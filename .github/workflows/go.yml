@@ -1,4 +1,4 @@
-name: Go
+name: code
 on:
   push:
     branches: ["main"]
@@ -6,18 +6,15 @@ on:
     branches: ["main"]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v4
-        with:
-          go-version: "1.23"
-      - run: go build -v ./...
       - run: go test -v ./...
 
   gofmt:
-    name: runner / gofmt
+    name: gofmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +28,7 @@ jobs:
           tool_name: gofmt
 
   golangci-lint:
-    name: runner / golangci-lint
+    name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

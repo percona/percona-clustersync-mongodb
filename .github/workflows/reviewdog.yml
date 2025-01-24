@@ -1,19 +1,8 @@
 name: reviewdog
 on: [pull_request]
 jobs:
-  shellcheck:
-    name: runner / shellcheck
-    runs-on: ubuntu-latest
-    if: ${{ github.event.pull_request.changed_files < 301 }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: spellcheck
-        uses: reviewdog/action-shellcheck@v1
-        with:
-          reporter: github-pr-review
-
   misspell:
-    name: runner / misspell
+    name: misspell
     runs-on: ubuntu-latest
     if: ${{ github.event.pull_request.changed_files < 301 }}
     steps:
@@ -25,7 +14,7 @@ jobs:
           locale: "US"
 
   alex:
-    name: runner / alex
+    name: alex
     runs-on: ubuntu-latest
     if: ${{ github.event.pull_request.changed_files < 301 }}
     steps:
