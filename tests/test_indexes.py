@@ -73,6 +73,15 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_compound(self, phase):
+        self.drop_database("db_1")
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"i": 1, "j": -1})
+
+        self.compare_all()
+
     def test_create_wildcard(self, phase):
         self.drop_database("db_1")
         self.create_collection("db_1", "coll_1")
