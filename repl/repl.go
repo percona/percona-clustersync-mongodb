@@ -28,8 +28,8 @@ type Status struct {
 }
 
 type Replicator struct {
-	src  *mongo.Client
-	dest *mongo.Client
+	source *mongo.Client
+	target *mongo.Client
 
 	drop bool
 
@@ -46,9 +46,9 @@ type Replicator struct {
 
 func New(source, target *mongo.Client) *Replicator {
 	r := &Replicator{
-		src:   source,
-		dest:  target,
-		state: IdleState,
+		source: source,
+		target: target,
+		state:  IdleState,
 	}
 	return r
 }
@@ -104,16 +104,16 @@ func (r *Replicator) run(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("repl.run"))
 	log.Info(ctx, "starting data cloning")
 
-	startedAt, err := topo.ClusterTime(ctx, r.src)
+	startedAt, err := topo.ClusterTime(ctx, r.source)
 	if err != nil {
 		return errors.Wrap(err, "get cluster time")
 	}
 
 	cloner := dataCloner{
-		Source:      r.src,
-		Destination: r.dest,
-		Drop:        r.drop,
-		IsSelected:  r.isSelected,
+		Source:     r.source,
+		Target:     r.target,
+		Drop:       r.drop,
+		IsSelected: r.isSelected,
 	}
 
 	err = cloner.Clone(ctx)
@@ -165,14 +165,14 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 	ctx = log.WithAttrs(ctx, log.Scope("repl.apply"))
 
 	applier := &eventApplier{
-		Client:     r.dest,
+		Client:     r.target,
 		Drop:       r.drop,
 		IsSelected: r.isSelected,
 	}
 	opts := options.ChangeStream().
 		SetStartAtOperationTime(&startAt).
 		SetShowExpandedEvents(true)
-	cur, err := r.src.Watch(ctx, mongo.Pipeline{}, opts)
+	cur, err := r.source.Watch(ctx, mongo.Pipeline{}, opts)
 	if err != nil {
 		return errors.Wrap(err, "start change stream")
 	}
@@ -203,7 +203,7 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 					SetResumeAfter(cur.ResumeToken()).
 					SetShowExpandedEvents(true)
 				// TODO: use include/exclude namespaces in pipeline
-				cur, err = r.src.Watch(ctx, mongo.Pipeline{}, opts)
+				cur, err = r.source.Watch(ctx, mongo.Pipeline{}, opts)
 			}
 			if mongo.IsDuplicateKeyError(err) {
 				r.updateLastAppliedOpTime(optime)

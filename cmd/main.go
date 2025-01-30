@@ -25,8 +25,8 @@ func main() {
 	var logLevelFlag string
 	var logNoColor bool
 	flag.StringVar(&srvOpts.Port, "port", "2242", "port")
-	flag.StringVar(&srvOpts.SourceURI, "src", "", "MongoDB connection string")
-	flag.StringVar(&srvOpts.DestURI, "dest", "", "MongoDB connection string")
+	flag.StringVar(&srvOpts.SourceURI, "source", "", "MongoDB connection string")
+	flag.StringVar(&srvOpts.TargetURI, "target", "", "MongoDB connection string")
 	flag.StringVar(&logLevelFlag, "log-level", "info", "log level")
 	flag.BoolVar(&logNoColor, "no-color", false, "disable log color")
 	flag.Parse()
@@ -77,19 +77,19 @@ func main() {
 type serverOptions struct {
 	Port      string
 	SourceURI string
-	DestURI   string
+	TargetURI string
 }
 
 func (o serverOptions) verify() error {
 	switch {
-	case o.SourceURI == "" && o.DestURI == "":
-		return errors.New("source uri and destination uri are empty")
+	case o.SourceURI == "" && o.TargetURI == "":
+		return errors.New("source uri and target uri are empty")
 	case o.SourceURI == "":
 		return errors.New("source uri is empty")
-	case o.DestURI == "":
-		return errors.New("destination uri is empty")
-	case o.SourceURI == o.DestURI:
-		return errors.New("source uri and destination uri are identical")
+	case o.TargetURI == "":
+		return errors.New("target uri is empty")
+	case o.SourceURI == o.TargetURI:
+		return errors.New("source uri and target uri are identical")
 	}
 	return nil
 }
@@ -110,36 +110,36 @@ func buildServerAddr(port string) (string, error) {
 }
 
 type server struct {
-	srcCluster *mongo.Client
-	dstCluster *mongo.Client
+	sourceCluster *mongo.Client
+	targetCluster *mongo.Client
 
 	repl *repl.Replicator
 }
 
 func newServer(ctx context.Context, options serverOptions) (*server, error) {
-	src, err := topo.Connect(ctx, options.SourceURI)
+	source, err := topo.Connect(ctx, options.SourceURI)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
 	log.Debug(ctx, "connected to source cluster")
 
-	dst, err := topo.Connect(ctx, options.DestURI)
+	target, err := topo.Connect(ctx, options.TargetURI)
 	if err != nil {
-		return nil, errors.Wrap(err, "connect to destination cluster")
+		return nil, errors.Wrap(err, "connect to target cluster")
 	}
-	log.Debug(ctx, "connected to destination cluster")
+	log.Debug(ctx, "connected to target cluster")
 
 	s := &server{
-		srcCluster: src,
-		dstCluster: dst,
-		repl:       repl.New(src, dst),
+		sourceCluster: source,
+		targetCluster: target,
+		repl:          repl.New(source, target),
 	}
 	return s, nil
 }
 
 func (s *server) Close(ctx context.Context) error {
-	err0 := s.srcCluster.Disconnect(ctx)
-	err1 := s.dstCluster.Disconnect(ctx)
+	err0 := s.sourceCluster.Disconnect(ctx)
+	err1 := s.targetCluster.Disconnect(ctx)
 	return errors.Join(err0, err1)
 }
 

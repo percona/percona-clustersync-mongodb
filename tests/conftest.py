@@ -8,21 +8,21 @@ from mlink import MLink
 
 
 def pytest_addoption(parser):
-    parser.addoption("--src-uri", help="MongoDB URI for source")
-    parser.addoption("--dest-uri", help="MongoDB URI for destination")
+    parser.addoption("--source-uri", help="MongoDB URI for source")
+    parser.addoption("--target-uri", help="MongoDB URI for target")
     parser.addoption("--mlink-url", help="mongolink url")
 
 
 @pytest.fixture(scope="session")
 def source_conn(request: pytest.FixtureRequest):
-    uri = request.config.getoption("--src-uri") or os.environ["TEST_SRC_URI"]
+    uri = request.config.getoption("--source-uri") or os.environ["TEST_SOURCE_URI"]
     with MongoClient(uri) as conn:
         yield conn
 
 
 @pytest.fixture(scope="session")
 def target_conn(request: pytest.FixtureRequest):
-    uri = request.config.getoption("--dest-uri") or os.environ["TEST_DEST_URI"]
+    uri = request.config.getoption("--target-uri") or os.environ["TEST_TARGET_URI"]
     with MongoClient(uri) as conn:
         yield conn
 

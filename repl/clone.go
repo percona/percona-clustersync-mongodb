@@ -52,9 +52,9 @@ func (s *collSpec) ns() string {
 }
 
 type dataCloner struct {
-	Source      *mongo.Client
-	Destination *mongo.Client
-	Drop        bool
+	Source *mongo.Client
+	Target *mongo.Client
+	Drop   bool
 
 	IsSelected FilterFunc
 
@@ -223,7 +223,7 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 					},
 				}
 
-				_, err := c.Destination.Database(spec.dbName).
+				_, err := c.Target.Database(spec.dbName).
 					Collection(spec.spec.Name).
 					Indexes().CreateOne(ctx, model)
 				if err != nil {
@@ -240,7 +240,7 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 	log.Debug(ctx, "cloning collection")
 
 	if c.Drop {
-		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
+		err := c.Target.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
 		if err != nil {
 			return errors.Wrap(err, "drop")
 		}
@@ -252,7 +252,7 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createCollection(ctx, c.Destination, spec.dbName, spec.spec.Name, &options)
+	err = createCollection(ctx, c.Target, spec.dbName, spec.spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
@@ -264,9 +264,9 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 	}
 	defer cur.Close(ctx)
 
-	destColl := c.Destination.Database(spec.dbName).Collection(spec.spec.Name)
+	targetColl := c.Target.Database(spec.dbName).Collection(spec.spec.Name)
 	for cur.Next(ctx) {
-		_, err = destColl.InsertOne(ctx, cur.Current)
+		_, err = targetColl.InsertOne(ctx, cur.Current)
 		if err != nil {
 			return errors.Wrap(err, "insert one")
 		}
@@ -285,7 +285,7 @@ func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
 	log.Debug(ctx, "cloning view")
 
 	if c.Drop {
-		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
+		err := c.Target.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
 		if err != nil {
 			return errors.Wrap(err, "drop")
 		}
@@ -297,7 +297,7 @@ func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createView(ctx, c.Destination, spec.dbName, spec.spec.Name, &options)
+	err = createView(ctx, c.Target, spec.dbName, spec.spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}

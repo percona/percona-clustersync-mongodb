@@ -44,30 +44,30 @@ class BaseTesting:
 
     @classmethod
     def compare_all(cls):
-        src_dbs = cls.list_databases(cls.source)
-        dst_dbs = cls.list_databases(cls.target)
-        assert src_dbs == dst_dbs, f"{src_dbs} != {dst_dbs}"
+        source_dbs = cls.list_databases(cls.source)
+        target_dbs = cls.list_databases(cls.target)
+        assert source_dbs == target_dbs, f"{source_dbs} != {target_dbs}"
 
-        for db in src_dbs:
-            src_colls = cls.list_namespaces(cls.source, db)
-            dst_colls = cls.list_namespaces(cls.target, db)
-            assert src_colls == dst_colls, f"{src_colls} != {dst_colls}"
+        for db in source_dbs:
+            source_colls = cls.list_namespaces(cls.source, db)
+            target_colls = cls.list_namespaces(cls.target, db)
+            assert source_colls == target_colls, f"{source_colls} != {target_colls}"
 
-            for coll in src_colls:
+            for coll in source_colls:
                 cls.compare_namespace(db, coll)
 
     @classmethod
     def check_if_target_is_subset(cls):
-        src_dbs = cls.list_databases(cls.source)
-        dst_dbs = cls.list_databases(cls.target)
-        assert set(dst_dbs).issubset(src_dbs)
+        source_dbs = cls.list_databases(cls.source)
+        target_dbs = cls.list_databases(cls.target)
+        assert set(target_dbs).issubset(source_dbs)
 
-        for db in dst_dbs:
-            src_colls = cls.list_namespaces(cls.source, db)
-            dst_colls = cls.list_namespaces(cls.target, db)
-            assert set(dst_colls).issubset(src_colls)
+        for db in target_dbs:
+            source_colls = cls.list_namespaces(cls.source, db)
+            target_colls = cls.list_namespaces(cls.target, db)
+            assert set(target_colls).issubset(source_colls)
 
-            for coll in dst_colls:
+            for coll in target_colls:
                 cls.compare_namespace(db, coll)
 
     @staticmethod
@@ -88,20 +88,20 @@ class BaseTesting:
 
     @classmethod
     def compare_namespace(cls, db: str, coll: str):
-        src_options = cls.source[db][coll].options()
-        dst_options = cls.target[db][coll].options()
-        assert src_options == dst_options, f"{src_options=} != {dst_options=}"
+        source_options = cls.source[db][coll].options()
+        target_options = cls.target[db][coll].options()
+        assert source_options == target_options, f"{source_options=} != {target_options=}"
 
-        if "viewOn" not in src_options:
-            src_indexes = cls.source[db][coll].index_information()
-            dst_indexes = cls.target[db][coll].index_information()
-            assert src_indexes == dst_indexes, f"{src_indexes=} != {dst_indexes=}"
+        if "viewOn" not in source_options:
+            source_indexes = cls.source[db][coll].index_information()
+            target_indexes = cls.target[db][coll].index_information()
+            assert source_indexes == target_indexes, f"{source_indexes=} != {target_indexes=}"
 
-        src_docs, src_hash = cls._coll_content(cls.source[db][coll])
-        dst_docs, dst_hash = cls._coll_content(cls.target[db][coll])
-        assert len(src_docs) == len(dst_docs), f"{src_docs=} != {dst_docs=}"
-        assert src_docs == dst_docs, f"{src_docs=} != {dst_docs=}"
-        assert src_hash == dst_hash, f"{src_hash=} != {dst_hash=}"
+        source_docs, source_hash = cls._coll_content(cls.source[db][coll])
+        target_docs, target_hash = cls._coll_content(cls.target[db][coll])
+        assert len(source_docs) == len(target_docs), f"{source_docs=} != {target_docs=}"
+        assert source_docs == target_docs, f"{source_docs=} != {target_docs=}"
+        assert source_hash == target_hash, f"{source_hash=} != {target_hash=}"
 
     @staticmethod
     def _coll_content(coll: Collection):
