@@ -87,7 +87,7 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1})
+            self.source["db_1"]["coll_1"].create_index({"i.j": 1})
 
         self.compare_all()
 
