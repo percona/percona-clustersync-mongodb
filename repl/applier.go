@@ -37,11 +37,10 @@ func IsInvalidatedError(err error) bool {
 }
 
 type eventApplier struct {
-	Client *mongo.Client
-
-	Drop bool
-
-	IsSelected FilterFunc
+	Client       *mongo.Client
+	Drop         bool
+	IsSelected   FilterFunc
+	IndexCatalog *IndexCatalog
 }
 
 func (h *eventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
@@ -154,7 +153,13 @@ func (h *eventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
-	return dropCollection(ctx, h.Client, event.Namespace.Database, event.Namespace.Collection)
+	err = dropCollection(ctx, h.Client, event.Namespace.Database, event.Namespace.Collection)
+	if err != nil {
+		return err
+	}
+
+	h.IndexCatalog.DropCollection(event.Namespace.Database, event.Namespace.Collection)
+	return nil
 }
 
 func (h *eventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) error {
@@ -164,7 +169,12 @@ func (h *eventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) er
 	}
 
 	err = h.Client.Database(event.Namespace.Database).Drop(ctx)
-	return err //nolint:wrapcheck
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
+	h.IndexCatalog.DropDatabase(event.Namespace.Database)
+	return nil
 }
 
 func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
@@ -173,8 +183,9 @@ func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 		return errors.Wrap(err, "parse")
 	}
 
-	indexes := []mongo.IndexModel{}
-	for _, index := range event.OperationDescription.Indexes {
+	indexes := make([]mongo.IndexModel, len(event.OperationDescription.Indexes))
+	specs := make([]IndexSpecification, len(event.OperationDescription.Indexes))
+	for i, index := range event.OperationDescription.Indexes {
 		model := options.IndexOptions{
 			Name:    &index.Name,
 			Version: &index.Version,
@@ -187,16 +198,35 @@ func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 			Collation: index.Collation,
 		}
 
-		indexes = append(indexes, mongo.IndexModel{
+		indexes[i] = mongo.IndexModel{
 			Keys:    index.KeysDocument,
 			Options: &model,
-		})
+		}
+
+		specs[i] = IndexSpecification{
+			Name:         index.Name,
+			KeysDocument: index.KeysDocument,
+			Version:      index.Version,
+			Unique:       index.Unique,
+			Sparse:       index.Sparse,
+			Hidden:       index.Hidden,
+
+			ExpireAfterSeconds:      index.ExpireAfterSeconds,
+			PartialFilterExpression: index.PartialFilterExpression,
+
+			Collation: index.Collation,
+		}
 	}
 
 	_, err = h.Client.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
 		Indexes().CreateMany(ctx, indexes)
-	return err //nolint:wrapcheck
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
+	h.IndexCatalog.CreateIndexes(event.Namespace.Database, event.Namespace.Collection, specs)
+	return nil
 }
 
 func (h *eventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) error {
@@ -206,15 +236,24 @@ func (h *eventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) err
 	}
 
 	for _, index := range event.OperationDescription.Indexes {
-		// TODO: check $currentOp if the index is building
 		_, err = h.Client.Database(event.Namespace.Database).
 			Collection(event.Namespace.Collection).
 			Indexes().DropOne(ctx, index.Name)
-		if err != nil && !isIndexNotFound(err) {
+		if err != nil {
+			if isIndexNotFound(err) {
+				log.Debug(ctx, "index not found "+index.Name)
+				continue
+			}
 			return errors.Wrapf(err, "drop %s index in %s", index.Name, event.Namespace)
 		}
 	}
 
+	for _, index := range event.OperationDescription.Indexes {
+		h.IndexCatalog.DropIndex(
+			event.Namespace.Database,
+			event.Namespace.Collection,
+			index.Name)
+	}
 	return nil
 }
 

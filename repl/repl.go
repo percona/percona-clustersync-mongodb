@@ -31,14 +31,13 @@ type Replicator struct {
 	source *mongo.Client
 	target *mongo.Client
 
-	drop bool
-
+	drop       bool
 	isSelected FilterFunc
 
 	stopC chan struct{}
-
 	state State
 
+	indexCatalog      *IndexCatalog
 	lastAppliedOpTime primitive.Timestamp
 
 	mu sync.Mutex
@@ -46,9 +45,10 @@ type Replicator struct {
 
 func New(source, target *mongo.Client) *Replicator {
 	r := &Replicator{
-		source: source,
-		target: target,
-		state:  IdleState,
+		source:       source,
+		target:       target,
+		state:        IdleState,
+		indexCatalog: NewIndexCatalog(),
 	}
 	return r
 }
@@ -110,10 +110,11 @@ func (r *Replicator) run(ctx context.Context) error {
 	}
 
 	cloner := dataCloner{
-		Source:     r.source,
-		Target:     r.target,
-		Drop:       r.drop,
-		IsSelected: r.isSelected,
+		Source:       r.source,
+		Target:       r.target,
+		Drop:         r.drop,
+		IsSelected:   r.isSelected,
+		IndexCatalog: r.indexCatalog,
 	}
 
 	err = cloner.Clone(ctx)
@@ -130,6 +131,11 @@ func (r *Replicator) run(ctx context.Context) error {
 	err = r.runChangeApplication(ctx, startedAt)
 	if err != nil {
 		return errors.Wrap(err, "run change application")
+	}
+
+	err = cloner.RestoreIndexes(ctx)
+	if err != nil {
+		return errors.Wrap(err, "build indexes (2)")
 	}
 
 	return nil
@@ -165,9 +171,10 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 	ctx = log.WithAttrs(ctx, log.Scope("repl.apply"))
 
 	applier := &eventApplier{
-		Client:     r.target,
-		Drop:       r.drop,
-		IsSelected: r.isSelected,
+		Client:       r.target,
+		Drop:         r.drop,
+		IsSelected:   r.isSelected,
+		IndexCatalog: r.indexCatalog,
 	}
 	opts := options.ChangeStream().
 		SetStartAtOperationTime(&startAt).

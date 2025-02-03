@@ -105,3 +105,14 @@ class Runner:
 
             time.sleep(0.2)
             status = self.mlink.status()
+
+    def wait_for_clone_done(self):
+        status = self.mlink.status()
+        assert status["state"] == MLink.State.RUNNING
+
+        for _ in range(10):  # ~2 secs timeout
+            if status.get("lastAppliedOpTime"):
+                break
+
+            time.sleep(0.2)
+            status = self.mlink.status()

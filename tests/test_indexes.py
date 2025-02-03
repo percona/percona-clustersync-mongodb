@@ -110,6 +110,15 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_ttl(self, phase):
+        self.drop_database("db_1")
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=1)
+
+        self.compare_all()
+
     def test_drop_cloned(self, phase):
         self.drop_database("db_1")
         self.create_collection("db_1", "coll_1")
@@ -127,5 +136,25 @@ class TestIndexes(BaseTesting):
         with self.perform(phase):
             index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
             self.source["db_1"]["coll_1"].drop_index(index_name)
+
+        self.compare_all()
+
+
+class TestIndexesManually(BaseTesting):
+    def test_create_ttl_manual(self):
+        self.drop_database("db_1")
+        self.create_collection("db_1", "coll_1")
+
+        mlink = self.perform(None)
+        try:
+            self.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
+            mlink.start()
+            self.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
+            mlink.wait_for_clone_done()
+            self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
+            mlink.finalize()
+        except:
+            mlink.finalize_fast()
+            raise
 
         self.compare_all()
