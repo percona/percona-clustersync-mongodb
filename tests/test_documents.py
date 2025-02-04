@@ -9,7 +9,7 @@ from mlink import Runner
 @pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
 class TestCRUDOperation(BaseTesting):
     def test_insert_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             for i in range(5):
@@ -18,7 +18,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_insert_many(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].insert_many([{"i": i} for i in range(5)])
@@ -26,7 +26,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_update_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -42,7 +42,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_update_many(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -51,7 +51,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_replace_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -67,7 +67,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_delete_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -76,7 +76,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_delete_many(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -85,7 +85,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_find_one_and_update(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -101,7 +101,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_find_one_and_replace(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -117,7 +117,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_find_one_and_delete(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(5)])
 
         with self.perform(phase):
@@ -126,7 +126,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_upsert_by_update_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             for i in range(5):
@@ -142,7 +142,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_upsert_by_update_many(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].update_many({}, {"$inc": {"i": 100}}, upsert=True)
@@ -150,7 +150,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_upsert_by_replace_one(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             for i in range(5):
@@ -166,7 +166,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_upsert_by_find_one_and_update(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             for i in range(5):
@@ -182,7 +182,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_upsert_by_find_one_and_replace(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             for i in range(5):
@@ -198,7 +198,7 @@ class TestCRUDOperation(BaseTesting):
         self.compare_all()
 
     def test_bulk_write(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             ops = [

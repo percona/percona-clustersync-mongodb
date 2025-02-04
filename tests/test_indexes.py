@@ -8,7 +8,7 @@ from mlink import Runner
 @pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
 class TestIndexes(BaseTesting):
     def test_create(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -17,7 +17,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_with_collation(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -26,7 +26,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_unique(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -35,7 +35,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_sparse(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -44,7 +44,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_partial(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -56,7 +56,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_hidden(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -65,7 +65,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_hashed(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -74,7 +74,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_compound(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -83,7 +83,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_multikey(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -92,7 +92,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_wildcard(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -101,7 +101,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_geospatial(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -111,7 +111,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_create_ttl(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -120,7 +120,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_drop_cloned(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
         self.create_index("db_1", "coll_1", [("i", 1)])
 
@@ -130,7 +130,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     def test_drop_created(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -142,7 +142,7 @@ class TestIndexes(BaseTesting):
 
 class TestIndexesManually(BaseTesting):
     def test_create_ttl_manual(self):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         mlink = self.perform(None)

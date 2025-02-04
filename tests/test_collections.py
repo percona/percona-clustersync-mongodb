@@ -10,7 +10,7 @@ from mlink import Runner
 @pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
 class TestCollection(BaseTesting):
     def test_create_implicitly(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].insert_one({})
@@ -18,7 +18,7 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
     def test_create(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"].create_collection("coll_1")
@@ -35,7 +35,7 @@ class TestCollection(BaseTesting):
 
     @pytest.mark.xfail
     def test_create_equal_uuid(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"].create_collection("coll_1")
@@ -50,7 +50,7 @@ class TestCollection(BaseTesting):
             pytest.xfail("colllection UUID may vary")
 
     def test_create_clustered(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"].create_collection(
@@ -60,8 +60,25 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
+    def test_create_clustered_ttl(self, phase):
+        self.drop_all_database()
+
+        with self.perform(phase):
+            self.source["db_1"].create_collection(
+                "coll_1",
+                clusteredIndex={"key": {"_id": 1}, "unique": True},
+                expireAfterSeconds=1,
+            )
+
+        source_options = self.source["db_1"]["coll_1"].options()
+        target_options = self.target["db_1"]["coll_1"].options()
+
+        assert source_options["clusteredIndex"] == target_options["clusteredIndex"]
+        assert source_options["expireAfterSeconds"] == 1
+        assert "expireAfterSeconds" not in target_options
+
     def test_create_capped(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"].create_collection("coll_1", capped=True, size=54321, max=12345)
@@ -70,7 +87,7 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
     def test_create_view(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(-3, 3)])
 
         with self.perform(phase):
@@ -83,7 +100,7 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
     def test_create_view_with_collation(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(-3, 3)])
 
         with self.perform(phase):
@@ -97,7 +114,7 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
     def test_timeseries_is_not_replicated(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
 
         with self.perform(phase):
             self.source["db_1"].create_collection(
@@ -111,7 +128,7 @@ class TestCollection(BaseTesting):
         assert "test" not in self.target.list_database_names()
 
     def test_drop_collection(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
@@ -120,7 +137,7 @@ class TestCollection(BaseTesting):
         assert "coll_1" not in self.target["db_1"].list_collection_names()
 
     def test_drop_capped_collection(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.source["db_1"].create_collection("coll_1", capped=True, size=54321, max=12345)
         self.source["db_1"]["coll_1"].insert_many({"i": i} for i in range(10))
 
@@ -130,7 +147,7 @@ class TestCollection(BaseTesting):
         assert "coll_1" not in self.target["db_1"].list_collection_names()
 
     def test_drop_view(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
         self.create_view("db_1", "view_1", "coll_1", [{"$match": {"i": {"$gt": 3}}}])
 
@@ -141,7 +158,7 @@ class TestCollection(BaseTesting):
         assert "coll_1" in self.target["db_1"].list_collection_names()
 
     def test_drop_view_source_collection(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
         self.create_view("db_1", "view_1", "coll_1", [{"$match": {"i": {"$gt": 3}}}])
 
@@ -152,7 +169,7 @@ class TestCollection(BaseTesting):
         assert "coll_1" not in self.target["db_1"].list_collection_names()
 
     def test_drop_database(self, phase):
-        self.drop_database("db_1")
+        self.drop_all_database()
         self.create_collection("db_1", "coll_1")
         self.create_view("db_1", "view_1", "coll_1", [{"$match": {"i": {"$gt": 3}}}])
 

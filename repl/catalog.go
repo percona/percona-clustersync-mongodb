@@ -18,12 +18,12 @@ func NewIndexCatalog() *IndexCatalog {
 
 func (ic *IndexCatalog) CollectionIndexes(db, coll string) iter.Seq[IndexSpecification] {
 	return func(yield func(IndexSpecification) bool) {
+		ic.mu.Lock()
+		defer ic.mu.Unlock()
+
 		if _, ok := ic.cat[db]; !ok {
 			return
 		}
-
-		ic.mu.Lock()
-		defer ic.mu.Unlock()
 
 		for _, index := range ic.cat[db][coll] {
 			if !yield(index) {

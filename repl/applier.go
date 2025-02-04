@@ -57,7 +57,7 @@ func (h *eventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 		log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection))
 
 	if !h.IsSelected(baseEvent.Namespace.Database, baseEvent.Namespace.Collection) {
-		log.Debug(ctx, "apply: not selected")
+		log.Debug(ctx, "not selected")
 		return baseEvent.ClusterTime, nil
 	}
 
@@ -184,7 +184,6 @@ func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 	}
 
 	indexes := make([]mongo.IndexModel, len(event.OperationDescription.Indexes))
-	specs := make([]IndexSpecification, len(event.OperationDescription.Indexes))
 	for i, index := range event.OperationDescription.Indexes {
 		model := options.IndexOptions{
 			Name:    &index.Name,
@@ -202,20 +201,6 @@ func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 			Keys:    index.KeysDocument,
 			Options: &model,
 		}
-
-		specs[i] = IndexSpecification{
-			Name:         index.Name,
-			KeysDocument: index.KeysDocument,
-			Version:      index.Version,
-			Unique:       index.Unique,
-			Sparse:       index.Sparse,
-			Hidden:       index.Hidden,
-
-			ExpireAfterSeconds:      index.ExpireAfterSeconds,
-			PartialFilterExpression: index.PartialFilterExpression,
-
-			Collation: index.Collation,
-		}
 	}
 
 	_, err = h.Client.Database(event.Namespace.Database).
@@ -225,7 +210,10 @@ func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 		return err //nolint:wrapcheck
 	}
 
-	h.IndexCatalog.CreateIndexes(event.Namespace.Database, event.Namespace.Collection, specs)
+	h.IndexCatalog.CreateIndexes(
+		event.Namespace.Database,
+		event.Namespace.Collection,
+		event.OperationDescription.Indexes)
 	return nil
 }
 
@@ -240,20 +228,19 @@ func (h *eventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) err
 			Collection(event.Namespace.Collection).
 			Indexes().DropOne(ctx, index.Name)
 		if err != nil {
-			if isIndexNotFound(err) {
-				log.Debug(ctx, "index not found "+index.Name)
-				continue
+			if !isIndexNotFound(err) {
+				return errors.Wrapf(err, "drop %s index in %s", index.Name, event.Namespace)
 			}
-			return errors.Wrapf(err, "drop %s index in %s", index.Name, event.Namespace)
-		}
-	}
 
-	for _, index := range event.OperationDescription.Indexes {
+			log.Debug(ctx, "index not found "+index.Name)
+		}
+
 		h.IndexCatalog.DropIndex(
 			event.Namespace.Database,
 			event.Namespace.Collection,
 			index.Name)
 	}
+
 	return nil
 }
 

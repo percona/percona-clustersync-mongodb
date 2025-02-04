@@ -80,11 +80,12 @@ func (c *dataCloner) init(ctx context.Context) error {
 		return errors.Wrap(err, "list databases")
 	}
 
+	nsCatalog := make(map[string][]*collSpec)
+
 	mu := sync.Mutex{}
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.SetLimit(runtime.NumCPU())
 
-	nsCatalog := make(map[string][]*collSpec)
 	for _, db := range databases.Databases {
 		switch db.Name {
 		case "admin", "config", "local":
@@ -92,16 +93,12 @@ func (c *dataCloner) init(ctx context.Context) error {
 		}
 
 		grp.Go(func() error {
-			colls, err := c.Source.Database(db.Name).
-				ListCollectionSpecifications(grpCtx, bson.D{})
+			colls, err := c.Source.Database(db.Name).ListCollectionSpecifications(grpCtx, bson.D{})
 			if err != nil {
 				return errors.Wrap(err, "list collections")
 			}
 
-			mu.Lock()
-			nsCatalog[db.Name] = make([]*collSpec, 0, len(colls))
-			mu.Unlock()
-
+			dbColls := make([]*collSpec, 0, len(colls))
 			for _, coll := range colls {
 				if strings.HasPrefix(coll.Name, "system.") {
 					continue
@@ -111,31 +108,44 @@ func (c *dataCloner) init(ctx context.Context) error {
 					continue
 				}
 
-				if coll.Type == "collection" {
-					cur, err := c.Source.Database(db.Name).
-						Collection(coll.Name).
-						Indexes().List(grpCtx)
-					if err != nil {
-						return errors.Wrap(err, "list indexes")
-					}
-
-					var indexes []IndexSpecification
-					err = cur.All(grpCtx, &indexes)
-					if err != nil {
-						return errors.Wrap(err, "decode indexes")
-					}
-
-					c.IndexCatalog.CreateIndexes(db.Name, coll.Name, indexes)
-				}
-
-				mu.Lock()
-				nsCatalog[db.Name] = append(nsCatalog[db.Name], &collSpec{
+				dbColls = append(dbColls, &collSpec{
 					DB:                      db.Name,
 					CollectionSpecification: *coll,
 				})
-				mu.Unlock()
+
+				if coll.Type != "collection" {
+					continue
+				}
+
+				cur, err := c.Source.Database(db.Name).Collection(coll.Name).Indexes().List(grpCtx)
+				if err != nil {
+					return errors.Wrap(err, "list indexes")
+				}
+
+				var indexes []IndexSpecification
+				err = cur.All(grpCtx, &indexes)
+				if err != nil {
+					return errors.Wrap(err, "decode indexes")
+				}
+
+				if coll.IDIndex == nil {
+					// make sure no TTL is set up for clustered index.
+					// reason: change stream does not provide TTL value for the clustered index.
+					for i := range indexes {
+						if idx := indexes[i]; idx.isClustered() && idx.ExpireAfterSeconds != nil {
+							log.Warn(ctx, "clustered index with time-to-live is not supported. "+
+								"creating clustered index without ttl value")
+							idx.ExpireAfterSeconds = nil
+						}
+					}
+				}
+
+				c.IndexCatalog.CreateIndexes(db.Name, coll.Name, indexes)
 			}
 
+			mu.Lock()
+			nsCatalog[db.Name] = dbColls
+			mu.Unlock()
 			return nil
 		})
 	}
@@ -228,12 +238,15 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 	return nil
 }
 
-func (c *dataCloner) RestoreIndexes(ctx context.Context) error {
+func (c *dataCloner) FinalizeIndexes(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			for index := range c.IndexCatalog.CollectionIndexes(spec.DB, spec.Name) {
 				if index.ExpireAfterSeconds == nil || *index.ExpireAfterSeconds <= 0 {
 					continue
+				}
+				if index.isClustered() {
+					continue // clustered index with ttl is not supported
 				}
 
 				res := c.Target.Database(spec.DB).RunCommand(ctx, bson.D{
