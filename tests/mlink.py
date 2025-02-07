@@ -34,6 +34,10 @@ class MLink:
         return res.json()
 
 
+class WaitTimeoutError(Exception):
+    pass
+
+
 class Runner:
     class Phase(StrEnum):
         CLONE = "phase:clone"
@@ -64,6 +68,7 @@ class Runner:
         if status["state"] == MLink.State.FINALIZING:
             self.wait_for_state(MLink.State.FINALIZED)
         elif status["state"] == MLink.State.RUNNING:
+            self.wait_for_finalizable()
             self.mlink.finalize()
             self.wait_for_state(MLink.State.FINALIZED)
 
@@ -74,6 +79,7 @@ class Runner:
     def finalize_fast(self):
         status = self.mlink.status()
         if status["state"] == MLink.State.RUNNING:
+            self.wait_for_finalizable()
             self.mlink.finalize()
 
     def finalize(self):
@@ -83,6 +89,7 @@ class Runner:
         elif status["state"] == MLink.State.RUNNING:
             optime = self.source.server_info()["operationTime"]
             self.wait_for_optime(optime)
+            self.wait_for_finalizable()
             self.mlink.finalize()
             self.wait_for_state(MLink.State.FINALIZED)
 
@@ -92,27 +99,39 @@ class Runner:
             time.sleep(0.2)
             status = self.mlink.status()
 
-    def wait_for_optime(self, ts: bson.Timestamp):
+    def wait_for_optime(self, ts: bson.Timestamp, timeout=5):
         status = self.mlink.status()
         assert status["state"] == MLink.State.RUNNING
 
-        for _ in range(10):  # ~2 secs timeout
+        for _ in range(timeout):  # ~2 secs timeout
             applied_optime: str = status.get("lastAppliedOpTime")
             if applied_optime:
                 t_s, i_s = applied_optime.split(".")
                 if ts <= bson.Timestamp(int(t_s), int(i_s)):
-                    break
+                    return
 
-            time.sleep(0.2)
+            time.sleep(1)
             status = self.mlink.status()
 
-    def wait_for_clone_done(self):
+        raise WaitTimeoutError()
+
+    def wait_for_finalizable(self, timeout=5):
         status = self.mlink.status()
         assert status["state"] == MLink.State.RUNNING
 
-        for _ in range(10):  # ~2 secs timeout
-            if status.get("lastAppliedOpTime"):
-                break
+        for _ in range(timeout):
+            if status.get("finalizable"):
+                return
 
-            time.sleep(0.2)
+            time.sleep(1)
             status = self.mlink.status()
+
+        raise WaitTimeoutError()
+
+    def last_applied_op(self):
+        status = self.mlink.status()
+        if applied_optime := status.get("lastAppliedOpTime"):
+            t_s, i_s = applied_optime.split(".")
+            return bson.Timestamp(int(t_s), int(i_s))
+
+        return bson.Timestamp(0, 0)

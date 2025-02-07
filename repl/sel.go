@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// FilterFunc returns true if a namespace is allowed.
-type FilterFunc func(db, coll string) bool
+// NSFilter returns true if a namespace is allowed.
+type NSFilter func(db, coll string) bool
 
-func makeFilter(include, exclude []string) FilterFunc {
+func makeFilter(include, exclude []string) NSFilter {
 	includeFilter := makeFitlerImpl(include)
 	excludeFilter := makeFitlerImpl(exclude)
 

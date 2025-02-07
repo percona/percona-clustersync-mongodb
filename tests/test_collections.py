@@ -115,6 +115,7 @@ class TestCollection(BaseTesting):
 
     def test_timeseries_is_not_replicated(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_2")
 
         with self.perform(phase):
             self.source["db_1"].create_collection(
@@ -124,6 +125,8 @@ class TestCollection(BaseTesting):
             self.source["db_1"]["coll_1"].insert_many(
                 {"ts": datetime.now(), "meta": {"i": i}} for i in range(10)
             )
+
+            self.source["db_1"]["coll_2"].insert_one({})  # FIXME: PML-61
 
         assert "test" not in self.target.list_database_names()
 

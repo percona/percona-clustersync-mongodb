@@ -10,6 +10,7 @@ from mlink import Runner
 class TestCRUDOperation(BaseTesting):
     def test_insert_one(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             for i in range(5):
@@ -19,6 +20,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_insert_many(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].insert_many([{"i": i} for i in range(5)])
@@ -127,6 +129,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_upsert_by_update_one(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             for i in range(5):
@@ -143,6 +146,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_upsert_by_update_many(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].update_many({}, {"$inc": {"i": 100}}, upsert=True)
@@ -151,6 +155,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_upsert_by_replace_one(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             for i in range(5):
@@ -167,6 +172,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_upsert_by_find_one_and_update(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             for i in range(5):
@@ -183,6 +189,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_upsert_by_find_one_and_replace(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             for i in range(5):
@@ -199,6 +206,7 @@ class TestCRUDOperation(BaseTesting):
 
     def test_bulk_write(self, phase):
         self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
             ops = [

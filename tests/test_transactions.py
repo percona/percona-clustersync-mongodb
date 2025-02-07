@@ -1,0 +1,159 @@
+# pylint: disable=missing-docstring,redefined-outer-name
+from _base import BaseTesting
+
+from mlink import Runner
+
+
+class TestTransaction(BaseTesting):
+    def test_simple(self):
+        self.drop_all_database()
+
+        with self.perform(phase=Runner.Phase.APPLY):
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 2}, session=sess)
+                sess.commit_transaction()
+
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 1
+        assert self.source["db_2"]["coll_2"].count_documents({}) == 1
+
+        self.compare_all()
+
+    def test_simple_aborted(self):
+        self.drop_all_database()
+        self.create_collection("db_3", "coll_3")
+
+        with self.perform(phase=Runner.Phase.APPLY):
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 2}, session=sess)
+                sess.abort_transaction()
+
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+        assert "db_1" not in self.source.list_database_names()
+        assert "db_2" not in self.source.list_database_names()
+
+        self.compare_all()
+
+    def test_mixed_with_non_trx_ops(self):
+        self.drop_all_database()
+
+        mlink = self.perform(Runner.Phase.APPLY)
+        with self.source.start_session() as sess:
+            for i in range(2):
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1})
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": i}, session=sess)
+
+                mlink.start()
+                self.source["db_1"]["coll_1"].insert_one({"i": 3})
+                mlink.wait_for_finalizable()
+
+                self.source["db_1"]["coll_1"].insert_one({"i": 4, "trx": i}, session=sess)
+                self.source["db_1"]["coll_1"].insert_one({"i": 5})
+                sess.commit_transaction()
+
+                self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+            mlink.finalize()
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 10
+
+        self.compare_all()
+
+    def test_mixed_with_non_trx_ops_aborted(self):
+        self.drop_all_database()
+
+        mlink = self.perform(None)
+        with self.source.start_session() as sess:
+            for t in range(2):
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1})
+                self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": t}, session=sess)
+
+                mlink.start()
+                self.source["db_1"]["coll_1"].insert_one({"i": 2})
+                mlink.wait_for_finalizable()
+
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": t}, session=sess)
+                self.source["db_1"]["coll_1"].insert_one({"i": 3})
+                sess.abort_transaction()
+
+            self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+            mlink.finalize()
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 6
+
+        self.compare_all()
+
+    def test_in_progress(self):
+        self.drop_all_database()
+
+        with self.source.start_session() as sess:
+            sess.start_transaction()
+            self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+
+            with self.perform(Runner.Phase.APPLY):
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                sess.commit_transaction()
+
+                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 2
+
+        self.compare_all()
+
+    def test_in_progress_aborted(self):
+        self.drop_all_database()
+
+        with self.source.start_session() as sess:
+            sess.start_transaction()
+            self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+
+            with self.perform(Runner.Phase.APPLY):
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                sess.abort_transaction()
+
+                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+        assert "db_1" not in self.source.list_database_names()
+
+        self.compare_all()
+
+    def test_unfinished(self):
+        self.drop_all_database()
+
+        with self.source.start_session() as sess:
+            sess.start_transaction()
+            self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+
+            with self.perform(Runner.Phase.APPLY):
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+            sess.commit_transaction()
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 2
+        assert "db_1" not in self.target.list_database_names()
+
+    def test_unfinished_aborted(self):
+        self.drop_all_database()
+
+        with self.source.start_session() as sess:
+            sess.start_transaction()
+            self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+
+            with self.perform(Runner.Phase.APPLY):
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+            sess.abort_transaction()
+
+        assert "db_1" not in self.source.list_database_names()
+
+        self.compare_all()

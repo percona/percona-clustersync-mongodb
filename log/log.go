@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -41,6 +42,15 @@ func NS(db, coll string) AttrOption {
 func OpTime(ts primitive.Timestamp) AttrOption {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Uints32("op_ts", []uint32{ts.T, ts.I})
+	}
+}
+
+func Tx(txn *int64, lsid bson.Raw) AttrOption {
+	return func(l zerolog.Context) zerolog.Context {
+		if txn == nil {
+			return l
+		}
+		return l.Int64("txn", *txn)
 	}
 }
 

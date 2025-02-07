@@ -190,7 +190,7 @@ type BaseEvent struct {
 	// This value is used as the resumeToken for the resumeAfter parameter
 	// when resuming a change stream.  The _id object has the following form:
 	// { "_data" : <BinData|hex string> }
-	// ID bson.Raw `bson:"_id"`
+	ID bson.Raw `bson:"_id"`
 
 	// ClusterTime is the timestamp from the oplog entry associated with
 	// the event.
@@ -230,7 +230,7 @@ type CreateEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription *createEventOptions `bson:"operationDescription,omitempty"`
+	OperationDescription *createCollectionOptions `bson:"operationDescription,omitempty"`
 
 	BaseEvent `bson:",inline"`
 }
@@ -243,7 +243,7 @@ func (e CreateEvent) IsTimeseries() bool {
 	return strings.HasPrefix(e.OperationDescription.ViewOn, "system.buckets.")
 }
 
-type createEventOptions struct {
+type createCollectionOptions struct {
 	IDIndex        bson.D `bson:"idIndex,omitempty"`
 	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
 

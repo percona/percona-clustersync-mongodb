@@ -113,7 +113,7 @@ type server struct {
 	sourceCluster *mongo.Client
 	targetCluster *mongo.Client
 
-	repl *repl.Replicator
+	repl *repl.Coordinator
 }
 
 func newServer(ctx context.Context, options serverOptions) (*server, error) {
@@ -239,8 +239,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := statusResponse{
-		Ok:    true,
-		State: replStatus.State,
+		Ok:          true,
+		State:       replStatus.State,
+		Finalizable: replStatus.Finalizable,
 	}
 	if !replStatus.LastAppliedOpTime.IsZero() {
 		res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
@@ -276,6 +277,7 @@ type statusResponse struct {
 	Error string `json:"error,omitempty"`
 
 	State             repl.State `json:"state"`
+	Finalizable       bool       `json:"finalizable,omitempty"`
 	LastAppliedOpTime string     `json:"lastAppliedOpTime,omitempty"`
 }
 

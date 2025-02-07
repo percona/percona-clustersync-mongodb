@@ -4,7 +4,7 @@ from typing import List
 
 import bson
 import pytest
-from pymongo import MongoClient
+from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
 from mlink import MLink, Runner
@@ -106,7 +106,7 @@ class BaseTesting:
     @staticmethod
     def _coll_content(coll: Collection):
         docs, md5 = [], hashlib.md5()
-        for data in coll.find_raw_batches():
+        for data in coll.find_raw_batches(sort=[("_id", ASCENDING)]):
             md5.update(data)
             docs.extend(bson.decode_all(data))
         return docs, md5.hexdigest()
