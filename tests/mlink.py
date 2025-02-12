@@ -1,6 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import time
-from dataclasses import dataclass
 from enum import StrEnum
 
 import bson

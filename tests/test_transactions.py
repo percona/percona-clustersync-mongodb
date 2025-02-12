@@ -84,7 +84,7 @@ class TestTransaction(BaseTesting):
                 self.source["db_1"]["coll_1"].insert_one({"i": 3})
                 sess.abort_transaction()
 
-            self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
             mlink.finalize()
 
         assert self.source["db_1"]["coll_1"].count_documents({}) == 6
@@ -102,7 +102,7 @@ class TestTransaction(BaseTesting):
                 self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
                 sess.commit_transaction()
 
-                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+                self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
 
         assert self.source["db_1"]["coll_1"].count_documents({}) == 2
 
@@ -119,7 +119,7 @@ class TestTransaction(BaseTesting):
                 self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
                 sess.abort_transaction()
 
-                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+                self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
 
         assert "db_1" not in self.source.list_database_names()
 
@@ -134,7 +134,8 @@ class TestTransaction(BaseTesting):
 
             with self.perform(Runner.Phase.APPLY):
                 self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
-                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+                self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
 
             sess.commit_transaction()
 
@@ -150,7 +151,8 @@ class TestTransaction(BaseTesting):
 
             with self.perform(Runner.Phase.APPLY):
                 self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
-                self.source["db_2"]["coll_2"].insert_one({"i": 3})  # FIXME: PML-61
+
+                self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
 
             sess.abort_transaction()
 
