@@ -5,17 +5,17 @@ import (
 )
 
 type List[T any] struct {
-	head *txnBufferElem[T]
-	tail *txnBufferElem[T]
+	head *listElem[T]
+	tail *listElem[T]
 }
 
-type txnBufferElem[T any] struct {
-	next *txnBufferElem[T]
+type listElem[T any] struct {
+	next *listElem[T]
 	val  T
 }
 
 func (l *List[T]) Push(val T) {
-	elem := &txnBufferElem[T]{val: val}
+	elem := &listElem[T]{val: val}
 
 	if l.head == nil {
 		l.head = elem
