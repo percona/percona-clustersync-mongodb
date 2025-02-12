@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import threading
+
 from _base import BaseTesting
 
 from mlink import Runner
@@ -157,5 +159,128 @@ class TestTransaction(BaseTesting):
             sess.abort_transaction()
 
         assert "db_1" not in self.source.list_database_names()
+
+        self.compare_all()
+
+    def test_concurrent_trx(self):
+        self.drop_all_database()
+
+        event_1 = threading.Event()
+        event_2 = threading.Event()
+
+        def run_transaction_1():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+                event_1.set()
+                event_2.wait()
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                sess.commit_transaction()
+
+        def run_transaction_2():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                event_1.wait()
+                self.source["db_2"]["coll_2"].insert_one({"i": 3, "trx": 2}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 4, "trx": 2}, session=sess)
+                event_2.set()
+                sess.commit_transaction()
+
+        with self.perform(Runner.Phase.APPLY):
+            thread1 = threading.Thread(target=run_transaction_1)
+            thread2 = threading.Thread(target=run_transaction_2)
+
+            thread1.start()
+            thread2.start()
+
+            thread1.join()
+            thread2.join()
+
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 2
+        assert "db_2" not in self.source.list_database_names()
+
+        self.compare_all()
+
+    def test_concurrent_trx_one_aborted(self):
+        self.drop_all_database()
+
+        event_1 = threading.Event()
+        event_2 = threading.Event()
+
+        def run_transaction_1():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+                event_1.set()
+                event_2.wait()
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                sess.commit_transaction()
+
+        def run_transaction_2():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                event_1.wait()
+                self.source["db_2"]["coll_2"].insert_one({"i": 3, "trx": 2}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 4, "trx": 2}, session=sess)
+                event_2.set()
+                sess.abort_transaction()
+
+        with self.perform(Runner.Phase.APPLY):
+            thread1 = threading.Thread(target=run_transaction_1)
+            thread2 = threading.Thread(target=run_transaction_2)
+
+            thread1.start()
+            thread2.start()
+
+            thread1.join()
+            thread2.join()
+
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+        assert self.source["db_1"]["coll_1"].count_documents({}) == 2
+        assert "db_2" not in self.source.list_database_names()
+
+        self.compare_all()
+
+    def test_concurrent_trx_all_aborted(self):
+        self.drop_all_database()
+
+        event_1 = threading.Event()
+        event_2 = threading.Event()
+
+        def run_transaction_1():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                self.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
+                event_1.set()
+                event_2.wait()
+                self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
+                sess.abort_transaction()
+
+        def run_transaction_2():
+            with self.source.start_session() as sess:
+                sess.start_transaction()
+                event_1.wait()
+                self.source["db_2"]["coll_2"].insert_one({"i": 3, "trx": 2}, session=sess)
+                self.source["db_2"]["coll_2"].insert_one({"i": 4, "trx": 2}, session=sess)
+                event_2.set()
+                sess.abort_transaction()
+
+        with self.perform(Runner.Phase.APPLY):
+            thread1 = threading.Thread(target=run_transaction_1)
+            thread2 = threading.Thread(target=run_transaction_2)
+
+            thread1.start()
+            thread2.start()
+
+            thread1.join()
+            thread2.join()
+
+            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
+
+        assert "db_1" not in self.source.list_database_names()
+        assert "db_2" not in self.source.list_database_names()
 
         self.compare_all()
