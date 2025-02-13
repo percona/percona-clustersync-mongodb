@@ -489,21 +489,18 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 	}
 }
 
+var insertDocOptions = options.Replace().SetUpsert(true)
+
 func (r *ChangeReplicator) handleInsert(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[InsertEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
 	}
 
-	// TODO: use replaceOne to ensure the changed version
 	_, err = r.Target.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
-		InsertOne(ctx, event.FullDocument)
+		ReplaceOne(ctx, event.DocumentKey, event.FullDocument, insertDocOptions)
 
-	if mongo.IsDuplicateKeyError(err) {
-		// log.Error(ctx, err, "DuplicateKeyError")
-		err = nil
-	}
 	return err //nolint:wrapcheck
 }
 
