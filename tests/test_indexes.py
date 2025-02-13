@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+from datetime import datetime
+
 import pytest
 from _base import BaseTesting
 
@@ -223,5 +225,34 @@ class TestModifyIndexes(BaseTesting):
 
         indexes = self.source["db_1"]["coll_1"].index_information()
         assert not indexes[index_name].get("hidden")
+
+        self.compare_all()
+
+
+class TestIndexFixes(BaseTesting):
+    def test_pml_56_ttl_mismatch(self):
+        self.drop_all_database()
+
+        with self.perform(Runner.Phase.APPLY):
+            self.source["db_1"].drop_collection("coll_1")
+            self.source["db_1"]["coll_1"].insert_many(
+                [
+                    {"created_at": datetime.now(), "short_lived": True},
+                    {"created_at": datetime.now(), "long_lived": True},
+                ]
+            )
+            self.source["db_1"]["coll_1"].create_index(
+                {"created_at": 1},
+                name="short_ttl_index",
+                expireAfterSeconds=1260,
+            )
+
+            source_indexes = self.source["db_1"]["coll_1"].index_information()
+            assert source_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
+
+            self.source["db_0"]["coll_0"].insert_one({})  # PML-61
+
+        target_indexes = self.target["db_1"]["coll_1"].index_information()
+        assert target_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
 
         self.compare_all()
