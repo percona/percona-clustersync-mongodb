@@ -30,9 +30,13 @@ type IndexSpecification struct {
 	Clustered    *bool    `bson:"clustered,omitempty"`
 	Hidden       *bool    `bson:"hidden,omitempty"`
 
-	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
+	Weights          any                `bson:"weights,omitempty"`
+	DefaultLanguage  *string            `bson:"default_language,omitempty"`
+	LanguageOverride *string            `bson:"language_override,omitempty"`
+	TextVersion      *int32             `bson:"textIndexVersion,omitempty"`
+	Collation        *options.Collation `bson:"collation,omitempty"`
 
-	Collation *options.Collation `bson:"collation,omitempty"`
+	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
 }
 
 func (s *IndexSpecification) isClustered() bool {
@@ -237,7 +241,11 @@ func buildIndexes(
 				ExpireAfterSeconds:      expireAfter,
 				PartialFilterExpression: index.PartialFilterExpression,
 
-				Collation: index.Collation,
+				Weights:          index.Weights,
+				DefaultLanguage:  index.DefaultLanguage,
+				LanguageOverride: index.LanguageOverride,
+				TextVersion:      index.TextVersion,
+				Collation:        index.Collation,
 			},
 		}
 	}
