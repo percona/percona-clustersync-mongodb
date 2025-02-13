@@ -110,6 +110,24 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_text(self, phase):
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"i": "text"})
+
+        self.compare_all()
+
+    def test_create_text_wildcard(self, phase):
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"$**": "text"})
+
+        self.compare_all()
+
     def test_create_ttl(self, phase):
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
