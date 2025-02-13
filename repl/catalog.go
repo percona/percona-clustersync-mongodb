@@ -14,8 +14,13 @@ import (
 	"github.com/percona-lab/percona-mongolink/errors"
 )
 
+type (
+	DBName   = string
+	CollName = string
+)
+
 type IndexSpecification struct {
-	Name         string   `bson:"name"`
+	Name         CollName `bson:"name"`
 	Namespace    string   `bson:"ns"`
 	KeysDocument bson.Raw `bson:"key"`
 	Version      int32    `bson:"v"`
@@ -37,36 +42,36 @@ func (s *IndexSpecification) isClustered() bool {
 type Catalog struct {
 	mu sync.Mutex
 
-	cat map[string]map[string][]IndexSpecification
+	cat map[DBName]map[CollName][]IndexSpecification
 }
 
 func NewCatalog() *Catalog {
-	return &Catalog{cat: make(map[string]map[string][]IndexSpecification)}
+	return &Catalog{cat: make(map[DBName]map[CollName][]IndexSpecification)}
 }
 
-func (ic *Catalog) CreateIndexes(db, coll string, indexes []IndexSpecification) {
+func (ic *Catalog) CreateIndexes(db DBName, coll CollName, indexes []IndexSpecification) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
 	if _, ok := ic.cat[db]; !ok {
-		ic.cat[db] = make(map[string][]IndexSpecification)
+		ic.cat[db] = make(map[CollName][]IndexSpecification)
 	}
 
 	ic.cat[db][coll] = append(ic.cat[db][coll], indexes...)
 }
 
-func (ic *Catalog) CreateIndex(db, coll string, index IndexSpecification) {
+func (ic *Catalog) CreateIndex(db DBName, coll CollName, index IndexSpecification) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
 	if _, ok := ic.cat[db]; !ok {
-		ic.cat[db] = make(map[string][]IndexSpecification)
+		ic.cat[db] = make(map[CollName][]IndexSpecification)
 	}
 
 	ic.cat[db][coll] = append(ic.cat[db][coll], index)
 }
 
-func (ic *Catalog) DropIndex(db, coll, name string) {
+func (ic *Catalog) DropIndex(db DBName, coll CollName, name string) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
@@ -79,14 +84,14 @@ func (ic *Catalog) DropIndex(db, coll, name string) {
 	})
 }
 
-func (ic *Catalog) DropCollection(db, coll string) {
+func (ic *Catalog) DropCollection(db DBName, coll CollName) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
 	delete(ic.cat[db], coll)
 }
 
-func (ic *Catalog) DropDatabase(db string) {
+func (ic *Catalog) DropDatabase(db DBName) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
@@ -96,8 +101,8 @@ func (ic *Catalog) DropDatabase(db string) {
 func (ic *Catalog) BuildCollectionIndexes(
 	ctx context.Context,
 	m *mongo.Client,
-	db string,
-	coll string,
+	db DBName,
+	coll CollName,
 ) error {
 	return buildIndexes(ctx, m, db, coll, ic.cat[db][coll])
 }
@@ -152,15 +157,15 @@ func (e TimeseriesError) Error() string {
 func createView(
 	ctx context.Context,
 	m *mongo.Client,
-	dbName string,
-	viewName string,
+	db DBName,
+	viewName CollName,
 	opts *createCollectionOptions,
 ) error {
 	if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
-		return TimeseriesError{Namespace{dbName, viewName}}
+		return TimeseriesError{Namespace{db, viewName}}
 	}
 
-	err := m.Database(dbName).CreateView(ctx,
+	err := m.Database(db).CreateView(ctx,
 		viewName,
 		opts.ViewOn,
 		opts.Pipeline,
@@ -171,8 +176,8 @@ func createView(
 func createCollection(
 	ctx context.Context,
 	m *mongo.Client,
-	dbName string,
-	collName string,
+	db DBName,
+	collName CollName,
 	opts *createCollectionOptions,
 ) error {
 	cmd := bson.D{{"create", collName}}
@@ -196,20 +201,20 @@ func createCollection(
 		cmd = append(cmd, bson.E{"collation", opts.Collation.ToDocument()}) //nolint:staticcheck
 	}
 
-	res := m.Database(dbName).RunCommand(ctx, cmd)
+	res := m.Database(db).RunCommand(ctx, cmd)
 	return errors.Wrap(res.Err(), "create collection")
 }
 
-func dropCollection(ctx context.Context, m *mongo.Client, dbName, collName string) error {
-	err := m.Database(dbName).Collection(collName).Drop(ctx)
+func dropCollection(ctx context.Context, m *mongo.Client, db DBName, collName string) error {
+	err := m.Database(db).Collection(collName).Drop(ctx)
 	return errors.Wrap(err, "drop collection")
 }
 
 func buildIndexes(
 	ctx context.Context,
 	m *mongo.Client,
-	db string,
-	coll string,
+	db DBName,
+	coll CollName,
 	indexes []IndexSpecification,
 ) error {
 	models := make([]mongo.IndexModel, len(indexes))
