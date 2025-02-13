@@ -307,6 +307,33 @@ type dropIndexesOpDesc struct {
 	Indexes []IndexSpecification `bson:"indexes"`
 }
 
+// ModifyEvent when a collection is modified, such as when the collMod command
+// adds or remove options from a collection or view. This event is received only
+// if the change stream has the showExpandedEvents option set to true.
+//
+// New in version 6.0.
+type ModifyEvent struct {
+	BaseEvent `bson:",inline"`
+
+	// OperationDescription	is additional information on the change operation.
+	//
+	// This document and its subfields only appears when the change stream uses
+	// expanded events.
+	//
+	// New in version 6.0.
+	OperationDescription modifyOpDesc `bson:"operationDescription"`
+}
+
+type modifyOpDesc struct {
+	// Index is the index that was modified.
+	//
+	// New in version 6.0.
+	Index *struct {
+		Name   string `bson:"name"`
+		Hidden *bool  `bson:"hidden"`
+	} `bson:"index"`
+}
+
 // InsertEvent occurs when an operation adds documents to a collection.
 type InsertEvent struct {
 	// DocumentKey is document that contains the _id value of the document

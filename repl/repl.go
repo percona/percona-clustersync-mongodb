@@ -283,6 +283,10 @@ func (r *ChangeReplicator) apply(ctx context.Context, data bson.Raw) error {
 		err = r.handleCreateIndexes(ctx, data)
 	case DropIndexes:
 		err = r.handleDropIndexes(ctx, data)
+
+	case Modify:
+		err = r.handleModify(ctx, data)
+
 	case Insert:
 		err = r.handleInsert(ctx, data)
 	case Delete:
@@ -298,8 +302,6 @@ func (r *ChangeReplicator) apply(ctx context.Context, data bson.Raw) error {
 		return nil
 
 	case Rename:
-		fallthrough
-	case Modify:
 		fallthrough
 	case ShardCollection:
 		fallthrough
@@ -439,6 +441,39 @@ func (r *ChangeReplicator) handleDropIndexes(ctx context.Context, data bson.Raw)
 	}
 
 	return nil
+}
+
+func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) error {
+	event, err := parseEvent[ModifyEvent](data)
+	if err != nil {
+		return errors.Wrap(err, "parse")
+	}
+
+	db := event.Namespace.Database
+	coll := event.Namespace.Collection
+	opts := event.OperationDescription
+
+	switch {
+	case opts.Index != nil:
+		if opts.Index.Hidden != nil {
+			res := r.Target.Database(db).RunCommand(ctx, bson.D{
+				{"collMod", coll},
+				{"index", bson.D{
+					{"name", opts.Index.Name},
+					{"hidden", *opts.Index.Hidden},
+				}},
+			})
+			if err := res.Err(); err != nil {
+				return errors.Wrap(err, "convert index: "+opts.Index.Name)
+			}
+
+			return nil
+		}
+
+		fallthrough
+	default:
+		return errors.New("unknown modify")
+	}
 }
 
 func (r *ChangeReplicator) handleInsert(ctx context.Context, data bson.Raw) error {
