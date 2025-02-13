@@ -58,39 +58,39 @@ type StartOptions struct {
 	ExcludeNamespaces []string
 }
 
-func (r *Coordinator) Start(ctx context.Context, options *StartOptions) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	ctx = log.WithAttrs(ctx, log.Scope("coord:repl"))
 
-	if r.state != IdleState && r.state != FinalizedState {
-		return errors.New(string(r.state))
+	if c.state != IdleState && c.state != FinalizedState {
+		return errors.New(string(c.state))
 	}
 
 	if options == nil {
 		options = &StartOptions{}
 	}
 
-	r.drop = options.DropBeforeCreate
-	r.nsFilter = makeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	c.drop = options.DropBeforeCreate
+	c.nsFilter = makeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
 
-	r.repl = nil
-	r.startedAt = primitive.Timestamp{}
-	r.clonedAt = primitive.Timestamp{}
-	r.state = RunningState
+	c.repl = nil
+	c.startedAt = primitive.Timestamp{}
+	c.clonedAt = primitive.Timestamp{}
+	c.state = RunningState
 
 	go func() {
 		ctx := log.CopyContext(ctx, context.Background())
-		err := r.run(ctx)
+		err := c.run(ctx)
 		if err != nil {
 			log.Error(ctx, err, "run")
 			return
 		}
 
-		r.mu.Lock()
-		r.state = FinalizedState
-		r.mu.Unlock()
+		c.mu.Lock()
+		c.state = FinalizedState
+		c.mu.Unlock()
 
 		log.Info(ctx, "finalized")
 	}()
@@ -99,25 +99,25 @@ func (r *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	return nil
 }
 
-func (r *Coordinator) run(ctx context.Context) error {
+func (c *Coordinator) run(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("coord:run"))
 	log.Info(ctx, "starting data cloning")
 
-	startedAt, err := topo.ClusterTime(ctx, r.source)
+	startedAt, err := topo.ClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "get cluster time")
 	}
 
-	r.mu.Lock()
-	r.startedAt = startedAt
-	r.mu.Unlock()
+	c.mu.Lock()
+	c.startedAt = startedAt
+	c.mu.Unlock()
 
 	catalog := NewCatalog()
 	cloner := DataCloner{
-		Source:       r.source,
-		Target:       r.target,
-		Drop:         r.drop,
-		NSFilter:     r.nsFilter,
+		Source:       c.source,
+		Target:       c.target,
+		Drop:         c.drop,
+		NSFilter:     c.nsFilter,
 		IndexCatalog: catalog,
 	}
 
@@ -126,23 +126,23 @@ func (r *Coordinator) run(ctx context.Context) error {
 		return errors.Wrap(err, "close")
 	}
 
-	clonedAt, err := topo.ClusterTime(ctx, r.source)
+	clonedAt, err := topo.ClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "get cluster time")
 	}
 
 	repl := &ChangeReplicator{
-		Source:   r.source,
-		Target:   r.target,
-		Drop:     r.drop,
-		NSFilter: r.nsFilter,
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
 		Catalog:  catalog,
 	}
 
-	r.mu.Lock()
-	r.clonedAt = clonedAt
-	r.repl = repl
-	r.mu.Unlock()
+	c.mu.Lock()
+	c.clonedAt = clonedAt
+	c.repl = repl
+	c.mu.Unlock()
 
 	log.Infof(ctx, "starting change replication at %d.%d", startedAt.T, startedAt.I)
 	err = repl.Start(ctx, startedAt)
@@ -155,7 +155,7 @@ func (r *Coordinator) run(ctx context.Context) error {
 		return errors.Wrap(err, "change replication")
 	}
 
-	err = catalog.FinalizeIndexes(ctx, r.target)
+	err = catalog.FinalizeIndexes(ctx, c.target)
 	if err != nil {
 		return errors.Wrap(err, "finalize indexes")
 	}
@@ -163,36 +163,36 @@ func (r *Coordinator) run(ctx context.Context) error {
 	return nil
 }
 
-func (r *Coordinator) Finalize(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (c *Coordinator) Finalize(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if r.state != RunningState {
-		return errors.New(string(r.state))
+	if c.state != RunningState {
+		return errors.New(string(c.state))
 	}
 
-	if r.repl == nil || r.repl.GetLastAppliedOpTime().Before(r.clonedAt) {
+	if c.repl == nil || c.repl.GetLastAppliedOpTime().Before(c.clonedAt) {
 		return errors.New("not ready")
 	}
 
-	r.repl.Pause()
+	c.repl.Pause()
 
-	r.state = FinalizingState
+	c.state = FinalizingState
 	log.Info(ctx, "finalizing")
 	return nil
 }
 
-func (r *Coordinator) Status(ctx context.Context) (*Status, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	s := &Status{
-		State: r.state,
+		State: c.state,
 	}
 
-	if r.repl != nil {
-		optime := r.repl.GetLastAppliedOpTime()
-		s.Finalizable = !optime.Before(r.clonedAt)
+	if c.repl != nil {
+		optime := c.repl.GetLastAppliedOpTime()
+		s.Finalizable = !optime.Before(c.clonedAt)
 		s.LastAppliedOpTime = optime
 	}
 	return s, nil

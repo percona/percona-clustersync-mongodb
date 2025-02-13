@@ -49,69 +49,69 @@ func NewCatalog() *Catalog {
 	return &Catalog{cat: make(map[DBName]map[CollName][]IndexSpecification)}
 }
 
-func (ic *Catalog) CreateIndexes(db DBName, coll CollName, indexes []IndexSpecification) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) CreateIndexes(db DBName, coll CollName, indexes []IndexSpecification) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if _, ok := ic.cat[db]; !ok {
-		ic.cat[db] = make(map[CollName][]IndexSpecification)
+	if _, ok := c.cat[db]; !ok {
+		c.cat[db] = make(map[CollName][]IndexSpecification)
 	}
 
-	ic.cat[db][coll] = append(ic.cat[db][coll], indexes...)
+	c.cat[db][coll] = append(c.cat[db][coll], indexes...)
 }
 
-func (ic *Catalog) CreateIndex(db DBName, coll CollName, index IndexSpecification) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) CreateIndex(db DBName, coll CollName, index IndexSpecification) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if _, ok := ic.cat[db]; !ok {
-		ic.cat[db] = make(map[CollName][]IndexSpecification)
+	if _, ok := c.cat[db]; !ok {
+		c.cat[db] = make(map[CollName][]IndexSpecification)
 	}
 
-	ic.cat[db][coll] = append(ic.cat[db][coll], index)
+	c.cat[db][coll] = append(c.cat[db][coll], index)
 }
 
-func (ic *Catalog) DropIndex(db DBName, coll CollName, name string) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) DropIndex(db DBName, coll CollName, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if _, ok := ic.cat[db]; !ok {
+	if _, ok := c.cat[db]; !ok {
 		return
 	}
 
-	ic.cat[db][coll] = slices.DeleteFunc(ic.cat[db][coll], func(index IndexSpecification) bool {
+	c.cat[db][coll] = slices.DeleteFunc(c.cat[db][coll], func(index IndexSpecification) bool {
 		return index.Name == name
 	})
 }
 
-func (ic *Catalog) DropCollection(db DBName, coll CollName) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) DropCollection(db DBName, coll CollName) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	delete(ic.cat[db], coll)
+	delete(c.cat[db], coll)
 }
 
-func (ic *Catalog) DropDatabase(db DBName) {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) DropDatabase(db DBName) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	delete(ic.cat, db)
+	delete(c.cat, db)
 }
 
-func (ic *Catalog) BuildCollectionIndexes(
+func (c *Catalog) BuildCollectionIndexes(
 	ctx context.Context,
 	m *mongo.Client,
 	db DBName,
 	coll CollName,
 ) error {
-	return buildIndexes(ctx, m, db, coll, ic.cat[db][coll])
+	return buildIndexes(ctx, m, db, coll, c.cat[db][coll])
 }
 
-func (ic *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	for db, colls := range ic.cat {
+	for db, colls := range c.cat {
 		for coll, indexes := range colls {
 			for _, index := range indexes {
 				if index.ExpireAfter == nil {
