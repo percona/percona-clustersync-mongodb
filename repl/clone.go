@@ -2,10 +2,12 @@ package repl
 
 import (
 	"context"
+	"runtime"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
@@ -29,6 +31,9 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 		return errors.Wrap(err, "list databases")
 	}
 
+	grp, grpCtx := errgroup.WithContext(ctx)
+	grp.SetLimit(runtime.NumCPU())
+
 	for _, db := range databases {
 		colls, err := c.Source.Database(db).ListCollectionSpecifications(ctx, bson.D{})
 		if err != nil {
@@ -39,30 +44,35 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 			if strings.HasPrefix(spec.Name, "system.") {
 				continue
 			}
+
 			if !c.NSFilter(db, spec.Name) {
 				log.Trace(log.WithAttrs(ctx, log.NS(db, spec.Name)), "not selected")
 				continue
 			}
 
-			ctx := log.WithAttrs(ctx, log.NS(db, spec.Name))
-			log.Tracef(ctx, "")
+			grp.Go(func() error {
+				ctx := log.WithAttrs(grpCtx, log.NS(db, spec.Name))
+				log.Tracef(ctx, "")
 
-			var err error
-			switch spec.Type {
-			case "collection":
-				err = c.cloneCollection(ctx, db, spec)
-			case "view":
-				err = c.cloneView(ctx, db, spec)
-			case "timeseries":
-				log.Warn(ctx, "timeseries is not supported. skip")
-			}
-			if err != nil {
-				return errors.Wrapf(err, "clone %s.%s", db, spec.Name)
-			}
+				var err error
+				switch spec.Type {
+				case "collection":
+					err = c.cloneCollection(ctx, db, spec)
+				case "view":
+					err = c.cloneView(ctx, db, spec)
+				case "timeseries":
+					log.Warn(ctx, "timeseries is not supported. skip")
+				}
+				if err != nil {
+					return errors.Wrapf(err, "clone %s.%s", db, spec.Name)
+				}
+
+				return nil
+			})
 		}
 	}
 
-	return nil
+	return grp.Wait() //nolint:wrapcheck
 }
 
 func (c *DataCloner) cloneCollection(
