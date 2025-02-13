@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -126,7 +127,6 @@ func (r *ChangeReplicator) startImpl(ctx context.Context, ts *primitive.Timestam
 		ctx, cancel := context.WithCancel(log.CopyContext(ctx, context.Background()))
 
 		defer func() {
-			log.Trace(ctx, "canceling loop")
 			cancel()
 
 			select {
@@ -153,7 +153,6 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 
 	go func() {
 		<-r.stopSig
-		log.Trace(ctx, "not running. stopping change stream")
 		cancel()
 	}()
 
@@ -161,6 +160,30 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 
 	go func() {
 		defer close(eventC)
+
+		const tickInternal = 5 * time.Second
+		ticker := time.NewTicker(tickInternal)
+		defer ticker.Stop()
+
+		go func() {
+			ctx := log.WithAttrs(ctx, log.Scope("repl:loop:tick"))
+			coll := r.Source.Database("percona_mongolink").Collection("tick")
+
+			for {
+				select {
+				case t := <-ticker.C:
+					_, err := coll.UpdateOne(ctx,
+						bson.D{{"_id", ""}},
+						bson.D{{"$set", bson.D{{"t", t}}}},
+						options.Update().SetUpsert(true))
+					if err != nil {
+						log.Error(ctx, err, "")
+					}
+				case <-r.stopSig:
+					return
+				}
+			}
+		}()
 
 		cur, err := r.Source.Watch(cursorCtx, mongo.Pipeline{}, opts)
 		if err != nil {
@@ -174,15 +197,8 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 		defer cur.Close(cursorCtx)
 
 		for cur.Next(cursorCtx) {
-			baseEvent, _ := parseEvent[BaseEvent](cur.Current)
-			ctx := log.WithAttrs(ctx,
-				log.Operation(string(baseEvent.OperationType)),
-				log.OpTime(baseEvent.ClusterTime),
-				log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection),
-				log.Tx(baseEvent.TxnNumber, baseEvent.LSID))
-
-			log.Trace(ctx, "")
 			eventC <- cur.Current
+			ticker.Reset(tickInternal)
 		}
 		if err := cur.Err(); err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -190,7 +206,6 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 				return
 			}
 
-			log.Trace(ctx, "context canceled. exit")
 			return
 		}
 	}()
@@ -201,7 +216,6 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 		event, ok := <-eventC
 		if !ok {
 			r.pause(errors.Wrap(changeStreamError, "cursor"))
-			log.Trace(ctx, "exit")
 			return
 		}
 
@@ -212,7 +226,6 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 				innerEvent, ok := <-eventC
 				if !ok {
 					r.pause(errors.Wrap(changeStreamError, "cursor"))
-					log.Trace(ctx, "exit")
 					return
 				}
 

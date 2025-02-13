@@ -126,8 +126,6 @@ class TestCollection(BaseTesting):
                 {"ts": datetime.now(), "meta": {"i": i}} for i in range(10)
             )
 
-            self.source["db_1"]["coll_2"].insert_one({})  # FIXME: PML-61
-
         assert "test" not in self.target.list_database_names()
 
     def test_drop_collection(self, phase):

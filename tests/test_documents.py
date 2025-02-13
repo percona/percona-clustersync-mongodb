@@ -86,8 +86,6 @@ class TestCRUDOperation(BaseTesting):
         with self.perform(phase):
             self.source["db_1"]["coll_1"].delete_many({"i": {"$gt": 2}})
 
-            self.source["db_0"]["coll_0"].insert_one({})  # FIXME: PML-61
-
         assert self.source["db_1"]["coll_1"].count_documents({}) == 3
 
         self.compare_all()

@@ -98,7 +98,7 @@ class Runner:
             time.sleep(0.2)
             status = self.mlink.status()
 
-    def wait_for_optime(self, ts: bson.Timestamp, timeout=5):
+    def wait_for_optime(self, ts: bson.Timestamp, timeout=10):
         status = self.mlink.status()
         assert status["state"] == MLink.State.RUNNING
 
@@ -114,7 +114,7 @@ class Runner:
 
         raise WaitTimeoutError()
 
-    def wait_for_finalizable(self, timeout=5):
+    def wait_for_finalizable(self, timeout=10):
         status = self.mlink.status()
         assert status["state"] == MLink.State.RUNNING
 
