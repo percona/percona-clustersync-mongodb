@@ -230,10 +230,11 @@ class TestModifyIndexes(BaseTesting):
 
 
 class TestIndexFixes(BaseTesting):
-    def test_pml_56_ttl_mismatch(self):
+    @pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+    def test_pml_56_ttl_mismatch(self, phase):
         self.drop_all_database()
 
-        with self.perform(Runner.Phase.APPLY):
+        with self.perform(phase):
             self.source["db_1"].drop_collection("coll_1")
             self.source["db_1"]["coll_1"].insert_many(
                 [
