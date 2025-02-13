@@ -176,3 +176,52 @@ class TestIndexesManually(BaseTesting):
             raise
 
         self.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+class TestModifyIndexes(BaseTesting):
+    def test_hide_index(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert not indexes[index_name].get("hidden")
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "name": index_name,
+                        "hidden": True,
+                    },
+                }
+            )
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name].get("hidden")
+
+        self.compare_all()
+
+    def test_unhide_index(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name].get("hidden")
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "name": index_name,
+                        "hidden": False,
+                    },
+                }
+            )
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert not indexes[index_name].get("hidden")
+
+        self.compare_all()
