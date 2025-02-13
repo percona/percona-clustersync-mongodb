@@ -14,11 +14,11 @@ import (
 )
 
 type DataCloner struct {
-	Source       *mongo.Client
-	Target       *mongo.Client
-	Drop         bool
-	NSFilter     NSFilter
-	IndexCatalog *Catalog
+	Source   *mongo.Client
+	Target   *mongo.Client
+	Drop     bool
+	NSFilter NSFilter
+	Catalog  *Catalog
 }
 
 func (c *DataCloner) Clone(ctx context.Context) error {
@@ -102,7 +102,7 @@ func (c *DataCloner) cloneCollection(
 			continue
 		}
 
-		c.IndexCatalog.CreateIndex(db, spec.Name, indexes[i])
+		c.Catalog.CreateIndex(db, spec.Name, indexes[i])
 	}
 
 	if c.Drop {
@@ -123,7 +123,7 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "create collection")
 	}
 
-	err = c.IndexCatalog.BuildCollectionIndexes(ctx, c.Target, db, spec.Name)
+	err = c.Catalog.BuildCollectionIndexes(ctx, c.Target, db, spec.Name)
 	if err != nil {
 		return errors.Wrap(err, "build collection indexes")
 	}

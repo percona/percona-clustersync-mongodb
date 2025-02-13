@@ -114,11 +114,11 @@ func (c *Coordinator) run(ctx context.Context) error {
 
 	catalog := NewCatalog()
 	cloner := DataCloner{
-		Source:       c.source,
-		Target:       c.target,
-		Drop:         c.drop,
-		NSFilter:     c.nsFilter,
-		IndexCatalog: catalog,
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
+		Catalog:  catalog,
 	}
 
 	err = cloner.Clone(ctx)
