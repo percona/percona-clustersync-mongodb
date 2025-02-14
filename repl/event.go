@@ -171,18 +171,18 @@ type BaseEvent struct {
 	// doesn't exist.
 	//
 	// New in version 6.0.
-	CollectionUUID *primitive.Binary `bson:"collectionUUID,omitempty"`
+	CollectionUUID *primitive.Binary `bson:"collectionUUID"`
 
 	// TxnNumber together with the lsid, a number that helps uniquely identify
 	// a transction.
 	//
 	// Only present if the operation is part of a multi-document transaction.
-	TxnNumber *int64 `bson:"txnNumber,omitempty"`
+	TxnNumber *int64 `bson:"txnNumber"`
 
 	// LSID is the identifier for the session associated with the transaction.
 	//
 	// Only present if the operation is part of a multi-document transaction.
-	LSID bson.Raw `bson:"lsid,omitempty"`
+	LSID bson.Raw `bson:"lsid"`
 
 	// ID is a BSON object which serves as an identifier for the change stream
 	// event.
@@ -230,7 +230,7 @@ type CreateEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription *createCollectionOptions `bson:"operationDescription,omitempty"`
+	OperationDescription createCollectionOptions `bson:"operationDescription"`
 
 	BaseEvent `bson:",inline"`
 }
@@ -244,17 +244,16 @@ func (e CreateEvent) IsTimeseries() bool {
 }
 
 type createCollectionOptions struct {
-	IDIndex        bson.D `bson:"idIndex,omitempty"`
-	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
+	ClusteredIndex bson.D `bson:"clusteredIndex"`
 
 	Capped bool  `bson:"capped"`
 	Size   int32 `bson:"size"`
 	Max    int32 `bson:"max"`
 
 	ViewOn   string `bson:"viewOn"`
-	Pipeline []any  `bson:"pipeline"`
+	Pipeline any    `bson:"pipeline"`
 
-	Collation *options.Collation `bson:"collation,omitempty"`
+	Collation *options.Collation `bson:"collation"`
 }
 
 // DropEvent occurs when a collection is dropped from a database.
@@ -280,11 +279,11 @@ type CreateIndexesEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription createIndexesOpDesc `bson:"operationDescription,omitempty"`
+	OperationDescription createIndexesOpDesc `bson:"operationDescription"`
 }
 
 type createIndexesOpDesc struct {
-	Indexes []IndexSpecification `bson:"indexes"`
+	Indexes []*IndexSpecification `bson:"indexes"`
 }
 
 // CreateIndexesEvent occurs when an index is dropped from the collection and
@@ -300,7 +299,7 @@ type DropIndexesEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription dropIndexesOpDesc `bson:"operationDescription,omitempty"`
+	OperationDescription dropIndexesOpDesc `bson:"operationDescription"`
 }
 
 type dropIndexesOpDesc struct {
@@ -328,10 +327,25 @@ type modifyOpDesc struct {
 	// Index is the index that was modified.
 	//
 	// New in version 6.0.
-	Index *struct {
-		Name   string `bson:"name"`
-		Hidden *bool  `bson:"hidden"`
-	} `bson:"index"`
+	Index *modifyIndexOption `bson:"index"`
+
+	CappedSize *int64 `bson:"cappedSize"`
+	CappedMax  *int64 `bson:"cappedMax"`
+
+	ViewOn   string `bson:"viewOn"`
+	Pipeline any    `bson:"pipeline"`
+
+	// Indexes is an array of documents listing the indexes that were changed by
+	// the operation.
+	// Indexes []any `bson:"indexes"`
+}
+
+type modifyIndexOption struct {
+	Name               string `bson:"name"`
+	Hidden             *bool  `bson:"hidden"`
+	Unique             *bool  `bson:"unique"`
+	PrepareUnique      *bool  `bson:"prepareUnique"`
+	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds"`
 }
 
 // InsertEvent occurs when an operation adds documents to a collection.
@@ -402,7 +416,7 @@ type UpdateEvent struct {
 	// included for insert events.
 	//
 	// Changed in version 6.0.
-	FullDocument bson.D `bson:"fullDocument,omitempty"`
+	FullDocument bson.D `bson:"fullDocument"`
 
 	// FullDocumentBeforeChange is the document before changes were applied by
 	// the operation. That is, the document pre-image.
@@ -412,7 +426,7 @@ type UpdateEvent struct {
 	// or collMod commands.
 	//
 	// New in version 6.0.
-	// FullDocumentBeforeChange bson.D `bson:"fullDocumentBeforeChange,omitempty"`
+	// FullDocumentBeforeChange bson.D `bson:"fullDocumentBeforeChange"`
 
 	UpdateDescription UpdateDescription `bson:"updateDescription"`
 
@@ -433,10 +447,10 @@ type UpdateDescription struct {
 	// Requires that you set the showExpandedEvents option to true.
 	//
 	// New in version 6.1.
-	DisambiguatedPaths bson.D `bson:"disambiguatedPaths,omitempty"`
+	DisambiguatedPaths bson.D `bson:"disambiguatedPaths"`
 
 	// An array of fields that were removed by the update operation.
-	RemovedFields []string `bson:"removedFields,omitempty"`
+	RemovedFields []string `bson:"removedFields"`
 
 	// An array of documents which record array truncations performed with
 	// pipeline-based updates using one or more of the following stages:
@@ -453,13 +467,13 @@ type UpdateDescription struct {
 
 		// NewSize is the number of elements in the truncated array.
 		NewSize int32 `bson:"newSize"`
-	} `bson:"truncatedArrays,omitempty"`
+	} `bson:"truncatedArrays"`
 
 	// A document whose keys correspond to the fields that were modified by
 	// the update operation. The value of each field corresponds to the new
 	// value of those fields, rather than the operation that resulted in
 	// the new value.
-	UpdatedFields bson.D `bson:"updatedFields,omitempty"`
+	UpdatedFields bson.D `bson:"updatedFields"`
 }
 
 // ReplaceEvent occurs when an update operation removes a document from
@@ -483,7 +497,7 @@ type ReplaceEvent struct {
 	// included for insert events.
 	//
 	// Changed in version 6.0.
-	FullDocument bson.Raw `bson:"fullDocument,omitempty"`
+	FullDocument bson.Raw `bson:"fullDocument"`
 
 	// FullDocumentBeforeChange is the document before changes were applied by
 	// the operation. That is, the document pre-image.
@@ -493,7 +507,7 @@ type ReplaceEvent struct {
 	// or collMod commands.
 	//
 	// New in version 6.0.
-	// FullDocumentBeforeChange bson.Raw `bson:"fullDocumentBeforeChange,omitempty"`
+	// FullDocumentBeforeChange bson.Raw `bson:"fullDocumentBeforeChange"`
 
 	BaseEvent `bson:",inline"`
 }

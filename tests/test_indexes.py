@@ -187,7 +187,7 @@ class TestModifyIndexes(BaseTesting):
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
 
         indexes = self.source["db_1"]["coll_1"].index_information()
-        assert not indexes[index_name].get("hidden")
+        assert "hidden" not in indexes[index_name]
 
         with self.perform(phase):
             self.source["db_1"].command(
@@ -201,7 +201,7 @@ class TestModifyIndexes(BaseTesting):
             )
 
         indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name].get("hidden")
+        assert indexes[index_name]["hidden"]
 
         self.compare_all()
 
@@ -210,21 +210,110 @@ class TestModifyIndexes(BaseTesting):
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
 
         indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name].get("hidden")
+        assert "hidden" in indexes[index_name]
 
         with self.perform(phase):
             self.source["db_1"].command(
                 {
                     "collMod": "coll_1",
                     "index": {
-                        "name": index_name,
+                        "keyPattern": {"i": 1},
                         "hidden": False,
                     },
                 }
             )
 
         indexes = self.source["db_1"]["coll_1"].index_information()
-        assert not indexes[index_name].get("hidden")
+        assert "hidden" not in indexes[index_name]
+
+        self.compare_all()
+
+    def test_modify_ttl(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=123)
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name]["expireAfterSeconds"] == 123
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "keyPattern": {"i": 1},
+                        "expireAfterSeconds": 432,
+                    },
+                }
+            )
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name]["expireAfterSeconds"] == 432
+
+        self.compare_all()
+
+    def test_unique(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert "prepareUnique" not in indexes[index_name]
+        assert "unique" not in indexes[index_name]
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {"keyPattern": {"i": 1}, "prepareUnique": True},
+                }
+            )
+
+            indexes = self.source["db_1"]["coll_1"].index_information()
+            assert indexes[index_name]["prepareUnique"]
+            assert "unique" not in indexes[index_name]
+
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "keyPattern": {"i": 1},
+                        "unique": True,
+                    },
+                }
+            )
+
+            indexes = self.source["db_1"]["coll_1"].index_information()
+            assert "prepareUnique" not in indexes[index_name]
+            assert indexes[index_name]["unique"]
+
+        self.compare_all()
+
+    def test_many_props(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name]["prepareUnique"]
+        assert "expireAfterSeconds" not in indexes[index_name]
+        assert "unique" not in indexes[index_name]
+        assert "hidden" not in indexes[index_name]
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "keyPattern": {"i": 1},
+                        "unique": True,
+                        "hidden": True,
+                        "expireAfterSeconds": 432,
+                    },
+                }
+            )
+
+        indexes = self.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name]["unique"]
+        assert indexes[index_name]["hidden"]
+        assert indexes[index_name]["expireAfterSeconds"] == 432
 
         self.compare_all()
 

@@ -3,6 +3,7 @@ package repl
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -354,7 +355,7 @@ func (r *ChangeReplicator) handleCreate(ctx context.Context, data bson.Raw) erro
 	}
 
 	if r.Drop {
-		err = dropCollection(ctx,
+		err = r.Catalog.DropCollection(ctx,
 			r.Target,
 			event.Namespace.Database,
 			event.Namespace.Collection)
@@ -364,19 +365,19 @@ func (r *ChangeReplicator) handleCreate(ctx context.Context, data bson.Raw) erro
 	}
 
 	if event.IsView() {
-		return createView(ctx,
+		return r.Catalog.CreateView(ctx,
 			r.Target,
 			event.Namespace.Database,
 			event.Namespace.Collection,
-			event.OperationDescription,
+			&event.OperationDescription,
 		)
 	}
 
-	return createCollection(ctx,
+	return r.Catalog.CreateCollection(ctx,
 		r.Target,
 		event.Namespace.Database,
 		event.Namespace.Collection,
-		event.OperationDescription,
+		&event.OperationDescription,
 	)
 }
 
@@ -386,13 +387,8 @@ func (r *ChangeReplicator) handleDrop(ctx context.Context, data bson.Raw) error 
 		return errors.Wrap(err, "parse")
 	}
 
-	err = dropCollection(ctx, r.Target, event.Namespace.Database, event.Namespace.Collection)
-	if err != nil {
-		return err
-	}
-
-	r.Catalog.DropCollection(event.Namespace.Database, event.Namespace.Collection)
-	return nil
+	err = r.Catalog.DropCollection(ctx, r.Target, event.Namespace.Database, event.Namespace.Collection)
+	return err
 }
 
 func (r *ChangeReplicator) handleDropDatabase(ctx context.Context, data bson.Raw) error {
@@ -401,13 +397,8 @@ func (r *ChangeReplicator) handleDropDatabase(ctx context.Context, data bson.Raw
 		return errors.Wrap(err, "parse")
 	}
 
-	err = r.Target.Database(event.Namespace.Database).Drop(ctx)
-	if err != nil {
-		return err //nolint:wrapcheck
-	}
-
-	r.Catalog.DropDatabase(event.Namespace.Database)
-	return nil
+	err = r.Catalog.DropDatabase(ctx, r.Target, event.Namespace.Database)
+	return err
 }
 
 func (r *ChangeReplicator) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
@@ -416,20 +407,12 @@ func (r *ChangeReplicator) handleCreateIndexes(ctx context.Context, data bson.Ra
 		return errors.Wrap(err, "parse")
 	}
 
-	err = buildIndexes(ctx,
+	err = r.Catalog.CreateIndexes(ctx,
 		r.Target,
 		event.Namespace.Database,
 		event.Namespace.Collection,
 		event.OperationDescription.Indexes)
-	if err != nil {
-		return err //nolint:wrapcheck
-	}
-
-	r.Catalog.CreateIndexes(
-		event.Namespace.Database,
-		event.Namespace.Collection,
-		event.OperationDescription.Indexes)
-	return nil
+	return err
 }
 
 func (r *ChangeReplicator) handleDropIndexes(ctx context.Context, data bson.Raw) error {
@@ -439,21 +422,14 @@ func (r *ChangeReplicator) handleDropIndexes(ctx context.Context, data bson.Raw)
 	}
 
 	for _, index := range event.OperationDescription.Indexes {
-		_, err = r.Target.Database(event.Namespace.Database).
-			Collection(event.Namespace.Collection).
-			Indexes().DropOne(ctx, index.Name)
-		if err != nil {
-			if !isIndexNotFound(err) {
-				return errors.Wrapf(err, "drop %s index in %s", index.Name, event.Namespace)
-			}
-
-			log.Debug(ctx, "index not found "+index.Name)
-		}
-
-		r.Catalog.DropIndex(
+		err = r.Catalog.DropIndex(ctx,
+			r.Target,
 			event.Namespace.Database,
 			event.Namespace.Collection,
 			index.Name)
+		if err != nil {
+			return errors.Wrap(err, "drop index "+index.Name)
+		}
 	}
 
 	return nil
@@ -471,25 +447,36 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 
 	switch {
 	case opts.Index != nil:
-		if opts.Index.Hidden != nil {
-			res := r.Target.Database(db).RunCommand(ctx, bson.D{
-				{"collMod", coll},
-				{"index", bson.D{
-					{"name", opts.Index.Name},
-					{"hidden", *opts.Index.Hidden},
-				}},
-			})
-			if err := res.Err(); err != nil {
-				return errors.Wrap(err, "convert index: "+opts.Index.Name)
-			}
-
+		err = r.Catalog.ModifyIndex(ctx, r.Target, db, coll, opts.Index)
+		if err != nil {
+			log.Error(ctx, err, "modify index: "+opts.Index.Name)
 			return nil
 		}
 
-		fallthrough
+	case opts.CappedSize != nil || opts.CappedMax != nil:
+		err = r.Catalog.ModifyCappedCollection(ctx, r.Target, db, coll, opts.CappedSize, opts.CappedMax)
+		if err != nil {
+			log.Error(ctx, err, "resize capped collection")
+			return nil
+		}
+
+	case opts.ViewOn != "":
+		if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
+			log.Warn(ctx, "timeseries is not supported. skip")
+			return nil
+		}
+
+		err = r.Catalog.ModifyView(ctx, r.Target, db, coll, opts.ViewOn, opts.Pipeline)
+		if err != nil {
+			log.Error(ctx, err, "modify view")
+			return nil
+		}
+
 	default:
-		return errors.New("unknown modify")
+		log.Error(ctx, errors.New("unknown modify options"), "")
 	}
+
+	return nil
 }
 
 var insertDocOptions = options.Replace().SetUpsert(true)
@@ -554,16 +541,6 @@ func (r *ChangeReplicator) handleReplace(ctx context.Context, data bson.Raw) err
 		Collection(event.Namespace.Collection).
 		ReplaceOne(ctx, event.DocumentKey, event.FullDocument)
 	return err //nolint:wrapcheck
-}
-
-func isIndexNotFound(err error) bool {
-	for ; err != nil; err = errors.Unwrap(err) {
-		le, ok := err.(mongo.CommandError) //nolint:errorlint
-		if ok && le.Name == "IndexNotFound" {
-			return true
-		}
-	}
-	return false
 }
 
 type txnEvent struct {

@@ -113,7 +113,7 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
-    def test_timeseries_is_not_replicated(self, phase):
+    def test_timeseries_ignored(self, phase):
         self.drop_all_database()
         self.create_collection("db_1", "coll_2")
 
@@ -176,5 +176,65 @@ class TestCollection(BaseTesting):
 
         with self.perform(phase):
             self.source.drop_database("test")
+
+        assert "test" not in self.target.list_database_names()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+class TestModifyCollections(BaseTesting):
+    def test_resize_capped(self, phase):
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1", capped=True, size=1111, max=222)
+        self.create_collection("db_1", "coll_2", capped=True, size=1111, max=222)
+        self.create_collection("db_1", "coll_3", capped=True, size=1111, max=222)
+
+        for coll in self.source["db_1"].list_collections():
+            assert coll["options"] == dict(capped=True, size=1111, max=222)
+
+        with self.perform(phase):
+            self.source["db_1"].command({"collMod": "coll_1", "cappedSize": 3333, "cappedMax": 444})
+            self.source["db_1"].command({"collMod": "coll_2", "cappedSize": 3333})
+            self.source["db_1"].command({"collMod": "coll_3", "cappedMax": 444})
+
+        assert self.source["db_1"]["coll_1"].options() == dict(capped=True, size=3333, max=444)
+        assert self.source["db_1"]["coll_2"].options() == dict(capped=True, size=3333, max=222)
+        assert self.source["db_1"]["coll_3"].options() == dict(capped=True, size=1111, max=444)
+
+        self.compare_all()
+
+    def test_modify_view(self, phase):
+        self.drop_all_database()
+        self.source["db_1"].create_collection(
+            "view_1",
+            viewOn="coll_1",
+            pipeline=[{"$match": {"i": {"$gte": 0}}}],
+        )
+
+        options = self.source["db_1"]["view_1"].options()
+        assert options == dict(viewOn="coll_1", pipeline=[{"$match": {"i": {"$gte": 0}}}])
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "view_1",
+                    "viewOn": "coll_2",
+                    "pipeline": [{"$match": {"j": {"$gte": 0}}}],
+                }
+            )
+
+        options = self.source["db_1"]["view_1"].options()
+        assert options == dict(viewOn="coll_2", pipeline=[{"$match": {"j": {"$gte": 0}}}])
+
+        self.compare_all()
+
+    def test_modify_timeseries_options_ignored(self, phase):
+        self.drop_all_database()
+        self.source["db_1"].create_collection(
+            "coll_1",
+            timeseries={"timeField": "ts", "metaField": "meta", "granularity": "seconds"},
+        )
+
+        with self.perform(phase):
+            self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 123})
 
         assert "test" not in self.target.list_database_names()

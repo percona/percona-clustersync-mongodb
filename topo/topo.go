@@ -13,8 +13,7 @@ import (
 var errMissedClusterTime = errors.New("missed clusterTime")
 
 func ClusterTime(ctx context.Context, m *mongo.Client) (primitive.Timestamp, error) {
-	res := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}})
-	raw, err := res.Raw()
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Raw()
 	if err != nil {
 		return primitive.Timestamp{}, err //nolint:wrapcheck
 	}

@@ -107,22 +107,23 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "list indexes")
 	}
 
-	var indexes []IndexSpecification
-	err = cur.All(ctx, &indexes)
+	var indexes0 []*IndexSpecification
+	err = cur.All(ctx, &indexes0)
 	if err != nil {
 		return errors.Wrap(err, "decode indexes")
 	}
 
-	for i := range indexes {
+	indexes := make([]*IndexSpecification, 0, len(indexes0))
+	for _, idx := range indexes0 {
 		if spec.IDIndex == nil {
-			if indexes[i].isClustered() {
+			if idx.isClustered() {
 				continue
 			}
-		} else if spec.IDIndex.Name == indexes[i].Name {
+		} else if spec.IDIndex.Name == idx.Name {
 			continue
 		}
 
-		c.Catalog.CreateIndex(db, spec.Name, indexes[i])
+		indexes = append(indexes, idx)
 	}
 
 	if c.Drop {
@@ -138,14 +139,16 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createCollection(ctx, c.Target, db, spec.Name, &options)
+	err = c.Catalog.CreateCollection(ctx, c.Target, db, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
 
-	err = c.Catalog.BuildCollectionIndexes(ctx, c.Target, db, spec.Name)
-	if err != nil {
-		return errors.Wrap(err, "build collection indexes")
+	if len(indexes) != 0 {
+		err = c.Catalog.CreateIndexes(ctx, c.Target, db, spec.Name, indexes)
+		if err != nil {
+			return errors.Wrap(err, "build collection indexes")
+		}
 	}
 
 	cur, err = c.Source.Database(db).Collection(spec.Name).Find(ctx, bson.D{})
@@ -193,7 +196,7 @@ func (c *DataCloner) cloneView(
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createView(ctx, c.Target, db, spec.Name, &options)
+	err = c.Catalog.CreateView(ctx, c.Target, db, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}
