@@ -251,8 +251,6 @@ class TestIndexFixes(BaseTesting):
             source_indexes = self.source["db_1"]["coll_1"].index_information()
             assert source_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
 
-            self.source["db_0"]["coll_0"].insert_one({})  # PML-61
-
         target_indexes = self.target["db_1"]["coll_1"].index_information()
         assert target_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
 
