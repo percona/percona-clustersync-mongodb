@@ -37,6 +37,9 @@ const (
 	ReplInitialSyncCheckInterval = time.Second
 )
 
+// CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning process.
+const CloneMaxWriteSizePerCollection = MaxMessageSizeBytes - KB
+
 // MaxBSONSize is hardcoded maximum BSON document size. 16 mebibytes.
 //
 //	https://www.mongodb.com/docs/v8.0/reference/limits/#mongodb-limit-BSON-Document-Size
