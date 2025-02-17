@@ -5,7 +5,7 @@ from _base import BaseTesting
 from mlink import Runner
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 class TestSelective(BaseTesting):
     def test_create_collection_with_include_only(self, phase):
         self.drop_all_database()

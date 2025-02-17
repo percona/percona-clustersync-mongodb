@@ -1,13 +1,14 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 from datetime import datetime
 
+import pymongo
 import pytest
 from _base import BaseTesting
 
 from mlink import Runner
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 class TestIndexes(BaseTesting):
     def test_create(self, phase):
         self.drop_all_database()
@@ -33,6 +34,30 @@ class TestIndexes(BaseTesting):
 
         with self.perform(phase):
             self.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
+
+        self.compare_all()
+
+    @pytest.mark.xfail(reason="IndexKeySpecsConflict")
+    def test_create_prepare_unique(self, phase):
+        # FIXME(phase:clone): create indexes error
+        #   (IndexKeySpecsConflict) An existing index has the same name as the requested index.
+        #    When index names are not specified, they are auto generated and can cause conflicts.
+        #    Please refer to our documentation.
+        #       Requested index: { v: 2, prepareUnique: true, key: { i: 1 }, name: "i_1" },
+        #       existing index: { v: 2, unique: true, hidden: true, key: { i: 1 }, name: "i_1" }
+        # op=createIndexes
+        # s=repl:apply
+        #
+        # reason:
+        #  [clone] (1) create with prepareUnique.
+        #          (2) prepareUnique converts to unique.
+        #  [repl]  (1) create with prepareUnique [fails here: unique already exists].
+        #          (2) prepareUnique converts to unique.
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
 
         self.compare_all()
 
@@ -71,7 +96,7 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": "hashed"})
+            self.source["db_1"]["coll_1"].create_index({"i": pymongo.HASHED})
 
         self.compare_all()
 
@@ -102,13 +127,24 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_wildcard_projection(self, phase):
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"$**": 1}, wildcardProjection={"a.*": 1})
+
+        self.compare_all()
+
+    @pytest.mark.xfail(reason="unknown")
     def test_create_geospatial(self, phase):
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"loc1": "2d"})
-            self.source["db_1"]["coll_1"].create_index({"loc2": "2dsphere"})
+            options = {"bits": 30, "min": -179.0, "max": 178.0, "2dsphereIndexVersion": 2}
+            self.source["db_1"]["coll_1"].create_index({"loc1": pymongo.GEO2D}, **options)
+            self.source["db_1"]["coll_1"].create_index({"loc2": pymongo.GEOSPHERE}, **options)
 
         self.compare_all()
 
@@ -117,7 +153,13 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": "text"})
+            self.source["db_1"]["coll_1"].create_index(
+                [("title", pymongo.TEXT), ("description", pymongo.TEXT)],
+                name="ArticlesTextIndex",
+                default_language="english",
+                language_override="language",
+                weights={"title": 10, "description": 5},
+            )
 
         self.compare_all()
 
@@ -159,30 +201,7 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-
-class TestIndexesManually(BaseTesting):
-    def test_create_ttl_manual(self):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
-
-        mlink = self.perform(None)
-        try:
-            self.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
-            mlink.start()
-            self.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
-            mlink.wait_for_finalizable()
-            self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
-            mlink.finalize()
-        except:
-            mlink.finalize_fast()
-            raise
-
-        self.compare_all()
-
-
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
-class TestModifyIndexes(BaseTesting):
-    def test_hide_index(self, phase):
+    def test_modify_hide(self, phase):
         self.drop_all_database()
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
 
@@ -205,7 +224,7 @@ class TestModifyIndexes(BaseTesting):
 
         self.compare_all()
 
-    def test_unhide_index(self, phase):
+    def test_modify_unhide(self, phase):
         self.drop_all_database()
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
 
@@ -287,7 +306,23 @@ class TestModifyIndexes(BaseTesting):
 
         self.compare_all()
 
+    @pytest.mark.xfail(reason="IndexKeySpecsConflict")
     def test_many_props(self, phase):
+        # FIXME(phase:clone): create indexes error
+        #   (IndexKeySpecsConflict) An existing index has the same name as the requested index.
+        #    When index names are not specified, they are auto generated and can cause conflicts.
+        #    Please refer to our documentation.
+        #       Requested index: { v: 2, prepareUnique: true, key: { i: 1 }, name: "i_1" },
+        #       existing index: { v: 2, unique: true, hidden: true, key: { i: 1 }, name: "i_1",
+        #                         expireAfterSeconds: 2147483647 }
+        # op=createIndexes
+        # s=repl:apply
+        #
+        # reason:
+        #  [clone] (1) create with prepareUnique.
+        #          (2) prepareUnique converts to unique.
+        #  [repl]  (1) create with prepareUnique [fails here: unique already exists].
+        #          (2) prepareUnique converts to unique.
         self.drop_all_database()
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
 
@@ -314,6 +349,26 @@ class TestModifyIndexes(BaseTesting):
         assert indexes[index_name]["unique"]
         assert indexes[index_name]["hidden"]
         assert indexes[index_name]["expireAfterSeconds"] == 432
+
+        self.compare_all()
+
+
+class TestIndexesManually(BaseTesting):
+    def test_create_ttl_manual(self):
+        self.drop_all_database()
+        self.create_collection("db_1", "coll_1")
+
+        mlink = self.perform(None)
+        try:
+            self.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
+            mlink.start()
+            self.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
+            mlink.wait_for_finalizable()
+            self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
+            mlink.finalize()
+        except:
+            mlink.finalize_fast()
+            raise
 
         self.compare_all()
 

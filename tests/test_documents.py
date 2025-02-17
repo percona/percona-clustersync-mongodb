@@ -6,7 +6,7 @@ from _base import BaseTesting
 from mlink import Runner
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 class TestCRUDOperation(BaseTesting):
     def test_insert_one(self, phase):
         self.drop_all_database()

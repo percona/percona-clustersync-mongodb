@@ -7,7 +7,7 @@ from _base import BaseTesting
 from mlink import Runner
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 class TestCollection(BaseTesting):
     def test_create_implicitly(self, phase):
         self.drop_all_database()
@@ -60,7 +60,7 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
-    def test_create_clustered_ttl(self, phase):
+    def test_create_clustered_ttl_ignored(self, phase):
         self.drop_all_database()
 
         with self.perform(phase):
@@ -113,7 +113,7 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
-    def test_timeseries_ignored(self, phase):
+    def test_create_timeseries_ignored(self, phase):
         self.drop_all_database()
         self.create_collection("db_1", "coll_2")
 
@@ -127,6 +127,56 @@ class TestCollection(BaseTesting):
             )
 
         assert "test" not in self.target.list_database_names()
+
+    def test_create_with_storage_options(self, phase):
+        self.drop_all_database()
+
+        with self.perform(phase):
+            options = {
+                "storageEngine": {"wiredTiger": {"configString": "block_compressor=snappy"}},
+                "indexOptionDefaults": {
+                    "storageEngine": {"wiredTiger": {"configString": "block_compressor=zlib"}}
+                },
+            }
+            self.source["db_1"].create_collection("coll_1", **options)
+
+        self.compare_all()
+
+    def test_create_with_pre_post_images_ignored(self, phase):
+        self.drop_all_database()
+
+        with self.perform(phase):
+            self.source["db_1"].create_collection(
+                "coll_1",
+                changeStreamPreAndPostImages={"enabled": True},
+            )
+
+            options = self.source["db_1"]["coll_1"].options()
+            assert options["changeStreamPreAndPostImages"] == {"enabled": True}
+
+        assert "changeStreamPreAndPostImages" not in self.target["db_1"]["coll_1"].options()
+
+    def test_create_with_validator_ignored(self, phase):
+        self.drop_all_database()
+
+        validator = {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name"],
+                "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+            }
+        }
+        create_options = {
+            "validator": validator,
+            "validationLevel": "strict",
+            "validationAction": "error",
+        }
+
+        with self.perform(phase):
+            self.source["db_1"].create_collection("coll_1", **create_options)
+            assert self.source["db_1"]["coll_1"].options() == create_options
+
+        assert self.target["db_1"]["coll_1"].options() == {}
 
     def test_drop_collection(self, phase):
         self.drop_all_database()
@@ -179,10 +229,20 @@ class TestCollection(BaseTesting):
 
         assert "test" not in self.target.list_database_names()
 
+    def test_modify_clustered_ttl_ignored(self, phase):
+        self.drop_all_database()
+        self.source["db_1"].create_collection(
+            "coll_1",
+            clusteredIndex={"key": {"_id": 1}, "unique": True},
+            expireAfterSeconds=123,
+        )
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
-class TestModifyCollections(BaseTesting):
-    def test_resize_capped(self, phase):
+        with self.perform(phase):
+            self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 444})
+
+        assert "test" not in self.target.list_database_names()
+
+    def test_modify_capped_size(self, phase):
         self.drop_all_database()
         self.create_collection("db_1", "coll_1", capped=True, size=1111, max=222)
         self.create_collection("db_1", "coll_2", capped=True, size=1111, max=222)
@@ -238,3 +298,71 @@ class TestModifyCollections(BaseTesting):
             self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 123})
 
         assert "test" not in self.target.list_database_names()
+
+    def test_modify_pre_post_images_ignored(self, phase):
+        self.drop_all_database()
+        self.source["db_1"].create_collection("coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "changeStreamPreAndPostImages": {"enabled": True},
+                }
+            )
+
+            options = self.source["db_1"]["coll_1"].options()
+            assert options["changeStreamPreAndPostImages"] == {"enabled": True}
+
+        assert "changeStreamPreAndPostImages" not in self.target["db_1"]["coll_1"].options()
+
+    def test_modify_validator_ignored(self, phase):
+        self.drop_all_database()
+        self.source["db_1"].create_collection("coll_1")
+
+        validator = {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name"],
+                "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+            }
+        }
+        modify_options = {
+            "validator": validator,
+            "validationLevel": "strict",
+            "validationAction": "error",
+        }
+
+        with self.perform(phase):
+            self.source["db_1"].command({"collMod": "coll_1", **modify_options})
+            assert self.source["db_1"]["coll_1"].options() == modify_options
+
+        assert self.target["db_1"]["coll_1"].options() == {}
+
+    def test_modify_validator_unset_ignored(self, phase):
+        self.drop_all_database()
+
+        validator = {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name"],
+                "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+            }
+        }
+        create_options = {
+            "validator": validator,
+            "validationLevel": "strict",
+            "validationAction": "error",
+        }
+
+        self.source["db_1"].create_collection("coll_1", **create_options)
+        assert self.source["db_1"]["coll_1"].options() == create_options
+
+        with self.perform(phase):
+            self.source["db_1"].command({"collMod": "coll_1", "validator": {}})
+
+            modified_options = create_options
+            del modified_options["validator"]
+            assert self.source["db_1"]["coll_1"].options() == modified_options
+
+        assert self.target["db_1"]["coll_1"].options() == {}
