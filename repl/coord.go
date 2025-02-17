@@ -21,10 +21,20 @@ const (
 	FinalizedState  = "finalized"
 )
 
+type CloneStatus struct {
+	Finished             bool
+	EstimatedTotalBytes  int64
+	EstimatedClonedBytes int64
+}
+
 type Status struct {
 	State             State
-	Finalizable       bool
 	LastAppliedOpTime primitive.Timestamp
+	Finalizable       bool
+	Info              string
+	EventsProcessed   int64
+
+	Clone CloneStatus
 }
 
 type Coordinator struct {
@@ -39,7 +49,10 @@ type Coordinator struct {
 	clonedAt  primitive.Timestamp
 
 	state State
-	mu    sync.Mutex
+
+	cloner *DataCloner
+
+	mu sync.Mutex
 }
 
 func New(source, target *mongo.Client) *Coordinator {
@@ -113,13 +126,14 @@ func (c *Coordinator) run(ctx context.Context) error {
 	c.mu.Unlock()
 
 	catalog := NewCatalog()
-	cloner := DataCloner{
+	cloner := &DataCloner{
 		Source:   c.source,
 		Target:   c.target,
 		Drop:     c.drop,
 		NSFilter: c.nsFilter,
 		Catalog:  catalog,
 	}
+	c.cloner = cloner
 
 	err = cloner.Clone(ctx)
 	if err != nil {
@@ -188,12 +202,28 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 
 	s := &Status{
 		State: c.state,
+		Info:  "waiting for start",
 	}
 
 	if c.repl != nil {
 		optime := c.repl.GetLastAppliedOpTime()
 		s.Finalizable = !optime.Before(c.clonedAt)
 		s.LastAppliedOpTime = optime
+		s.EventsProcessed = c.repl.EventsProcessed
+		s.Info = "replicating changes"
 	}
+
+	if c.cloner != nil {
+		s.Clone = CloneStatus{
+			Finished:             c.cloner.Finished,
+			EstimatedTotalBytes:  c.cloner.EstimatedTotalBytes.Load(),
+			EstimatedClonedBytes: c.cloner.EstimatedClonedBytes.Load(),
+		}
+
+		if c.cloner.Finished {
+			s.Info = "cloning data"
+		}
+	}
+
 	return s, nil
 }

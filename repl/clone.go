@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,6 +20,10 @@ type DataCloner struct {
 	Drop     bool
 	NSFilter NSFilter
 	Catalog  *Catalog
+
+	EstimatedTotalBytes  atomic.Int64
+	EstimatedClonedBytes atomic.Int64
+	Finished             bool
 }
 
 func (c *DataCloner) Clone(ctx context.Context) error {
@@ -35,6 +40,15 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 	grp.SetLimit(runtime.NumCPU())
 
 	for _, db := range databases {
+		res := c.Source.Database(db).RunCommand(ctx, bson.D{{"dbStats", 1}})
+		b, err := res.Raw()
+		if err != nil {
+			return errors.Wrap(err, "get database stats")
+		}
+
+		dbSize := b.Lookup("dataSize").AsInt64()
+		c.EstimatedTotalBytes.Add(dbSize)
+
 		colls, err := c.Source.Database(db).ListCollectionSpecifications(ctx, bson.D{})
 		if err != nil {
 			return errors.Wrap(err, "list collections")
@@ -72,7 +86,13 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 		}
 	}
 
-	return grp.Wait() //nolint:wrapcheck
+	err = grp.Wait() //nolint:wrapcheck
+	if err != nil {
+		return errors.Wrap(err, "wait")
+	}
+
+	c.Finished = true
+	return nil
 }
 
 func (c *DataCloner) cloneCollection(
@@ -140,6 +160,8 @@ func (c *DataCloner) cloneCollection(
 		if err != nil {
 			return errors.Wrap(err, "insert one")
 		}
+
+		c.EstimatedClonedBytes.Add(int64(len(cur.Current)))
 	}
 
 	err = cur.Err()

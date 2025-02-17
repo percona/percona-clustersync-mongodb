@@ -29,6 +29,8 @@ type ChangeReplicator struct {
 	stopSig chan struct{}
 	doneSig chan struct{}
 	running bool
+
+	EventsProcessed int64
 }
 
 func (r *ChangeReplicator) GetLastAppliedOpTime() primitive.Timestamp {
@@ -320,6 +322,7 @@ func (r *ChangeReplicator) apply(ctx context.Context, data bson.Raw) error {
 	r.mu.Lock()
 	r.resumeToken = baseEvent.ID
 	r.lastAppliedOpTime = baseEvent.ClusterTime
+	r.EventsProcessed++
 	r.mu.Unlock()
 	return nil
 }

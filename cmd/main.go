@@ -239,15 +239,24 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := statusResponse{
-		Ok:          true,
-		State:       replStatus.State,
-		Finalizable: replStatus.Finalizable,
+		Ok:              true,
+		State:           replStatus.State,
+		Finalizable:     replStatus.Finalizable,
+		Info:            replStatus.Info,
+		EventsProcessed: replStatus.EventsProcessed,
+		Clone: CloneStatus{
+			Finished:             replStatus.Clone.Finished,
+			EstimatedTotalBytes:  replStatus.Clone.EstimatedTotalBytes,
+			EstimatedClonedBytes: replStatus.Clone.EstimatedClonedBytes,
+		},
 	}
+
 	if !replStatus.LastAppliedOpTime.IsZero() {
 		res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
 			replStatus.LastAppliedOpTime.T,
 			replStatus.LastAppliedOpTime.I)
 	}
+
 	err = json.NewEncoder(w).Encode(res)
 	if err != nil {
 		log.Error(ctx, err, "write status")
@@ -272,13 +281,22 @@ type finalizeReponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+type CloneStatus struct {
+	Finished             bool  `json:"finished"`
+	EstimatedTotalBytes  int64 `json:"estimatedTotalBytes"`
+	EstimatedClonedBytes int64 `json:"estimatedClonedBytes"`
+}
+
 type statusResponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 
-	State             repl.State `json:"state"`
-	Finalizable       bool       `json:"finalizable,omitempty"`
-	LastAppliedOpTime string     `json:"lastAppliedOpTime,omitempty"`
+	State             repl.State  `json:"state"`
+	Finalizable       bool        `json:"finalizable,omitempty"`
+	LastAppliedOpTime string      `json:"lastAppliedOpTime,omitempty"`
+	Info              string      `json:"info"`
+	EventsProcessed   int64       `json:"eventsProcessed"`
+	Clone             CloneStatus `json:"clone"`
 }
 
 func internalServerError(w http.ResponseWriter) {
