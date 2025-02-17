@@ -303,7 +303,9 @@ type DropIndexesEvent struct {
 }
 
 type dropIndexesOpDesc struct {
-	Indexes []IndexSpecification `bson:"indexes"`
+	Indexes []struct {
+		Name string `bson:"name"`
+	} `bson:"indexes"`
 }
 
 // ModifyEvent when a collection is modified, such as when the collMod command
