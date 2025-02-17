@@ -9,10 +9,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/log"
 )
+
+const IDIndex IndexName = "_id_"
 
 type (
 	DBName    = string
@@ -20,25 +22,36 @@ type (
 	IndexName = string
 )
 
+// IndexSpecification contains all index options.
+//
+// NOTE: Indexes().Create*() uses [mongo.IndexModel] which does not support `prepareUnique`.
+// GeoHaystack indexes cannot be created in version 5.0 and above (`bucketSize` field)
 type IndexSpecification struct {
-	Name               CollName `bson:"name"`
-	Namespace          string   `bson:"ns"`
-	KeysDocument       bson.Raw `bson:"key"`
-	Version            int32    `bson:"v"`
-	Sparse             *bool    `bson:"sparse,omitempty"`
-	Hidden             *bool    `bson:"hidden,omitempty"`
-	Unique             *bool    `bson:"unique,omitempty"`
-	PrepareUnique      *bool    `bson:"prepareUnique,omitempty"`
-	Clustered          *bool    `bson:"clustered,omitempty"`
-	ExpireAfterSeconds *int64   `bson:"expireAfterSeconds,omitempty"`
+	Name               IndexName `bson:"name"`
+	Namespace          string    `bson:"ns"`
+	KeysDocument       bson.Raw  `bson:"key"`
+	Version            int32     `bson:"v"`
+	Sparse             *bool     `bson:"sparse,omitempty"`
+	Hidden             *bool     `bson:"hidden,omitempty"`
+	Unique             *bool     `bson:"unique,omitempty"`
+	PrepareUnique      *bool     `bson:"prepareUnique,omitempty"`
+	Clustered          *bool     `bson:"clustered,omitempty"`
+	ExpireAfterSeconds *int64    `bson:"expireAfterSeconds,omitempty"`
 
-	Weights          any                `bson:"weights,omitempty"`
-	DefaultLanguage  *string            `bson:"default_language,omitempty"`
-	LanguageOverride *string            `bson:"language_override,omitempty"`
-	TextVersion      *int32             `bson:"textIndexVersion,omitempty"`
-	Collation        *options.Collation `bson:"collation,omitempty"`
+	Weights          any      `bson:"weights,omitempty"`
+	DefaultLanguage  string   `bson:"default_language,omitempty"`
+	LanguageOverride string   `bson:"language_override,omitempty"`
+	TextVersion      int32    `bson:"textIndexVersion,omitempty"`
+	Collation        bson.Raw `bson:"collation,omitempty"`
 
+	WildcardProjection      any `bson:"wildcardProjection,omitempty"`
 	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
+
+	Bits int32   `bson:"bits,omitempty"`
+	Min  float64 `bson:"min,omitempty"`
+	Max  float64 `bson:"max,omitempty"`
+
+	TwoDSphereIndexVersion int32 `bson:"2dsphereIndexVersion,omitempty"`
 }
 
 func (s *IndexSpecification) isClustered() bool {
@@ -48,21 +61,24 @@ func (s *IndexSpecification) isClustered() bool {
 type Catalog struct {
 	mu sync.Mutex
 
-	cat map[DBName]map[CollName]map[IndexName]*IndexSpecification
+	databases map[DBName]map[CollName]map[string]*IndexSpecification
 }
 
 func NewCatalog() *Catalog {
-	return &Catalog{cat: make(map[DBName]map[CollName]map[IndexName]*IndexSpecification)}
+	return &Catalog{databases: make(map[DBName]map[CollName]map[string]*IndexSpecification)}
 }
 
 func (c *Catalog) CreateCollection(
 	ctx context.Context,
 	m *mongo.Client,
 	db DBName,
-	collName CollName,
+	coll CollName,
 	opts *createCollectionOptions,
 ) error {
-	cmd := bson.D{{"create", collName}}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	cmd := bson.D{{"create", coll}}
 	if opts.ClusteredIndex != nil {
 		cmd = append(cmd, bson.E{"clusteredIndex", opts.ClusteredIndex})
 	}
@@ -78,46 +94,63 @@ func (c *Catalog) CreateCollection(
 	}
 
 	if opts.Collation != nil {
-		cmd = append(cmd, bson.E{"collation", opts.Collation.ToDocument()}) //nolint:staticcheck
+		cmd = append(cmd, bson.E{"collation", opts.Collation})
+	}
+
+	if opts.StorageEngine != nil {
+		cmd = append(cmd, bson.E{"storageEngine", opts.StorageEngine})
+	}
+	if opts.IndexOptionDefaults != nil {
+		cmd = append(cmd, bson.E{"indexOptionDefaults", opts.IndexOptionDefaults})
 	}
 
 	err := m.Database(db).RunCommand(ctx, cmd).Err()
-	if err != nil {
-		return errors.Wrap(err, "create collection")
-	}
-
-	return nil
+	return errors.Wrap(err, "create collection")
 }
 
 func (c *Catalog) CreateView(
 	ctx context.Context,
 	m *mongo.Client,
 	db DBName,
-	viewName CollName,
+	view CollName,
 	opts *createCollectionOptions,
 ) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
-		return errors.New("unsupported timeseries: " + db + "." + viewName)
+		return errors.New("unsupported timeseries: " + db + "." + view)
 	}
 
-	err := m.Database(db).CreateView(ctx,
-		viewName,
-		opts.ViewOn,
-		opts.Pipeline,
-		options.CreateView().SetCollation(opts.Collation))
+	cmd := bson.D{
+		{"create", view},
+		{"viewOn", opts.ViewOn},
+		{"pipeline", opts.Pipeline},
+	}
+
+	if opts.Collation != nil {
+		cmd = append(cmd, bson.E{"collation", opts.Collation})
+	}
+
+	err := m.Database(db).RunCommand(ctx, cmd).Err()
 	return errors.Wrap(err, "create view")
 }
 
-func (c *Catalog) DropCollection(ctx context.Context, m *mongo.Client, db DBName, coll CollName) error {
+func (c *Catalog) DropCollection(
+	ctx context.Context,
+	m *mongo.Client,
+	db DBName,
+	coll CollName,
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	err := m.Database(db).Collection(coll).Drop(ctx)
 	if err != nil {
-		return errors.Wrap(err, "drop collection")
+		return err //nolint:wrapcheck
 	}
 
-	delete(c.cat[db], coll)
+	c.deleteCollectionEntry(db, coll)
 	return nil
 }
 
@@ -130,7 +163,7 @@ func (c *Catalog) DropDatabase(ctx context.Context, m *mongo.Client, db DBName) 
 		return err //nolint:wrapcheck
 	}
 
-	delete(c.cat, db)
+	c.deleteDatabaseEntry(db)
 	return nil
 }
 
@@ -144,73 +177,33 @@ func (c *Catalog) CreateIndexes(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var prepareUnique []*IndexSpecification
-
-	models := make([]mongo.IndexModel, len(indexes))
-	for i, index := range indexes {
-		var expireAfter *int32
-		if index.ExpireAfterSeconds != nil {
-			maxInt32 := int32(math.MaxInt32)
-			expireAfter = &maxInt32
-		}
-
-		models[i] = mongo.IndexModel{
-			Keys: index.KeysDocument,
-			Options: &options.IndexOptions{
-				Name:    &index.Name,
-				Version: &index.Version,
-				Unique:  index.Unique,
-				Sparse:  index.Sparse,
-				Hidden:  index.Hidden,
-
-				ExpireAfterSeconds:      expireAfter,
-				PartialFilterExpression: index.PartialFilterExpression,
-
-				Weights:          index.Weights,
-				DefaultLanguage:  index.DefaultLanguage,
-				LanguageOverride: index.LanguageOverride,
-				TextVersion:      index.TextVersion,
-				Collation:        index.Collation,
-			},
-		}
-
-		if index.PrepareUnique != nil && *index.PrepareUnique {
-			prepareUnique = append(prepareUnique, index)
-		}
-	}
-
-	_, err := m.Database(db).Collection(coll).Indexes().CreateMany(ctx, models)
-	if err != nil {
-		return errors.Wrap(err, "create indexes")
-	}
-
-	colls := c.cat[db]
-	if colls == nil {
-		colls = make(map[CollName]map[IndexName]*IndexSpecification)
-		c.cat[db] = colls
-	}
-
-	collIndexes := colls[coll]
-	if collIndexes == nil {
-		collIndexes = make(map[IndexName]*IndexSpecification)
-		colls[coll] = collIndexes
-	}
-
+	idxs := make([]*IndexSpecification, 0, len(indexes)-1) //-1 for ID index
 	for _, index := range indexes {
-		collIndexes[index.Name] = index
+		if index.Name == IDIndex {
+			continue // already created
+		}
+
+		if index.ExpireAfterSeconds != nil {
+			maxInt32 := int64(math.MaxInt32)
+			idxCopy := *index
+			idxCopy.ExpireAfterSeconds = &maxInt32
+			idxs = append(idxs, &idxCopy)
+			continue
+		}
+
+		idxs = append(idxs, index)
+	}
+	if len(idxs) == 0 {
+		return nil
 	}
 
-	for _, index := range prepareUnique {
-		mod := modifyIndexOption{
-			Name:          index.Name,
-			PrepareUnique: index.PrepareUnique,
-		}
-		err = c.modifyIndexImpl(ctx, m, db, coll, &mod)
-		if err != nil {
-			return errors.Wrap(err, db+"."+coll+": "+index.Name)
-		}
+	// NOTE: Indexes().CreateMany() uses [mongo.IndexModel] which does not support `prepareUnique`.
+	res := m.Database(db).RunCommand(ctx, bson.D{{"createIndexes", coll}, {"indexes", idxs}})
+	if err := res.Err(); err != nil {
+		return err //nolint:wrapcheck
 	}
 
+	c.addIndexEntries(db, coll, indexes) //nolint:contextcheck
 	return nil
 }
 
@@ -219,18 +212,18 @@ func (c *Catalog) ModifyCappedCollection(
 	m *mongo.Client,
 	db DBName,
 	coll CollName,
-	size *int64,
-	max *int64,
+	sizeBytes *int64,
+	maxDocs *int64,
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	cmd := bson.D{{"collMod", coll}}
-	if size != nil {
-		cmd = append(cmd, bson.E{"cappedSize", size})
+	if sizeBytes != nil {
+		cmd = append(cmd, bson.E{"cappedSize", sizeBytes})
 	}
-	if max != nil {
-		cmd = append(cmd, bson.E{"cappedMax", max})
+	if maxDocs != nil {
+		cmd = append(cmd, bson.E{"cappedMax", maxDocs})
 	}
 
 	err := m.Database(db).RunCommand(ctx, cmd).Err()
@@ -271,65 +264,71 @@ func (c *Catalog) modifyIndexImpl(
 	m *mongo.Client,
 	db DBName,
 	coll CollName,
-	modOpts *modifyIndexOption,
+	mods *modifyIndexOption,
 ) error {
-	mods := bson.D{{"name", modOpts.Name}}
-	if modOpts.PrepareUnique != nil {
-		mods = append(mods, primitive.E{"prepareUnique", modOpts.PrepareUnique})
+	cmdMods := bson.D{{"name", mods.Name}}
+	if mods.PrepareUnique != nil {
+		cmdMods = append(cmdMods, primitive.E{"prepareUnique", mods.PrepareUnique})
 	}
-	if modOpts.Unique != nil {
-		mods = append(mods, primitive.E{"unique", modOpts.Unique})
+	if mods.Unique != nil {
+		cmdMods = append(cmdMods, primitive.E{"unique", mods.Unique})
 	}
-	if modOpts.Hidden != nil {
-		mods = append(mods, primitive.E{"hidden", modOpts.Hidden})
+	if mods.Hidden != nil {
+		cmdMods = append(cmdMods, primitive.E{"hidden", mods.Hidden})
 	}
 
-	if len(mods) != 1 {
-		cmd := bson.D{{"collMod", coll}, {"index", mods}}
+	if len(cmdMods) != 1 {
+		cmd := bson.D{{"collMod", coll}, {"index", cmdMods}}
 		err := m.Database(db).RunCommand(ctx, cmd).Err()
 		if err != nil {
-			return errors.Wrap(err, "modify index: "+modOpts.Name)
+			return errors.Wrap(err, "modify index: "+mods.Name)
 		}
 	}
 
-	index := c.cat[db][coll][modOpts.Name]
-	if modOpts.PrepareUnique != nil {
-		index.PrepareUnique = modOpts.PrepareUnique
+	index := c.getIndexEntry(db, coll, mods.Name)
+	if index == nil {
+		log.Warn(ctx, "index not found: "+mods.Name)
+		return nil
 	}
-	if modOpts.Unique != nil {
+
+	// update in-place by ptr
+	if mods.PrepareUnique != nil {
+		index.PrepareUnique = mods.PrepareUnique
+	}
+	if mods.Unique != nil {
 		index.PrepareUnique = nil
-		index.Unique = modOpts.Unique
+		index.Unique = mods.Unique
 	}
-	if modOpts.Hidden != nil {
-		index.Hidden = modOpts.Hidden
+	if mods.Hidden != nil {
+		index.Hidden = mods.Hidden
 	}
-	if modOpts.ExpireAfterSeconds != nil {
-		index.ExpireAfterSeconds = modOpts.ExpireAfterSeconds
+	if mods.ExpireAfterSeconds != nil {
+		index.ExpireAfterSeconds = mods.ExpireAfterSeconds
 	}
-	c.cat[db][coll][modOpts.Name] = index
 
 	return nil
 }
 
-func (c *Catalog) DropIndex(ctx context.Context, m *mongo.Client, db DBName, coll CollName, name IndexName) error {
+func (c *Catalog) DropIndex(
+	ctx context.Context,
+	m *mongo.Client,
+	db DBName,
+	coll CollName,
+	name IndexName,
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	_, err := m.Database(db).Collection(coll).Indexes().DropOne(ctx, name)
 	if err != nil {
 		if !isIndexNotFound(err) {
-			if c.cat[db] != nil {
-				delete(c.cat[db][coll], name)
-			}
+			return err //nolint:wrapcheck
 		}
 
-		return err //nolint:wrapcheck
+		log.Error(ctx, err, "")
 	}
 
-	if c.cat[db] != nil {
-		delete(c.cat[db][coll], name)
-	}
-
+	c.deleteIndexEntry(db, coll, name)
 	return nil
 }
 
@@ -337,14 +336,15 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for db, colls := range c.cat {
-		for coll, indexes := range colls {
-			for _, index := range indexes {
+	for db, dbEntry := range c.databases {
+		for coll, collEntry := range dbEntry {
+			for _, index := range collEntry {
 				if index.ExpireAfterSeconds == nil {
 					continue
 				}
 				if index.isClustered() {
-					continue // clustered index with ttl is not supported
+					log.Warn(ctx, "clustered index with ttl is not supported")
+					continue
 				}
 
 				res := m.Database(db).RunCommand(ctx, bson.D{
@@ -362,6 +362,61 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 	}
 
 	return nil
+}
+
+func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *IndexSpecification {
+	dbEntry := c.databases[db]
+	if len(dbEntry) == 0 {
+		return nil
+	}
+	collEntry := dbEntry[coll]
+	if len(collEntry) == 0 {
+		return nil
+	}
+
+	for _, idx := range collEntry {
+		if idx.Name == name {
+			return idx
+		}
+	}
+
+	return nil
+}
+
+func (c *Catalog) addIndexEntries(db DBName, coll CollName, indexes []*IndexSpecification) {
+	dbEntry := c.databases[db]
+	if dbEntry == nil {
+		dbEntry = make(map[CollName]map[string]*IndexSpecification)
+		c.databases[db] = dbEntry
+	}
+
+	collEntry := dbEntry[coll]
+	if collEntry == nil {
+		collEntry = make(map[string]*IndexSpecification)
+		dbEntry[coll] = collEntry
+	}
+
+	for _, index := range indexes {
+		collEntry[index.Name] = index
+	}
+}
+
+func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
+	dbEntry := c.databases[db]
+	if len(dbEntry) == 0 {
+		return
+	}
+
+	collEntry := dbEntry[coll]
+	delete(collEntry, name)
+}
+
+func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
+	delete(c.databases[db], coll)
+}
+
+func (c *Catalog) deleteDatabaseEntry(db DBName) {
+	delete(c.databases, db)
 }
 
 func isIndexNotFound(err error) bool {

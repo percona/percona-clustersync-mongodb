@@ -98,7 +98,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 		err := c.run(ctx)
 		if err != nil {
 			log.Error(ctx, err, "run")
-			return
+			// TODO: mark it as "failed"
 		}
 
 		c.mu.Lock()

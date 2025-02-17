@@ -6,7 +6,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type OperationType string
@@ -253,7 +252,10 @@ type createCollectionOptions struct {
 	ViewOn   string `bson:"viewOn"`
 	Pipeline any    `bson:"pipeline"`
 
-	Collation *options.Collation `bson:"collation"`
+	Collation bson.Raw `bson:"collation"`
+
+	StorageEngine       bson.Raw `bson:"storageEngine"`
+	IndexOptionDefaults bson.Raw `bson:"indexOptionDefaults"`
 }
 
 // DropEvent occurs when a collection is dropped from a database.
@@ -336,10 +338,6 @@ type modifyOpDesc struct {
 
 	ViewOn   string `bson:"viewOn"`
 	Pipeline any    `bson:"pipeline"`
-
-	// Indexes is an array of documents listing the indexes that were changed by
-	// the operation.
-	// Indexes []any `bson:"indexes"`
 }
 
 type modifyIndexOption struct {

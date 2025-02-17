@@ -107,23 +107,10 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "list indexes")
 	}
 
-	var indexes0 []*IndexSpecification
-	err = cur.All(ctx, &indexes0)
+	var indexes []*IndexSpecification
+	err = cur.All(ctx, &indexes)
 	if err != nil {
 		return errors.Wrap(err, "decode indexes")
-	}
-
-	indexes := make([]*IndexSpecification, 0, len(indexes0))
-	for _, idx := range indexes0 {
-		if spec.IDIndex == nil {
-			if idx.isClustered() {
-				continue
-			}
-		} else if spec.IDIndex.Name == idx.Name {
-			continue
-		}
-
-		indexes = append(indexes, idx)
 	}
 
 	if c.Drop {
@@ -144,11 +131,9 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "create collection")
 	}
 
-	if len(indexes) != 0 {
-		err = c.Catalog.CreateIndexes(ctx, c.Target, db, spec.Name, indexes)
-		if err != nil {
-			return errors.Wrap(err, "build collection indexes")
-		}
+	err = c.Catalog.CreateIndexes(ctx, c.Target, db, spec.Name, indexes)
+	if err != nil {
+		return errors.Wrap(err, "build collection indexes")
 	}
 
 	cur, err = c.Source.Database(db).Collection(spec.Name).Find(ctx, bson.D{})
