@@ -103,7 +103,12 @@ func (c *Catalog) CreateCollection(
 	}
 
 	err := m.Database(db).RunCommand(ctx, cmd).Err()
-	return errors.Wrap(err, "create collection")
+	if err != nil {
+		return errors.Wrap(err, "create collection")
+	}
+
+	c.ensureCollectionEntry(db, coll)
+	return nil
 }
 
 func (c *Catalog) CreateView(
@@ -131,7 +136,12 @@ func (c *Catalog) CreateView(
 	}
 
 	err := m.Database(db).RunCommand(ctx, cmd).Err()
-	return errors.Wrap(err, "create view")
+	if err != nil {
+		return errors.Wrap(err, "create view")
+	}
+
+	c.ensureCollectionEntry(db, view)
+	return nil
 }
 
 func (c *Catalog) DropCollection(
@@ -156,12 +166,16 @@ func (c *Catalog) DropDatabase(ctx context.Context, m *mongo.Client, db DBName) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	err := m.Database(db).Drop(ctx)
-	if err != nil {
-		return err //nolint:wrapcheck
+	for coll := range c.databases[db] {
+		err := m.Database(db).Collection(coll).Drop(ctx)
+		if err != nil {
+			return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
+		}
+
+		log.Infof(ctx, "dropped %s.%s", db, coll)
+		c.deleteCollectionEntry(db, coll)
 	}
 
-	c.deleteDatabaseEntry(db)
 	return nil
 }
 
@@ -431,18 +445,7 @@ func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *Index
 }
 
 func (c *Catalog) addIndexEntries(db DBName, coll CollName, indexes []*IndexSpecification) {
-	dbEntry := c.databases[db]
-	if dbEntry == nil {
-		dbEntry = make(map[CollName]map[string]*IndexSpecification)
-		c.databases[db] = dbEntry
-	}
-
-	collEntry := dbEntry[coll]
-	if collEntry == nil {
-		collEntry = make(map[string]*IndexSpecification)
-		dbEntry[coll] = collEntry
-	}
-
+	collEntry := c.ensureCollectionEntry(db, coll)
 	for _, index := range indexes {
 		collEntry[index.Name] = index
 	}
@@ -457,12 +460,24 @@ func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
 	delete(dbEntry[coll], name)
 }
 
-func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
-	delete(c.databases[db], coll)
+func (c *Catalog) ensureCollectionEntry(db DBName, coll CollName) map[string]*IndexSpecification {
+	dbEntry := c.databases[db]
+	if dbEntry == nil {
+		dbEntry = make(map[CollName]map[string]*IndexSpecification)
+		c.databases[db] = dbEntry
+	}
+
+	collEntry := dbEntry[coll]
+	if collEntry == nil {
+		collEntry = make(map[string]*IndexSpecification)
+		dbEntry[coll] = collEntry
+	}
+
+	return collEntry
 }
 
-func (c *Catalog) deleteDatabaseEntry(db DBName) {
-	delete(c.databases, db)
+func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
+	delete(c.databases[db], coll)
 }
 
 func isIndexNotFound(err error) bool {

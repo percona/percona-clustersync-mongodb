@@ -229,7 +229,12 @@ class TestCollection(BaseTesting):
             )
             self.source.drop_database("db_1")
 
-        assert self.target["db_1"].list_collection_names() == []
+        if phase is Runner.Phase.CLONE:
+            # clone started after view has been dropped
+            assert self.target["db_1"].list_collection_names() == []
+        else:
+            # view was dropped after the clone had started
+            assert self.target["db_1"].list_collection_names() == ["system.views"]
 
     def test_modify_clustered_ttl_ignored(self, phase):
         self.drop_all_database()
