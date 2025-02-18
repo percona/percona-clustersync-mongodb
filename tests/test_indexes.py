@@ -149,7 +149,7 @@ class TestIndexes(BaseTesting):
         #
         # reason:
         #  [clone] (1) create with 2dsphere index.
-        #  [repl]  (1) 2dsphere with empty bits, min, max fields.
+        #  [repl]  (1) create 2dsphere with empty bits, min, max fields.
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
