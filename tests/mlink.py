@@ -6,6 +6,9 @@ import bson
 import requests
 from pymongo import MongoClient
 
+# default HTTP request read timeout (in seconds)
+DFL_REQ_TIMEOUT = 5
+
 
 class MLink:
     class State(StrEnum):
@@ -19,17 +22,17 @@ class MLink:
         self.uri = uri
 
     def status(self):
-        res = requests.get(f"{self.uri}/status", timeout=5)
+        res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
         return res.json()
 
     def start(self, params):
-        res = requests.post(f"{self.uri}/start", json=params, timeout=5)
+        res = requests.post(f"{self.uri}/start", json=params, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
         return res.json()
 
     def finalize(self):
-        res = requests.post(f"{self.uri}/finalize", timeout=5)
+        res = requests.post(f"{self.uri}/finalize", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
         return res.json()
 

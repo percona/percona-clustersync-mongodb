@@ -176,6 +176,11 @@ func (c *Catalog) CreateIndexes(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if len(indexes) == 0 {
+		log.Warn(ctx, "createIndexes: no indexes")
+		return nil
+	}
+
 	idxs := make([]*IndexSpecification, 0, len(indexes)-1) //-1 for ID index
 	for _, index := range indexes {
 		if index.Name == IDIndex {

@@ -115,7 +115,6 @@ class TestCollection(BaseTesting):
 
     def test_create_timeseries_ignored(self, phase):
         self.drop_all_database()
-        self.create_collection("db_1", "coll_2")
 
         with self.perform(phase):
             self.source["db_1"].create_collection(
@@ -126,7 +125,7 @@ class TestCollection(BaseTesting):
                 {"ts": datetime.now(), "meta": {"i": i}} for i in range(10)
             )
 
-        assert "test" not in self.target.list_database_names()
+        assert self.target["db_1"].list_collection_names() == []
 
     def test_create_with_storage_options(self, phase):
         self.drop_all_database()
@@ -220,40 +219,43 @@ class TestCollection(BaseTesting):
 
     def test_drop_database(self, phase):
         self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
-        self.create_view("db_1", "view_1", "coll_1", [{"$match": {"i": {"$gt": 3}}}])
 
         with self.perform(phase):
-            self.source.drop_database("test")
+            self.source["db_1"].create_collection("coll_1")
+            self.source["db_1"].create_collection(
+                "view_1",
+                viewOn="coll_1",
+                pipeline=[{"$match": {"i": {"$gte": 0}}}],
+            )
+            self.source.drop_database("db_1")
 
-        assert "test" not in self.target.list_database_names()
+        assert self.target["db_1"].list_collection_names() == []
 
     def test_modify_clustered_ttl_ignored(self, phase):
         self.drop_all_database()
-        create_options = {
-            "clusteredIndex": {"key": {"_id": 1}, "unique": True},
+
+        self.source["db_1"].create_collection(
+            "coll_1",
+            clusteredIndex={"key": {"_id": 1}, "unique": True},
+            expireAfterSeconds=123,
+        )
+
+        expected_index_options = {"name": "_id_", "key": {"_id": 1}, "unique": True, "v": 2}
+        assert self.source["db_1"]["coll_1"].options() == {
+            "clusteredIndex": expected_index_options,
             "expireAfterSeconds": 123,
         }
-        self.source["db_1"].create_collection("coll_1", **create_options)
 
         with self.perform(phase):
-            modify_options = {
-                "expireAfterSeconds": 444,
-            }
-            self.source["db_1"].command({"collMod": "coll_1", **modify_options})
+            self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 444})
 
-            expected_options = {
-                "clusteredIndex": {
-                    "name": "_id_",
-                    "key": {"_id": 1},
-                    "unique": True,
-                    "v": 2,
-                },
-                "expireAfterSeconds": 444,
-            }
-            assert self.source["db_1"]["coll_1"].options() == expected_options
-
-        assert "test" not in self.target.list_database_names()
+        assert self.source["db_1"]["coll_1"].options() == {
+            "clusteredIndex": expected_index_options,
+            "expireAfterSeconds": 444,
+        }
+        assert self.target["db_1"]["coll_1"].options() == {
+            "clusteredIndex": expected_index_options,
+        }
 
     def test_modify_capped_size(self, phase):
         self.drop_all_database()
@@ -307,7 +309,7 @@ class TestCollection(BaseTesting):
         with self.perform(phase):
             self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 123})
 
-        assert "test" not in self.target.list_database_names()
+        assert "db_1" not in self.target.list_database_names()
 
     def test_modify_pre_post_images_ignored(self, phase):
         self.drop_all_database()

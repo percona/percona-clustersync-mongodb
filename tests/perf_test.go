@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -77,7 +78,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := collection.ReplaceOne(context.Background(), id, doc,
+		_, err := collection.ReplaceOne(context.Background(), bson.D{{"_id", id}}, doc,
 			options.Replace().SetUpsert(true))
 		if err != nil && !mongo.IsDuplicateKeyError(err) {
 			b.Fatalf("Failed to insert document: %v", err)

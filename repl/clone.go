@@ -66,7 +66,7 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 
 			grp.Go(func() error {
 				ctx := log.WithAttrs(grpCtx, log.NS(db, spec.Name))
-				log.Tracef(ctx, "")
+				log.Trace(ctx, "")
 
 				var err error
 				switch spec.Type {
@@ -186,6 +186,6 @@ func (c *DataCloner) cloneView(
 		return errors.Wrap(err, "create view")
 	}
 
-	log.Info(ctx, "cloned view")
+	log.Info(ctx, "created view")
 	return nil
 }
