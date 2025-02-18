@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -24,6 +25,25 @@ type DataCloner struct {
 	EstimatedTotalBytes  atomic.Int64
 	EstimatedClonedBytes atomic.Int64
 	Finished             bool
+
+	mu sync.Mutex
+}
+
+type CloneStatus struct {
+	Finished             bool
+	EstimatedTotalBytes  int64
+	EstimatedClonedBytes int64
+}
+
+func (c *DataCloner) Status() CloneStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return CloneStatus{
+		Finished:             c.Finished,
+		EstimatedTotalBytes:  c.EstimatedTotalBytes.Load(),
+		EstimatedClonedBytes: c.EstimatedClonedBytes.Load(),
+	}
 }
 
 func (c *DataCloner) Clone(ctx context.Context) error {
@@ -91,7 +111,9 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 		return errors.Wrap(err, "wait")
 	}
 
+	c.mu.Lock()
 	c.Finished = true
+	c.mu.Unlock()
 	return nil
 }
 

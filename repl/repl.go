@@ -35,11 +35,19 @@ type ChangeReplicator struct {
 	EventsProcessed int64
 }
 
-func (r *ChangeReplicator) GetLastAppliedOpTime() primitive.Timestamp {
+type ChangeReplicationStatus struct {
+	LastAppliedOpTime primitive.Timestamp
+	EventsProcessed   int64
+}
+
+func (r *ChangeReplicator) Status() ChangeReplicationStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.lastAppliedOpTime
+	return ChangeReplicationStatus{
+		LastAppliedOpTime: r.lastAppliedOpTime,
+		EventsProcessed:   r.EventsProcessed,
+	}
 }
 
 func (r *ChangeReplicator) Wait() error {

@@ -22,12 +22,6 @@ const (
 	FinalizedState  = "finalized"
 )
 
-type CloneStatus struct {
-	Finished             bool
-	EstimatedTotalBytes  int64
-	EstimatedClonedBytes int64
-}
-
 type Status struct {
 	State             State
 	LastAppliedOpTime primitive.Timestamp
@@ -190,8 +184,11 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 		return errors.New(string(c.state))
 	}
 
-	if c.repl == nil || c.repl.GetLastAppliedOpTime().Before(c.clonedAt) {
-		return errors.New("not ready")
+	if c.repl == nil {
+		replStatus := c.repl.Status()
+		if replStatus.LastAppliedOpTime.Before(c.clonedAt) {
+			return errors.New("not ready")
+		}
 	}
 
 	c.repl.Pause()
@@ -211,21 +208,18 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 	}
 
 	if c.repl != nil {
-		optime := c.repl.GetLastAppliedOpTime()
-		s.Finalizable = !optime.Before(c.clonedAt)
-		s.LastAppliedOpTime = optime
-		s.EventsProcessed = c.repl.EventsProcessed
+		replStatus := c.repl.Status()
+		s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
+		s.LastAppliedOpTime = replStatus.LastAppliedOpTime
+		s.EventsProcessed = replStatus.EventsProcessed
 		s.Info = "replicating changes"
 	}
 
 	if c.cloner != nil {
-		s.Clone = CloneStatus{
-			Finished:             c.cloner.Finished,
-			EstimatedTotalBytes:  c.cloner.EstimatedTotalBytes.Load(),
-			EstimatedClonedBytes: c.cloner.EstimatedClonedBytes.Load(),
-		}
+		cloneStatus := c.cloner.Status()
+		s.Clone = cloneStatus
 
-		if c.cloner.Finished {
+		if cloneStatus.Finished {
 			s.Info = "cloning data"
 		}
 	}
