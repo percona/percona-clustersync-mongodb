@@ -9,6 +9,7 @@ from pymongo import MongoClient
 
 class MLink:
     class State(StrEnum):
+        FAILED = "failed"
         IDLE = "idle"
         RUNNING = "running"
         FINALIZING = "finalizing"

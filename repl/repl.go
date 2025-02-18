@@ -472,6 +472,9 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 			return nil
 		}
 
+	case opts.ExpireAfterSeconds != nil:
+		log.Warn(ctx, "collection ttl modification is not supported")
+
 	default:
 		log.Error(ctx, errors.New("unknown modify options"), "")
 	}

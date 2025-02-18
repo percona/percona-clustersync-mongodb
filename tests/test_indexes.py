@@ -136,8 +136,20 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-    @pytest.mark.xfail(reason="unknown")
+    @pytest.mark.xfail(reason="IndexOptionsConflict")
     def test_create_geospatial(self, phase):
+        # FIXME(phase:clone): create indexes error
+        #   (IndexOptionsConflict) An equivalent index already exists with the same name but different options.
+        #       Requested index: { v: 2, key: { loc2: \"2dsphere\" }, name: \"loc2_2dsphere\",
+        #                          bits: 30, min: -179.0, max: 178.0, 2dsphereIndexVersion: 2 },
+        #       existing index: { v: 2, key: { loc2: \"2dsphere\" }, name: \"loc2_2dsphere\",
+        #                          2dsphereIndexVersion: 2 }
+        # op=createIndexes
+        # s=repl:apply
+        #
+        # reason:
+        #  [clone] (1) create with 2dsphere index.
+        #  [repl]  (1) 2dsphere with empty bits, min, max fields.
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
@@ -270,7 +282,7 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-    def test_unique(self, phase):
+    def test_modify_unique(self, phase):
         self.drop_all_database()
         index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
 
@@ -307,7 +319,7 @@ class TestIndexes(BaseTesting):
         self.compare_all()
 
     @pytest.mark.xfail(reason="IndexKeySpecsConflict")
-    def test_many_props(self, phase):
+    def test_modify_many_props(self, phase):
         # FIXME(phase:clone): create indexes error
         #   (IndexKeySpecsConflict) An existing index has the same name as the requested index.
         #    When index names are not specified, they are auto generated and can cause conflicts.

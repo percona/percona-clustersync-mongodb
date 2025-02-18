@@ -2,18 +2,17 @@ package tests
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var theDocument = bson.M{
-	"_id": 0,
-	"val": "3456tgfbvwet6tyrhfbvaetyydhfvsjhzsteydcghjdghtsryu",
-}
+var seed int64 = time.Now().Unix()
 
 func BenchmarkInsertOne(b *testing.B) {
 	mongodbURI := os.Getenv("TEST_TARGET_URI")
@@ -30,9 +29,18 @@ func BenchmarkInsertOne(b *testing.B) {
 	collection := client.Database("db_0").Collection("coll_0")
 	collection.Drop(context.Background()) //nolint:errcheck
 
+	payload := make([]byte, 1024*1024)
+	rnd := rand.New(rand.NewSource(seed))
+	rnd.Read(payload)
+
+	doc := map[string]any{
+		"_id":  primitive.NewObjectID(),
+		"data": payload,
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := collection.InsertOne(context.Background(), theDocument)
+		_, err := collection.InsertOne(context.Background(), doc)
 		if err != nil {
 			if mongo.IsDuplicateKeyError(err) {
 				continue
@@ -57,13 +65,19 @@ func BenchmarkReplaceOne(b *testing.B) {
 	collection := client.Database("db_0").Collection("coll_0")
 	collection.Drop(context.Background()) //nolint:errcheck
 
-	key := bson.M{"_id": theDocument["_id"]}
+	payload := make([]byte, 1024*1024)
+	rnd := rand.New(rand.NewSource(seed))
+	rnd.Read(payload)
+
+	id := primitive.NewObjectID()
+	doc := map[string]any{
+		"_id":  id,
+		"data": payload,
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := collection.ReplaceOne(context.Background(),
-			key,
-			theDocument,
+		_, err := collection.ReplaceOne(context.Background(), id, doc,
 			options.Replace().SetUpsert(true))
 		if err != nil && !mongo.IsDuplicateKeyError(err) {
 			b.Fatalf("Failed to insert document: %v", err)

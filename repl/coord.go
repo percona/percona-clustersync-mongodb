@@ -15,6 +15,7 @@ import (
 type State string
 
 const (
+	FailedState     = "failed"
 	IdleState       = "idle"
 	RunningState    = "running"
 	FinalizingState = "finalizing"
@@ -77,7 +78,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 
 	ctx = log.WithAttrs(ctx, log.Scope("coord:repl"))
 
-	if c.state != IdleState && c.state != FinalizedState {
+	if c.state != IdleState && c.state != FinalizedState && c.state != FailedState {
 		return errors.New(string(c.state))
 	}
 
@@ -97,8 +98,12 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 		ctx := log.CopyContext(ctx, context.Background())
 		err := c.run(ctx)
 		if err != nil {
-			log.Error(ctx, err, "run")
-			// TODO: mark it as "failed"
+			c.mu.Lock()
+			c.state = FailedState
+			c.mu.Unlock()
+
+			log.Error(ctx, err, "failed")
+			return
 		}
 
 		c.mu.Lock()

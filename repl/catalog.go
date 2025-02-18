@@ -39,19 +39,18 @@ type IndexSpecification struct {
 	ExpireAfterSeconds *int64    `bson:"expireAfterSeconds,omitempty"`
 
 	Weights          any      `bson:"weights,omitempty"`
-	DefaultLanguage  string   `bson:"default_language,omitempty"`
-	LanguageOverride string   `bson:"language_override,omitempty"`
-	TextVersion      int32    `bson:"textIndexVersion,omitempty"`
+	DefaultLanguage  *string  `bson:"default_language,omitempty"`
+	LanguageOverride *string  `bson:"language_override,omitempty"`
+	TextVersion      *int32   `bson:"textIndexVersion,omitempty"`
 	Collation        bson.Raw `bson:"collation,omitempty"`
 
 	WildcardProjection      any `bson:"wildcardProjection,omitempty"`
 	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
 
-	Bits int32   `bson:"bits,omitempty"`
-	Min  float64 `bson:"min,omitempty"`
-	Max  float64 `bson:"max,omitempty"`
-
-	TwoDSphereIndexVersion int32 `bson:"2dsphereIndexVersion,omitempty"`
+	Bits      *int32   `bson:"bits,omitempty"`
+	Min       *float64 `bson:"min,omitempty"`
+	Max       *float64 `bson:"max,omitempty"`
+	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"`
 }
 
 func (s *IndexSpecification) isClustered() bool {
@@ -83,12 +82,12 @@ func (c *Catalog) CreateCollection(
 		cmd = append(cmd, bson.E{"clusteredIndex", opts.ClusteredIndex})
 	}
 
-	if opts.Capped {
+	if opts.Capped != nil {
 		cmd = append(cmd, bson.E{"capped", opts.Capped})
-		if opts.Size != 0 {
+		if opts.Size != nil {
 			cmd = append(cmd, bson.E{"size", opts.Size})
 		}
-		if opts.Max != 0 {
+		if opts.Max != nil {
 			cmd = append(cmd, bson.E{"max", opts.Max})
 		}
 	}
@@ -200,10 +199,14 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: Indexes().CreateMany() uses [mongo.IndexModel] which does not support `prepareUnique`.
 	res := m.Database(db).RunCommand(ctx, bson.D{{"createIndexes", coll}, {"indexes", idxs}})
 	if err := res.Err(); err != nil {
+		if isIndexOptionsConflict(err) {
+			log.Error(ctx, err, "")
+			return nil
+		}
 		return err //nolint:wrapcheck
 	}
 
-	c.addIndexEntries(db, coll, indexes) //nolint:contextcheck
+	c.addIndexEntries(db, coll, indexes)
 	return nil
 }
 
@@ -241,7 +244,11 @@ func (c *Catalog) ModifyView(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cmd := bson.D{{"collMod", view}, {"viewOn", viewOn}, {"pipeline", pipeline}}
+	cmd := bson.D{
+		{"collMod", view},
+		{"viewOn", viewOn},
+		{"pipeline", pipeline},
+	}
 	err := m.Database(db).RunCommand(ctx, cmd).Err()
 	return err //nolint:wrapcheck
 }
@@ -321,11 +328,13 @@ func (c *Catalog) DropIndex(
 
 	_, err := m.Database(db).Collection(coll).Indexes().DropOne(ctx, name)
 	if err != nil {
-		if !isIndexNotFound(err) {
-			return err //nolint:wrapcheck
+		if isIndexNotFound(err) {
+			log.Warn(ctx, err.Error())
+			c.deleteIndexEntry(db, coll, name) // make sure no index stored
+			return nil
 		}
 
-		log.Error(ctx, err, "")
+		return err //nolint:wrapcheck
 	}
 
 	c.deleteIndexEntry(db, coll, name)
@@ -351,7 +360,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 					{"collMod", coll},
 					{"index", bson.D{
 						{"name", index.Name},
-						{"expireAfterSeconds", *index.ExpireAfterSeconds},
+						{"expireAfterSeconds", index.ExpireAfterSeconds},
 					}},
 				})
 				if err := res.Err(); err != nil {
@@ -369,6 +378,7 @@ func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *Index
 	if len(dbEntry) == 0 {
 		return nil
 	}
+
 	collEntry := dbEntry[coll]
 	if len(collEntry) == 0 {
 		return nil
@@ -407,8 +417,7 @@ func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
 		return
 	}
 
-	collEntry := dbEntry[coll]
-	delete(collEntry, name)
+	delete(dbEntry[coll], name)
 }
 
 func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
@@ -420,11 +429,22 @@ func (c *Catalog) deleteDatabaseEntry(db DBName) {
 }
 
 func isIndexNotFound(err error) bool {
-	for ; err != nil; err = errors.Unwrap(err) {
-		le, ok := err.(mongo.CommandError) //nolint:errorlint
-		if ok && le.Name == "IndexNotFound" {
-			return true
-		}
+	return isMongoError(err, "IndexNotFound")
+}
+
+func isIndexOptionsConflict(err error) bool {
+	return isMongoError(err, "IndexOptionsConflict")
+}
+
+func isMongoError(err error, name string) bool {
+	if err == nil {
+		return false
 	}
-	return false
+
+	le, ok := err.(mongo.CommandError) //nolint:errorlint
+	if ok && le.Name == name {
+		return true
+	}
+
+	return isIndexNotFound(errors.Unwrap(err))
 }

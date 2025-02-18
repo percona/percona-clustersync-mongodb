@@ -139,6 +139,7 @@ class TestCollection(BaseTesting):
                 },
             }
             self.source["db_1"].create_collection("coll_1", **options)
+            assert self.source["db_1"]["coll_1"].options() == options
 
         self.compare_all()
 
@@ -146,13 +147,11 @@ class TestCollection(BaseTesting):
         self.drop_all_database()
 
         with self.perform(phase):
-            self.source["db_1"].create_collection(
-                "coll_1",
-                changeStreamPreAndPostImages={"enabled": True},
-            )
-
-            options = self.source["db_1"]["coll_1"].options()
-            assert options["changeStreamPreAndPostImages"] == {"enabled": True}
+            options = {
+                "changeStreamPreAndPostImages": {"enabled": True},
+            }
+            self.source["db_1"].create_collection("coll_1", **options)
+            assert self.source["db_1"]["coll_1"].options() == options
 
         assert "changeStreamPreAndPostImages" not in self.target["db_1"]["coll_1"].options()
 
@@ -231,14 +230,28 @@ class TestCollection(BaseTesting):
 
     def test_modify_clustered_ttl_ignored(self, phase):
         self.drop_all_database()
-        self.source["db_1"].create_collection(
-            "coll_1",
-            clusteredIndex={"key": {"_id": 1}, "unique": True},
-            expireAfterSeconds=123,
-        )
+        create_options = {
+            "clusteredIndex": {"key": {"_id": 1}, "unique": True},
+            "expireAfterSeconds": 123,
+        }
+        self.source["db_1"].create_collection("coll_1", **create_options)
 
         with self.perform(phase):
-            self.source["db_1"].command({"collMod": "coll_1", "expireAfterSeconds": 444})
+            modify_options = {
+                "expireAfterSeconds": 444,
+            }
+            self.source["db_1"].command({"collMod": "coll_1", **modify_options})
+
+            expected_options = {
+                "clusteredIndex": {
+                    "name": "_id_",
+                    "key": {"_id": 1},
+                    "unique": True,
+                    "v": 2,
+                },
+                "expireAfterSeconds": 444,
+            }
+            assert self.source["db_1"]["coll_1"].options() == expected_options
 
         assert "test" not in self.target.list_database_names()
 
@@ -264,26 +277,23 @@ class TestCollection(BaseTesting):
 
     def test_modify_view(self, phase):
         self.drop_all_database()
-        self.source["db_1"].create_collection(
-            "view_1",
-            viewOn="coll_1",
-            pipeline=[{"$match": {"i": {"$gte": 0}}}],
-        )
+        create_options = {
+            "viewOn": "coll_1",
+            "pipeline": [{"$match": {"i": {"$gte": 0}}}],
+        }
+        self.source["db_1"].create_collection("view_1", **create_options)
 
         options = self.source["db_1"]["view_1"].options()
-        assert options == dict(viewOn="coll_1", pipeline=[{"$match": {"i": {"$gte": 0}}}])
+        assert options == create_options
 
         with self.perform(phase):
-            self.source["db_1"].command(
-                {
-                    "collMod": "view_1",
-                    "viewOn": "coll_2",
-                    "pipeline": [{"$match": {"j": {"$gte": 0}}}],
-                }
-            )
+            modify_options = {
+                "viewOn": "coll_2",
+                "pipeline": [{"$match": {"j": {"$gte": 0}}}],
+            }
 
-        options = self.source["db_1"]["view_1"].options()
-        assert options == dict(viewOn="coll_2", pipeline=[{"$match": {"j": {"$gte": 0}}}])
+            self.source["db_1"].command({"collMod": "view_1", **modify_options})
+            assert self.source["db_1"]["view_1"].options() == modify_options
 
         self.compare_all()
 
