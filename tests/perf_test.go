@@ -30,7 +30,7 @@ func BenchmarkInsertOne(b *testing.B) {
 	collection.Drop(context.Background()) //nolint:errcheck
 
 	payload := make([]byte, 1024*1024)
-	rnd := rand.New(rand.NewSource(seed))
+	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
 	rnd.Read(payload)
 
 	doc := map[string]any{
@@ -66,7 +66,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 	collection.Drop(context.Background()) //nolint:errcheck
 
 	payload := make([]byte, 1024*1024)
-	rnd := rand.New(rand.NewSource(seed))
+	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
 	rnd.Read(payload)
 
 	id := primitive.NewObjectID()
