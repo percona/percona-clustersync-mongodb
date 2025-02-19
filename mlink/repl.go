@@ -1,4 +1,4 @@
-package repl
+package mlink
 
 import (
 	"bytes"
@@ -7,23 +7,23 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
-type ChangeReplicator struct {
+type Repl struct {
 	Source   *mongo.Client
 	Target   *mongo.Client
 	Drop     bool
-	NSFilter NSFilter
+	NSFilter util.NSFilter
 	Catalog  *Catalog
 
-	lastAppliedOpTime primitive.Timestamp
+	lastAppliedOpTime bson.Timestamp
 	resumeToken       bson.Raw
 
 	mu      sync.Mutex
@@ -32,25 +32,25 @@ type ChangeReplicator struct {
 	doneSig chan struct{}
 	running bool
 
-	EventsProcessed int64
+	eventsProcessed int64
 }
 
 type ChangeReplicationStatus struct {
-	LastAppliedOpTime primitive.Timestamp
+	LastAppliedOpTime bson.Timestamp
 	EventsProcessed   int64
 }
 
-func (r *ChangeReplicator) Status() ChangeReplicationStatus {
+func (r *Repl) Status() ChangeReplicationStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	return ChangeReplicationStatus{
 		LastAppliedOpTime: r.lastAppliedOpTime,
-		EventsProcessed:   r.EventsProcessed,
+		EventsProcessed:   r.eventsProcessed,
 	}
 }
 
-func (r *ChangeReplicator) Wait() error {
+func (r *Repl) Wait() error {
 	r.mu.Lock()
 	doneC := r.doneSig
 	r.mu.Unlock()
@@ -64,15 +64,15 @@ func (r *ChangeReplicator) Wait() error {
 	return r.err
 }
 
-func (r *ChangeReplicator) Start(ctx context.Context, startAt primitive.Timestamp) error {
+func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	return r.startImpl(ctx, &startAt)
 }
 
-func (r *ChangeReplicator) Resume(ctx context.Context) error {
+func (r *Repl) Resume(ctx context.Context) error {
 	return r.startImpl(ctx, nil)
 }
 
-func (r *ChangeReplicator) Pause() {
+func (r *Repl) Pause() {
 	r.mu.Lock()
 	stopSig := r.stopSig
 	r.mu.Unlock()
@@ -88,7 +88,7 @@ func (r *ChangeReplicator) Pause() {
 	r.pause(nil)
 }
 
-func (r *ChangeReplicator) pause(err error) {
+func (r *Repl) pause(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -96,7 +96,7 @@ func (r *ChangeReplicator) pause(err error) {
 	r.running = false
 }
 
-func (r *ChangeReplicator) startImpl(ctx context.Context, ts *primitive.Timestamp) error {
+func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -120,7 +120,7 @@ func (r *ChangeReplicator) startImpl(ctx context.Context, ts *primitive.Timestam
 		return errors.New("cannot resume due to existing error")
 	}
 
-	opts := options.ChangeStream().SetShowExpandedEvents(true)
+	opts := options.ChangeStream()
 	if ts != nil {
 		opts.SetStartAtOperationTime(ts)
 	} else {
@@ -155,7 +155,7 @@ func (r *ChangeReplicator) startImpl(ctx context.Context, ts *primitive.Timestam
 	return nil
 }
 
-func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamOptions) {
+func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	ctx = log.WithAttrs(ctx, log.Scope("repl:loop"))
 
 	eventC := make(chan bson.Raw, 100)
@@ -186,7 +186,7 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 					_, err := coll.UpdateOne(ctx,
 						bson.D{{"_id", ""}},
 						bson.D{{"$set", bson.D{{"t", t}}}},
-						options.Update().SetUpsert(true))
+						options.UpdateOne().SetUpsert(true))
 					if err != nil {
 						log.Error(ctx, err, "")
 					}
@@ -196,6 +196,7 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 			}
 		}()
 
+		opts.SetShowExpandedEvents(true).SetBatchSize(100)
 		cur, err := r.Source.Watch(cursorCtx, mongo.Pipeline{}, opts)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -222,7 +223,7 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 	}()
 
 	applyCtx := log.CopyContext(ctx, context.Background())
-	var txBuffer List[bson.Raw]
+	var txBuffer util.List[bson.Raw]
 	for {
 		event, ok := <-eventC
 		if !ok {
@@ -270,7 +271,7 @@ func (r *ChangeReplicator) loop(ctx context.Context, opts *options.ChangeStreamO
 	}
 }
 
-func (r *ChangeReplicator) apply(ctx context.Context, data bson.Raw) error {
+func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	var baseEvent BaseEvent
 	err := bson.Unmarshal(data, &baseEvent)
 	if err != nil {
@@ -346,12 +347,12 @@ func (r *ChangeReplicator) apply(ctx context.Context, data bson.Raw) error {
 	r.mu.Lock()
 	r.resumeToken = baseEvent.ID
 	r.lastAppliedOpTime = baseEvent.ClusterTime
-	r.EventsProcessed++
+	r.eventsProcessed++
 	r.mu.Unlock()
 	return nil
 }
 
-func (r *ChangeReplicator) handleCreate(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -389,7 +390,7 @@ func (r *ChangeReplicator) handleCreate(ctx context.Context, data bson.Raw) erro
 	)
 }
 
-func (r *ChangeReplicator) handleDrop(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleDrop(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -399,7 +400,7 @@ func (r *ChangeReplicator) handleDrop(ctx context.Context, data bson.Raw) error 
 	return err
 }
 
-func (r *ChangeReplicator) handleDropDatabase(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleDropDatabase(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropDatabaseEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -409,7 +410,7 @@ func (r *ChangeReplicator) handleDropDatabase(ctx context.Context, data bson.Raw
 	return err
 }
 
-func (r *ChangeReplicator) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateIndexesEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -423,7 +424,7 @@ func (r *ChangeReplicator) handleCreateIndexes(ctx context.Context, data bson.Ra
 	return err
 }
 
-func (r *ChangeReplicator) handleDropIndexes(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleDropIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropIndexesEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -443,7 +444,7 @@ func (r *ChangeReplicator) handleDropIndexes(ctx context.Context, data bson.Raw)
 	return nil
 }
 
-func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[ModifyEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -501,7 +502,7 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 
 var insertDocOptions = options.Replace().SetUpsert(true)
 
-func (r *ChangeReplicator) handleInsert(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleInsert(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[InsertEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -514,7 +515,7 @@ func (r *ChangeReplicator) handleInsert(ctx context.Context, data bson.Raw) erro
 	return err //nolint:wrapcheck
 }
 
-func (r *ChangeReplicator) handleDelete(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleDelete(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DeleteEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -526,7 +527,7 @@ func (r *ChangeReplicator) handleDelete(ctx context.Context, data bson.Raw) erro
 	return err //nolint:wrapcheck
 }
 
-func (r *ChangeReplicator) handleUpdate(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[UpdateEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -551,7 +552,7 @@ func (r *ChangeReplicator) handleUpdate(ctx context.Context, data bson.Raw) erro
 	return err //nolint:wrapcheck
 }
 
-func (r *ChangeReplicator) handleReplace(ctx context.Context, data bson.Raw) error {
+func (r *Repl) handleReplace(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[ReplaceEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")

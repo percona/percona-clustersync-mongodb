@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/repl"
+	"github.com/percona-lab/percona-mongolink/mlink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
@@ -113,7 +113,7 @@ type server struct {
 	sourceCluster *mongo.Client
 	targetCluster *mongo.Client
 
-	repl *repl.Coordinator
+	repl *mlink.Coordinator
 }
 
 func newServer(ctx context.Context, options serverOptions) (*server, error) {
@@ -132,7 +132,7 @@ func newServer(ctx context.Context, options serverOptions) (*server, error) {
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		repl:          repl.New(source, target),
+		repl:          mlink.New(source, target),
 	}
 	return s, nil
 }
@@ -178,7 +178,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	options := &repl.StartOptions{
+	options := &mlink.StartOptions{
 		DropBeforeCreate: true,
 		// TODO: uncomment when tests will be added
 		// DropBeforeCreate: params.DropBeforeCreate,
@@ -291,7 +291,7 @@ type statusResponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 
-	State             repl.State  `json:"state"`
+	State             mlink.State `json:"state"`
 	Finalizable       bool        `json:"finalizable,omitempty"`
 	LastAppliedOpTime string      `json:"lastAppliedOpTime,omitempty"`
 	Info              string      `json:"info"`

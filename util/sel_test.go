@@ -1,8 +1,6 @@
-package repl
+package util
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestFilter(t *testing.T) {
 	t.Run("include", func(t *testing.T) {
@@ -30,7 +28,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := makeFilter(includeFilter, nil)
+		isIncluded := MakeFilter(includeFilter, nil)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {
@@ -65,7 +63,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := makeFilter(nil, excludedFilter)
+		isIncluded := MakeFilter(nil, excludedFilter)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if db == "db_1" {
@@ -110,7 +108,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := makeFilter(includedFilter, excludedFilter)
+		isIncluded := MakeFilter(includedFilter, excludedFilter)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {

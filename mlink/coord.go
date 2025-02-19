@@ -1,15 +1,16 @@
-package repl
+package mlink
 
 import (
 	"context"
 	"sync"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 type State string
@@ -24,7 +25,7 @@ const (
 
 type Status struct {
 	State             State
-	LastAppliedOpTime primitive.Timestamp
+	LastAppliedOpTime bson.Timestamp
 	Finalizable       bool
 	Info              string
 	EventsProcessed   int64
@@ -37,15 +38,15 @@ type Coordinator struct {
 	target *mongo.Client
 
 	drop     bool
-	nsFilter NSFilter
+	nsFilter util.NSFilter
 
 	state   State
 	catalog *Catalog
-	cloner  *DataCloner
-	repl    *ChangeReplicator
+	clone   *Clone
+	repl    *Repl
 
-	startedAt primitive.Timestamp
-	clonedAt  primitive.Timestamp
+	startedAt bson.Timestamp
+	clonedAt  bson.Timestamp
 
 	mu sync.Mutex
 }
@@ -81,15 +82,15 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	}
 
 	c.drop = options.DropBeforeCreate
-	c.nsFilter = makeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	c.nsFilter = util.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
 
 	c.repl = nil
-	c.startedAt = primitive.Timestamp{}
-	c.clonedAt = primitive.Timestamp{}
+	c.startedAt = bson.Timestamp{}
+	c.clonedAt = bson.Timestamp{}
 	c.state = RunningState
 
 	c.catalog = NewCatalog()
-	c.cloner = &DataCloner{
+	c.clone = &Clone{
 		Source:   c.source,
 		Target:   c.target,
 		Drop:     c.drop,
@@ -97,7 +98,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 		Catalog:  c.catalog,
 	}
 
-	c.repl = &ChangeReplicator{
+	c.repl = &Repl{
 		Source:   c.source,
 		Target:   c.target,
 		Drop:     c.drop,
@@ -141,7 +142,7 @@ func (c *Coordinator) run(ctx context.Context) error {
 	c.startedAt = startedAt
 	c.mu.Unlock()
 
-	err = c.cloner.Clone(ctx)
+	err = c.clone.Clone(ctx)
 	if err != nil {
 		return errors.Wrap(err, "close")
 	}
@@ -182,7 +183,7 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 		return errors.New(string(c.state))
 	}
 
-	cloneStatus := c.cloner.Status()
+	cloneStatus := c.clone.Status()
 	if !cloneStatus.Finished {
 		return errors.New("clone has not finished")
 	}
@@ -212,7 +213,7 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 		return s, nil
 	}
 
-	cloneStatus := c.cloner.Status()
+	cloneStatus := c.clone.Status()
 	s.Clone = cloneStatus
 
 	replStatus := c.repl.Status()

@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readconcern"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
@@ -30,7 +30,7 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority())
 
-	conn, err := mongo.Connect(ctx, opts)
+	conn, err := mongo.Connect(opts)
 	if err != nil {
 		return nil, err //nolint:wrapcheck
 	}

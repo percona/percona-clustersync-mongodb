@@ -1,4 +1,4 @@
-package repl
+package mlink
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
@@ -349,7 +349,7 @@ func (c *Catalog) DropIndex(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	_, err := m.Database(db).Collection(coll).Indexes().DropOne(ctx, name)
+	err := m.Database(db).Collection(coll).Indexes().DropOne(ctx, name)
 	if err != nil {
 		if isIndexNotFound(err) {
 			log.Warn(ctx, err.Error())

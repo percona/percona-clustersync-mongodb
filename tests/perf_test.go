@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/percona-lab/percona-mongolink/topo"
 )
 
 var seed int64 = time.Now().Unix()
@@ -21,7 +22,7 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongodbURI))
+	client, err := topo.Connect(context.Background(), mongodbURI)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -35,7 +36,7 @@ func BenchmarkInsertOne(b *testing.B) {
 	rnd.Read(payload)
 
 	doc := map[string]any{
-		"_id":  primitive.NewObjectID(),
+		"_id":  bson.NewObjectID(),
 		"data": payload,
 	}
 
@@ -57,7 +58,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongodbURI))
+	client, err := topo.Connect(context.Background(), mongodbURI)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -70,7 +71,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
 	rnd.Read(payload)
 
-	id := primitive.NewObjectID()
+	id := bson.NewObjectID()
 	doc := map[string]any{
 		"_id":  id,
 		"data": payload,

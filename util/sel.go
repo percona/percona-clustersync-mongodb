@@ -1,4 +1,4 @@
-package repl
+package util
 
 import (
 	"slices"
@@ -8,7 +8,7 @@ import (
 // NSFilter returns true if a namespace is allowed.
 type NSFilter func(db, coll string) bool
 
-func makeFilter(include, exclude []string) NSFilter {
+func MakeFilter(include, exclude []string) NSFilter {
 	includeFilter := makeFitlerImpl(include)
 	excludeFilter := makeFitlerImpl(exclude)
 

@@ -1,11 +1,10 @@
 // https://www.mongodb.com/docs/manual/changeStreams/
-package repl
+package mlink
 
 import (
 	"strings"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type OperationType string
@@ -142,14 +141,14 @@ type InvalidateEvent struct {
 	// of lsid and txnNumber in the change stream event document.
 	//
 	// Changed in version 8.0.
-	ClusterTime primitive.Timestamp `bson:"clusterTime"`
+	ClusterTime bson.Timestamp `bson:"clusterTime"`
 
 	// WallTime is the server date and time of the database operation.
 	// WallTime differs from clusterTime in that clusterTime is a timestamp
 	// taken from the oplog entry associated with the database operation event.
 	//
 	// New in version 6.0.
-	// WallTime primitive.DateTime `bson:"wallTime"`
+	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
 type BaseEvent struct {
@@ -170,7 +169,7 @@ type BaseEvent struct {
 	// doesn't exist.
 	//
 	// New in version 6.0.
-	CollectionUUID *primitive.Binary `bson:"collectionUUID,omitempty"`
+	CollectionUUID *bson.Binary `bson:"collectionUUID,omitempty"`
 
 	// TxnNumber together with the lsid, a number that helps uniquely identify
 	// a transction.
@@ -208,14 +207,14 @@ type BaseEvent struct {
 	// of lsid and txnNumber in the change stream event document.
 	//
 	// Changed in version 8.0.
-	ClusterTime primitive.Timestamp `bson:"clusterTime"`
+	ClusterTime bson.Timestamp `bson:"clusterTime"`
 
 	// WallTime is the server date and time of the database operation.
 	// WallTime differs from clusterTime in that clusterTime is a timestamp
 	// taken from the oplog entry associated with the database operation event.
 	//
 	// New in version 6.0.
-	// WallTime primitive.DateTime `bson:"wallTime"`
+	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
 // CreateEvent occurs when a collection is created on a watched database and

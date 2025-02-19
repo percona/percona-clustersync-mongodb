@@ -5,14 +5,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type Attrs struct {
 	Scope  string
 	Op     string
-	OpTime primitive.Timestamp
+	OpTime bson.Timestamp
 	OpNS   string
 }
 
@@ -39,7 +38,7 @@ func NS(db, coll string) AttrOption {
 	}
 }
 
-func OpTime(ts primitive.Timestamp) AttrOption {
+func OpTime(ts bson.Timestamp) AttrOption {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Uints32("op_ts", []uint32{ts.T, ts.I})
 	}

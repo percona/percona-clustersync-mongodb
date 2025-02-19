@@ -1,4 +1,4 @@
-package repl
+package mlink
 
 import (
 	"context"
@@ -7,24 +7,25 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
-type DataCloner struct {
+type Clone struct {
 	Source   *mongo.Client
 	Target   *mongo.Client
 	Drop     bool
-	NSFilter NSFilter
+	NSFilter util.NSFilter
 	Catalog  *Catalog
 
-	EstimatedTotalBytes  atomic.Int64
-	EstimatedClonedBytes atomic.Int64
-	Finished             bool
+	estimatedTotalBytes  atomic.Int64
+	estimatedClonedBytes atomic.Int64
+	finished             bool
 
 	mu sync.Mutex
 }
@@ -35,18 +36,18 @@ type CloneStatus struct {
 	EstimatedClonedBytes int64
 }
 
-func (c *DataCloner) Status() CloneStatus {
+func (c *Clone) Status() CloneStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	return CloneStatus{
-		Finished:             c.Finished,
-		EstimatedTotalBytes:  c.EstimatedTotalBytes.Load(),
-		EstimatedClonedBytes: c.EstimatedClonedBytes.Load(),
+		Finished:             c.finished,
+		EstimatedTotalBytes:  c.estimatedTotalBytes.Load(),
+		EstimatedClonedBytes: c.estimatedClonedBytes.Load(),
 	}
 }
 
-func (c *DataCloner) Clone(ctx context.Context) error {
+func (c *Clone) Clone(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("clone"))
 
 	databases, err := c.Source.ListDatabaseNames(ctx, bson.D{
@@ -67,7 +68,7 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 		}
 
 		dbSize := b.Lookup("dataSize").AsInt64()
-		c.EstimatedTotalBytes.Add(dbSize)
+		c.estimatedTotalBytes.Add(dbSize)
 
 		colls, err := c.Source.Database(db).ListCollectionSpecifications(ctx, bson.D{})
 		if err != nil {
@@ -91,9 +92,9 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 				var err error
 				switch spec.Type {
 				case "collection":
-					err = c.cloneCollection(ctx, db, spec)
+					err = c.cloneCollection(ctx, db, &spec)
 				case "view":
-					err = c.cloneView(ctx, db, spec)
+					err = c.cloneView(ctx, db, &spec)
 				case "timeseries":
 					log.Warn(ctx, "timeseries is not supported. skip")
 				}
@@ -112,12 +113,12 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	c.Finished = true
+	c.finished = true
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *DataCloner) cloneCollection(
+func (c *Clone) cloneCollection(
 	ctx context.Context,
 	db string,
 	spec *mongo.CollectionSpecification,
@@ -171,7 +172,7 @@ func (c *DataCloner) cloneCollection(
 			return errors.Wrap(err, "insert one")
 		}
 
-		c.EstimatedClonedBytes.Add(int64(len(cur.Current)))
+		c.estimatedClonedBytes.Add(int64(len(cur.Current)))
 	}
 
 	err = cur.Err()
@@ -183,7 +184,7 @@ func (c *DataCloner) cloneCollection(
 	return nil
 }
 
-func (c *DataCloner) cloneView(
+func (c *Clone) cloneView(
 	ctx context.Context,
 	db string,
 	spec *mongo.CollectionSpecification,

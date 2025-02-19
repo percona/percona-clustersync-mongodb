@@ -1,8 +1,6 @@
-package repl
+package util
 
-import (
-	"iter"
-)
+import "iter"
 
 type List[T any] struct {
 	head *listElem[T]
