@@ -483,6 +483,12 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 	case opts.ExpireAfterSeconds != nil:
 		log.Warn(ctx, "collection ttl modification is not supported")
 
+	case opts.ChangeStreamPreAndPostImages != nil:
+		log.Warn(ctx, "changeStreamPreAndPostImages is not supported")
+
+	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
+		log.Warn(ctx, "validator, validatorLevel and validatorAction are not supported")
+
 	default:
 		log.Error(ctx, errors.New("unknown modify options"), "")
 	}

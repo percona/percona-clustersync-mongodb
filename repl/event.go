@@ -325,8 +325,6 @@ type ModifyEvent struct {
 	//
 	// New in version 6.0.
 	OperationDescription modifyOpDesc `bson:"operationDescription"`
-
-	Unknowns map[string]any `bson:",inline"`
 }
 
 type modifyOpDesc struct {
@@ -343,7 +341,13 @@ type modifyOpDesc struct {
 
 	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
 
-	Unknowns map[string]any `bson:",inline"`
+	ChangeStreamPreAndPostImages *struct {
+		Enabled bool `bson:"enabled"`
+	} `bson:"changeStreamPreAndPostImages,omitempty"`
+
+	Validator       *bson.Raw `bson:"validator,omitempty"`
+	ValidatorLevel  *string   `bson:"validatorLevel,omitempty"`
+	ValidatorAction *string   `bson:"validatorAction,omitempty"`
 }
 
 type modifyIndexOption struct {
