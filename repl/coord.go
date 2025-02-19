@@ -182,9 +182,17 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 		return errors.New(string(c.state))
 	}
 
+	cloneStatus := c.cloner.Status()
+	if !cloneStatus.Finished {
+		return errors.New("clone has not finished")
+	}
+
 	replStatus := c.repl.Status()
+	if replStatus.LastAppliedOpTime.IsZero() {
+		return errors.New("repl has not been started")
+	}
 	if replStatus.LastAppliedOpTime.Before(c.clonedAt) {
-		return errors.New("not ready")
+		return errors.New("not finalizable")
 	}
 
 	c.repl.Pause()
@@ -198,26 +206,29 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	s := &Status{
-		State: c.state,
-		Info:  "waiting for start",
-	}
+	s := &Status{State: c.state}
 
 	if c.state == IdleState {
 		return s, nil
 	}
 
-	replStatus := c.repl.Status()
-	s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
-	s.LastAppliedOpTime = replStatus.LastAppliedOpTime
-	s.EventsProcessed = replStatus.EventsProcessed
-	s.Info = "replicating changes"
-
 	cloneStatus := c.cloner.Status()
 	s.Clone = cloneStatus
 
-	if cloneStatus.Finished {
+	replStatus := c.repl.Status()
+	s.LastAppliedOpTime = replStatus.LastAppliedOpTime
+	s.EventsProcessed = replStatus.EventsProcessed
+	if cloneStatus.Finished && !replStatus.LastAppliedOpTime.IsZero() {
+		s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
+	}
+
+	switch {
+	case c.state == IdleState:
+		s.Info = "waiting for start"
+	case c.state == RunningState && !cloneStatus.Finished:
 		s.Info = "cloning data"
+	case c.state == RunningState && !replStatus.LastAppliedOpTime.IsZero():
+		s.Info = "replicating changes"
 	}
 
 	return s, nil

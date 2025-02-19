@@ -251,7 +251,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if !replStatus.LastAppliedOpTime.IsZero() {
+	if replStatus.Clone.Finished && !replStatus.LastAppliedOpTime.IsZero() {
 		res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
 			replStatus.LastAppliedOpTime.T,
 			replStatus.LastAppliedOpTime.I)
