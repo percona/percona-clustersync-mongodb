@@ -39,13 +39,13 @@ type Coordinator struct {
 	drop     bool
 	nsFilter NSFilter
 
-	repl      *ChangeReplicator
+	state   State
+	catalog *Catalog
+	cloner  *DataCloner
+	repl    *ChangeReplicator
+
 	startedAt primitive.Timestamp
 	clonedAt  primitive.Timestamp
-
-	state State
-
-	cloner *DataCloner
 
 	mu sync.Mutex
 }
@@ -88,6 +88,23 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	c.clonedAt = primitive.Timestamp{}
 	c.state = RunningState
 
+	c.catalog = NewCatalog()
+	c.cloner = &DataCloner{
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
+		Catalog:  c.catalog,
+	}
+
+	c.repl = &ChangeReplicator{
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
+		Catalog:  c.catalog,
+	}
+
 	go func() {
 		ctx := log.CopyContext(ctx, context.Background())
 		err := c.run(ctx)
@@ -124,17 +141,7 @@ func (c *Coordinator) run(ctx context.Context) error {
 	c.startedAt = startedAt
 	c.mu.Unlock()
 
-	catalog := NewCatalog()
-	cloner := &DataCloner{
-		Source:   c.source,
-		Target:   c.target,
-		Drop:     c.drop,
-		NSFilter: c.nsFilter,
-		Catalog:  catalog,
-	}
-	c.cloner = cloner
-
-	err = cloner.Clone(ctx)
+	err = c.cloner.Clone(ctx)
 	if err != nil {
 		return errors.Wrap(err, "close")
 	}
@@ -144,31 +151,22 @@ func (c *Coordinator) run(ctx context.Context) error {
 		return errors.Wrap(err, "get cluster time")
 	}
 
-	repl := &ChangeReplicator{
-		Source:   c.source,
-		Target:   c.target,
-		Drop:     c.drop,
-		NSFilter: c.nsFilter,
-		Catalog:  catalog,
-	}
-
 	c.mu.Lock()
 	c.clonedAt = clonedAt
-	c.repl = repl
 	c.mu.Unlock()
 
 	log.Infof(ctx, "starting change replication at %d.%d", startedAt.T, startedAt.I)
-	err = repl.Start(ctx, startedAt)
+	err = c.repl.Start(ctx, startedAt)
 	if err != nil {
 		return errors.Wrap(err, "start change replication")
 	}
 
-	err = repl.Wait()
+	err = c.repl.Wait()
 	if err != nil {
 		return errors.Wrap(err, "change replication")
 	}
 
-	err = catalog.FinalizeIndexes(ctx, c.target)
+	err = c.catalog.FinalizeIndexes(ctx, c.target)
 	if err != nil {
 		return errors.Wrap(err, "finalize indexes")
 	}
@@ -184,11 +182,9 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 		return errors.New(string(c.state))
 	}
 
-	if c.repl == nil {
-		replStatus := c.repl.Status()
-		if replStatus.LastAppliedOpTime.Before(c.clonedAt) {
-			return errors.New("not ready")
-		}
+	replStatus := c.repl.Status()
+	if replStatus.LastAppliedOpTime.Before(c.clonedAt) {
+		return errors.New("not ready")
 	}
 
 	c.repl.Pause()
@@ -207,21 +203,21 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 		Info:  "waiting for start",
 	}
 
-	if c.repl != nil {
-		replStatus := c.repl.Status()
-		s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
-		s.LastAppliedOpTime = replStatus.LastAppliedOpTime
-		s.EventsProcessed = replStatus.EventsProcessed
-		s.Info = "replicating changes"
+	if c.state == IdleState {
+		return s, nil
 	}
 
-	if c.cloner != nil {
-		cloneStatus := c.cloner.Status()
-		s.Clone = cloneStatus
+	replStatus := c.repl.Status()
+	s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
+	s.LastAppliedOpTime = replStatus.LastAppliedOpTime
+	s.EventsProcessed = replStatus.EventsProcessed
+	s.Info = "replicating changes"
 
-		if cloneStatus.Finished {
-			s.Info = "cloning data"
-		}
+	cloneStatus := c.cloner.Status()
+	s.Clone = cloneStatus
+
+	if cloneStatus.Finished {
+		s.Info = "cloning data"
 	}
 
 	return s, nil
