@@ -489,6 +489,9 @@ func (r *ChangeReplicator) handleModify(ctx context.Context, data bson.Raw) erro
 	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
 		log.Warn(ctx, "validator, validatorLevel and validatorAction are not supported")
 
+	case opts.Unknown == nil:
+		log.Debug(ctx, "empty modify event")
+
 	default:
 		log.Error(ctx, errors.New("unknown modify options"), "")
 	}

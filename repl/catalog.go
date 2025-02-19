@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -187,12 +186,33 @@ func (c *Catalog) CreateIndexes(
 			continue // already created
 		}
 
-		if index.ExpireAfterSeconds != nil {
-			maxInt32 := int64(math.MaxInt32)
+		switch { // unique and prepareUnique are mutually exclusive.
+		case index.Unique != nil && *index.Unique:
 			idxCopy := *index
-			idxCopy.ExpireAfterSeconds = &maxInt32
-			idxs = append(idxs, &idxCopy)
-			continue
+			idxCopy.Unique = nil
+			index = &idxCopy
+			log.Info(ctx, "create unique index as non-unique: "+index.Name)
+
+		case index.PrepareUnique != nil && *index.PrepareUnique:
+			idxCopy := *index
+			idxCopy.PrepareUnique = nil
+			index = &idxCopy
+			log.Info(ctx, "create prepareUnique index as non-unique: "+index.Name)
+		}
+
+		if index.ExpireAfterSeconds != nil {
+			maxDuration := int64(math.MaxInt32)
+			idxCopy := *index
+			idxCopy.ExpireAfterSeconds = &maxDuration
+			index = &idxCopy
+			log.Info(ctx, "create TTL index with modified expireAfterSeconds value: "+index.Name)
+		}
+
+		if index.Hidden != nil && *index.Hidden {
+			idxCopy := *index
+			idxCopy.Hidden = nil
+			index = &idxCopy
+			log.Info(ctx, "create hidden index as unhidden: "+index.Name)
 		}
 
 		idxs = append(idxs, index)
@@ -263,34 +283,19 @@ func (c *Catalog) ModifyIndex(
 	m *mongo.Client,
 	db DBName,
 	coll CollName,
-	modOpts *modifyIndexOption,
+	mods *modifyIndexOption,
 ) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.modifyIndexImpl(ctx, m, db, coll, modOpts)
-}
-
-func (c *Catalog) modifyIndexImpl(
-	ctx context.Context,
-	m *mongo.Client,
-	db DBName,
-	coll CollName,
-	mods *modifyIndexOption,
-) error {
-	cmdMods := bson.D{{"name", mods.Name}}
-	if mods.PrepareUnique != nil {
-		cmdMods = append(cmdMods, primitive.E{"prepareUnique", mods.PrepareUnique})
-	}
-	if mods.Unique != nil {
-		cmdMods = append(cmdMods, primitive.E{"unique", mods.Unique})
-	}
-	if mods.Hidden != nil {
-		cmdMods = append(cmdMods, primitive.E{"hidden", mods.Hidden})
-	}
-
-	if len(cmdMods) != 1 {
-		cmd := bson.D{{"collMod", coll}, {"index", cmdMods}}
+	if mods.ExpireAfterSeconds != nil {
+		cmd := bson.D{
+			{"collMod", coll},
+			{"index", bson.D{
+				{"name", mods.Name},
+				{"expireAfterSeconds", math.MaxInt32},
+			}},
+		}
 		err := m.Database(db).RunCommand(ctx, cmd).Err()
 		if err != nil {
 			return errors.Wrap(err, "modify index: "+mods.Name)
@@ -299,7 +304,6 @@ func (c *Catalog) modifyIndexImpl(
 
 	index := c.getIndexEntry(db, coll, mods.Name)
 	if index == nil {
-		log.Warn(ctx, "index not found: "+mods.Name)
 		return nil
 	}
 
@@ -350,26 +354,54 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	ctx = log.WithAttrs(ctx, log.Scope("catalog:finalize"))
+
 	for db, dbEntry := range c.databases {
 		for coll, collEntry := range dbEntry {
 			for _, index := range collEntry {
-				if index.ExpireAfterSeconds == nil {
-					continue
-				}
 				if index.isClustered() {
 					log.Warn(ctx, "clustered index with ttl is not supported")
 					continue
 				}
 
-				res := m.Database(db).RunCommand(ctx, bson.D{
-					{"collMod", coll},
-					{"index", bson.D{
-						{"name", index.Name},
-						{"expireAfterSeconds", index.ExpireAfterSeconds},
-					}},
-				})
-				if err := res.Err(); err != nil {
-					return errors.Wrap(err, "convert index: "+index.Name)
+				// restore properties
+				switch { // unique and prepareUnique are mutually exclusive.
+				case index.Unique != nil && *index.Unique:
+					log.Info(ctx, "convert index to prepareUnique: "+index.Name)
+					err := modifyIndexProp(ctx, m, db, coll, index.Name, "prepareUnique", true)
+					if err != nil {
+						return errors.Wrap(err, "convert to unique: prepareUnique: "+index.Name)
+					}
+
+					log.Info(ctx, "convert prepareUnique index to unique: "+index.Name)
+					err = modifyIndexProp(ctx, m, db, coll, index.Name, "unique", true)
+					if err != nil {
+						return errors.Wrap(err, "convert to unique: "+index.Name)
+					}
+
+				case index.PrepareUnique != nil && *index.PrepareUnique:
+					log.Info(ctx, "convert prepareUnique index to unique: "+index.Name)
+					err := modifyIndexProp(ctx, m, db, coll, index.Name, "prepareUnique", true)
+					if err != nil {
+						return errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+					}
+				}
+
+				if index.ExpireAfterSeconds != nil {
+					log.Info(ctx, "modify index expireAfterSeconds: "+index.Name)
+					err := modifyIndexProp(ctx,
+						m, db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
+					if err != nil {
+						return errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+					}
+				}
+
+				if index.Hidden != nil {
+					log.Info(ctx, "modify index hidden: "+index.Name)
+					err := modifyIndexProp(ctx, m, db, coll, index.Name, "hidden", index.Hidden)
+					if err != nil {
+						return errors.Wrap(err, "modify hidden: "+index.Name)
+					}
 				}
 			}
 		}
@@ -452,4 +484,23 @@ func isMongoError(err error, name string) bool {
 	}
 
 	return isIndexNotFound(errors.Unwrap(err))
+}
+
+func modifyIndexProp(
+	ctx context.Context,
+	m *mongo.Client,
+	db DBName,
+	coll CollName,
+	index IndexName,
+	name string,
+	value any,
+) error {
+	res := m.Database(db).RunCommand(ctx, bson.D{
+		{"collMod", coll},
+		{"index", bson.D{
+			{"name", index},
+			{name, value},
+		}},
+	})
+	return res.Err() //nolint:wrapcheck
 }

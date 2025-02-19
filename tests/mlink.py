@@ -90,8 +90,7 @@ class Runner:
         if status["state"] == MLink.State.FINALIZING:
             self.wait_for_state(MLink.State.FINALIZED)
         elif status["state"] == MLink.State.RUNNING:
-            optime = self.source.server_info()["operationTime"]
-            self.wait_for_optime(optime)
+            self.wait_for_current_optime()
             self.wait_for_finalizable()
             self.mlink.finalize()
             self.wait_for_state(MLink.State.FINALIZED)
@@ -102,15 +101,16 @@ class Runner:
             time.sleep(0.1)
             status = self.mlink.status()
 
-    def wait_for_optime(self, ts: bson.Timestamp, timeout=10):
+    def wait_for_current_optime(self, timeout=10):
         status = self.mlink.status()
         assert status["state"] == MLink.State.RUNNING
 
+        curr_optime = self.source.server_info()["operationTime"]
         for _ in range(timeout * 10):
             applied_optime: str = status.get("lastAppliedOpTime")
             if applied_optime:
                 t_s, i_s = applied_optime.split(".")
-                if ts <= bson.Timestamp(int(t_s), int(i_s)):
+                if curr_optime <= bson.Timestamp(int(t_s), int(i_s)):
                     return
 
             time.sleep(0.1)

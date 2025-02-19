@@ -11,3 +11,6 @@ vendor/
 
 .pytest_cache
 __pycache__
+
+/org.md
+/scratch.*

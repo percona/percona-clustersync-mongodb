@@ -37,22 +37,7 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-    @pytest.mark.xfail(reason="IndexKeySpecsConflict")
     def test_create_prepare_unique(self, phase):
-        # FIXME(phase:clone): create indexes error
-        #   (IndexKeySpecsConflict) An existing index has the same name as the requested index.
-        #    When index names are not specified, they are auto generated and can cause conflicts.
-        #    Please refer to our documentation.
-        #       Requested index: { v: 2, prepareUnique: true, key: { i: 1 }, name: "i_1" },
-        #       existing index: { v: 2, unique: true, hidden: true, key: { i: 1 }, name: "i_1" }
-        # op=createIndexes
-        # s=repl:apply
-        #
-        # reason:
-        #  [clone] (1) create with prepareUnique.
-        #          (2) prepareUnique converts to unique.
-        #  [repl]  (1) create with prepareUnique [fails here: unique already exists].
-        #          (2) prepareUnique converts to unique.
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
@@ -86,8 +71,14 @@ class TestIndexes(BaseTesting):
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
+        with self.perform(phase) as mlink:
+            name = "i_1"
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, name=name, hidden=True)
+            assert self.source["db_1"]["coll_1"].index_information()[name]["hidden"]
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                assert "hidden" not in self.target["db_1"]["coll_1"].index_information()[name]
 
         self.compare_all()
 
@@ -318,49 +309,155 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-    @pytest.mark.xfail(reason="IndexKeySpecsConflict")
-    def test_modify_many_props(self, phase):
-        # FIXME(phase:clone): create indexes error
-        #   (IndexKeySpecsConflict) An existing index has the same name as the requested index.
-        #    When index names are not specified, they are auto generated and can cause conflicts.
-        #    Please refer to our documentation.
-        #       Requested index: { v: 2, prepareUnique: true, key: { i: 1 }, name: "i_1" },
-        #       existing index: { v: 2, unique: true, hidden: true, key: { i: 1 }, name: "i_1",
-        #                         expireAfterSeconds: 2147483647 }
-        # op=createIndexes
-        # s=repl:apply
-        #
-        # reason:
-        #  [clone] (1) create with prepareUnique.
-        #          (2) prepareUnique converts to unique.
-        #  [repl]  (1) create with prepareUnique [fails here: unique already exists].
-        #          (2) prepareUnique converts to unique.
+    def test_internal_create_many_props(self, phase):
         self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name]["prepareUnique"]
-        assert "expireAfterSeconds" not in indexes[index_name]
-        assert "unique" not in indexes[index_name]
-        assert "hidden" not in indexes[index_name]
+        with self.perform(phase) as mlink:
+            options = {
+                "unique": True,
+                "hidden": True,
+                "expireAfterSeconds": 3600,
+            }
+            index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, **options)
 
-        with self.perform(phase):
+            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
+            for prop, val in options.items():
+                assert source_index.get(prop) == val
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                for prop, val in options.items():
+                    if prop == "expireAfterSeconds":
+                        assert target_index["expireAfterSeconds"] == (2**31) - 1
+                    else:
+                        assert not target_index.get(prop)
+
+        self.compare_all()
+
+    def test_internal_modify_many_props(self, phase):
+        self.drop_all_database()
+        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
+
+        with self.perform(phase) as mlink:
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {"name": index_name, "prepareUnique": True},
+                }
+            )
+
+            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
+            assert source_index["prepareUnique"]
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                assert "prepareUnique" not in target_index
+
+            modify_options = {
+                "unique": True,
+                "hidden": True,
+                "expireAfterSeconds": 3600,
+            }
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {"name": index_name, **modify_options},
+                },
+            )
+
+            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
+            for prop, val in modify_options.items():
+                assert source_index.get(prop) == val
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                for prop, val in modify_options.items():
+                    if prop == "expireAfterSeconds":
+                        assert target_index["expireAfterSeconds"] == (2**31) - 1
+                    else:
+                        assert not target_index.get(prop)
+
+        self.compare_all()
+
+    def test_internal_modify_index_props_complex(self, phase):
+        self.drop_all_database()
+        index_key = {"i": 1}
+        index_name = self.source["db_1"]["coll_1"].create_index(index_key, prepareUnique=True)
+
+        source_index1 = self.source["db_1"]["coll_1"].index_information()[index_name]
+        assert source_index1["prepareUnique"]
+        assert "unique" not in source_index1
+        assert "hidden" not in source_index1
+        assert "expireAfterSeconds" not in source_index1
+
+        with self.perform(phase) as mlink:
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                assert "prepareUnique" not in target_index
+                assert "unique" not in target_index
+                assert "hidden" not in target_index
+                assert "expireAfterSeconds" not in target_index
+
             self.source["db_1"].command(
                 {
                     "collMod": "coll_1",
                     "index": {
-                        "keyPattern": {"i": 1},
+                        "keyPattern": index_key,
+                        "prepareUnique": True,
                         "unique": True,
                         "hidden": True,
-                        "expireAfterSeconds": 432,
+                        "expireAfterSeconds": 132,
                     },
                 }
             )
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name]["unique"]
-        assert indexes[index_name]["hidden"]
-        assert indexes[index_name]["expireAfterSeconds"] == 432
+            source_index2 = self.source["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in source_index2
+            assert source_index2["unique"]
+            assert source_index2["hidden"]
+            assert source_index2["expireAfterSeconds"] == 132
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                assert "prepareUnique" not in target_index
+                assert "unique" not in target_index
+                assert "hidden" not in target_index
+                assert target_index["expireAfterSeconds"] == (2**31) - 1
+
+            self.source["db_1"].command(
+                {
+                    "collMod": "coll_1",
+                    "index": {
+                        "keyPattern": index_key,
+                        "prepareUnique": True,  # do nothing
+                        "expireAfterSeconds": 133,
+                    },
+                }
+            )
+
+            source_index3 = self.source["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in source_index2
+            assert source_index3["unique"]
+            assert source_index3["hidden"]
+            assert source_index3["expireAfterSeconds"] == 133
+
+            if phase is Runner.Phase.APPLY:
+                mlink.wait_for_current_optime()
+                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
+                assert "prepareUnique" not in target_index
+                assert "unique" not in target_index
+                assert "hidden" not in target_index
+                assert target_index["expireAfterSeconds"] == (2**31) - 1
+
+        target_index = self.source["db_1"]["coll_1"].index_information()[index_name]
+        assert target_index["unique"]
+        assert target_index["hidden"]
+        assert target_index["expireAfterSeconds"] == 133
 
         self.compare_all()
 

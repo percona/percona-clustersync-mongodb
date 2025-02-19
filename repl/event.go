@@ -348,6 +348,8 @@ type modifyOpDesc struct {
 	Validator       *bson.Raw `bson:"validator,omitempty"`
 	ValidatorLevel  *string   `bson:"validatorLevel,omitempty"`
 	ValidatorAction *string   `bson:"validatorAction,omitempty"`
+
+	Unknown map[string]any `bson:",inline"`
 }
 
 type modifyIndexOption struct {
