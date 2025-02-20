@@ -1,6 +1,6 @@
 module github.com/percona-lab/percona-mongolink
 
-go 1.23
+go 1.24
 
 require (
 	github.com/rs/zerolog v1.33.0

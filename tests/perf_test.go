@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"math/rand"
 	"os"
 	"testing"
@@ -23,14 +22,14 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(context.Background(), mongodbURI)
+	client, err := topo.Connect(b.Context(), mongodbURI)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	defer client.Disconnect(context.Background()) //nolint:errcheck
+	defer client.Disconnect(b.Context()) //nolint:errcheck
 
 	collection := client.Database("db_0").Collection("coll_0")
-	collection.Drop(context.Background()) //nolint:errcheck
+	collection.Drop(b.Context()) //nolint:errcheck
 
 	payload := make([]byte, 1024*1024)
 	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
@@ -43,7 +42,7 @@ func BenchmarkInsertOne(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := collection.InsertOne(context.Background(), doc)
+		_, err := collection.InsertOne(b.Context(), doc)
 		if err != nil {
 			if mongo.IsDuplicateKeyError(err) {
 				continue
@@ -60,14 +59,14 @@ func BenchmarkReplaceOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(context.Background(), mongodbURI)
+	client, err := topo.Connect(b.Context(), mongodbURI)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	defer client.Disconnect(context.Background()) //nolint:errcheck
+	defer client.Disconnect(b.Context()) //nolint:errcheck
 
 	collection := client.Database("db_0").Collection("coll_0")
-	collection.Drop(context.Background()) //nolint:errcheck
+	collection.Drop(b.Context()) //nolint:errcheck
 
 	payload := make([]byte, 1024*1024)
 	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
@@ -81,7 +80,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := collection.ReplaceOne(context.Background(), bson.D{{"_id", id}}, doc,
+		_, err := collection.ReplaceOne(b.Context(), bson.D{{"_id", id}}, doc,
 			options.Replace().SetUpsert(true))
 		if err != nil && !mongo.IsDuplicateKeyError(err) {
 			b.Fatalf("Failed to insert document: %v", err)
