@@ -12,16 +12,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/list"
 	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona-lab/percona-mongolink/sel"
 )
 
+// Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
-	Source   *mongo.Client
-	Target   *mongo.Client
-	Drop     bool
-	NSFilter util.NSFilter
-	Catalog  *Catalog
+	Source   *mongo.Client // Source MongoDB client
+	Target   *mongo.Client // Target MongoDB client
+	Drop     bool          // Drop collections before creating them
+	NSFilter sel.NSFilter  // Namespace filter
+	Catalog  *Catalog      // Catalog for managing collections and indexes
 
 	lastAppliedOpTime bson.Timestamp
 	resumeToken       bson.Raw
@@ -35,11 +37,13 @@ type Repl struct {
 	eventsProcessed int64
 }
 
+// ChangeReplicationStatus represents the status of change replication.
 type ChangeReplicationStatus struct {
-	LastAppliedOpTime bson.Timestamp
-	EventsProcessed   int64
+	LastAppliedOpTime bson.Timestamp // Last applied operation time
+	EventsProcessed   int64          // Number of events processed
 }
 
+// Status returns the current replication status.
 func (r *Repl) Status() ChangeReplicationStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -50,6 +54,7 @@ func (r *Repl) Status() ChangeReplicationStatus {
 	}
 }
 
+// Wait waits for the replication to complete and returns any error encountered.
 func (r *Repl) Wait() error {
 	r.mu.Lock()
 	doneC := r.doneSig
@@ -64,14 +69,17 @@ func (r *Repl) Wait() error {
 	return r.err
 }
 
+// Start begins the replication process from the specified start timestamp.
 func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	return r.startImpl(ctx, &startAt)
 }
 
+// Resume resumes the replication process from the last known resume token.
 func (r *Repl) Resume(ctx context.Context) error {
 	return r.startImpl(ctx, nil)
 }
 
+// Pause pauses the replication process.
 func (r *Repl) Pause() {
 	r.mu.Lock()
 	stopSig := r.stopSig
@@ -88,6 +96,7 @@ func (r *Repl) Pause() {
 	r.pause(nil)
 }
 
+// pause sets the replication error and marks it as not running.
 func (r *Repl) pause(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -96,6 +105,7 @@ func (r *Repl) pause(err error) {
 	r.running = false
 }
 
+// startImpl starts the replication process with the given options.
 func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -155,6 +165,7 @@ func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 	return nil
 }
 
+// loop handles the main replication loop.
 func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	ctx = log.WithAttrs(ctx, log.Scope("repl:loop"))
 
@@ -223,7 +234,7 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 	}()
 
 	applyCtx := log.CopyContext(ctx, context.Background())
-	var txBuffer util.List[bson.Raw]
+	var txBuffer list.List[bson.Raw]
 	for {
 		event, ok := <-eventC
 		if !ok {
@@ -271,6 +282,7 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 	}
 }
 
+// apply applies a change event to the target MongoDB.
 func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	var baseEvent BaseEvent
 	err := bson.Unmarshal(data, &baseEvent)
@@ -281,7 +293,7 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	ctx = log.WithAttrs(ctx,
 		log.Scope("repl:apply"),
 		log.Operation(string(baseEvent.OperationType)),
-		log.OpTime(baseEvent.ClusterTime),
+		log.OpTime(baseEvent.ClusterTime.T, baseEvent.ClusterTime.I),
 		log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection),
 		log.Tx(baseEvent.TxnNumber, baseEvent.LSID))
 
@@ -352,6 +364,7 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	return nil
 }
 
+// handleCreate handles create events.
 func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateEvent](data)
 	if err != nil {
@@ -390,6 +403,7 @@ func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
 	)
 }
 
+// handleDrop handles drop events.
 func (r *Repl) handleDrop(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropEvent](data)
 	if err != nil {
@@ -400,6 +414,7 @@ func (r *Repl) handleDrop(ctx context.Context, data bson.Raw) error {
 	return err
 }
 
+// handleDropDatabase handles drop database events.
 func (r *Repl) handleDropDatabase(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropDatabaseEvent](data)
 	if err != nil {
@@ -410,6 +425,7 @@ func (r *Repl) handleDropDatabase(ctx context.Context, data bson.Raw) error {
 	return err
 }
 
+// handleCreateIndexes handles create indexes events.
 func (r *Repl) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateIndexesEvent](data)
 	if err != nil {
@@ -424,6 +440,7 @@ func (r *Repl) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
 	return err
 }
 
+// handleDropIndexes handles drop indexes events.
 func (r *Repl) handleDropIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropIndexesEvent](data)
 	if err != nil {
@@ -444,6 +461,7 @@ func (r *Repl) handleDropIndexes(ctx context.Context, data bson.Raw) error {
 	return nil
 }
 
+// handleModify handles modify events.
 func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[ModifyEvent](data)
 	if err != nil {
@@ -502,6 +520,7 @@ func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 
 var insertDocOptions = options.Replace().SetUpsert(true)
 
+// handleInsert handles insert events.
 func (r *Repl) handleInsert(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[InsertEvent](data)
 	if err != nil {
@@ -515,6 +534,7 @@ func (r *Repl) handleInsert(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
+// handleDelete handles delete events.
 func (r *Repl) handleDelete(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DeleteEvent](data)
 	if err != nil {
@@ -527,6 +547,7 @@ func (r *Repl) handleDelete(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
+// handleUpdate handles update events.
 func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[UpdateEvent](data)
 	if err != nil {
@@ -552,6 +573,7 @@ func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
+// handleReplace handles replace events.
 func (r *Repl) handleReplace(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[ReplaceEvent](data)
 	if err != nil {
@@ -564,21 +586,25 @@ func (r *Repl) handleReplace(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
+// txnEvent represents a transaction event.
 type txnEvent struct {
-	TxnNumber int64    `bson:"txnNumber"`
-	LSID      bson.Raw `bson:"lsid"`
+	TxnNumber int64    `bson:"txnNumber"` // Transaction number
+	LSID      bson.Raw `bson:"lsid"`      // Logical session ID
 }
 
+// TxnEvent extracts a transaction event from raw BSON data.
 func TxnEvent(data bson.Raw) txnEvent {
 	var e txnEvent
 	_ = bson.Unmarshal(data, &e)
 	return e
 }
 
+// IsTxn checks if the event is part of a transaction.
 func (t txnEvent) IsTxn() bool {
 	return t.TxnNumber != 0
 }
 
+// Equal checks if two transaction events are equal.
 func (t txnEvent) Equal(o txnEvent) bool {
 	return t.TxnNumber == o.TxnNumber && bytes.Equal(t.LSID, o.LSID)
 }

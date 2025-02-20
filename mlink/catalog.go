@@ -26,46 +26,49 @@ type (
 // NOTE: Indexes().Create*() uses [mongo.IndexModel] which does not support `prepareUnique`.
 // GeoHaystack indexes cannot be created in version 5.0 and above (`bucketSize` field)
 type IndexSpecification struct {
-	Name               IndexName `bson:"name"`
-	Namespace          string    `bson:"ns"`
-	KeysDocument       bson.Raw  `bson:"key"`
-	Version            int32     `bson:"v"`
-	Sparse             *bool     `bson:"sparse,omitempty"`
-	Hidden             *bool     `bson:"hidden,omitempty"`
-	Unique             *bool     `bson:"unique,omitempty"`
-	PrepareUnique      *bool     `bson:"prepareUnique,omitempty"`
-	Clustered          *bool     `bson:"clustered,omitempty"`
-	ExpireAfterSeconds *int64    `bson:"expireAfterSeconds,omitempty"`
+	Name               IndexName `bson:"name"`                         // Index name
+	Namespace          string    `bson:"ns"`                           // Namespace
+	KeysDocument       bson.Raw  `bson:"key"`                          // Keys document
+	Version            int32     `bson:"v"`                            // Version
+	Sparse             *bool     `bson:"sparse,omitempty"`             // Sparse index
+	Hidden             *bool     `bson:"hidden,omitempty"`             // Hidden index
+	Unique             *bool     `bson:"unique,omitempty"`             // Unique index
+	PrepareUnique      *bool     `bson:"prepareUnique,omitempty"`      // Prepare unique index
+	Clustered          *bool     `bson:"clustered,omitempty"`          // Clustered index
+	ExpireAfterSeconds *int64    `bson:"expireAfterSeconds,omitempty"` // Expire after seconds
 
-	Weights          any      `bson:"weights,omitempty"`
-	DefaultLanguage  *string  `bson:"default_language,omitempty"`
-	LanguageOverride *string  `bson:"language_override,omitempty"`
-	TextVersion      *int32   `bson:"textIndexVersion,omitempty"`
-	Collation        bson.Raw `bson:"collation,omitempty"`
+	Weights          any      `bson:"weights,omitempty"`           // Weights
+	DefaultLanguage  *string  `bson:"default_language,omitempty"`  // Default language
+	LanguageOverride *string  `bson:"language_override,omitempty"` // Language override
+	TextVersion      *int32   `bson:"textIndexVersion,omitempty"`  // Text index version
+	Collation        bson.Raw `bson:"collation,omitempty"`         // Collation
 
-	WildcardProjection      any `bson:"wildcardProjection,omitempty"`
-	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
+	WildcardProjection      any `bson:"wildcardProjection,omitempty"`      // Wildcard projection
+	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"` // Partial filter expression
 
-	Bits      *int32   `bson:"bits,omitempty"`
-	Min       *float64 `bson:"min,omitempty"`
-	Max       *float64 `bson:"max,omitempty"`
-	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"`
+	Bits      *int32   `bson:"bits,omitempty"`                 // Bits
+	Min       *float64 `bson:"min,omitempty"`                  // Min
+	Max       *float64 `bson:"max,omitempty"`                  // Max
+	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
 }
 
 func (s *IndexSpecification) isClustered() bool {
 	return s.Clustered != nil && *s.Clustered
 }
 
+// Catalog manages the MongoDB catalog.
 type Catalog struct {
 	mu sync.Mutex
 
-	databases map[DBName]map[CollName]map[string]*IndexSpecification
+	databases map[DBName]map[CollName]map[string]*IndexSpecification // Databases map
 }
 
+// NewCatalog creates a new Catalog.
 func NewCatalog() *Catalog {
 	return &Catalog{databases: make(map[DBName]map[CollName]map[string]*IndexSpecification)}
 }
 
+// CreateCollection creates a new collection in the target MongoDB.
 func (c *Catalog) CreateCollection(
 	ctx context.Context,
 	m *mongo.Client,
@@ -111,6 +114,7 @@ func (c *Catalog) CreateCollection(
 	return nil
 }
 
+// CreateView creates a new view in the target MongoDB.
 func (c *Catalog) CreateView(
 	ctx context.Context,
 	m *mongo.Client,
@@ -144,6 +148,7 @@ func (c *Catalog) CreateView(
 	return nil
 }
 
+// DropCollection drops a collection in the target MongoDB.
 func (c *Catalog) DropCollection(
 	ctx context.Context,
 	m *mongo.Client,
@@ -162,6 +167,7 @@ func (c *Catalog) DropCollection(
 	return nil
 }
 
+// DropDatabase drops a database in the target MongoDB.
 func (c *Catalog) DropDatabase(ctx context.Context, m *mongo.Client, db DBName) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -179,6 +185,7 @@ func (c *Catalog) DropDatabase(ctx context.Context, m *mongo.Client, db DBName) 
 	return nil
 }
 
+// CreateIndexes creates indexes in the target MongoDB.
 func (c *Catalog) CreateIndexes(
 	ctx context.Context,
 	m *mongo.Client,
@@ -249,6 +256,7 @@ func (c *Catalog) CreateIndexes(
 	return nil
 }
 
+// ModifyCappedCollection modifies a capped collection in the target MongoDB.
 func (c *Catalog) ModifyCappedCollection(
 	ctx context.Context,
 	m *mongo.Client,
@@ -272,6 +280,7 @@ func (c *Catalog) ModifyCappedCollection(
 	return err //nolint:wrapcheck
 }
 
+// ModifyView modifies a view in the target MongoDB.
 func (c *Catalog) ModifyView(
 	ctx context.Context,
 	m *mongo.Client,
@@ -292,6 +301,7 @@ func (c *Catalog) ModifyView(
 	return err //nolint:wrapcheck
 }
 
+// ModifyIndex modifies an index in the target MongoDB.
 func (c *Catalog) ModifyIndex(
 	ctx context.Context,
 	m *mongo.Client,
@@ -339,6 +349,7 @@ func (c *Catalog) ModifyIndex(
 	return nil
 }
 
+// DropIndex drops an index in the target MongoDB.
 func (c *Catalog) DropIndex(
 	ctx context.Context,
 	m *mongo.Client,
@@ -364,6 +375,7 @@ func (c *Catalog) DropIndex(
 	return nil
 }
 
+// FinalizeIndexes finalizes the indexes in the target MongoDB.
 func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -424,6 +436,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 	return nil
 }
 
+// getIndexEntry gets an index entry from the catalog.
 func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *IndexSpecification {
 	dbEntry := c.databases[db]
 	if len(dbEntry) == 0 {
@@ -444,6 +457,7 @@ func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *Index
 	return nil
 }
 
+// addIndexEntries adds index entries to the catalog.
 func (c *Catalog) addIndexEntries(db DBName, coll CollName, indexes []*IndexSpecification) {
 	collEntry := c.ensureCollectionEntry(db, coll)
 	for _, index := range indexes {
@@ -451,6 +465,7 @@ func (c *Catalog) addIndexEntries(db DBName, coll CollName, indexes []*IndexSpec
 	}
 }
 
+// deleteIndexEntry deletes an index entry from the catalog.
 func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
 	dbEntry := c.databases[db]
 	if len(dbEntry) == 0 {
@@ -460,6 +475,7 @@ func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
 	delete(dbEntry[coll], name)
 }
 
+// ensureCollectionEntry ensures a collection entry exists in the catalog.
 func (c *Catalog) ensureCollectionEntry(db DBName, coll CollName) map[string]*IndexSpecification {
 	dbEntry := c.databases[db]
 	if dbEntry == nil {
@@ -476,18 +492,22 @@ func (c *Catalog) ensureCollectionEntry(db DBName, coll CollName) map[string]*In
 	return collEntry
 }
 
+// deleteCollectionEntry deletes a collection entry from the catalog.
 func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
 	delete(c.databases[db], coll)
 }
 
+// isIndexNotFound checks if an error is an index not found error.
 func isIndexNotFound(err error) bool {
 	return isMongoError(err, "IndexNotFound")
 }
 
+// isIndexOptionsConflict checks if an error is an index options conflict error.
 func isIndexOptionsConflict(err error) bool {
 	return isMongoError(err, "IndexOptionsConflict")
 }
 
+// isMongoError checks if an error is a MongoDB error with the specified name.
 func isMongoError(err error, name string) bool {
 	if err == nil {
 		return false
@@ -501,6 +521,7 @@ func isMongoError(err error, name string) bool {
 	return isIndexNotFound(errors.Unwrap(err))
 }
 
+// modifyIndexProp modifies an index property in the target MongoDB.
 func modifyIndexProp(
 	ctx context.Context,
 	m *mongo.Client,

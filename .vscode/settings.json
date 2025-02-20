@@ -32,7 +32,6 @@
   "gopls": {
     "analyses": {
       "composites": false,
-      "fieldalignment": false
     },
     "formatting.gofumpt": true,
     "formatting.local": "github.com/percona",

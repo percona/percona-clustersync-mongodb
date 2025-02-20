@@ -13,12 +13,13 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
-const DefaultMongoURI = "mongodb://localhost:27017"
-
+// Connect establishes a connection to a MongoDB instance using the provided URI.
+// If the URI is empty, it returns an error.
 func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 	if uri == "" {
-		uri = DefaultMongoURI
-	} else if !strings.HasPrefix(uri, "mongodb://") {
+		return nil, errors.New("invalid MongoDB URI")
+	}
+	if !strings.HasPrefix(uri, "mongodb://") {
 		uri = "mongodb://" + uri
 	}
 

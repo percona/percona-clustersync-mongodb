@@ -1,6 +1,10 @@
-package util
+package sel_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/percona-lab/percona-mongolink/sel"
+)
 
 func TestFilter(t *testing.T) {
 	t.Run("include", func(t *testing.T) {
@@ -28,7 +32,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := MakeFilter(includeFilter, nil)
+		isIncluded := sel.MakeFilter(includeFilter, nil)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {
@@ -63,7 +67,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := MakeFilter(nil, excludedFilter)
+		isIncluded := sel.MakeFilter(nil, excludedFilter)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if db == "db_1" {
@@ -108,7 +112,7 @@ func TestFilter(t *testing.T) {
 			},
 		}
 
-		isIncluded := MakeFilter(includedFilter, excludedFilter)
+		isIncluded := sel.MakeFilter(includedFilter, excludedFilter)
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {

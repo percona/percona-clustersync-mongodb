@@ -12,11 +12,14 @@ from mlink import MLink, Runner
 
 @pytest.mark.usefixtures("cls_source", "cls_target", "cls__mlink")
 class BaseTesting:
+    """BaseTesting provides common setup and utility methods for MongoLink tests."""
+
     source: MongoClient
     target: MongoClient
     _mlink: MLink
 
     def perform(self, phase: Runner.Phase):
+        """Perform the MongoLink operation for the given phase."""
         return self.perform_with_options(phase, {})
 
     def perform_with_options(
@@ -25,6 +28,7 @@ class BaseTesting:
         include_ns=None,
         exclude_ns=None,
     ):
+        """Perform the MongoLink operation with the given options."""
         mlink_options = {}
         if include_ns:
             mlink_options["includeNamespaces"] = include_ns
@@ -34,6 +38,7 @@ class BaseTesting:
 
     @classmethod
     def all_target_namespaces(cls):
+        """Return all namespaces in the target MongoDB."""
         rv = set()
         for db in cls.target.list_database_names():
             if db in ("admin", "config", "local"):
@@ -44,6 +49,7 @@ class BaseTesting:
 
     @classmethod
     def compare_all(cls):
+        """Compare all databases and collections between source and target MongoDB."""
         source_dbs = cls.list_databases(cls.source)
         target_dbs = cls.list_databases(cls.target)
         assert source_dbs == target_dbs, f"{source_dbs} != {target_dbs}"
@@ -58,6 +64,7 @@ class BaseTesting:
 
     @classmethod
     def check_if_target_is_subset(cls):
+        """Check if the target MongoDB is a subset of the source MongoDB."""
         source_dbs = cls.list_databases(cls.source)
         target_dbs = cls.list_databases(cls.target)
         assert set(target_dbs).issubset(source_dbs)
@@ -72,6 +79,7 @@ class BaseTesting:
 
     @staticmethod
     def list_databases(client: MongoClient):
+        """List all databases in the given MongoClient."""
         rv = set()
         for name in client.list_database_names():
             if name not in ("admin", "config", "local"):
@@ -80,6 +88,7 @@ class BaseTesting:
 
     @staticmethod
     def list_namespaces(client: MongoClient, db: str):
+        """List all namespaces in the given database."""
         rv = set()
         for name in client[db].list_collection_names():
             if not name.startswith("system."):
@@ -88,6 +97,7 @@ class BaseTesting:
 
     @classmethod
     def compare_namespace(cls, db: str, coll: str):
+        """Compare the given namespace between source and target MongoDB."""
         source_options = cls.source[db][coll].options()
         target_options = cls.target[db][coll].options()
         assert source_options == target_options, f"{source_options=} != {target_options=}"
@@ -105,6 +115,7 @@ class BaseTesting:
 
     @staticmethod
     def _coll_content(coll: Collection):
+        """Get the content and hash of the given collection."""
         docs, md5 = [], hashlib.md5()
         for data in coll.find_raw_batches(sort=[("_id", ASCENDING)]):
             md5.update(data)
@@ -112,6 +123,7 @@ class BaseTesting:
         return docs, md5.hexdigest()
 
     def drop_all_database(self):
+        """Drop all databases in the source and target MongoDB."""
         for db in self.source.list_database_names():
             if db not in ("admin", "config", "local"):
                 self.source.drop_database(db)
@@ -120,21 +132,26 @@ class BaseTesting:
                 self.target.drop_database(db)
 
     def drop_database(self, db: str):
+        """Drop the given database in the source and target MongoDB."""
         self.source.drop_database(db)
         self.target.drop_database(db)
 
     def create_collection(self, db: str, coll: str, **kwargs):
+        """Create a collection in the source and target MongoDB."""
         self.source[db].create_collection(coll, **kwargs)
         self.target[db].create_collection(coll, **kwargs)
 
     def create_index(self, db: str, coll: str, keys, **kwargs):
+        """Create an index in the source and target MongoDB."""
         self.source[db][coll].create_index(keys, **kwargs)
         self.source[db][coll].create_index(keys, **kwargs)
 
     def create_view(self, db: str, view_name: str, source: str, pipeline: List[dict]):
+        """Create a view in the source and target MongoDB."""
         self.source[db].create_collection(view_name, viewOn=source, pipeline=pipeline)
         self.target[db].create_collection(view_name, viewOn=source, pipeline=pipeline)
 
     def insert_documents(self, db: str, coll: str, documents: List[dict]):
+        """Insert documents into the source and target MongoDB."""
         self.source[db][coll].insert_many(documents)
         self.target[db][coll].insert_many(documents)

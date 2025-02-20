@@ -9,10 +9,11 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
-	"github.com/percona-lab/percona-mongolink/util"
 )
 
+// State represents the state of the coordinator.
 type State string
 
 const (
@@ -23,34 +24,36 @@ const (
 	FinalizedState  = "finalized"
 )
 
+// Status represents the status of the coordinator.
 type Status struct {
-	State             State
-	LastAppliedOpTime bson.Timestamp
-	Finalizable       bool
-	Info              string
-	EventsProcessed   int64
-
-	Clone CloneStatus
+	State             State          // Current state of the coordinator
+	LastAppliedOpTime bson.Timestamp // Last applied operation time
+	Finalizable       bool           // Indicates if the process can be finalized
+	Info              string         // Additional information
+	EventsProcessed   int64          // Number of events processed
+	Clone             CloneStatus    // Status of the cloning process
 }
 
+// Coordinator manages the replication process.
 type Coordinator struct {
-	source *mongo.Client
-	target *mongo.Client
+	source *mongo.Client // Source MongoDB client
+	target *mongo.Client // Target MongoDB client
 
-	drop     bool
-	nsFilter util.NSFilter
+	drop     bool         // Drop collections before creating them
+	nsFilter sel.NSFilter // Namespace filter
 
-	state   State
-	catalog *Catalog
-	clone   *Clone
-	repl    *Repl
+	state   State    // Current state of the coordinator
+	catalog *Catalog // Catalog for managing collections and indexes
+	clone   *Clone   // Clone process
+	repl    *Repl    // Replication process
 
-	startedAt bson.Timestamp
-	clonedAt  bson.Timestamp
+	startedAt bson.Timestamp // Timestamp when the process started
+	clonedAt  bson.Timestamp // Timestamp when the cloning finished
 
 	mu sync.Mutex
 }
 
+// New creates a new Coordinator.
 func New(source, target *mongo.Client) *Coordinator {
 	r := &Coordinator{
 		source: source,
@@ -60,13 +63,14 @@ func New(source, target *mongo.Client) *Coordinator {
 	return r
 }
 
+// StartOptions represents the options for starting the coordinator.
 type StartOptions struct {
-	DropBeforeCreate bool
-
-	IncludeNamespaces []string
-	ExcludeNamespaces []string
+	DropBeforeCreate  bool     // Drop collections before creating them
+	IncludeNamespaces []string // Namespaces to include
+	ExcludeNamespaces []string // Namespaces to exclude
 }
 
+// Start starts the replication process with the given options.
 func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -82,7 +86,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	}
 
 	c.drop = options.DropBeforeCreate
-	c.nsFilter = util.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	c.nsFilter = sel.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
 
 	c.repl = nil
 	c.startedAt = bson.Timestamp{}
@@ -129,6 +133,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	return nil
 }
 
+// run executes the replication process.
 func (c *Coordinator) run(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("coord:run"))
 	log.Info(ctx, "starting data cloning")
@@ -175,6 +180,7 @@ func (c *Coordinator) run(ctx context.Context) error {
 	return nil
 }
 
+// Finalize finalizes the replication process.
 func (c *Coordinator) Finalize(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -203,6 +209,7 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 	return nil
 }
 
+// Status returns the current status of the coordinator.
 func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

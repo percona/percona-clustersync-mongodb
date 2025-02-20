@@ -9,8 +9,10 @@ import (
 	"github.com/percona-lab/percona-mongolink/errors"
 )
 
+// errMissedClusterTime is returned when the cluster time is missing.
 var errMissedClusterTime = errors.New("missed clusterTime")
 
+// ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Raw()
 	if err != nil {

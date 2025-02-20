@@ -16,6 +16,7 @@ import (
 
 var seed int64 = time.Now().Unix()
 
+// BenchmarkInsertOne benchmarks the performance of inserting a single document into MongoDB.
 func BenchmarkInsertOne(b *testing.B) {
 	mongodbURI := os.Getenv("TEST_TARGET_URI")
 	if mongodbURI == "" {
@@ -52,6 +53,7 @@ func BenchmarkInsertOne(b *testing.B) {
 	}
 }
 
+// BenchmarkReplaceOne benchmarks the performance of replacing a single document in MongoDB.
 func BenchmarkReplaceOne(b *testing.B) {
 	mongodbURI := os.Getenv("TEST_TARGET_URI")
 	if mongodbURI == "" {

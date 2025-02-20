@@ -13,29 +13,32 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona-lab/percona-mongolink/sel"
 )
 
+// Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
-	Source   *mongo.Client
-	Target   *mongo.Client
-	Drop     bool
-	NSFilter util.NSFilter
-	Catalog  *Catalog
+	Source   *mongo.Client // Source MongoDB client
+	Target   *mongo.Client // Target MongoDB client
+	Drop     bool          // Drop collections before creating them
+	NSFilter sel.NSFilter  // Namespace filter
+	Catalog  *Catalog      // Catalog for managing collections and indexes
 
-	estimatedTotalBytes  atomic.Int64
-	estimatedClonedBytes atomic.Int64
-	finished             bool
+	estimatedTotalBytes  atomic.Int64 // Estimated total bytes to be cloned
+	estimatedClonedBytes atomic.Int64 // Estimated bytes cloned so far
+	finished             bool         // Indicates if the cloning process is finished
 
 	mu sync.Mutex
 }
 
+// CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	Finished             bool
-	EstimatedTotalBytes  int64
-	EstimatedClonedBytes int64
+	Finished             bool  // Indicates if the cloning process is finished
+	EstimatedTotalBytes  int64 // Estimated total bytes to be cloned
+	EstimatedClonedBytes int64 // Estimated bytes cloned so far
 }
 
+// Status returns the current status of the cloning process.
 func (c *Clone) Status() CloneStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -47,6 +50,7 @@ func (c *Clone) Status() CloneStatus {
 	}
 }
 
+// Clone starts the cloning process.
 func (c *Clone) Clone(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("clone"))
 
@@ -118,6 +122,7 @@ func (c *Clone) Clone(ctx context.Context) error {
 	return nil
 }
 
+// cloneCollection clones a collection from the source to the target.
 func (c *Clone) cloneCollection(
 	ctx context.Context,
 	db string,
@@ -184,6 +189,7 @@ func (c *Clone) cloneCollection(
 	return nil
 }
 
+// cloneView clones a view from the source to the target.
 func (c *Clone) cloneView(
 	ctx context.Context,
 	db string,
