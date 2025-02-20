@@ -1,4 +1,4 @@
-package tests
+package tests_test
 
 import (
 	"math/rand"
@@ -13,7 +13,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-var seed int64 = time.Now().Unix()
+var seed = time.Now().Unix() //nolint:gochecknoglobals
 
 // BenchmarkInsertOne benchmarks the performance of inserting a single document into MongoDB.
 func BenchmarkInsertOne(b *testing.B) {
@@ -41,12 +41,14 @@ func BenchmarkInsertOne(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for range b.N {
 		_, err := collection.InsertOne(b.Context(), doc)
 		if err != nil {
 			if mongo.IsDuplicateKeyError(err) {
 				continue
 			}
+
 			b.Fatalf("Failed to insert document: %v", err)
 		}
 	}
@@ -79,7 +81,8 @@ func BenchmarkReplaceOne(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for range b.N {
 		_, err := collection.ReplaceOne(b.Context(), bson.D{{"_id", id}}, doc,
 			options.Replace().SetUpsert(true))
 		if err != nil && !mongo.IsDuplicateKeyError(err) {

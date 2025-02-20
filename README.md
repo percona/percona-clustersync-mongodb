@@ -15,7 +15,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 ### Prerequisites
 
 - Go 1.24 or later
-- MongoDB 5.0 or later
+- MongoDB 6.0 or later
 - Python 3.13 or later (for testing)
 - Poetry (for managing Python dependencies)
 
@@ -111,12 +111,35 @@ When starting the MongoLink server, you can use the following options:
 - `--source`: The MongoDB connection string for the source cluster
 - `--target`: The MongoDB connection string for the target cluster
 - `--log-level`: The log level (default: "info")
-- `--no-color`: Disable log color
+- `--log-json`: Output log in JSON format with disabled color
+- `--no-color`: Disable log ASCI color
 
 Example:
 
 ```sh
-bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 8080 --log-level debug --no-color
+bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 2242 --log-level debug --log-json
+```
+
+## Log JSON Fields
+
+When using the `--log-json` option, the logs will be output in JSON format with the following fields:
+
+- `time`: Unix time when the log entry was created.
+- `level`: Log level (e.g., "debug", "info", "warn", "error").
+- `message`: Log message, if any.
+- `error`: Error message, if any.
+- `s`: Scope of the log entry.
+- `ns`: Namespace (database.collection format).
+
+Example:
+
+```json
+{
+    "level": "info",
+    "s": "mongolink",
+    "time": 1740077878718,
+    "message": "starting change replication at 1740077878.3",
+}
 ```
 
 ## HTTP API
@@ -134,8 +157,8 @@ Example:
 
 ```json
 {
-  "includeNamespaces": ["db1.collection1", "db2.collection2"],
-  "excludeNamespaces": ["db3.collection3"]
+  "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
+  "excludeNamespaces": ["dbName.collName"]
 }
 ```
 

@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/list"
 	"github.com/percona-lab/percona-mongolink/log"
@@ -19,11 +20,11 @@ import (
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
-	Source   *mongo.Client // Source MongoDB client
-	Target   *mongo.Client // Target MongoDB client
-	Drop     bool          // Drop collections before creating them
-	NSFilter sel.NSFilter  // Namespace filter
-	Catalog  *Catalog      // Catalog for managing collections and indexes
+	Source *mongo.Client // Source MongoDB client
+	Target *mongo.Client // Target MongoDB client
+
+	NSFilter sel.NSFilter // Namespace filter
+	Catalog  *Catalog     // Catalog for managing collections and indexes
 
 	lastAppliedOpTime bson.Timestamp
 	resumeToken       bson.Raw
@@ -32,7 +33,6 @@ type Repl struct {
 	err     error
 	stopSig chan struct{}
 	doneSig chan struct{}
-	running bool
 
 	eventsProcessed int64
 }
@@ -41,6 +41,7 @@ type Repl struct {
 type ChangeReplicationStatus struct {
 	LastAppliedOpTime bson.Timestamp // Last applied operation time
 	EventsProcessed   int64          // Number of events processed
+	Error             error
 }
 
 // Status returns the current replication status.
@@ -51,48 +52,30 @@ func (r *Repl) Status() ChangeReplicationStatus {
 	return ChangeReplicationStatus{
 		LastAppliedOpTime: r.lastAppliedOpTime,
 		EventsProcessed:   r.eventsProcessed,
+		Error:             r.err,
 	}
 }
 
-// Wait waits for the replication to complete and returns any error encountered.
-func (r *Repl) Wait() error {
-	r.mu.Lock()
-	doneC := r.doneSig
-	r.mu.Unlock()
-	if doneC != nil {
-		<-r.doneSig
-	}
-
+// Done returns a channel that is closed when the replication is done.
+func (r *Repl) Done() <-chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return r.err
+	return r.doneSig
 }
 
 // Start begins the replication process from the specified start timestamp.
-func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
-	return r.startImpl(ctx, &startAt)
+func (r *Repl) Start(_ context.Context, startAt bson.Timestamp) error {
+	return r.startImpl(&startAt)
 }
 
 // Resume resumes the replication process from the last known resume token.
-func (r *Repl) Resume(ctx context.Context) error {
-	return r.startImpl(ctx, nil)
+func (r *Repl) Resume(_ context.Context) error {
+	return r.startImpl(nil)
 }
 
 // Pause pauses the replication process.
 func (r *Repl) Pause() {
-	r.mu.Lock()
-	stopSig := r.stopSig
-	r.mu.Unlock()
-
-	if stopSig != nil {
-		select {
-		case <-stopSig:
-		default:
-			close(stopSig)
-		}
-	}
-
 	r.pause(nil)
 }
 
@@ -101,12 +84,19 @@ func (r *Repl) pause(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.stopSig != nil {
+		select {
+		case <-r.stopSig:
+		default:
+			close(r.stopSig)
+		}
+	}
+
 	r.err = err
-	r.running = false
 }
 
 // startImpl starts the replication process with the given options.
-func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
+func (r *Repl) startImpl(ts *bson.Timestamp) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -137,6 +127,7 @@ func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 		if r.resumeToken == nil {
 			return errors.New("no resume token")
 		}
+
 		opts.SetResumeAfter(r.resumeToken)
 	}
 
@@ -145,10 +136,13 @@ func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 
 	started := make(chan struct{})
 	go func() {
-		ctx, cancel := context.WithCancel(log.CopyContext(ctx, context.Background()))
+		ctx, cancel := context.WithCancel(context.Background())
 
 		defer func() {
 			cancel()
+
+			r.mu.Lock()
+			defer r.mu.Unlock()
 
 			select {
 			case <-r.doneSig:
@@ -162,20 +156,23 @@ func (r *Repl) startImpl(ctx context.Context, ts *bson.Timestamp) error {
 	}()
 
 	<-started
+
 	return nil
 }
 
 // loop handles the main replication loop.
 func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
-	ctx = log.WithAttrs(ctx, log.Scope("repl:loop"))
+	lg := log.New("repl:apply")
+	ctx = lg.WithContext(ctx)
 
-	eventC := make(chan bson.Raw, 100)
-	cursorCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	eventC := make(chan bson.Raw, config.ChangeStreamBatchSize)
+	cursorCtx, stopCursor := context.WithCancel(ctx)
+
+	defer stopCursor()
 
 	go func() {
 		<-r.stopSig
-		cancel()
+		stopCursor()
 	}()
 
 	var changeStreamError error
@@ -183,49 +180,60 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 	go func() {
 		defer close(eventC)
 
-		const tickInternal = 5 * time.Second
-		ticker := time.NewTicker(tickInternal)
+		lg := log.New("repl:apply")
+
+		ticker := time.NewTicker(config.ReplTickInteral)
 		defer ticker.Stop()
 
 		go func() {
-			ctx := log.WithAttrs(ctx, log.Scope("repl:loop:tick"))
-			coll := r.Source.Database("percona_mongolink").Collection("tick")
+			coll := r.Source.Database(config.MongoLinkDatabase).Collection(config.TickCollection)
 
 			for {
 				select {
 				case t := <-ticker.C:
-					_, err := coll.UpdateOne(ctx,
+					_, err := coll.UpdateOne(cursorCtx,
 						bson.D{{"_id", ""}},
 						bson.D{{"$set", bson.D{{"t", t}}}},
 						options.UpdateOne().SetUpsert(true))
 					if err != nil {
-						log.Error(ctx, err, "")
+						log.New("repl:tick").Error(err, "")
 					}
+
 				case <-r.stopSig:
 					return
 				}
 			}
 		}()
 
-		opts.SetShowExpandedEvents(true).SetBatchSize(100)
+		opts.SetShowExpandedEvents(true).SetBatchSize(config.ChangeStreamBatchSize)
+
 		cur, err := r.Source.Watch(cursorCtx, mongo.Pipeline{}, opts)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
 				changeStreamError = errors.Wrap(err, "open")
 			}
 
-			log.Error(ctx, err, "open cursor")
+			lg.Error(err, "open cursor")
+
 			return
 		}
-		defer cur.Close(cursorCtx)
+
+		defer func() {
+			if err := cur.Close(cursorCtx); err != nil {
+				lg.Error(err, "close change stream cursor")
+			}
+		}()
 
 		for cur.Next(cursorCtx) {
 			eventC <- cur.Current
-			ticker.Reset(tickInternal)
+
+			ticker.Reset(config.ReplTickInteral)
 		}
+
 		if err := cur.Err(); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				changeStreamError = errors.Wrap(err, "next")
+
 				return
 			}
 
@@ -233,50 +241,62 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 		}
 	}()
 
-	applyCtx := log.CopyContext(ctx, context.Background())
+	applyCtx, stopApply := context.WithCancel(context.Background())
+	applyCtx = lg.WithContext(applyCtx)
+	defer stopApply()
+
 	var txBuffer list.List[bson.Raw]
+
 	for {
 		event, ok := <-eventC
 		if !ok {
 			r.pause(errors.Wrap(changeStreamError, "cursor"))
+
 			return
 		}
 
-		firstTxOp := TxnEvent(event)
+		firstTxOp := parseTxnEvent(event)
 		for firstTxOp.IsTxn() {
 			txBuffer.Push(event)
+
 			for {
 				innerEvent, ok := <-eventC
 				if !ok {
 					r.pause(errors.Wrap(changeStreamError, "cursor"))
+
 					return
 				}
 
-				txOp := TxnEvent(innerEvent)
+				txOp := parseTxnEvent(innerEvent)
 				if !firstTxOp.Equal(txOp) {
 					event = innerEvent
 					firstTxOp = txOp
+
 					break
 				}
+
 				txBuffer.Push(innerEvent)
 			}
 
 			// apply all transactional ops
-			for e := range txBuffer.All() {
-				err := r.apply(applyCtx, e)
+			for event := range txBuffer.All() {
+				err := r.apply(applyCtx, event)
 				if err != nil {
-					log.Error(ctx, err, "apply transaction")
-					r.pause(errors.Wrap(err, "repl:apply"))
+					lg.Error(err, "apply transaction")
+					r.pause(errors.Join(changeStreamError, errors.Wrap(err, "apply transaction")))
+
 					return
 				}
 			}
+
 			txBuffer.Clear()
 		}
 
 		err := r.apply(applyCtx, event)
 		if err != nil {
-			log.Error(ctx, err, "apply op")
-			r.pause(errors.Wrap(err, "repl:apply"))
+			lg.Error(err, "apply op")
+			r.pause(errors.Join(changeStreamError, errors.Wrap(err, "apply op")))
+
 			return
 		}
 	}
@@ -285,29 +305,31 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 // apply applies a change event to the target MongoDB.
 func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	var baseEvent BaseEvent
+
 	err := bson.Unmarshal(data, &baseEvent)
 	if err != nil {
 		return errors.Wrap(err, "failed to decode BaseEvent")
 	}
 
-	ctx = log.WithAttrs(ctx,
-		log.Scope("repl:apply"),
-		log.Operation(string(baseEvent.OperationType)),
+	lg := log.Ctx(ctx).With(
 		log.OpTime(baseEvent.ClusterTime.T, baseEvent.ClusterTime.I),
+		log.Op(string(baseEvent.OperationType)),
 		log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection),
 		log.Tx(baseEvent.TxnNumber, baseEvent.LSID))
+	ctx = lg.WithContext(ctx)
 
 	if !r.NSFilter(baseEvent.Namespace.Database, baseEvent.Namespace.Collection) {
-		log.Debug(ctx, "not selected")
+		lg.Debug("not selected")
 
 		r.mu.Lock()
 		r.resumeToken = baseEvent.ID
 		r.lastAppliedOpTime = baseEvent.ClusterTime
 		r.mu.Unlock()
+
 		return nil
 	}
 
-	log.Trace(ctx, "")
+	lg.Trace("")
 
 	switch baseEvent.OperationType {
 	case Create:
@@ -335,7 +357,8 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 
 	case Invalidate:
 		err := errors.New("invalidate")
-		log.Error(ctx, err, "")
+		lg.Error(err, "")
+
 		return nil
 
 	case Rename:
@@ -348,7 +371,8 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 		fallthrough
 
 	default:
-		log.Warn(ctx, "unsupported type: "+string(baseEvent.OperationType))
+		lg.Warn("unsupported type: " + string(baseEvent.OperationType))
+
 		return nil
 	}
 
@@ -361,6 +385,7 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 	r.lastAppliedOpTime = baseEvent.ClusterTime
 	r.eventsProcessed++
 	r.mu.Unlock()
+
 	return nil
 }
 
@@ -372,18 +397,17 @@ func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
 	}
 
 	if event.IsTimeseries() {
-		log.Warn(ctx, "timeseries is not supported. skip")
+		log.Ctx(ctx).Warn("timeseries is not supported. skip")
+
 		return nil
 	}
 
-	if r.Drop {
-		err = r.Catalog.DropCollection(ctx,
-			r.Target,
-			event.Namespace.Database,
-			event.Namespace.Collection)
-		if err != nil {
-			return errors.Wrap(err, "drop before create")
-		}
+	err = r.Catalog.DropCollection(ctx,
+		r.Target,
+		event.Namespace.Database,
+		event.Namespace.Collection)
+	if err != nil {
+		return errors.Wrap(err, "drop before create")
 	}
 
 	if event.IsView() {
@@ -410,7 +434,11 @@ func (r *Repl) handleDrop(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
-	err = r.Catalog.DropCollection(ctx, r.Target, event.Namespace.Database, event.Namespace.Collection)
+	err = r.Catalog.DropCollection(ctx,
+		r.Target,
+		event.Namespace.Database,
+		event.Namespace.Collection)
+
 	return err
 }
 
@@ -421,7 +449,10 @@ func (r *Repl) handleDropDatabase(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
-	err = r.Catalog.DropDatabase(ctx, r.Target, event.Namespace.Database)
+	err = r.Catalog.DropDatabase(ctx,
+		r.Target,
+		event.Namespace.Database)
+
 	return err
 }
 
@@ -437,6 +468,7 @@ func (r *Repl) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
 		event.Namespace.Database,
 		event.Namespace.Collection,
 		event.OperationDescription.Indexes)
+
 	return err
 }
 
@@ -468,6 +500,8 @@ func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
+	lg := log.Ctx(ctx)
+
 	db := event.Namespace.Database
 	coll := event.Namespace.Collection
 	opts := event.OperationDescription
@@ -476,49 +510,53 @@ func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 	case opts.Index != nil:
 		err = r.Catalog.ModifyIndex(ctx, r.Target, db, coll, opts.Index)
 		if err != nil {
-			log.Error(ctx, err, "modify index: "+opts.Index.Name)
+			lg.Error(err, "modify index: "+opts.Index.Name)
+
 			return nil
 		}
 
 	case opts.CappedSize != nil || opts.CappedMax != nil:
 		err = r.Catalog.ModifyCappedCollection(ctx, r.Target, db, coll, opts.CappedSize, opts.CappedMax)
 		if err != nil {
-			log.Error(ctx, err, "resize capped collection")
+			lg.Error(err, "resize capped collection")
+
 			return nil
 		}
 
 	case opts.ViewOn != "":
 		if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
-			log.Warn(ctx, "timeseries is not supported. skip")
+			lg.Warn("timeseries is not supported. skip")
+
 			return nil
 		}
 
 		err = r.Catalog.ModifyView(ctx, r.Target, db, coll, opts.ViewOn, opts.Pipeline)
 		if err != nil {
-			log.Error(ctx, err, "modify view")
+			lg.Error(err, "modify view")
+
 			return nil
 		}
 
 	case opts.ExpireAfterSeconds != nil:
-		log.Warn(ctx, "collection ttl modification is not supported")
+		lg.Warn("collection ttl modification is not supported")
 
 	case opts.ChangeStreamPreAndPostImages != nil:
-		log.Warn(ctx, "changeStreamPreAndPostImages is not supported")
+		lg.Warn("changeStreamPreAndPostImages is not supported")
 
 	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
-		log.Warn(ctx, "validator, validatorLevel and validatorAction are not supported")
+		lg.Warn("validator, validatorLevel and validatorAction are not supported")
 
 	case opts.Unknown == nil:
-		log.Debug(ctx, "empty modify event")
+		lg.Debug("empty modify event")
 
 	default:
-		log.Error(ctx, errors.New("unknown modify options"), "")
+		lg.Error(errors.New("unknown modify options"), "")
 	}
 
 	return nil
 }
 
-var insertDocOptions = options.Replace().SetUpsert(true)
+var insertDocOptions = options.Replace().SetUpsert(true) //nolint:gochecknoglobals
 
 // handleInsert handles insert events.
 func (r *Repl) handleInsert(ctx context.Context, data bson.Raw) error {
@@ -544,6 +582,7 @@ func (r *Repl) handleDelete(ctx context.Context, data bson.Raw) error {
 	_, err = r.Target.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
 		DeleteOne(ctx, event.DocumentKey)
+
 	return err //nolint:wrapcheck
 }
 
@@ -558,18 +597,21 @@ func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
 		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
 	}
+
 	if len(event.UpdateDescription.RemovedFields) != 0 {
 		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
 		for i, field := range event.UpdateDescription.RemovedFields {
 			fields[i].Key = field
 			fields[i].Value = 1
 		}
+
 		ops = append(ops, bson.E{"$unset", fields})
 	}
 
 	_, err = r.Target.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
 		UpdateOne(ctx, event.DocumentKey, ops)
+
 	return err //nolint:wrapcheck
 }
 
@@ -583,6 +625,7 @@ func (r *Repl) handleReplace(ctx context.Context, data bson.Raw) error {
 	_, err = r.Target.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
 		ReplaceOne(ctx, event.DocumentKey, event.FullDocument)
+
 	return err //nolint:wrapcheck
 }
 
@@ -592,10 +635,11 @@ type txnEvent struct {
 	LSID      bson.Raw `bson:"lsid"`      // Logical session ID
 }
 
-// TxnEvent extracts a transaction event from raw BSON data.
-func TxnEvent(data bson.Raw) txnEvent {
+// parseTxnEvent extracts a transaction event from raw BSON data.
+func parseTxnEvent(data bson.Raw) txnEvent {
 	var e txnEvent
 	_ = bson.Unmarshal(data, &e)
+
 	return e
 }
 

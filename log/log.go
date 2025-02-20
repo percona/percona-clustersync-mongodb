@@ -1,50 +1,84 @@
+// Package log provides logging utilities for the MongoLink application.
 package log
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"io"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog"
 )
 
-// AttrOption defines a function type for setting log attributes.
-type AttrOption func(l zerolog.Context) zerolog.Context
+const TimeFieldFormat = "2006-01-02 15:04:05.000"
 
-// Scope sets the scope attribute.
-func Scope(s string) AttrOption {
+// InitGlobals initializes the logger with the specified level and settings.
+//   - level: the log level (e.g., debug, info, warn, error).
+//   - json: if true, output logs in JSON format with disabled color.
+//   - noColor: if true, disable color in the console output.
+func InitGlobals(level zerolog.Level, json, noColor bool) *zerolog.Logger {
+	zerolog.TimeFieldFormat = TimeFieldFormat
+	zerolog.DurationFieldUnit = time.Second
+	zerolog.DurationFieldInteger = true
+
+	var logWriter io.Writer = os.Stdout
+	if !json {
+		logWriter = zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+			w.NoColor = noColor
+			w.TimeFormat = TimeFieldFormat
+		})
+	}
+
+	l := zerolog.New(logWriter).Level(level).With().Timestamp().Logger()
+	zerolog.DefaultContextLogger = &l
+
+	return &l
+}
+
+// AttrFn defines a function type for setting log attributes.
+type AttrFn func(l zerolog.Context) zerolog.Context
+
+func Elapsed(dur time.Duration) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		return l.Str("s", s)
+		return l.Dur("elapsed_secs", dur.Round(time.Millisecond))
 	}
 }
 
-// Operation sets the operation attribute.
-func Operation(op string) AttrOption {
+func TotalElapsed(dur time.Duration) AttrFn {
+	return func(l zerolog.Context) zerolog.Context {
+		return l.Dur("total_elapsed_secs", dur)
+	}
+}
+
+// Op sets the operation attribute.
+func Op(op string) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Str("op", op)
 	}
 }
 
 // NS sets the namespace attribute.
-func NS(db, coll string) AttrOption {
+func NS(database, collection string) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		if coll == "" {
-			return l.Str("ns", db)
+		if collection == "" {
+			return l.Str("ns", database)
 		}
-		return l.Str("ns", db+"."+coll)
+
+		return l.Str("ns", database+"."+collection)
 	}
 }
 
 // OpTime sets the operation time attribute.
-func OpTime(t, i uint32) AttrOption {
+func OpTime(t, i uint32) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Uints32("op_ts", []uint32{t, i})
 	}
 }
 
 // Tx sets the transaction and session ID attributes.
-func Tx(txn *int64, lsid []byte) AttrOption {
+func Tx(txn *int64, lsid []byte) AttrFn {
 	if txn == nil {
 		return func(l zerolog.Context) zerolog.Context { return l }
 	}
@@ -56,85 +90,110 @@ func Tx(txn *int64, lsid []byte) AttrOption {
 		if txn == nil {
 			return l
 		}
+
 		return l.Int64("txn", *txn).Str("sid", encoded)
 	}
 }
 
-// WithAttrs adds attributes to the logger context.
-func WithAttrs(ctx context.Context, opts ...AttrOption) context.Context {
-	l := zerolog.Ctx(ctx).With()
-	for _, opt := range opts {
-		l = opt(l)
-	}
-	return l.Logger().WithContext(ctx)
+// New creates a new Logger with the specified scope.
+func New(scope string) Logger {
+	log := zerolog.Ctx(context.Background()).With().Logger()
+	// replace. (With() adds one more "s" to JSON)
+	log.UpdateContext(func(logContext zerolog.Context) zerolog.Context {
+		return logContext.Str("s", scope)
+	})
+
+	return Logger{&log}
 }
 
-// CopyContext copies the logger from one context to another.
-func CopyContext(from, to context.Context) context.Context {
-	return zerolog.Ctx(from).WithContext(to)
+// Logger wraps a zerolog.Logger to provide additional functionality.
+type Logger struct {
+	zl *zerolog.Logger
+}
+
+// Ctx returns a Logger from the context.
+func Ctx(ctx context.Context) Logger {
+	return Logger{zerolog.Ctx(ctx)}
+}
+
+// WithContext returns a new context with the Logger.
+func (l Logger) WithContext(ctx context.Context) context.Context {
+	return l.zl.WithContext(ctx)
+}
+
+// With returns a new Logger with the specified attributes.
+func (l Logger) With(opts ...AttrFn) Logger {
+	c := l.zl.With()
+	for _, opt := range opts {
+		c = opt(c)
+	}
+
+	zl := c.Logger()
+
+	return Logger{&zl}
+}
+
+func (l Logger) Unwrap() *zerolog.Logger {
+	return l.zl
 }
 
 // Trace logs a trace level message.
-func Trace(ctx context.Context, msg string) {
-	zerolog.Ctx(ctx).Trace().Timestamp().Msg(msg)
+func (l Logger) Trace(msg string) {
+	l.zl.Trace().Msg(msg)
 }
 
 // Tracef logs a formatted trace level message.
-func Tracef(ctx context.Context, msg string, args ...any) {
-	zerolog.Ctx(ctx).Trace().Timestamp().Msgf(msg, args...)
+func (l Logger) Tracef(msg string, args ...any) {
+	l.zl.Trace().Msgf(msg, args...)
 }
 
 // Debug logs a debug level message.
-func Debug(ctx context.Context, msg string) {
-	zerolog.Ctx(ctx).Debug().Timestamp().Msg(msg)
+func (l Logger) Debug(msg string) {
+	l.zl.Debug().Msg(msg)
 }
 
 // Debugf logs a formatted debug level message.
-func Debugf(ctx context.Context, msg string, args ...any) {
-	zerolog.Ctx(ctx).Debug().Timestamp().Msgf(msg, args...)
+func (l Logger) Debugf(msg string, args ...any) {
+	l.zl.Debug().Msgf(msg, args...)
 }
 
 // Info logs an info level message.
-func Info(ctx context.Context, msg string) {
-	zerolog.Ctx(ctx).Info().Timestamp().Msg(msg)
+func (l Logger) Info(msg string) {
+	l.zl.Info().Msg(msg)
 }
 
 // Infof logs a formatted info level message.
-func Infof(ctx context.Context, msg string, args ...any) {
-	zerolog.Ctx(ctx).Info().Timestamp().Msgf(msg, args...)
+func (l Logger) Infof(msg string, args ...any) {
+	l.zl.Info().Msgf(msg, args...)
+}
+
+// Info logs an info level message.
+func (l Logger) InfoWith(msg string, attrs ...AttrFn) {
+	c := l.zl.With()
+	for _, apply := range attrs {
+		c = apply(c)
+	}
+
+	lz := c.Logger()
+	lz.Info().Msg(msg)
 }
 
 // Warn logs a warning level message.
-func Warn(ctx context.Context, msg string) {
-	zerolog.Ctx(ctx).Warn().Timestamp().Msg(msg)
+func (l Logger) Warn(msg string) {
+	l.zl.Warn().Msg(msg)
 }
 
 // Warnf logs a formatted warning level message.
-func Warnf(ctx context.Context, msg string, args ...any) {
-	zerolog.Ctx(ctx).Warn().Timestamp().Msgf(msg, args...)
+func (l Logger) Warnf(msg string, args ...any) {
+	l.zl.Warn().Msgf(msg, args...)
 }
 
 // Error logs an error level message with an error.
-func Error(ctx context.Context, err error, msg string) {
-	zerolog.Ctx(ctx).Error().Err(err).Timestamp().Msg(msg)
+func (l Logger) Error(err error, msg string) {
+	l.zl.Error().Err(err).Msg(msg)
 }
 
 // Errorf logs a formatted error level message with an error.
-func Errorf(ctx context.Context, err error, msg string, args ...any) {
-	zerolog.Ctx(ctx).Error().Err(err).Timestamp().Msgf(msg, args...)
-}
-
-// New creates a new logger with the specified level and color settings.
-func New(level zerolog.Level, noColor bool) *zerolog.Logger {
-	w := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
-		w.NoColor = noColor
-		w.TimeFormat = time.DateTime
-	})
-	l := zerolog.New(w).Level(level)
-	return &l
-}
-
-// SetFallbackLogger sets the fallback logger.
-func SetFallbackLogger(l *zerolog.Logger) {
-	zerolog.DefaultContextLogger = l
+func (l Logger) Errorf(err error, msg string, args ...any) {
+	l.zl.Error().Err(err).Msgf(msg, args...)
 }

@@ -1,27 +1,17 @@
 linters:
-  presets:
-    - bugs
-    - error
-    - unused
-  enable:
-    - errname
-    - predeclared
-    - stylecheck
-    - ireturn
-    - misspell
-    - nilerr
-    - nilnil
-    - lll
-    - gocritic
-    - typecheck
-    - goconst
-    - gochecknoinits
-    - forbidigo
-    - nonamedreturns
+  enable-all: true
+  disable:
+    - nolintlint
+    - gci
     - contextcheck
-    - exhaustive
-    - gosec
-    - wrapcheck
+    - exhaustruct
+    - depguard
+    - varnamelen
+    - cyclop
+    - gocognit
+    - dupl
+    - funlen
+    - tenv
 
 linters-settings:
   govet:

@@ -7,7 +7,11 @@ import (
 )
 
 func TestFilter(t *testing.T) {
+	t.Parallel()
+
 	t.Run("include", func(t *testing.T) {
+		t.Parallel()
+
 		includeFilter := []string{
 			"db_0.*",
 			"db_1.coll_0",
@@ -33,6 +37,7 @@ func TestFilter(t *testing.T) {
 		}
 
 		isIncluded := sel.MakeFilter(includeFilter, nil)
+
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {
@@ -43,6 +48,8 @@ func TestFilter(t *testing.T) {
 	})
 
 	t.Run("exclude", func(t *testing.T) {
+		t.Parallel()
+
 		excludedFilter := []string{
 			"db_0.*",
 			"db_1.coll_0",
@@ -68,11 +75,13 @@ func TestFilter(t *testing.T) {
 		}
 
 		isIncluded := sel.MakeFilter(nil, excludedFilter)
+
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if db == "db_1" {
 					_ = coll
 				}
+
 				if got := isIncluded(db, coll); got != expected {
 					t.Errorf("%s.%s: expected %v, got %v", db, coll, expected, got)
 				}
@@ -81,6 +90,8 @@ func TestFilter(t *testing.T) {
 	})
 
 	t.Run("include with exclude", func(t *testing.T) {
+		t.Parallel()
+
 		includedFilter := []string{
 			"db_0.*",
 			"db_1.coll_0",
@@ -113,6 +124,7 @@ func TestFilter(t *testing.T) {
 		}
 
 		isIncluded := sel.MakeFilter(includedFilter, excludedFilter)
+
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
 				if got := isIncluded(db, coll); got != expected {

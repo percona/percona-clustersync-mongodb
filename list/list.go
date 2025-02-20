@@ -22,6 +22,7 @@ func (l *List[T]) Push(val T) {
 	if l.head == nil {
 		l.head = elem
 		l.tail = elem
+
 		return
 	}
 
@@ -37,6 +38,7 @@ func (l *List[T]) PushFront(val T) {
 	if l.head == nil {
 		l.head = elem
 		l.tail = elem
+
 		return
 	}
 
@@ -49,15 +51,19 @@ func (l *List[T]) PushFront(val T) {
 func (l *List[T]) Pop() (T, bool) { //nolint:ireturn
 	if l.head == nil {
 		var zero T
+
 		return zero, false
 	}
+
 	val := l.head.val
 	l.head = l.head.next
+
 	if l.head != nil {
 		l.head.prev = nil
 	} else {
 		l.tail = nil
 	}
+
 	return val, true
 }
 

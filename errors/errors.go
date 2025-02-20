@@ -27,6 +27,7 @@ func Wrap(cause error, text string) error {
 	if cause == nil {
 		return nil
 	}
+
 	return &wrappedError{cause: cause, msg: text}
 }
 
@@ -34,6 +35,7 @@ func Wrapf(cause error, format string, vals ...any) error {
 	if cause == nil {
 		return nil
 	}
+
 	return &wrappedError{cause: cause, msg: fmt.Sprintf(format, vals...)}
 }
 

@@ -2,10 +2,12 @@ package mongolink
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -18,24 +20,28 @@ import (
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
-	Source   *mongo.Client // Source MongoDB client
-	Target   *mongo.Client // Target MongoDB client
-	Drop     bool          // Drop collections before creating them
-	NSFilter sel.NSFilter  // Namespace filter
-	Catalog  *Catalog      // Catalog for managing collections and indexes
+	Source *mongo.Client // Source MongoDB client
+	Target *mongo.Client // Target MongoDB client
+
+	NSFilter sel.NSFilter // Namespace filter
+	Catalog  *Catalog     // Catalog for managing collections and indexes
 
 	estimatedTotalBytes  atomic.Int64 // Estimated total bytes to be cloned
 	estimatedClonedBytes atomic.Int64 // Estimated bytes cloned so far
-	finished             bool         // Indicates if the cloning process is finished
+
+	err      error // Error encountered during the cloning process
+	finished bool  // Indicates if the cloning process is finished
 
 	mu sync.Mutex
 }
 
 // CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	Finished             bool  // Indicates if the cloning process is finished
 	EstimatedTotalBytes  int64 // Estimated total bytes to be cloned
 	EstimatedClonedBytes int64 // Estimated bytes cloned so far
+
+	Error    error // Error encountered during the cloning process
+	Finished bool  // Indicates if the cloning process is finished
 }
 
 // Status returns the current status of the cloning process.
@@ -44,15 +50,17 @@ func (c *Clone) Status() CloneStatus {
 	defer c.mu.Unlock()
 
 	return CloneStatus{
-		Finished:             c.finished,
 		EstimatedTotalBytes:  c.estimatedTotalBytes.Load(),
 		EstimatedClonedBytes: c.estimatedClonedBytes.Load(),
+		Error:                c.err,
+		Finished:             c.finished,
 	}
 }
 
 // Clone starts the cloning process.
 func (c *Clone) Clone(ctx context.Context) error {
-	ctx = log.WithAttrs(ctx, log.Scope("clone"))
+	lg := log.New("clone")
+	ctx = lg.WithContext(ctx)
 
 	databases, err := c.Source.ListDatabaseNames(ctx, bson.D{
 		{"name", bson.D{{"$nin", bson.A{"local", "admin", "config"}}}},
@@ -65,16 +73,17 @@ func (c *Clone) Clone(ctx context.Context) error {
 	grp.SetLimit(runtime.NumCPU())
 
 	for _, db := range databases {
-		res := c.Source.Database(db).RunCommand(ctx, bson.D{{"dbStats", 1}})
-		b, err := res.Raw()
+		rawDBStats, err := c.Source.Database(db).RunCommand(grpCtx, bson.D{{"dbStats", 1}}).Raw()
 		if err != nil {
 			return errors.Wrap(err, "get database stats")
 		}
 
-		dbSize := b.Lookup("dataSize").AsInt64()
-		c.estimatedTotalBytes.Add(dbSize)
+		dbSize, ok := rawDBStats.Lookup("dataSize").AsInt64OK()
+		if ok {
+			c.estimatedTotalBytes.Add(dbSize)
+		}
 
-		colls, err := c.Source.Database(db).ListCollectionSpecifications(ctx, bson.D{})
+		colls, err := c.Source.Database(db).ListCollectionSpecifications(grpCtx, bson.D{})
 		if err != nil {
 			return errors.Wrap(err, "list collections")
 		}
@@ -85,41 +94,48 @@ func (c *Clone) Clone(ctx context.Context) error {
 			}
 
 			if !c.NSFilter(db, spec.Name) {
-				log.Trace(log.WithAttrs(ctx, log.NS(db, spec.Name)), "not selected")
+				lg.With(log.NS(db, spec.Name)).Debug("not selected")
+
 				continue
 			}
 
 			grp.Go(func() error {
-				ctx := log.WithAttrs(grpCtx, log.NS(db, spec.Name))
-				log.Trace(ctx, "")
+				lg := lg.With(log.NS(db, spec.Name))
+				lg.Infof("cloning %s.%s", db, spec.Name)
+
+				startedAt := time.Now()
 
 				var err error
+
 				switch spec.Type {
 				case "collection":
-					err = c.cloneCollection(ctx, db, &spec)
+					err = c.cloneCollection(lg.WithContext(grpCtx), db, &spec)
 				case "view":
-					err = c.cloneView(ctx, db, &spec)
+					err = c.cloneView(lg.WithContext(grpCtx), db, &spec)
 				case "timeseries":
-					log.Warn(ctx, "timeseries is not supported. skip")
+					lg.Warn("timeseries is not supported. skip")
 				}
+
 				if err != nil {
 					return errors.Wrapf(err, "clone %s.%s", db, spec.Name)
 				}
+
+				lg.InfoWith(fmt.Sprintf("cloned %s.%s", db, spec.Name),
+					log.Elapsed(time.Since(startedAt)))
 
 				return nil
 			})
 		}
 	}
 
-	err = grp.Wait() //nolint:wrapcheck
-	if err != nil {
-		return errors.Wrap(err, "wait")
-	}
+	err = grp.Wait()
 
 	c.mu.Lock()
+	c.err = err
 	c.finished = true
 	c.mu.Unlock()
-	return nil
+
+	return err //nolint:wrapcheck
 }
 
 // cloneCollection clones a collection from the source to the target.
@@ -128,27 +144,25 @@ func (c *Clone) cloneCollection(
 	db string,
 	spec *mongo.CollectionSpecification,
 ) error {
-	log.Debug(ctx, "cloning collection")
-
 	cur, err := c.Source.Database(db).Collection(spec.Name).Indexes().List(ctx)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")
 	}
 
 	var indexes []*IndexSpecification
+
 	err = cur.All(ctx, &indexes)
 	if err != nil {
 		return errors.Wrap(err, "decode indexes")
 	}
 
-	if c.Drop {
-		err := c.Target.Database(db).Collection(spec.Name).Drop(ctx)
-		if err != nil {
-			return errors.Wrap(err, "drop")
-		}
+	err = c.Target.Database(db).Collection(spec.Name).Drop(ctx)
+	if err != nil {
+		return errors.Wrap(err, "drop")
 	}
 
 	var options createCollectionOptions
+
 	err = bson.Unmarshal(spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
@@ -185,7 +199,6 @@ func (c *Clone) cloneCollection(
 		return errors.Wrapf(err, "cloning failed %s.%s", db, spec.Name)
 	}
 
-	log.Info(ctx, "cloned collection")
 	return nil
 }
 
@@ -195,17 +208,14 @@ func (c *Clone) cloneView(
 	db string,
 	spec *mongo.CollectionSpecification,
 ) error {
-	log.Debug(ctx, "cloning view")
-
-	if c.Drop {
-		err := c.Target.Database(db).Collection(spec.Name).Drop(ctx)
-		if err != nil {
-			return errors.Wrap(err, "drop")
-		}
+	err := c.Target.Database(db).Collection(spec.Name).Drop(ctx)
+	if err != nil {
+		return errors.Wrap(err, "drop")
 	}
 
 	var options createCollectionOptions
-	err := bson.Unmarshal(spec.Options, &options)
+
+	err = bson.Unmarshal(spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
@@ -215,6 +225,5 @@ func (c *Clone) cloneView(
 		return errors.Wrap(err, "create view")
 	}
 
-	log.Info(ctx, "created view")
 	return nil
 }
