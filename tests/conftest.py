@@ -4,14 +4,14 @@ import os
 import pytest
 from pymongo import MongoClient
 
-from mlink import MLink
+from mlink import MongoLink
 
 
 def pytest_addoption(parser):
     """Add custom command-line options to pytest."""
     parser.addoption("--source-uri", help="MongoDB URI for source")
     parser.addoption("--target-uri", help="MongoDB URI for target")
-    parser.addoption("--mlink-url", help="mongolink url")
+    parser.addoption("--mongolink-url", help="MongoLink url")
 
 
 @pytest.fixture(scope="session")
@@ -43,7 +43,7 @@ def cls_target(request: pytest.FixtureRequest, target_conn: MongoClient):
 
 
 @pytest.fixture(scope="class")
-def cls__mlink(request: pytest.FixtureRequest):
-    """Provide a class-scoped MLink instance."""
-    url = request.config.getoption("--mlink-url") or os.environ["TEST_MLINK_URL"]
-    request.cls._mlink = MLink(url)  # pylint: disable=protected-access
+def cls_mlink(request: pytest.FixtureRequest):
+    """Provide a class-scoped mongolink instance."""
+    url = request.config.getoption("--mongolink-url") or os.environ["TEST_MONGOLINK_URL"]
+    request.cls.mlink = MongoLink(url)

@@ -3,7 +3,7 @@
 !.vscode/extensions.json
 .idea/
 
-.dev/
+.dev
 .env
 
 /bin/

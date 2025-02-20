@@ -16,7 +16,7 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/mlink"
+	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
@@ -117,7 +117,7 @@ type server struct {
 	sourceCluster *mongo.Client
 	targetCluster *mongo.Client
 
-	repl *mlink.Coordinator
+	repl *mongolink.MongoLink
 }
 
 // newServer creates a new server with the given options.
@@ -137,7 +137,7 @@ func newServer(ctx context.Context, options serverOptions) (*server, error) {
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		repl:          mlink.New(source, target),
+		repl:          mongolink.New(source, target),
 	}
 	return s, nil
 }
@@ -186,7 +186,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	options := &mlink.StartOptions{
+	options := &mongolink.StartOptions{
 		DropBeforeCreate: true,
 		// TODO: uncomment when tests will be added
 		// DropBeforeCreate: params.DropBeforeCreate,
@@ -306,12 +306,12 @@ type statusResponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 
-	State             mlink.State `json:"state"`
-	Finalizable       bool        `json:"finalizable,omitempty"`
-	LastAppliedOpTime string      `json:"lastAppliedOpTime,omitempty"`
-	Info              string      `json:"info"`
-	EventsProcessed   int64       `json:"eventsProcessed"`
-	Clone             CloneStatus `json:"clone"`
+	State             mongolink.State `json:"state"`
+	Finalizable       bool            `json:"finalizable,omitempty"`
+	LastAppliedOpTime string          `json:"lastAppliedOpTime,omitempty"`
+	Info              string          `json:"info"`
+	EventsProcessed   int64           `json:"eventsProcessed"`
+	Clone             CloneStatus     `json:"clone"`
 }
 
 // internalServerError sends an internal server error response.

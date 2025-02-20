@@ -1,12 +1,12 @@
 /*
-Package mlink provides functionality for replicating and cloning data between MongoDB instances.
+Package mongolink provides functionality for replicating and cloning data between MongoDB clusters.
 
 This package includes the following main components:
 
-- Coordinator: Manages the overall replication process, including cloning and change replication.
-- Clone: Handles the cloning of data from a source MongoDB to a target MongoDB.
-- Repl: Handles the replication of changes from a source MongoDB to a target MongoDB.
-- Catalog: Manages collections and indexes in the target MongoDB.
+- MongoLink: Manages the overall replication process, including cloning and change replication.
+- Clone: Handles the cloning of data from a source MongoDB cluster to a target MongoDB cluster.
+- Repl: Handles the replication of changes from a source MongoDB cluster to a target MongoDB cluster.
+- Catalog: Manages collections and indexes in the target MongoDB cluster.
 
 Example usage:
 
@@ -14,7 +14,7 @@ Example usage:
 		"context"
 		"go.mongodb.org/mongo-driver/v2/mongo"
 		"go.mongodb.org/mongo-driver/v2/mongo/options"
-		"github.com/percona-lab/percona-mongolink/mlink"
+		"github.com/percona-lab/percona-mongolink/mongolink"
 	)
 
 	func main() {
@@ -34,18 +34,18 @@ Example usage:
 		}
 		defer targetClient.Disconnect(context.Background())
 
-		coordinator := mlink.New(sourceClient, targetClient)
-		options := &mlink.StartOptions{
+		mlink := mongolink.New(sourceClient, targetClient)
+		options := &mongolink.StartOptions{
 			IncludeNamespaces: []string{"db1", "db2"},
 			ExcludeNamespaces: []string{"db3"},
 		}
 
-		err = coordinator.Start(context.Background(), options)
+		err = mlink.Start(context.Background(), options)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		status, err := coordinator.Status(context.Background())
+		status, err := mlink.Status(context.Background())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -53,4 +53,4 @@ Example usage:
 		log.Printf("Replication status: %+v", status)
 	}
 */
-package mlink
+package mongolink

@@ -1,4 +1,4 @@
-package mlink
+package mongolink
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-// State represents the state of the coordinator.
+// State represents the state of the mongolink.
 type State string
 
 const (
@@ -24,9 +24,9 @@ const (
 	FinalizedState  = "finalized"
 )
 
-// Status represents the status of the coordinator.
+// Status represents the status of the mongolink.
 type Status struct {
-	State             State          // Current state of the coordinator
+	State             State          // Current state of the mongolink
 	LastAppliedOpTime bson.Timestamp // Last applied operation time
 	Finalizable       bool           // Indicates if the process can be finalized
 	Info              string         // Additional information
@@ -34,15 +34,15 @@ type Status struct {
 	Clone             CloneStatus    // Status of the cloning process
 }
 
-// Coordinator manages the replication process.
-type Coordinator struct {
+// MongoLink manages the replication process.
+type MongoLink struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
 	drop     bool         // Drop collections before creating them
 	nsFilter sel.NSFilter // Namespace filter
 
-	state   State    // Current state of the coordinator
+	state   State    // Current state of the mongolink
 	catalog *Catalog // Catalog for managing collections and indexes
 	clone   *Clone   // Clone process
 	repl    *Repl    // Replication process
@@ -53,9 +53,9 @@ type Coordinator struct {
 	mu sync.Mutex
 }
 
-// New creates a new Coordinator.
-func New(source, target *mongo.Client) *Coordinator {
-	r := &Coordinator{
+// New creates a new MongoLink.
+func New(source, target *mongo.Client) *MongoLink {
+	r := &MongoLink{
 		source: source,
 		target: target,
 		state:  IdleState,
@@ -63,7 +63,7 @@ func New(source, target *mongo.Client) *Coordinator {
 	return r
 }
 
-// StartOptions represents the options for starting the coordinator.
+// StartOptions represents the options for starting the mongolink.
 type StartOptions struct {
 	DropBeforeCreate  bool     // Drop collections before creating them
 	IncludeNamespaces []string // Namespaces to include
@@ -71,7 +71,7 @@ type StartOptions struct {
 }
 
 // Start starts the replication process with the given options.
-func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
+func (c *MongoLink) Start(ctx context.Context, options *StartOptions) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -134,7 +134,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 }
 
 // run executes the replication process.
-func (c *Coordinator) run(ctx context.Context) error {
+func (c *MongoLink) run(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("coord:run"))
 	log.Info(ctx, "starting data cloning")
 
@@ -181,7 +181,7 @@ func (c *Coordinator) run(ctx context.Context) error {
 }
 
 // Finalize finalizes the replication process.
-func (c *Coordinator) Finalize(ctx context.Context) error {
+func (c *MongoLink) Finalize(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -209,8 +209,8 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 	return nil
 }
 
-// Status returns the current status of the coordinator.
-func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
+// Status returns the current status of the mongolink.
+func (c *MongoLink) Status(ctx context.Context) (*Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

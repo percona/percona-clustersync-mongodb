@@ -7,16 +7,16 @@ import pytest
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
-from mlink import MLink, Runner
+from mlink import MongoLink, Runner
 
 
-@pytest.mark.usefixtures("cls_source", "cls_target", "cls__mlink")
+@pytest.mark.usefixtures("cls_source", "cls_target", "cls_mlink")
 class BaseTesting:
     """BaseTesting provides common setup and utility methods for MongoLink tests."""
 
     source: MongoClient
     target: MongoClient
-    _mlink: MLink
+    mlink: MongoLink
 
     def perform(self, phase: Runner.Phase):
         """Perform the MongoLink operation for the given phase."""
@@ -34,7 +34,7 @@ class BaseTesting:
             mlink_options["includeNamespaces"] = include_ns
         if exclude_ns:
             mlink_options["excludeNamespaces"] = exclude_ns
-        return Runner(self.source, self._mlink, phase, mlink_options)
+        return Runner(self.source, self.mlink, phase, mlink_options)
 
     @classmethod
     def all_target_namespaces(cls):

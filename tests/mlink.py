@@ -10,7 +10,7 @@ from pymongo import MongoClient
 DFL_REQ_TIMEOUT = 5
 
 
-class MLink:
+class MongoLink:
     """MLink provides methods to interact with the MongoLink service."""
 
     class State(StrEnum):
@@ -58,7 +58,7 @@ class Runner:
         CLONE = "phase:clone"
         APPLY = "phase:apply"
 
-    def __init__(self, source: MongoClient, mlink: MLink, phase: Phase, options: dict):
+    def __init__(self, source: MongoClient, mlink: MongoLink, phase: Phase, options: dict):
         """Initialize Runner with the given source, mlink, phase, and options."""
         self.source: MongoClient = source
         self.mlink = mlink
@@ -84,34 +84,34 @@ class Runner:
     def start(self):
         """Start the MongoLink service."""
         status = self.mlink.status()
-        if status["state"] == MLink.State.FINALIZING:
-            self.wait_for_state(MLink.State.FINALIZED)
-        elif status["state"] == MLink.State.RUNNING:
+        if status["state"] == MongoLink.State.FINALIZING:
+            self.wait_for_state(MongoLink.State.FINALIZED)
+        elif status["state"] == MongoLink.State.RUNNING:
             self.wait_for_finalizable()
             self.mlink.finalize()
-            self.wait_for_state(MLink.State.FINALIZED)
+            self.wait_for_state(MongoLink.State.FINALIZED)
 
         self.mlink.start(self.options)
-        self.wait_for_state(MLink.State.RUNNING)
+        self.wait_for_state(MongoLink.State.RUNNING)
         return self
 
     def finalize_fast(self):
         """Finalize the MongoLink service quickly."""
         status = self.mlink.status()
-        if status["state"] == MLink.State.RUNNING:
+        if status["state"] == MongoLink.State.RUNNING:
             self.wait_for_finalizable()
             self.mlink.finalize()
 
     def finalize(self):
         """Finalize the MongoLink service."""
         status = self.mlink.status()
-        if status["state"] == MLink.State.FINALIZING:
-            self.wait_for_state(MLink.State.FINALIZED)
-        elif status["state"] == MLink.State.RUNNING:
+        if status["state"] == MongoLink.State.FINALIZING:
+            self.wait_for_state(MongoLink.State.FINALIZED)
+        elif status["state"] == MongoLink.State.RUNNING:
             self.wait_for_current_optime()
             self.wait_for_finalizable()
             self.mlink.finalize()
-            self.wait_for_state(MLink.State.FINALIZED)
+            self.wait_for_state(MongoLink.State.FINALIZED)
 
     def wait_for_state(self, state):
         """Wait for the MongoLink service to reach the specified state."""
@@ -123,7 +123,7 @@ class Runner:
     def wait_for_current_optime(self, timeout=10):
         """Wait for the current operation time to be applied."""
         status = self.mlink.status()
-        assert status["state"] == MLink.State.RUNNING
+        assert status["state"] == MongoLink.State.RUNNING
 
         curr_optime = self.source.server_info()["operationTime"]
         for _ in range(timeout * 10):
@@ -139,7 +139,7 @@ class Runner:
     def wait_for_finalizable(self, timeout=10):
         """Wait for the MongoLink service to be finalizable."""
         status = self.mlink.status()
-        assert status["state"] == MLink.State.RUNNING
+        assert status["state"] == MongoLink.State.RUNNING
 
         for _ in range(timeout * 10):
             if status.get("finalizable"):

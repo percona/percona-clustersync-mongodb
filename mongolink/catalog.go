@@ -1,4 +1,4 @@
-package mlink
+package mongolink
 
 import (
 	"context"

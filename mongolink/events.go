@@ -1,5 +1,4 @@
-// https://www.mongodb.com/docs/manual/changeStreams/
-package mlink
+package mongolink
 
 import (
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 type OperationType string
 
+// https://www.mongodb.com/docs/manual/changeStreams/
 const (
 	// Invalidate occurs when an operation renders the change stream invalid.
 	Invalidate OperationType = "invalidate"
