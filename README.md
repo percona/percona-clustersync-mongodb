@@ -31,13 +31,13 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 2. Build the project:
 
     ```sh
-    go build -o mongolink ./cmd/mongolink
+    go build -o bin/mongolink ./mongolink
     ```
 
 3. Run the server:
 
     ```sh
-    ./mongolink --source <source-mongodb-uri> --target <target-mongodb-uri>
+    bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri>
     ```
 
     Alternatively, you can use environment variables:
@@ -45,7 +45,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
     ```sh
     export SOURCE_URI=<source-mongodb-uri>
     export TARGET_URI=<target-mongodb-uri>
-    ./mongolink --source $SOURCE_URI --target $TARGET_URI
+    bin/mongolink --source $SOURCE_URI --target $TARGET_URI
     ```
 
     **Note:** Connections to the source and target must have `readPreference=primary` and `writeConcern=majority` explicitly or unset.
@@ -54,7 +54,15 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 
 ### Starting the Replication
 
-To start the replication process, send a POST request to the `/start` endpoint with the desired options:
+To start the replication process, you can either use the command-line interface or send a POST request to the `/start` endpoint with the desired options:
+
+#### Using Command-Line Interface
+
+```sh
+bin/mongolink start --port <port>
+```
+
+#### Using HTTP API
 
 ```sh
 curl -X POST http://localhost:2242/start -d '{
@@ -65,7 +73,15 @@ curl -X POST http://localhost:2242/start -d '{
 
 ### Finalizing the Replication
 
-To finalize the replication process, send a POST request to the `/finalize` endpoint:
+To finalize the replication process, you can either use the command-line interface or send a POST request to the `/finalize` endpoint:
+
+#### Using Command-Line Interface
+
+```sh
+bin/mongolink finalize --port <port>
+```
+
+#### Using HTTP API
 
 ```sh
 curl -X POST http://localhost:2242/finalize
@@ -73,7 +89,15 @@ curl -X POST http://localhost:2242/finalize
 
 ### Checking the Status
 
-To check the current status of the replication process, send a GET request to the `/status` endpoint:
+To check the current status of the replication process, you can either use the command-line interface or send a GET request to the `/status` endpoint:
+
+#### Using Command-Line Interface
+
+```sh
+bin/mongolink status --port <port>
+```
+
+#### Using HTTP API
 
 ```sh
 curl http://localhost:2242/status
@@ -92,7 +116,7 @@ When starting the MongoLink server, you can use the following options:
 Example:
 
 ```sh
-./mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 8080 --log-level debug --no-color
+bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 8080 --log-level debug --no-color
 ```
 
 ## HTTP API

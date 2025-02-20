@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -21,12 +23,13 @@ import (
 )
 
 func main() {
-	srvOpts := serverOptions{}
+	var port, sourceURI, targetURI string
 	var logLevelFlag string
 	var logNoColor bool
-	flag.StringVar(&srvOpts.Port, "port", "2242", "port")
-	flag.StringVar(&srvOpts.SourceURI, "source", "", "MongoDB connection string")
-	flag.StringVar(&srvOpts.TargetURI, "target", "", "MongoDB connection string")
+
+	flag.StringVar(&port, "port", "2242", "port")
+	flag.StringVar(&sourceURI, "source", "", "MongoDB connection string")
+	flag.StringVar(&targetURI, "target", "", "MongoDB connection string")
 	flag.StringVar(&logLevelFlag, "log-level", "info", "log level")
 	flag.BoolVar(&logNoColor, "no-color", false, "disable log color")
 	flag.Parse()
@@ -40,19 +43,45 @@ func main() {
 	log.SetFallbackLogger(l)
 	ctx := l.WithContext(context.Background())
 
-	err = srvOpts.verify()
+	command := flag.Arg(0)
+	switch command {
+	case "start":
+		err = requestStart(ctx, port)
+	case "finalize":
+		err = requestFinalize(ctx, port)
+	case "status":
+		err = requestStatus(ctx, port)
+	case "":
+		err = runServer(ctx, port, sourceURI, targetURI)
+	default:
+		err = errors.New("unknown command")
+	}
+
 	if err != nil {
 		l.Fatal().Timestamp().Err(err).Msg("")
 	}
+}
 
-	addr, err := buildServerAddr(srvOpts.Port)
-	if err != nil {
-		l.Fatal().Timestamp().Err(err).Msg("build server address")
+func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
+	switch {
+	case sourceURI == "" && targetURI == "":
+		return errors.New("source uri and target uri are empty")
+	case sourceURI == "":
+		return errors.New("source uri is empty")
+	case targetURI == "":
+		return errors.New("target uri is empty")
+	case sourceURI == targetURI:
+		return errors.New("source uri and target uri are identical")
 	}
 
-	srv, err := newServer(ctx, srvOpts)
+	addr, err := buildServerAddr(port)
 	if err != nil {
-		l.Fatal().Timestamp().Err(err).Msg("new server")
+		return errors.Wrap(err, "build server address")
+	}
+
+	srv, err := newServer(ctx, sourceURI, targetURI)
+	if err != nil {
+		return errors.Wrap(err, "new server")
 	}
 
 	httpServer := http.Server{
@@ -63,35 +92,14 @@ func main() {
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
-	l.Info().Timestamp().Msg("starting server at http://" + addr)
+	log.Info(ctx, "starting server at http://"+addr)
 	err = httpServer.ListenAndServe()
 	if err != nil {
-		l.Fatal().Timestamp().Err(err).Msg("listen")
+		return errors.Wrap(err, "listen")
 	}
 
 	if err := srv.Close(ctx); err != nil {
-		l.Fatal().Timestamp().Err(err).Msg("close server")
-	}
-}
-
-// serverOptions holds the options for the server.
-type serverOptions struct {
-	Port      string
-	SourceURI string
-	TargetURI string
-}
-
-// verify checks if the server options are valid.
-func (o serverOptions) verify() error {
-	switch {
-	case o.SourceURI == "" && o.TargetURI == "":
-		return errors.New("source uri and target uri are empty")
-	case o.SourceURI == "":
-		return errors.New("source uri is empty")
-	case o.TargetURI == "":
-		return errors.New("target uri is empty")
-	case o.SourceURI == o.TargetURI:
-		return errors.New("source uri and target uri are identical")
+		return errors.Wrap(err, "close server")
 	}
 	return nil
 }
@@ -121,14 +129,14 @@ type server struct {
 }
 
 // newServer creates a new server with the given options.
-func newServer(ctx context.Context, options serverOptions) (*server, error) {
-	source, err := topo.Connect(ctx, options.SourceURI)
+func newServer(ctx context.Context, sourceURI, targetURI string) (*server, error) {
+	source, err := topo.Connect(ctx, sourceURI)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
 	log.Debug(ctx, "connected to source cluster")
 
-	target, err := topo.Connect(ctx, options.TargetURI)
+	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}
@@ -254,17 +262,20 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Finalizable:     replStatus.Finalizable,
 		Info:            replStatus.Info,
 		EventsProcessed: replStatus.EventsProcessed,
-		Clone: CloneStatus{
+	}
+
+	if replStatus.State != mongolink.IdleState {
+		res.Clone = &CloneStatus{
 			Finished:             replStatus.Clone.Finished,
 			EstimatedTotalBytes:  replStatus.Clone.EstimatedTotalBytes,
 			EstimatedClonedBytes: replStatus.Clone.EstimatedClonedBytes,
-		},
-	}
+		}
 
-	if replStatus.Clone.Finished && !replStatus.LastAppliedOpTime.IsZero() {
-		res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
-			replStatus.LastAppliedOpTime.T,
-			replStatus.LastAppliedOpTime.I)
+		if replStatus.Clone.Finished && !replStatus.LastAppliedOpTime.IsZero() {
+			res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
+				replStatus.LastAppliedOpTime.T,
+				replStatus.LastAppliedOpTime.I)
+		}
 	}
 
 	err = json.NewEncoder(w).Encode(res)
@@ -296,9 +307,9 @@ type finalizeReponse struct {
 
 // CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	Finished             bool  `json:"finished"`
-	EstimatedTotalBytes  int64 `json:"estimatedTotalBytes"`
-	EstimatedClonedBytes int64 `json:"estimatedClonedBytes"`
+	Finished             bool  `json:"finished,omitempty"`
+	EstimatedTotalBytes  int64 `json:"estimatedTotalBytes,omitempty"`
+	EstimatedClonedBytes int64 `json:"estimatedClonedBytes,omitempty"`
 }
 
 // statusResponse represents the response body for the /status endpoint.
@@ -309,9 +320,10 @@ type statusResponse struct {
 	State             mongolink.State `json:"state"`
 	Finalizable       bool            `json:"finalizable,omitempty"`
 	LastAppliedOpTime string          `json:"lastAppliedOpTime,omitempty"`
-	Info              string          `json:"info"`
-	EventsProcessed   int64           `json:"eventsProcessed"`
-	Clone             CloneStatus     `json:"clone"`
+	Info              string          `json:"info,omitempty"`
+	EventsProcessed   int64           `json:"eventsProcessed,omitempty"`
+
+	Clone *CloneStatus `json:"clone,omitempty"`
 }
 
 // internalServerError sends an internal server error response.
@@ -319,4 +331,91 @@ func internalServerError(w http.ResponseWriter) {
 	http.Error(w,
 		http.StatusText(http.StatusInternalServerError),
 		http.StatusInternalServerError)
+}
+
+func requestStart(ctx context.Context, port string) error {
+	url := fmt.Sprintf("http://localhost:%s/start", port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		return errors.Wrap(err, "build request")
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "request")
+	}
+	defer res.Body.Close()
+
+	var resp startReponse
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return errors.Wrap(err, "decode response")
+	}
+
+	if !resp.Ok {
+		return errors.New(resp.Error)
+	}
+
+	j := json.NewEncoder(os.Stdout)
+	j.SetIndent("", "  ")
+	err = j.Encode(resp)
+	return errors.Wrap(err, "print response")
+}
+
+func requestFinalize(ctx context.Context, port string) error {
+	url := fmt.Sprintf("http://localhost:%s/finalize", port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		return errors.Wrap(err, "build request")
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "request")
+	}
+	defer res.Body.Close()
+
+	var resp finalizeReponse
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return errors.Wrap(err, "decode response")
+	}
+
+	if !resp.Ok {
+		return errors.New(resp.Error)
+	}
+
+	j := json.NewEncoder(os.Stdout)
+	j.SetIndent("", "  ")
+	err = j.Encode(resp)
+	return errors.Wrap(err, "print response")
+}
+
+func requestStatus(ctx context.Context, port string) error {
+	url := fmt.Sprintf("http://localhost:%s/status", port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return errors.Wrap(err, "build request")
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "request")
+	}
+	defer res.Body.Close()
+
+	var resp statusResponse
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return errors.Wrap(err, "decode response")
+	}
+
+	if !resp.Ok {
+		return errors.New(resp.Error)
+	}
+
+	j := json.NewEncoder(os.Stdout)
+	j.SetIndent("", "  ")
+	err = j.Encode(resp)
+	return errors.Wrap(err, "print response")
 }
