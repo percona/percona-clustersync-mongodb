@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 )
@@ -30,6 +31,12 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 				SetDeprecationErrors(true)).
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority())
+
+	if config.MongoLogEnabled {
+		opts = opts.SetLoggerOptions(options.Logger().
+			SetSink(log.MongoLogger(ctx)).
+			SetComponentLevel(config.MongoLogComponent, config.MongoLogLevel))
+	}
 
 	conn, err := mongo.Connect(opts)
 	if err != nil {
