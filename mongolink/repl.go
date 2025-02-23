@@ -26,8 +26,8 @@ type Repl struct {
 	NSFilter sel.NSFilter // Namespace filter
 	Catalog  *Catalog     // Catalog for managing collections and indexes
 
-	lastAppliedOpTime bson.Timestamp
-	resumeToken       bson.Raw
+	lastReplicatedOpTime bson.Timestamp
+	resumeToken          bson.Raw
 
 	mu      sync.Mutex
 	err     error
@@ -37,22 +37,23 @@ type Repl struct {
 	eventsProcessed int64
 }
 
-// ChangeReplicationStatus represents the status of change replication.
-type ChangeReplicationStatus struct {
-	LastAppliedOpTime bson.Timestamp // Last applied operation time
-	EventsProcessed   int64          // Number of events processed
-	Error             error
+// ReplStatus represents the status of change replication.
+type ReplStatus struct {
+	LastReplicatedOpTime bson.Timestamp // Last applied operation time
+	EventsProcessed      int64          // Number of events processed
+
+	Error error
 }
 
 // Status returns the current replication status.
-func (r *Repl) Status() ChangeReplicationStatus {
+func (r *Repl) Status() ReplStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return ChangeReplicationStatus{
-		LastAppliedOpTime: r.lastAppliedOpTime,
-		EventsProcessed:   r.eventsProcessed,
-		Error:             r.err,
+	return ReplStatus{
+		LastReplicatedOpTime: r.lastReplicatedOpTime,
+		EventsProcessed:      r.eventsProcessed,
+		Error:                r.err,
 	}
 }
 
@@ -66,12 +67,12 @@ func (r *Repl) Done() <-chan struct{} {
 
 // Start begins the replication process from the specified start timestamp.
 func (r *Repl) Start(_ context.Context, startAt bson.Timestamp) error {
-	return r.startImpl(&startAt)
+	return r.doStart(&startAt)
 }
 
 // Resume resumes the replication process from the last known resume token.
 func (r *Repl) Resume(_ context.Context) error {
-	return r.startImpl(nil)
+	return r.doStart(nil)
 }
 
 // Pause pauses the replication process.
@@ -95,8 +96,8 @@ func (r *Repl) pause(err error) {
 	r.err = err
 }
 
-// startImpl starts the replication process with the given options.
-func (r *Repl) startImpl(ts *bson.Timestamp) error {
+// doStart starts the replication process with the given options.
+func (r *Repl) doStart(ts *bson.Timestamp) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -165,9 +166,7 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 	lg := log.New("repl:apply")
 	ctx = lg.WithContext(ctx)
 
-	eventC := make(chan bson.Raw, config.ChangeStreamBatchSize)
 	cursorCtx, stopCursor := context.WithCancel(ctx)
-
 	defer stopCursor()
 
 	go func() {
@@ -176,6 +175,8 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 	}()
 
 	var changeStreamError error
+
+	eventC := make(chan bson.Raw, config.ChangeStreamBatchSize)
 
 	go func() {
 		defer close(eventC)
@@ -213,14 +214,14 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 				changeStreamError = errors.Wrap(err, "open")
 			}
 
-			lg.Error(err, "open cursor")
+			lg.Error(err, "Open cursor")
 
 			return
 		}
 
 		defer func() {
 			if err := cur.Close(cursorCtx); err != nil {
-				lg.Error(err, "close change stream cursor")
+				lg.Error(err, "Close change stream cursor")
 			}
 		}()
 
@@ -278,39 +279,53 @@ func (r *Repl) loop(ctx context.Context, opts *options.ChangeStreamOptionsBuilde
 				txBuffer.Push(innerEvent)
 			}
 
+			var opTime bson.Timestamp
 			// apply all transactional ops
 			for event := range txBuffer.All() {
-				err := r.apply(applyCtx, event)
+				var err error
+
+				opTime, err = r.apply(applyCtx, event)
 				if err != nil {
-					lg.Error(err, "apply transaction")
+					lg.Error(err, "Apply transaction")
 					r.pause(errors.Join(changeStreamError, errors.Wrap(err, "apply transaction")))
 
 					return
 				}
 			}
 
+			lg.With(log.Tx(&firstTxOp.TxnNumber, firstTxOp.LSID)).Trace("transaction applied")
+
+			r.mu.Lock()
+			r.lastReplicatedOpTime = opTime
+			r.mu.Unlock()
+
 			txBuffer.Clear()
 		}
 
-		err := r.apply(applyCtx, event)
+		opTime, err := r.apply(applyCtx, event)
 		if err != nil {
-			lg.Error(err, "apply op")
-			r.pause(errors.Join(changeStreamError, errors.Wrap(err, "apply op")))
+			lg.Error(err, "Apply change")
+			r.pause(errors.Join(changeStreamError, errors.Wrap(err, "apply change")))
 
 			return
 		}
+
+		r.mu.Lock()
+		r.lastReplicatedOpTime = opTime
+		r.mu.Unlock()
 	}
 }
 
 // apply applies a change event to the target MongoDB.
-func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
+func (r *Repl) apply(ctx context.Context, data bson.Raw) (bson.Timestamp, error) {
 	var baseEvent BaseEvent
 
 	err := bson.Unmarshal(data, &baseEvent)
 	if err != nil {
-		return errors.Wrap(err, "failed to decode BaseEvent")
+		return bson.Timestamp{}, errors.Wrap(err, "failed to decode BaseEvent")
 	}
 
+	opTime := baseEvent.ClusterTime
 	lg := log.Ctx(ctx).With(
 		log.OpTime(baseEvent.ClusterTime.T, baseEvent.ClusterTime.I),
 		log.Op(string(baseEvent.OperationType)),
@@ -323,10 +338,9 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 
 		r.mu.Lock()
 		r.resumeToken = baseEvent.ID
-		r.lastAppliedOpTime = baseEvent.ClusterTime
 		r.mu.Unlock()
 
-		return nil
+		return opTime, nil
 	}
 
 	lg.Trace("")
@@ -359,7 +373,7 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 		err := errors.New("invalidate")
 		lg.Error(err, "")
 
-		return nil
+		return opTime, nil
 
 	case Rename:
 		fallthrough
@@ -371,22 +385,21 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) error {
 		fallthrough
 
 	default:
-		lg.Warn("unsupported type: " + string(baseEvent.OperationType))
+		lg.Warn("Unsupported type: " + string(baseEvent.OperationType))
 
-		return nil
+		return opTime, nil
 	}
 
 	if err != nil {
-		return errors.Wrap(err, string(baseEvent.OperationType))
+		return opTime, errors.Wrap(err, string(baseEvent.OperationType))
 	}
 
 	r.mu.Lock()
 	r.resumeToken = baseEvent.ID
-	r.lastAppliedOpTime = baseEvent.ClusterTime
 	r.eventsProcessed++
 	r.mu.Unlock()
 
-	return nil
+	return opTime, nil
 }
 
 // handleCreate handles create events.
@@ -397,7 +410,7 @@ func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
 	}
 
 	if event.IsTimeseries() {
-		log.Ctx(ctx).Warn("timeseries is not supported. skip")
+		log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
 
 		return nil
 	}
@@ -510,7 +523,7 @@ func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 	case opts.Index != nil:
 		err = r.Catalog.ModifyIndex(ctx, r.Target, db, coll, opts.Index)
 		if err != nil {
-			lg.Error(err, "modify index: "+opts.Index.Name)
+			lg.Error(err, "Modify index: "+opts.Index.Name)
 
 			return nil
 		}
@@ -518,39 +531,39 @@ func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
 	case opts.CappedSize != nil || opts.CappedMax != nil:
 		err = r.Catalog.ModifyCappedCollection(ctx, r.Target, db, coll, opts.CappedSize, opts.CappedMax)
 		if err != nil {
-			lg.Error(err, "resize capped collection")
+			lg.Error(err, "Resize capped collection")
 
 			return nil
 		}
 
 	case opts.ViewOn != "":
 		if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
-			lg.Warn("timeseries is not supported. skip")
+			lg.Warn("Timeseries is not supported. skipping")
 
 			return nil
 		}
 
 		err = r.Catalog.ModifyView(ctx, r.Target, db, coll, opts.ViewOn, opts.Pipeline)
 		if err != nil {
-			lg.Error(err, "modify view")
+			lg.Error(err, "Modify view")
 
 			return nil
 		}
 
 	case opts.ExpireAfterSeconds != nil:
-		lg.Warn("collection ttl modification is not supported")
+		lg.Warn("Collection TTL modification is not supported")
 
 	case opts.ChangeStreamPreAndPostImages != nil:
 		lg.Warn("changeStreamPreAndPostImages is not supported")
 
 	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
-		lg.Warn("validator, validatorLevel and validatorAction are not supported")
+		lg.Warn("validator, validatorLevel, and validatorAction are not supported")
 
 	case opts.Unknown == nil:
 		lg.Debug("empty modify event")
 
 	default:
-		lg.Error(errors.New("unknown modify options"), "")
+		lg.Error(errors.New("Unknown modify options"), "")
 	}
 
 	return nil

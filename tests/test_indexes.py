@@ -4,7 +4,6 @@ from datetime import datetime
 import pymongo
 import pytest
 from _base import BaseTesting
-
 from mlink import Runner
 
 
@@ -472,7 +471,7 @@ class TestIndexesManually(BaseTesting):
             self.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
             mlink.start()
             self.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
-            mlink.wait_for_finalizable()
+            mlink.wait_for_initial_sync()
             self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
             mlink.finalize()
         except:

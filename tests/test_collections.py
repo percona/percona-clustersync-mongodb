@@ -3,7 +3,6 @@ from datetime import datetime
 
 import pytest
 from _base import BaseTesting
-
 from mlink import Runner
 
 
@@ -33,10 +32,10 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
-    @pytest.mark.xfail
-    def test_create_equal_uuid(self, phase):
+    def test_create_diff_uuid(self, phase):
         self.drop_all_database()
 
+        # mongolink does not use applyOps. no possible to preserveUUID
         with self.perform(phase):
             self.source["db_1"].create_collection("coll_1")
 
@@ -46,8 +45,8 @@ class TestCollection(BaseTesting):
         target_info = next(self.target["db_1"].list_collections(filter={"name": "coll_1"}))
         assert source_info["name"] == "coll_1" == target_info["name"]
 
-        if source_info["info"]["uuid"] != target_info["info"]["uuid"]:
-            pytest.xfail("colllection UUID may vary")
+        if source_info["info"]["uuid"] == target_info["info"]["uuid"]:
+            pytest.xfail("colllection UUID should not be equal")
 
     def test_create_clustered(self, phase):
         self.drop_all_database()
@@ -134,7 +133,7 @@ class TestCollection(BaseTesting):
             options = {
                 "storageEngine": {"wiredTiger": {"configString": "block_compressor=snappy"}},
                 "indexOptionDefaults": {
-                    "storageEngine": {"wiredTiger": {"configString": "block_compressor=zlib"}}
+                    "storageEngine": {"wiredTiger": {"configString": "block_compressor=zlib"}},
                 },
             }
             self.source["db_1"].create_collection("coll_1", **options)

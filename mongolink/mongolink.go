@@ -16,7 +16,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-// State represents the state of the mongolink.
+// State represents the state of the MongoLink.
 type State string
 
 const (
@@ -32,16 +32,19 @@ const (
 	StateFinalized = "finalized"
 )
 
-// Status represents the status of the mongolink.
+// Status represents the status of the MongoLink.
 type Status struct {
-	State State  // Current state of the mongolink
-	Info  string // Additional information
+	State State // Current state of the MongoLink
 	Error error
 
-	Finalizable       bool           // Indicates if the process can be finalized
-	LastAppliedOpTime bson.Timestamp // Last applied operation time
-	EventsProcessed   int64          // Number of events processed
-	Clone             CloneStatus    // Status of the cloning process
+	PauseOnInitialSync  bool
+	InitialSyncComplete bool // Indicates if the process can be finalized
+	InitialSyncLagTime  int64
+
+	LagTime *int64
+
+	Repl  ReplStatus
+	Clone CloneStatus // Status of the cloning process
 }
 
 // MongoLink manages the replication process.
@@ -49,15 +52,17 @@ type MongoLink struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
-	nsFilter sel.NSFilter // Namespace filter
+	nsFilter           sel.NSFilter // Namespace filter
+	pauseOnInitialSync bool
 
-	state   State    // Current state of the mongolink
+	state State // Current state of the MongoLink
+
 	catalog *Catalog // Catalog for managing collections and indexes
 	clone   *Clone   // Clone process
 	repl    *Repl    // Replication process
 
-	cloneStartedAtSourceTS  bson.Timestamp // Timestamp when the process started
-	cloneFinishedAtSourceTS bson.Timestamp // Timestamp when the cloning finished
+	cloneStartedAtTS  bson.Timestamp // Timestamp when the process started
+	cloneFinishedAtTS bson.Timestamp // Timestamp when the cloning finished
 
 	mu sync.Mutex
 }
@@ -71,10 +76,14 @@ func New(source, target *mongo.Client) *MongoLink {
 	}
 }
 
-// StartOptions represents the options for starting the mongolink.
+// StartOptions represents the options for starting the MongoLink.
 type StartOptions struct {
-	IncludeNamespaces []string // Namespaces to include
-	ExcludeNamespaces []string // Namespaces to exclude
+	// PauseOnInitialSync indicates whether to finalize after the initial sync.
+	PauseOnInitialSync bool
+	// IncludeNamespaces are the namespaces to include.
+	IncludeNamespaces []string
+	// ExcludeNamespaces are the namespaces to exclude.
+	ExcludeNamespaces []string
 }
 
 // Start starts the replication process with the given options.
@@ -93,6 +102,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	}
 
 	ml.nsFilter = sel.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	ml.pauseOnInitialSync = options.PauseOnInitialSync
 
 	ml.repl = nil
 	ml.cloneStartedAtSourceTS = bson.Timestamp{}
@@ -124,7 +134,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 			ml.state = StateFailed
 			ml.mu.Unlock()
 
-			lg.Error(err, "cluster replication has failed")
+			lg.Error(err, "Cluster replication has failed")
 
 			return
 		}
@@ -134,7 +144,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 		ml.mu.Unlock()
 	}()
 
-	lg.Info("cluster replication has started")
+	lg.Info("Cluster replication has started")
 
 	return nil
 }
@@ -143,7 +153,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 func (ml *MongoLink) run(ctx context.Context) error {
 	lg := log.Ctx(ctx)
 
-	lg.Info("starting data clone")
+	lg.Info("Starting data clone")
 
 	clusterReplStartedAt := time.Now()
 
@@ -153,14 +163,14 @@ func (ml *MongoLink) run(ctx context.Context) error {
 	}
 
 	ml.mu.Lock()
-	ml.cloneStartedAtSourceTS = cloneStartedAtSourceTS
+	ml.cloneStartedAtTS = cloneStartedAtSourceTS
 	ml.mu.Unlock()
 
 	cloneStartedAt := time.Now()
 
 	err = ml.clone.Clone(ctx)
 	if err != nil {
-		return errors.Wrap(err, "close")
+		return errors.Wrap(err, "clone")
 	}
 
 	cloneFinishedAt := time.Now()
@@ -171,14 +181,14 @@ func (ml *MongoLink) run(ctx context.Context) error {
 	}
 
 	ml.mu.Lock()
-	ml.cloneFinishedAtSourceTS = cloneFinishedAtSourceTS
+	ml.cloneFinishedAtTS = cloneFinishedAtSourceTS
 	ml.mu.Unlock()
 
-	lg.InfoWith("data clone is completed",
+	lg.InfoWith("Data clone is completed",
 		log.Elapsed(cloneFinishedAt.Sub(cloneStartedAt)))
-	lg.Infof("remaining logical seconds until initial sync done: %d",
+	lg.Infof("Remaining logical seconds until Initial Sync complete: %d",
 		cloneFinishedAtSourceTS.T-cloneStartedAtSourceTS.T)
-	lg.Infof("starting change replication since %d.%d source cluster time",
+	lg.Infof("Starting Change Replication since %d.%d source cluster time",
 		cloneStartedAtSourceTS.T, cloneStartedAtSourceTS.I)
 
 	replStartedAt := time.Now()
@@ -188,8 +198,10 @@ func (ml *MongoLink) run(ctx context.Context) error {
 		return errors.Wrap(err, "start change replication")
 	}
 
+	replDoneSig := ml.repl.Done()
+
 	go func() {
-		// wait until repl makes applies first op
+		// make sure the repl processes its first operation
 		<-time.After(config.ReplTickInteral)
 
 		t := time.NewTicker(config.ReplInitialSyncCheckInterval)
@@ -198,7 +210,7 @@ func (ml *MongoLink) run(ctx context.Context) error {
 		for {
 			select {
 			case <-t.C:
-			case <-ml.repl.Done():
+			case <-replDoneSig:
 				return
 			}
 
@@ -207,20 +219,25 @@ func (ml *MongoLink) run(ctx context.Context) error {
 				return
 			}
 
-			if !replStatus.LastAppliedOpTime.Before(cloneFinishedAtSourceTS) {
-				lg.InfoWith("initial sync done",
+			if !replStatus.LastReplicatedOpTime.Before(cloneFinishedAtSourceTS) {
+				lg.InfoWith("Initial sync has been completed",
 					log.Elapsed(time.Since(replStartedAt)),
 					log.TotalElapsed(time.Since(clusterReplStartedAt)))
+
+				if ml.pauseOnInitialSync {
+					lg.Info("Pausing [PauseOnInitialSync]")
+					ml.repl.Pause()
+				}
 
 				return
 			}
 
-			lg.Infof("remaining logical seconds until initial sync done: %d",
-				cloneFinishedAtSourceTS.T-replStatus.LastAppliedOpTime.T)
+			lg.Debugf("Remaining logical seconds until Initial Sync complete: %d",
+				cloneFinishedAtSourceTS.T-replStatus.LastReplicatedOpTime.T)
 		}
 	}()
 
-	<-ml.repl.Done()
+	<-replDoneSig
 
 	replFinishedAt := time.Now()
 
@@ -230,8 +247,8 @@ func (ml *MongoLink) run(ctx context.Context) error {
 	}
 
 	lg.InfoWith(
-		fmt.Sprintf("change replication stopped at %d.%d source cluster time",
-			replStatus.LastAppliedOpTime.T, replStatus.LastAppliedOpTime.T),
+		fmt.Sprintf("Change replication stopped at %d.%d source cluster time",
+			replStatus.LastReplicatedOpTime.T, replStatus.LastReplicatedOpTime.T),
 		log.Elapsed(replFinishedAt.Sub(replStartedAt)))
 
 	err = ml.catalog.FinalizeIndexes(ctx, ml.target)
@@ -239,7 +256,7 @@ func (ml *MongoLink) run(ctx context.Context) error {
 		return errors.Wrap(err, "finalize indexes")
 	}
 
-	lg.InfoWith("cluster replication is finalized",
+	lg.InfoWith("Cluster replication is finalized",
 		log.Elapsed(time.Since(replFinishedAt)),
 		log.TotalElapsed(time.Since(clusterReplStartedAt)))
 
@@ -260,8 +277,8 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 		return errors.Wrap(cloneStatus.Error, "clone failed")
 	}
 
-	if !cloneStatus.Finished {
-		return errors.New("clone has not finished")
+	if !cloneStatus.Complete {
+		return errors.New("clone has not been completed")
 	}
 
 	replStatus := ml.repl.Status()
@@ -269,24 +286,24 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 		return errors.Wrap(replStatus.Error, "cannot finalize due to existing error")
 	}
 
-	if replStatus.LastAppliedOpTime.IsZero() {
-		return errors.New("repl has not been started")
+	if replStatus.LastReplicatedOpTime.IsZero() {
+		return errors.New("replication has not been started")
 	}
 
-	if replStatus.LastAppliedOpTime.Before(ml.cloneFinishedAtSourceTS) {
+	if replStatus.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS) {
 		return errors.New("not finalizable")
 	}
 
 	ml.repl.Pause()
 	ml.state = StateFinalizing
 
-	log.New("mongolink").Info("finalizing")
+	log.New("mongolink").Info("Finalizing")
 
 	return nil
 }
 
-// Status returns the current status of the mongolink.
-func (ml *MongoLink) Status(_ context.Context) (*Status, error) {
+// Status returns the current status of the MongoLink.
+func (ml *MongoLink) Status(ctx context.Context) (*Status, error) {
 	ml.mu.Lock()
 	defer ml.mu.Unlock()
 
@@ -296,25 +313,41 @@ func (ml *MongoLink) Status(_ context.Context) (*Status, error) {
 		return s, nil
 	}
 
-	cloneStatus := ml.clone.Status()
-	s.Clone = cloneStatus
+	sourceTime, err := topo.ClusterTime(ctx, ml.source)
+	if err != nil {
+		// Do not block status if source cluster is lost
+		log.New("mongolink").Error(err, "Status: get source cluster time")
+	}
 
-	replStatus := ml.repl.Status()
-	s.Error = replStatus.Error
-	s.LastAppliedOpTime = replStatus.LastAppliedOpTime
-	s.EventsProcessed = replStatus.EventsProcessed
+	s.Clone = ml.clone.Status()
+	s.Repl = ml.repl.Status()
 
-	if cloneStatus.Finished && !replStatus.LastAppliedOpTime.IsZero() {
-		s.Finalizable = !replStatus.LastAppliedOpTime.Before(ml.cloneFinishedAtSourceTS)
+	s.PauseOnInitialSync = ml.pauseOnInitialSync
+
+	if s.Clone.Complete && !s.Repl.LastReplicatedOpTime.IsZero() {
+		s.InitialSyncComplete = !s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS)
+		if !s.InitialSyncComplete {
+			var lag int64
+			if !s.Repl.LastReplicatedOpTime.IsZero() {
+				lag = int64(ml.cloneFinishedAtTS.T) - int64(s.Repl.LastReplicatedOpTime.T)
+			} else { // replication has not processed its first operation
+				lag = int64(ml.cloneFinishedAtTS.T) - int64(ml.cloneStartedAtTS.T)
+			}
+
+			s.InitialSyncLagTime = lag
+		}
+	}
+
+	if !s.Repl.LastReplicatedOpTime.IsZero() && !sourceTime.IsZero() {
+		lag := max(int64(sourceTime.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
+		s.LagTime = &lag
 	}
 
 	switch {
-	case ml.state == StateIdle:
-		s.Info = "waiting for start"
-	case ml.state == StateRunning && !cloneStatus.Finished:
-		s.Info = "cloning data"
-	case ml.state == StateRunning && !replStatus.LastAppliedOpTime.IsZero():
-		s.Info = "replicating changes"
+	case s.Repl.Error != nil:
+		s.Error = errors.Wrap(s.Repl.Error, "Change Replication")
+	case s.Clone.Error != nil:
+		s.Error = errors.Wrap(s.Clone.Error, "Clone")
 	}
 
 	return s, nil

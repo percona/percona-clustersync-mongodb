@@ -2,9 +2,8 @@
 import os
 
 import pytest
-from pymongo import MongoClient
-
 from mlink import MongoLink
+from pymongo import MongoClient
 
 
 def pytest_addoption(parser):

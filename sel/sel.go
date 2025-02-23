@@ -9,8 +9,8 @@ import (
 type NSFilter func(db, coll string) bool
 
 func MakeFilter(include, exclude []string) NSFilter {
-	includeFilter := makeFitlerImpl(include)
-	excludeFilter := makeFitlerImpl(exclude)
+	includeFilter := doMakeFitler(include)
+	excludeFilter := doMakeFitler(exclude)
 
 	return func(db, coll string) bool {
 		if len(includeFilter) != 0 && !includeFilter.Has(db, coll) {
@@ -40,7 +40,7 @@ func (f filterMap) Has(db, coll string) bool {
 	return slices.Contains(list, coll) // only if explcitly listed
 }
 
-func makeFitlerImpl(filter []string) filterMap {
+func doMakeFitler(filter []string) filterMap {
 	// keys are database names. values are list collections that belong to the db.
 	// if a key contains empty/nil, whole db is included (all its collections).
 	filterMap := make(map[string][]string)

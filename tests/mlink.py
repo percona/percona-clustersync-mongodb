@@ -10,6 +10,14 @@ from pymongo import MongoClient
 DFL_REQ_TIMEOUT = 5
 
 
+class WaitTimeoutError(Exception):
+    """Exception raised when a wait operation times out."""
+
+
+class MongoLinkServerError(Exception):
+    """Exception raised when there is an error with the MongoLink service."""
+
+
 class MongoLink:
     """MLink provides methods to interact with the MongoLink service."""
 
@@ -30,23 +38,42 @@ class MongoLink:
         """Get the current status of the MongoLink service."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
-        return res.json()
 
-    def start(self, params):
+        payload = res.json()
+        if not payload["ok"] or payload["state"] == self.State.FAILED:
+            raise MongoLinkServerError(payload["error"])
+
+        return payload
+
+    def start(self, include_namespaces=None, exclude_namespaces=None, pause_on_initial_sync=None):
         """Start the MongoLink service with the given parameters."""
-        res = requests.post(f"{self.uri}/start", json=params, timeout=DFL_REQ_TIMEOUT)
+        options = {}
+        if include_namespaces:
+            options["includeNamespaces"] = include_namespaces
+        if exclude_namespaces:
+            options["excludeNamespaces"] = exclude_namespaces
+        if pause_on_initial_sync:
+            options["pauseOnInitialSync"] = True
+
+        res = requests.post(f"{self.uri}/start", json=options, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
-        return res.json()
+
+        payload = res.json()
+        if not payload["ok"]:
+            raise MongoLinkServerError(payload["error"])
+
+        return payload
 
     def finalize(self):
         """Finalize the MongoLink service."""
         res = requests.post(f"{self.uri}/finalize", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
-        return res.json()
 
+        payload = res.json()
+        if not payload["ok"]:
+            raise MongoLinkServerError(payload["error"])
 
-class WaitTimeoutError(Exception):
-    """Exception raised when a wait operation times out."""
+        return payload
 
 
 class Runner:
@@ -57,6 +84,7 @@ class Runner:
 
         CLONE = "phase:clone"
         APPLY = "phase:apply"
+        MANUAL = "manual"  # manual mode
 
     def __init__(self, source: MongoClient, mlink: MongoLink, phase: Phase, options: dict):
         """Initialize Runner with the given source, mlink, phase, and options."""
@@ -69,6 +97,7 @@ class Runner:
         """Enter the context manager."""
         if self.phase is self.Phase.APPLY:
             self.start()
+
         return self
 
     def __exit__(self, _t, exc, _tb):
@@ -79,6 +108,7 @@ class Runner:
 
         if self.phase is self.Phase.CLONE:
             self.start()
+
         self.finalize()
 
     def start(self):
@@ -87,20 +117,29 @@ class Runner:
         if status["state"] == MongoLink.State.FINALIZING:
             self.wait_for_state(MongoLink.State.FINALIZED)
         elif status["state"] == MongoLink.State.RUNNING:
-            self.wait_for_finalizable()
-            self.mlink.finalize()
+            if self.phase is self.Phase.APPLY:
+                self.wait_for_initial_sync()
+            self.finalize_fast()
             self.wait_for_state(MongoLink.State.FINALIZED)
 
-        self.mlink.start(self.options)
-        self.wait_for_state(MongoLink.State.RUNNING)
+        pause_on_initial_sync = self.phase is not self.Phase.CLONE
+        self.mlink.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
         return self
 
     def finalize_fast(self):
         """Finalize the MongoLink service quickly."""
         status = self.mlink.status()
         if status["state"] == MongoLink.State.RUNNING:
-            self.wait_for_finalizable()
-            self.mlink.finalize()
+            if self.phase is self.Phase.APPLY:
+                self.wait_for_initial_sync()
+
+            try:
+                self.mlink.finalize()
+            except MongoLinkServerError as e:
+                if e == MongoLink.State.FAILED:
+                    return
+
+                raise
 
     def finalize(self):
         """Finalize the MongoLink service."""
@@ -109,8 +148,17 @@ class Runner:
             self.wait_for_state(MongoLink.State.FINALIZED)
         elif status["state"] == MongoLink.State.RUNNING:
             self.wait_for_current_optime()
-            self.wait_for_finalizable()
-            self.mlink.finalize()
+            if self.phase is self.Phase.APPLY:
+                self.wait_for_initial_sync()
+
+            try:
+                self.mlink.finalize()
+            except MongoLinkServerError as e:
+                if e == MongoLink.State.FAILED:
+                    return
+
+                raise
+
             self.wait_for_state(MongoLink.State.FINALIZED)
 
     def wait_for_state(self, state):
@@ -123,12 +171,11 @@ class Runner:
     def wait_for_current_optime(self, timeout=10):
         """Wait for the current operation time to be applied."""
         status = self.mlink.status()
-        assert status["state"] == MongoLink.State.RUNNING
+        assert status["state"] == MongoLink.State.RUNNING, status
 
-        curr_optime = self.source.server_info()["operationTime"]
+        curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
         for _ in range(timeout * 10):
-            applied_optime = self.last_applied_op()
-            if curr_optime <= applied_optime:
+            if curr_optime <= self.last_applied_op():
                 return
 
             time.sleep(0.1)
@@ -136,13 +183,16 @@ class Runner:
 
         raise WaitTimeoutError()
 
-    def wait_for_finalizable(self, timeout=10):
+    def wait_for_initial_sync(self, timeout=10):
         """Wait for the MongoLink service to be finalizable."""
         status = self.mlink.status()
-        assert status["state"] == MongoLink.State.RUNNING
+        if status.get("initialSyncComplete"):
+            return
+
+        assert status["state"] == MongoLink.State.RUNNING, status
 
         for _ in range(timeout * 10):
-            if status.get("finalizable"):
+            if status.get("initialSyncComplete"):
                 return
 
             time.sleep(0.1)
@@ -153,8 +203,8 @@ class Runner:
     def last_applied_op(self):
         """Get the last applied operation time."""
         status = self.mlink.status()
-        if applied_optime := status.get("lastAppliedOpTime"):
-            t_s, i_s = applied_optime.split(".")
+        if last_replicated_op_time := status.get("lastReplicatedOpTime"):
+            t_s, i_s = last_replicated_op_time.split(".")
             return bson.Timestamp(int(t_s), int(i_s))
 
         return bson.Timestamp(0, 0)

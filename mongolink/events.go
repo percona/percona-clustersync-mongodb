@@ -8,7 +8,7 @@ import (
 
 type OperationType string
 
-// https://www.mongodb.com/docs/manual/changeStreams/
+// https://www.mongodb.com/docs/v8.0/changeStreams/
 const (
 	// Invalidate occurs when an operation renders the change stream invalid.
 	Invalidate OperationType = "invalidate"
@@ -84,7 +84,7 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
-// Namespace is the namespace (database and or collection) affected by
+// Namespace is the namespace (database and/or collection) affected by
 // the event.
 type Namespace struct {
 	// Database is the name of the database where the event occurred.
@@ -120,7 +120,7 @@ type InvalidateEvent struct {
 	// event.
 	//
 	// This value is used as the resumeToken for the resumeAfter parameter when
-	// resuming a change stream.  The _id object has the following form:
+	// resuming a change stream. The _id object has the following form:
 	// { "_data" : <BinData|hex string> }
 	ID bson.Raw `bson:"_id"`
 
@@ -151,6 +151,7 @@ type InvalidateEvent struct {
 	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
+// BaseEvent is the base structure for all events.
 type BaseEvent struct {
 	// OperationType is the type of operation that the change notification
 	// reports.
@@ -158,11 +159,11 @@ type BaseEvent struct {
 	// Returns a value of create for these change events.
 	OperationType OperationType `bson:"operationType"`
 
-	// Namespace is the namespace (database and or collection) affected by
+	// Namespace is the namespace (database and/or collection) affected by
 	// the event.
 	Namespace Namespace `bson:"ns"`
 
-	// CollectionUUID is collection's UUID.
+	// CollectionUUID is the collection's UUID.
 	//
 	// If the change occurred on a collection, CollectionUUID indicates
 	// the collection's UUID. If the change occurred on a view, CollectionUUID
@@ -172,7 +173,7 @@ type BaseEvent struct {
 	CollectionUUID *bson.Binary `bson:"collectionUUID,omitempty"`
 
 	// TxnNumber together with the lsid, a number that helps uniquely identify
-	// a transction.
+	// a transaction.
 	//
 	// Only present if the operation is part of a multi-document transaction.
 	TxnNumber *int64 `bson:"txnNumber,omitempty"`
@@ -186,7 +187,7 @@ type BaseEvent struct {
 	// event.
 	//
 	// This value is used as the resumeToken for the resumeAfter parameter
-	// when resuming a change stream.  The _id object has the following form:
+	// when resuming a change stream. The _id object has the following form:
 	// { "_data" : <BinData|hex string> }
 	ID bson.Raw `bson:"_id"`
 
@@ -222,9 +223,9 @@ type BaseEvent struct {
 //
 // New in version 6.0.
 type CreateEvent struct {
-	// OperationDescription	is additional information on the change operation.
+	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appears when the change stream uses
+	// This document and its subfields only appear when the change stream uses
 	// expanded events.
 	//
 	// New in version 6.0.
@@ -233,14 +234,17 @@ type CreateEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
+// IsView returns true if the event is for a view.
 func (e CreateEvent) IsView() bool {
 	return e.CollectionUUID == nil
 }
 
+// IsTimeseries returns true if the event is for a timeseries collection.
 func (e CreateEvent) IsTimeseries() bool {
 	return strings.HasPrefix(e.OperationDescription.ViewOn, "system.buckets.")
 }
 
+// createCollectionOptions represents the options for creating a collection.
 type createCollectionOptions struct {
 	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
 
@@ -274,58 +278,61 @@ type DropDatabaseEvent struct {
 type CreateIndexesEvent struct {
 	BaseEvent `bson:",inline"`
 
-	// OperationDescription	is additional information on the change operation.
+	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appears when the change stream uses
+	// This document and its subfields only appear when the change stream uses
 	// expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription createIndexesOpDesc `bson:"operationDescription"`
 }
 
+// createIndexesOpDesc represents the description of the create indexes operation.
 type createIndexesOpDesc struct {
 	Indexes []*IndexSpecification `bson:"indexes"`
 }
 
-// CreateIndexesEvent occurs when an index is dropped from the collection and
+// DropIndexesEvent occurs when an index is dropped from the collection and
 // the change stream has the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type DropIndexesEvent struct {
 	BaseEvent `bson:",inline"`
 
-	// OperationDescription	is additional information on the change operation.
+	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appears when the change stream uses
+	// This document and its subfields only appear when the change stream uses
 	// expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription dropIndexesOpDesc `bson:"operationDescription"`
 }
 
+// dropIndexesOpDesc represents the description of the drop indexes operation.
 type dropIndexesOpDesc struct {
 	Indexes []struct {
 		Name string `bson:"name"`
 	} `bson:"indexes"`
 }
 
-// ModifyEvent when a collection is modified, such as when the collMod command
-// adds or remove options from a collection or view. This event is received only
+// ModifyEvent occurs when a collection is modified, such as when the collMod command
+// adds or removes options from a collection or view. This event is received only
 // if the change stream has the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type ModifyEvent struct {
 	BaseEvent `bson:",inline"`
 
-	// OperationDescription	is additional information on the change operation.
+	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appears when the change stream uses
+	// This document and its subfields only appear when the change stream uses
 	// expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription modifyOpDesc `bson:"operationDescription"`
 }
 
+// modifyOpDesc represents the description of the modify operation.
 type modifyOpDesc struct {
 	// Index is the index that was modified.
 	//
@@ -351,6 +358,7 @@ type modifyOpDesc struct {
 	Unknown map[string]any `bson:",inline"`
 }
 
+// modifyIndexOption represents the options for modifying an index.
 type modifyIndexOption struct {
 	Name               string `bson:"name"`
 	Hidden             *bool  `bson:"hidden,omitempty"`
@@ -361,7 +369,7 @@ type modifyIndexOption struct {
 
 // InsertEvent occurs when an operation adds documents to a collection.
 type InsertEvent struct {
-	// DocumentKey is document that contains the _id value of the document
+	// DocumentKey is the document that contains the _id value of the document
 	// created or modified by the CRUD operation.
 	//
 	// For sharded collections, this field also displays the full shard key for
@@ -386,7 +394,7 @@ type InsertEvent struct {
 // DeleteEvent occurs when operations remove documents from a collection,
 // such as when a user or application executes the delete command.
 type DeleteEvent struct {
-	// DocumentKey is document that contains the _id value of the document
+	// DocumentKey is the document that contains the _id value of the document
 	// created or modified by the CRUD operation.
 	//
 	// For sharded collections, this field also displays the full shard key for
@@ -399,7 +407,7 @@ type DeleteEvent struct {
 
 // UpdateEvent occurs when an operation updates a document in a collection.
 type UpdateEvent struct {
-	// DocumentKey is document that contains the _id value of the document
+	// DocumentKey is the document that contains the _id value of the document
 	// created or modified by the CRUD operation.
 	//
 	// For sharded collections, this field also displays the full shard key for
@@ -418,7 +426,7 @@ type UpdateEvent struct {
 	// between the original update operation and the full document lookup.
 	//
 	// For more information, see [Lookup Full Document for Update Operations](
-	//   https://www.mongodb.com/docs/manual/changeStreams/#std-label-change-streams-updateLookup).
+	//   https://www.mongodb.com/docs/v8.0/changeStreams/#std-label-change-streams-updateLookup).
 	//
 	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages
 	// option using db.createCollection(), create, or collMod, then
@@ -491,7 +499,7 @@ type UpdateDescription struct {
 // a collection and replaces it with a new document, such as when the replaceOne
 // method is called.
 type ReplaceEvent struct {
-	// DocumentKey is document that contains the _id value of the document
+	// DocumentKey is the document that contains the _id value of the document
 	// created or modified by the CRUD operation.
 	//
 	// For sharded collections, this field also displays the full shard key for
@@ -523,18 +531,22 @@ type ReplaceEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
+// ParsingError represents an error that occurred during parsing.
 type ParsingError struct {
 	cause error
 }
 
+// Error returns the error message.
 func (e ParsingError) Error() string {
-	return "parsing: " + e.cause.Error()
+	return "parsing event: " + e.cause.Error()
 }
 
+// Unwrap returns the underlying error.
 func (e ParsingError) Unwrap() error {
 	return e.cause
 }
 
+// parseEvent parses the given BSON data into the specified event type.
 func parseEvent[T any](data bson.Raw) (*T, error) {
 	var event T
 

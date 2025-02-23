@@ -1,7 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
 from _base import BaseTesting
-
 from mlink import Runner
 
 

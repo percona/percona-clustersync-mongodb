@@ -130,16 +130,26 @@ When using the `--log-json` option, the logs will be output in JSON format with 
 - `error`: Error message, if any.
 - `s`: Scope of the log entry.
 - `ns`: Namespace (database.collection format).
+- `elapsed_secs`: The duration in seconds for the specific operation to complete.
+- `total_elapsed_secs`: The cumulative time in seconds for the entire process, including all operations.
 
 Example:
 
 ```json
-{
-    "level": "info",
-    "s": "mongolink",
-    "time": 1740077878718,
-    "message": "starting change replication at 1740077878.3",
-}
+
+{ "level": "info",
+  "s": "clone",
+  "ns": "db_1.coll_1",
+  "elapsed_secs": 0,
+  "time": "2025-02-23 11:26:03.758",
+  "message": "Cloned db_1.coll_1" }
+
+{ "level": "info",
+  "s": "mongolink",
+  "elapsed_secs": 0,
+  "time": "2025-02-23 11:26:03.857",
+  "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
+
 ```
 
 ## HTTP API
@@ -194,18 +204,27 @@ Example:
 
 ### GET /status
 
-Gets the current status of the replication process.
+The /status endpoint provides the current state of the MongoLink replication
+process, including its progress, lag, and event processing details.
 
 #### Response
 
-- `ok`: Boolean indicating if the operation was successful.
-- `error` (optional): Error message if the operation failed.
-- `state`: Current state of the replication process.
-- `finalizable`: Boolean indicating if the process can be finalized.
-- `lastAppliedOpTime`: Last applied operation time.
-- `info`: Additional information.
-- `eventsProcessed`: Number of events processed.
-- `clone`: Status of the cloning process.
+- `ok`: Ok indicates if the operation was successful.
+- `state`: State is the current state of the replication.
+- `info` (optional): Info provides additional information about the current state.
+- `error` (optional): Error is the error message if the operation failed.
+
+- `pauseOnInitialSync` (optional): PauseOnInitialSync indicates if the replication is paused on initial sync.
+- `initialSyncComplete` (optional): InitialSyncComplete indicates if the initial sync is complete.
+- `initialSyncLagTime` (optional): InitialSyncLagTime is the lag time during the initial sync.
+
+- `eventsProcessed` (optional): EventsProcessed is the number of events processed.
+- `lastReplicatedOpTime` (optional): LastReplicatedOpTime is the last replicated operation time.
+- `lagTime` (optional): LagTime is the current lag time.
+
+- `cloneComplete` (optional): CloneComplete indicates if the cloning process is complete.
+- `estimatedCloneSize` (optional): EstimatedCloneSize is the estimated total size of the clone.
+- `clonedSize` (optional): ClonedSize is the size of the data that has been cloned.
 
 Example:
 
@@ -213,15 +232,15 @@ Example:
 {
   "ok": true,
   "state": "running",
-  "finalizable": false,
-  "lastAppliedOpTime": "1622547800.1",
   "info": "replicating changes",
-  "eventsProcessed": 100,
-  "clone": {
-    "finished": true,
-    "estimatedTotalBytes": 1000000,
-    "estimatedClonedBytes": 1000000
-  }
+  "initialSyncComplete": false,
+  "initialSyncLagTime": 5,
+  "eventsProcessed": 5000,
+  "lastReplicatedOpTime": "1740335200.5",
+  "lagTime": 2,
+  "cloneComplete": false,
+  "estimatedCloneSize": 5000000000,
+  "clonedSize": 2500000000
 }
 ```
 

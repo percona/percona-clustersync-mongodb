@@ -16,6 +16,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/sel"
+	"github.com/percona-lab/percona-mongolink/topo"
 )
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
@@ -26,22 +27,22 @@ type Clone struct {
 	NSFilter sel.NSFilter // Namespace filter
 	Catalog  *Catalog     // Catalog for managing collections and indexes
 
-	estimatedTotalBytes  atomic.Int64 // Estimated total bytes to be cloned
-	estimatedClonedBytes atomic.Int64 // Estimated bytes cloned so far
+	totalSize  int64        // Estimated total bytes to be cloned
+	clonedSize atomic.Int64 // Bytes cloned so far
 
 	err      error // Error encountered during the cloning process
-	finished bool  // Indicates if the cloning process is finished
+	complete bool  // Indicates if the cloning process is finished
 
 	mu sync.Mutex
 }
 
 // CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	EstimatedTotalBytes  int64 // Estimated total bytes to be cloned
-	EstimatedClonedBytes int64 // Estimated bytes cloned so far
+	EstimatedTotalSize int64 // Estimated total bytes to be copied
+	CopiedSize         int64 // Bytes copied so far
 
 	Error    error // Error encountered during the cloning process
-	Finished bool  // Indicates if the cloning process is finished
+	Complete bool  // Indicates if the cloning process is completed
 }
 
 // Status returns the current status of the cloning process.
@@ -50,10 +51,11 @@ func (c *Clone) Status() CloneStatus {
 	defer c.mu.Unlock()
 
 	return CloneStatus{
-		EstimatedTotalBytes:  c.estimatedTotalBytes.Load(),
-		EstimatedClonedBytes: c.estimatedClonedBytes.Load(),
-		Error:                c.err,
-		Finished:             c.finished,
+		EstimatedTotalSize: c.totalSize,
+		CopiedSize:         c.clonedSize.Load(),
+
+		Error:    c.err,
+		Complete: c.complete,
 	}
 }
 
@@ -69,20 +71,20 @@ func (c *Clone) Clone(ctx context.Context) error {
 		return errors.Wrap(err, "list databases")
 	}
 
+	// XXX: Should the total size be adjusted on collection/database drop?
+	totalSize, err := c.getTotalSize(ctx, databases)
+	if err != nil {
+		return errors.Wrap(err, "get database stats")
+	}
+
+	c.mu.Lock()
+	c.totalSize = totalSize
+	c.mu.Unlock()
+
 	grp, grpCtx := errgroup.WithContext(ctx)
-	grp.SetLimit(runtime.NumCPU())
+	grp.SetLimit(runtime.GOMAXPROCS(0))
 
 	for _, db := range databases {
-		rawDBStats, err := c.Source.Database(db).RunCommand(grpCtx, bson.D{{"dbStats", 1}}).Raw()
-		if err != nil {
-			return errors.Wrap(err, "get database stats")
-		}
-
-		dbSize, ok := rawDBStats.Lookup("dataSize").AsInt64OK()
-		if ok {
-			c.estimatedTotalBytes.Add(dbSize)
-		}
-
 		colls, err := c.Source.Database(db).ListCollectionSpecifications(grpCtx, bson.D{})
 		if err != nil {
 			return errors.Wrap(err, "list collections")
@@ -100,30 +102,7 @@ func (c *Clone) Clone(ctx context.Context) error {
 			}
 
 			grp.Go(func() error {
-				lg := lg.With(log.NS(db, spec.Name))
-				lg.Infof("cloning %s.%s", db, spec.Name)
-
-				startedAt := time.Now()
-
-				var err error
-
-				switch spec.Type {
-				case "collection":
-					err = c.cloneCollection(lg.WithContext(grpCtx), db, &spec)
-				case "view":
-					err = c.cloneView(lg.WithContext(grpCtx), db, &spec)
-				case "timeseries":
-					lg.Warn("timeseries is not supported. skip")
-				}
-
-				if err != nil {
-					return errors.Wrapf(err, "clone %s.%s", db, spec.Name)
-				}
-
-				lg.InfoWith(fmt.Sprintf("cloned %s.%s", db, spec.Name),
-					log.Elapsed(time.Since(startedAt)))
-
-				return nil
+				return c.cloneNamespace(ctx, db, &spec)
 			})
 		}
 	}
@@ -132,10 +111,65 @@ func (c *Clone) Clone(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.err = err
-	c.finished = true
+	c.complete = true
 	c.mu.Unlock()
 
 	return err //nolint:wrapcheck
+}
+
+// getTotalSize calculates the total size of the databases to be cloned.
+func (c *Clone) getTotalSize(ctx context.Context, databases []string) (int64, error) {
+	var total atomic.Int64
+
+	eg, grpCtx := errgroup.WithContext(ctx)
+
+	for _, db := range databases {
+		eg.Go(func() error {
+			dbStats, err := topo.GetDBStats(grpCtx, c.Source, db)
+			if err != nil {
+				return errors.Wrap(err, db)
+			}
+
+			total.Add(dbStats.DataSize)
+
+			return nil
+		})
+	}
+
+	err := eg.Wait()
+
+	return total.Load(), err //nolint:wrapcheck
+}
+
+// cloneNamespace clones a specific namespace (collection or view) from the source to the target.
+func (c *Clone) cloneNamespace(
+	ctx context.Context,
+	db string,
+	spec *mongo.CollectionSpecification,
+) error {
+	lg := log.Ctx(ctx).With(log.NS(db, spec.Name))
+	lg.Infof("Cloning %s.%s", db, spec.Name)
+
+	var err error
+
+	startedAt := time.Now()
+
+	switch spec.Type {
+	case "collection":
+		err = c.cloneCollection(lg.WithContext(ctx), db, spec)
+	case "view":
+		err = c.cloneView(lg.WithContext(ctx), db, spec)
+	case "timeseries":
+		lg.Warn("Timeseries is not supported. skipping")
+	}
+
+	if err != nil {
+		return errors.Wrapf(err, "clone %s.%s", db, spec.Name)
+	}
+
+	lg.InfoWith(fmt.Sprintf("Cloned %s.%s", db, spec.Name), log.Elapsed(time.Since(startedAt)))
+
+	return nil
 }
 
 // cloneCollection clones a collection from the source to the target.
@@ -191,7 +225,7 @@ func (c *Clone) cloneCollection(
 			return errors.Wrap(err, "insert one")
 		}
 
-		c.estimatedClonedBytes.Add(int64(len(cur.Current)))
+		c.clonedSize.Add(int64(len(cur.Current)))
 	}
 
 	err = cur.Err()

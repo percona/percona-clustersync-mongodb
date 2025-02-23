@@ -2,7 +2,6 @@
 import pymongo
 import pytest
 from _base import BaseTesting
-
 from mlink import Runner
 
 

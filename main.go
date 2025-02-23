@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,78 +12,138 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/rs/zerolog"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
+// Constants for server configuration.
 const (
 	ServerReadTimeout       = 30 * time.Second
 	ServerReadHeaderTimeout = 3 * time.Second
-	MaxRequestSize          = 1024 // 1KB
+	MaxRequestSize          = config.KiB
 	ServerResponseTimeout   = 5 * time.Second
 )
 
 func main() {
 	var (
-		port         string
-		sourceURI    string
-		targetURI    string
 		logLevelFlag string
 		logJSON      bool
 		logNoColor   bool
+
+		port string
 	)
 
-	flag.StringVar(&port, "port", "2242", "port")
-	flag.StringVar(&sourceURI, "source", "", "MongoDB connection string")
-	flag.StringVar(&targetURI, "target", "", "MongoDB connection string")
-	flag.StringVar(&logLevelFlag, "log-level", "info", "log level")
-	flag.BoolVar(&logJSON, "log-json", false, "output log in JSON")
-	flag.BoolVar(&logNoColor, "no-color", false, "disable log color")
-	flag.Parse()
+	rootCmd := &cobra.Command{
+		Use:   "mongolink",
+		Short: "Percona MongoLink replication tool",
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			logLevel, err := zerolog.ParseLevel(logLevelFlag)
+			if err != nil {
+				log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
+			}
 
-	logLevel, err := zerolog.ParseLevel(logLevelFlag)
-	if err != nil {
-		log.InitGlobals(0, logJSON, true).Fatal().Msg("unknown log level")
+			lg := log.InitGlobals(logLevel, logJSON, logNoColor)
+			ctx := lg.WithContext(context.Background())
+			cmd.SetContext(ctx)
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Check if this is the root command being executed without a subcommand
+			if cmd.CalledAs() != "mongolink" || cmd.ArgsLenAtDash() != -1 {
+				return nil
+			}
+
+			port, err := cmd.Flags().GetString("port")
+			if err != nil {
+				return err //nolint:wrapcheck
+			}
+
+			sourceURI, _ := cmd.Flags().GetString("source")
+			if sourceURI == "" {
+				return errors.New("required flag --source not set")
+			}
+
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				return errors.New("required flag --target not set")
+			}
+
+			return runServer(cmd.Context(), port, sourceURI, targetURI)
+		},
 	}
 
-	lg := log.InitGlobals(logLevel, logJSON, logNoColor)
-	ctx := lg.WithContext(context.Background())
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 
-	command := flag.Arg(0)
-	switch command {
-	case "start":
-		err = requestStart(ctx, port)
-	case "finalize":
-		err = requestFinalize(ctx, port)
-	case "status":
-		err = requestStatus(ctx, port)
-	case "":
-		err = runServer(ctx, port, sourceURI, targetURI)
-	default:
-		err = errors.New("unknown command")
+	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
+	rootCmd.PersistentFlags().BoolVar(&logJSON, "log-json", false, "Output log in JSON format")
+	rootCmd.PersistentFlags().BoolVar(&logNoColor, "no-color", false, "Disable log color")
+
+	rootCmd.Flags().StringVar(&port, "port", "2242", "Port number")
+	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
+	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+
+	startCmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start the replication process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			pauseOnInitialSync, err := cmd.Flags().GetBool("pause-on-initial-sync")
+			if err != nil {
+				return err //nolint:wrapcheck
+			}
+
+			startOptions := startRequest{
+				PauseOnInitialSync: pauseOnInitialSync,
+			}
+
+			return NewClient(port).Start(cmd.Context(), startOptions)
+		},
+	}
+	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+
+	finalizeCmd := &cobra.Command{
+		Use:   "finalize",
+		Short: "Finalize the replication process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(port).Finalize(cmd.Context())
+		},
+	}
+	finalizeCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Get the status of the replication process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(port).Status(cmd.Context())
+		},
 	}
 
+	rootCmd.AddCommand(startCmd, finalizeCmd, statusCmd)
+
+	err := rootCmd.Execute()
 	if err != nil {
-		lg.Fatal().Err(err).Msg("")
+		zerolog.Ctx(context.Background()).Fatal().Err(err).Msg("")
 	}
 }
 
+// runServer starts the HTTP server with the provided configuration.
 func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 	switch {
 	case sourceURI == "" && targetURI == "":
-		return errors.New("source uri and target uri are empty")
+		return errors.New("source URI and target URI are empty")
 	case sourceURI == "":
-		return errors.New("source uri is empty")
+		return errors.New("source URI is empty")
 	case targetURI == "":
-		return errors.New("target uri is empty")
+		return errors.New("target URI is empty")
 	case sourceURI == targetURI:
-		return errors.New("source uri and target uri are identical")
+		return errors.New("source URI and target URI are identical")
 	}
 
 	addr, err := buildServerAddr(port)
@@ -104,7 +164,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 		ReadHeaderTimeout: ServerReadHeaderTimeout,
 	}
 
-	log.Ctx(ctx).Info("starting server at http://" + addr)
+	log.Ctx(ctx).Info("Starting server at http://" + addr)
 
 	err = httpServer.ListenAndServe()
 	if err != nil {
@@ -118,9 +178,9 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 	return nil
 }
 
-var errUnsupportedPortRange = errors.New("port value is outside supported range [1024 - 65535]")
+var errUnsupportedPortRange = errors.New("port value is outside the supported range [1024 - 65535]")
 
-// buildServerAddr builds the server address from the port.
+// buildServerAddr constructs the server address from the port.
 func buildServerAddr(port string) (string, error) {
 	i, err := strconv.ParseInt(port, 10, 32)
 	if err != nil {
@@ -136,9 +196,11 @@ func buildServerAddr(port string) (string, error) {
 
 // server represents the replication server.
 type server struct {
+	// sourceCluster is the MongoDB client for the source cluster.
 	sourceCluster *mongo.Client
+	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-
+	// mlink is the MongoLink instance for replication.
 	mlink *mongolink.MongoLink
 }
 
@@ -151,14 +213,14 @@ func newServer(ctx context.Context, sourceURI, targetURI string) (*server, error
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
 
-	lg.Debug("connected to source cluster")
+	lg.Debug("Connected to source cluster")
 
 	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}
 
-	lg.Debug("connected to target cluster")
+	lg.Debug("Connected to target cluster")
 
 	s := &server{
 		sourceCluster: source,
@@ -233,18 +295,19 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	options := &mongolink.StartOptions{
-		IncludeNamespaces: params.IncludeNamespaces,
-		ExcludeNamespaces: params.ExcludeNamespaces,
+		PauseOnInitialSync: params.PauseOnInitialSync,
+		IncludeNamespaces:  params.IncludeNamespaces,
+		ExcludeNamespaces:  params.ExcludeNamespaces,
 	}
 
 	err = s.mlink.Start(ctx, options)
 	if err != nil {
-		writeResponse(w, startReponse{Error: err.Error()})
+		writeResponse(w, startResponse{Error: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, startReponse{Ok: true})
+	writeResponse(w, startResponse{Ok: true})
 }
 
 // handleFinalize handles the /finalize endpoint.
@@ -270,12 +333,12 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 
 	err := s.mlink.Finalize(ctx)
 	if err != nil {
-		writeResponse(w, startReponse{Error: err.Error()})
+		writeResponse(w, finalizeResponse{Error: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, finalizeReponse{Ok: true})
+	writeResponse(w, finalizeResponse{Ok: true})
 }
 
 // handleStatus handles the /status endpoint.
@@ -291,7 +354,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replStatus, err := s.mlink.Status(ctx)
+	status, err := s.mlink.Status(ctx)
 	if err != nil {
 		writeResponse(w, statusResponse{Error: err.Error()})
 
@@ -299,44 +362,58 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	errorMessage := ""
-	if replStatus.Clone.Error != nil {
-		errorMessage = replStatus.Clone.Error.Error()
-	} else if replStatus.Error != nil {
-		errorMessage = replStatus.Error.Error()
+	if status.Clone.Error != nil {
+		errorMessage = status.Clone.Error.Error()
+	} else if status.Error != nil {
+		errorMessage = status.Error.Error()
 	}
 
 	res := statusResponse{
-		Ok:              replStatus.Error == nil,
-		Error:           errorMessage,
-		State:           replStatus.State,
-		Finalizable:     replStatus.Finalizable,
-		Info:            replStatus.Info,
-		EventsProcessed: replStatus.EventsProcessed,
+		Ok:    status.Error == nil,
+		Error: errorMessage,
+		State: status.State,
 	}
 
-	if replStatus.State != mongolink.StateIdle {
-		res.Clone = &CloneStatus{
-			EstimatedTotalBytes:  replStatus.Clone.EstimatedTotalBytes,
-			EstimatedClonedBytes: replStatus.Clone.EstimatedClonedBytes,
-			Finished:             replStatus.Clone.Finished,
+	if status.State != mongolink.StateIdle {
+		res.PauseOnInitialSync = status.PauseOnInitialSync
+		res.InitialSyncComplete = status.InitialSyncComplete
+		res.InitialSyncLagTime = status.InitialSyncLagTime
+
+		res.EventsProcessed = &status.Repl.EventsProcessed
+		res.LagTime = status.LagTime
+
+		if status.Clone.Complete {
+			res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
+				status.Repl.LastReplicatedOpTime.T,
+				status.Repl.LastReplicatedOpTime.I)
 		}
 
-		if replStatus.Clone.Finished && !replStatus.LastAppliedOpTime.IsZero() {
-			res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
-				replStatus.LastAppliedOpTime.T,
-				replStatus.LastAppliedOpTime.I)
+		res.CloneComplete = status.Clone.Complete
+		if status.Clone.Complete {
+			res.EstimatedCloneSize = &status.Clone.EstimatedTotalSize
+			res.ClonedSize = &status.Clone.CopiedSize
 		}
 	}
 
-	log.New("http:status").Unwrap().
-		Trace().
-		Bool("ok", res.Ok).
-		Err(replStatus.Error).
-		Str("state", string(res.State)).
-		Send()
+	switch {
+	case status.State == mongolink.StateRunning && !status.Clone.Complete:
+		res.Info = "Initial Sync: Cloning Data"
+	case status.State == mongolink.StateRunning && !status.InitialSyncComplete:
+		res.Info = "Initial Sync: Replicating Changes"
+	case status.State == mongolink.StateRunning:
+		res.Info = "Replicating Changes"
+	case status.State == mongolink.StateFinalizing:
+		res.Info = "Finalizing"
+	case status.State == mongolink.StateFinalized:
+		res.Info = "Finalized"
+	case status.State == mongolink.StateFailed:
+		res.Info = "Failed"
+	}
+
 	writeResponse(w, res)
 }
 
+// writeResponse writes the response as JSON to the ResponseWriter.
 func writeResponse[T any](w http.ResponseWriter, resp T) {
 	err := json.NewEncoder(w).Encode(resp)
 	if err != nil {
@@ -350,51 +427,87 @@ func writeResponse[T any](w http.ResponseWriter, resp T) {
 
 // startRequest represents the request body for the /start endpoint.
 type startRequest struct {
+	// PauseOnInitialSync indicates whether to pause after the initial sync.
+	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
+
+	// IncludeNamespaces are the namespaces to include in the replication.
 	IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
+	// ExcludeNamespaces are the namespaces to exclude from the replication.
 	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
 }
 
-// startReponse represents the response body for the /start endpoint.
-type startReponse struct {
-	Ok    bool   `json:"ok"`
+// startResponse represents the response body for the /start endpoint.
+type startResponse struct {
+	// Ok indicates if the operation was successful.
+	Ok bool `json:"ok"`
+	// Error is the error message if the operation failed.
 	Error string `json:"error,omitempty"`
 }
 
-// finalizeReponse represents the response body for the /finalize endpoint.
-type finalizeReponse struct {
-	Ok    bool   `json:"ok"`
+// finalizeResponse represents the response body for the /finalize endpoint.
+type finalizeResponse struct {
+	// Ok indicates if the operation was successful.
+	Ok bool `json:"ok"`
+	// Error is the error message if the operation failed.
 	Error string `json:"error,omitempty"`
-}
-
-// CloneStatus represents the status of the cloning process.
-type CloneStatus struct {
-	Finished             bool  `json:"finished,omitempty"`
-	EstimatedTotalBytes  int64 `json:"estimatedTotalBytes,omitempty"`
-	EstimatedClonedBytes int64 `json:"estimatedClonedBytes,omitempty"`
 }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
-	Ok    bool   `json:"ok"`
+	// Ok indicates if the operation was successful.
+	Ok bool `json:"ok"`
+	// State is the current state of the replication.
+	State mongolink.State `json:"state"`
+	// Info provides additional information about the current state.
+	Info string `json:"info,omitempty"`
+	// Error is the error message if the operation failed.
 	Error string `json:"error,omitempty"`
 
-	State             mongolink.State `json:"state"`
-	Finalizable       bool            `json:"finalizable,omitempty"`
-	LastAppliedOpTime string          `json:"lastAppliedOpTime,omitempty"`
-	Info              string          `json:"info,omitempty"`
-	EventsProcessed   int64           `json:"eventsProcessed,omitempty"`
+	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
+	// InitialSyncComplete indicates if the initial sync is complete.
+	InitialSyncComplete bool `json:"initialSyncComplete,omitempty"`
+	// InitialSyncLagTime is the lag time during the initial sync.
+	InitialSyncLagTime int64 `json:"initialSyncLagTime,omitempty"`
 
-	Clone *CloneStatus `json:"clone,omitempty"`
+	// EventsProcessed is the number of events processed.
+	EventsProcessed *int64 `json:"eventsProcessed,omitempty"`
+	// LastReplicatedOpTime is the last replicated operation time.
+	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
+	// LagTime is the current lag time.
+	LagTime *int64 `json:"lagTime,omitempty"`
+
+	// CloneComplete indicates if the cloning process is complete.
+	CloneComplete bool `json:"cloneComplete,omitempty"`
+	// EstimatedCloneSize is the estimated total size of the clone.
+	EstimatedCloneSize *int64 `json:"estimatedCloneSize,omitempty"`
+	// ClonedSize is the size of the data that has been cloned.
+	ClonedSize *int64 `json:"clonedSize,omitempty"`
 }
 
-// requestStart sends a request to start the replication process.
-func requestStart(ctx context.Context, port string) error {
-	url := fmt.Sprintf("http://localhost:%s/start", port)
+type Client struct {
+	port string
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+func NewClient(port string) Client {
+	return Client{port: port}
+}
+
+// Start sends a request to start the replication process.
+func (c Client) Start(ctx context.Context, startOptions startRequest) error {
+	url := fmt.Sprintf("http://localhost:%s/start", c.port)
+
+	payload, err := json.MarshalIndent(startOptions, "", "  ")
+	if err != nil {
+		return errors.Wrap(err, "marshal request")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return errors.Wrap(err, "build request")
 	}
+
+	log.Ctx(ctx).Debug("POST /start\n" + string(payload))
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -402,7 +515,7 @@ func requestStart(ctx context.Context, port string) error {
 	}
 	defer res.Body.Close()
 
-	var resp startReponse
+	var resp startResponse
 
 	err = json.NewDecoder(res.Body).Decode(&resp)
 	if err != nil {
@@ -420,14 +533,16 @@ func requestStart(ctx context.Context, port string) error {
 	return errors.Wrap(err, "print response")
 }
 
-// requestFinalize sends a request to finalize the replication process.
-func requestFinalize(ctx context.Context, port string) error {
-	url := fmt.Sprintf("http://localhost:%s/finalize", port)
+// Finalize sends a request to finalize the replication process.
+func (c Client) Finalize(ctx context.Context) error {
+	url := fmt.Sprintf("http://localhost:%s/finalize", c.port)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
 	if err != nil {
 		return errors.Wrap(err, "build request")
 	}
+
+	log.Ctx(ctx).Debug("POST /finalize {}")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -435,7 +550,7 @@ func requestFinalize(ctx context.Context, port string) error {
 	}
 	defer res.Body.Close()
 
-	var resp finalizeReponse
+	var resp finalizeResponse
 
 	err = json.NewDecoder(res.Body).Decode(&resp)
 	if err != nil {
@@ -453,14 +568,16 @@ func requestFinalize(ctx context.Context, port string) error {
 	return errors.Wrap(err, "print response")
 }
 
-// requestStatus sends a request to get the status of the replication process.
-func requestStatus(ctx context.Context, port string) error {
-	url := fmt.Sprintf("http://localhost:%s/status", port)
+// Status sends a request to get the status of the replication process.
+func (c Client) Status(ctx context.Context) error {
+	url := fmt.Sprintf("http://localhost:%s/status", c.port)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return errors.Wrap(err, "build request")
 	}
+
+	log.Ctx(ctx).Debug("GET /status")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

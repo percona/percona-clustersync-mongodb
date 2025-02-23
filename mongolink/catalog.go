@@ -52,6 +52,7 @@ type IndexSpecification struct {
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
 }
 
+// isClustered checks if the index is clustered.
 func (s *IndexSpecification) isClustered() bool {
 	return s.Clustered != nil && *s.Clustered
 }
@@ -185,7 +186,7 @@ func (c *Catalog) DropDatabase(ctx context.Context, m *mongo.Client, db DBName) 
 			return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
 		}
 
-		lg.Infof("dropped %s.%s", db, coll)
+		lg.Infof("Dropped %s.%s", db, coll)
 		c.deleteCollectionEntry(db, coll)
 	}
 
@@ -206,7 +207,7 @@ func (c *Catalog) CreateIndexes(
 	lg := log.Ctx(ctx)
 
 	if len(indexes) == 0 {
-		lg.Error(nil, "no indexes to create")
+		lg.Error(nil, "No indexes to create")
 
 		return nil
 	}
@@ -223,13 +224,13 @@ func (c *Catalog) CreateIndexes(
 			idxCopy := *index
 			idxCopy.Unique = nil
 			index = &idxCopy
-			lg.Info("create unique index as non-unique: " + index.Name)
+			lg.Info("Create unique index as non-unique: " + index.Name)
 
 		case index.PrepareUnique != nil && *index.PrepareUnique:
 			idxCopy := *index
 			idxCopy.PrepareUnique = nil
 			index = &idxCopy
-			lg.Info("create prepareUnique index as non-unique: " + index.Name)
+			lg.Info("Create prepareUnique index as non-unique: " + index.Name)
 		}
 
 		if index.ExpireAfterSeconds != nil {
@@ -237,14 +238,14 @@ func (c *Catalog) CreateIndexes(
 			idxCopy := *index
 			idxCopy.ExpireAfterSeconds = &maxDuration
 			index = &idxCopy
-			lg.Info("create TTL index with modified expireAfterSeconds value: " + index.Name)
+			lg.Info("Create TTL index with modified expireAfterSeconds value: " + index.Name)
 		}
 
 		if index.Hidden != nil && *index.Hidden {
 			idxCopy := *index
 			idxCopy.Hidden = nil
 			index = &idxCopy
-			lg.Info("create hidden index as unhidden: " + index.Name)
+			lg.Info("Create hidden index as unhidden: " + index.Name)
 		}
 
 		idxs = append(idxs, index)
@@ -411,7 +412,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 		for coll, collEntry := range dbEntry {
 			for _, index := range collEntry {
 				if index.isClustered() {
-					lg.Warn("clustered index with ttl is not supported")
+					lg.Warn("Clustered index with TTL is not supported")
 
 					continue
 				}
@@ -419,14 +420,14 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 				// restore properties
 				switch { // unique and prepareUnique are mutually exclusive.
 				case index.Unique != nil && *index.Unique:
-					lg.Info("convert index to prepareUnique: " + index.Name)
+					lg.Info("Convert index to prepareUnique: " + index.Name)
 
 					err := modifyIndexProp(ctx, m, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
 						return errors.Wrap(err, "convert to unique: prepareUnique: "+index.Name)
 					}
 
-					lg.Info("convert prepareUnique index to unique: " + index.Name)
+					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err = modifyIndexProp(ctx, m, db, coll, index.Name, "unique", true)
 					if err != nil {
@@ -434,7 +435,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 					}
 
 				case index.PrepareUnique != nil && *index.PrepareUnique:
-					lg.Info("convert prepareUnique index to unique: " + index.Name)
+					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err := modifyIndexProp(ctx, m, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
@@ -443,7 +444,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 				}
 
 				if index.ExpireAfterSeconds != nil {
-					lg.Info("modify index expireAfterSeconds: " + index.Name)
+					lg.Info("Modify index expireAfterSeconds: " + index.Name)
 
 					err := modifyIndexProp(ctx,
 						m, db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
@@ -453,7 +454,7 @@ func (c *Catalog) FinalizeIndexes(ctx context.Context, m *mongo.Client) error {
 				}
 
 				if index.Hidden != nil {
-					lg.Info("modify index hidden: " + index.Name)
+					lg.Info("Modify index hidden: " + index.Name)
 
 					err := modifyIndexProp(ctx, m, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {

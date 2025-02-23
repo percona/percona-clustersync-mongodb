@@ -2,7 +2,6 @@
 import threading
 
 from _base import BaseTesting
-
 from mlink import Runner
 
 
@@ -50,7 +49,7 @@ class TestTransaction(BaseTesting):
 
                 mlink.start()
                 self.source["db_1"]["coll_1"].insert_one({"i": 3})
-                mlink.wait_for_finalizable()
+                mlink.wait_for_initial_sync()
 
                 self.source["db_1"]["coll_1"].insert_one({"i": 4, "trx": i}, session=sess)
                 self.source["db_1"]["coll_1"].insert_one({"i": 5})
@@ -65,7 +64,7 @@ class TestTransaction(BaseTesting):
     def test_mixed_with_non_trx_ops_aborted(self):
         self.drop_all_database()
 
-        mlink = self.perform(None)
+        mlink = self.perform(Runner.Phase.MANUAL)
         with self.source.start_session() as sess:
             for t in range(2):
                 sess.start_transaction()
@@ -74,7 +73,7 @@ class TestTransaction(BaseTesting):
 
                 mlink.start()
                 self.source["db_1"]["coll_1"].insert_one({"i": 2})
-                mlink.wait_for_finalizable()
+                mlink.wait_for_initial_sync()
 
                 self.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": t}, session=sess)
                 self.source["db_1"]["coll_1"].insert_one({"i": 3})

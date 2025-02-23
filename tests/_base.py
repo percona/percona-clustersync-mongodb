@@ -4,10 +4,9 @@ from typing import List
 
 import bson
 import pytest
+from mlink import MongoLink, Runner
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
-
-from mlink import MongoLink, Runner
 
 
 @pytest.mark.usefixtures("cls_source", "cls_target", "cls_mlink")
@@ -20,7 +19,7 @@ class BaseTesting:
 
     def perform(self, phase: Runner.Phase):
         """Perform the MongoLink operation for the given phase."""
-        return self.perform_with_options(phase, {})
+        return Runner(self.source, self.mlink, phase, {})
 
     def perform_with_options(
         self,
@@ -31,9 +30,10 @@ class BaseTesting:
         """Perform the MongoLink operation with the given options."""
         mlink_options = {}
         if include_ns:
-            mlink_options["includeNamespaces"] = include_ns
+            mlink_options["include_namespaces"] = include_ns
         if exclude_ns:
-            mlink_options["excludeNamespaces"] = exclude_ns
+            mlink_options["exclude_namespaces"] = exclude_ns
+
         return Runner(self.source, self.mlink, phase, mlink_options)
 
     @classmethod
@@ -82,7 +82,7 @@ class BaseTesting:
         """List all databases in the given MongoClient."""
         rv = set()
         for name in client.list_database_names():
-            if name not in ("admin", "config", "local"):
+            if name not in ("admin", "config", "local", "percona_mongolink"):
                 rv.add(name)
         return rv
 

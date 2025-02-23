@@ -47,7 +47,7 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 	err = conn.Ping(ctx, nil)
 	if err != nil {
 		if err1 := conn.Disconnect(ctx); err1 != nil {
-			log.Ctx(ctx).Warn("disconnect: " + err1.Error())
+			log.Ctx(ctx).Warn("Disconnect: " + err1.Error())
 		}
 
 		return nil, errors.Wrap(err, "ping")
