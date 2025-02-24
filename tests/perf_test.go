@@ -230,7 +230,6 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 
 	if collStats.Count == 0 {
 		// b.Log("empty collection")
-
 		return 0, nil
 	}
 
