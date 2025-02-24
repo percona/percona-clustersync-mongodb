@@ -20,16 +20,16 @@ import (
 type State string
 
 const (
-	// FailedState indicates that the mongolink has failed.
-	FailedState = "failed"
-	// IdleState indicates that the mongolink is idle.
-	IdleState = "idle"
-	// RunningState indicates that the mongolink is running.
-	RunningState = "running"
-	// FinalizingState indicates that the mongolink is finalizing.
-	FinalizingState = "finalizing"
-	// FinalizedState indicates that the mongolink has been finalized.
-	FinalizedState = "finalized"
+	// StateFailed indicates that the mongolink has failed.
+	StateFailed = "failed"
+	// StateIdle indicates that the mongolink is idle.
+	StateIdle = "idle"
+	// StateRunning indicates that the mongolink is running.
+	StateRunning = "running"
+	// StateFinalizing indicates that the mongolink is finalizing.
+	StateFinalizing = "finalizing"
+	// StateFinalized indicates that the mongolink has been finalized.
+	StateFinalized = "finalized"
 )
 
 // Status represents the status of the mongolink.
@@ -67,7 +67,7 @@ func New(source, target *mongo.Client) *MongoLink {
 	return &MongoLink{
 		source: source,
 		target: target,
-		state:  IdleState,
+		state:  StateIdle,
 	}
 }
 
@@ -84,7 +84,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 
 	lg := log.New("mongolink")
 
-	if ml.state != IdleState && ml.state != FinalizedState && ml.state != FailedState {
+	if ml.state != StateIdle && ml.state != StateFinalized && ml.state != StateFailed {
 		return errors.New(string(ml.state))
 	}
 
@@ -97,7 +97,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.repl = nil
 	ml.cloneStartedAtSourceTS = bson.Timestamp{}
 	ml.cloneFinishedAtSourceTS = bson.Timestamp{}
-	ml.state = RunningState
+	ml.state = StateRunning
 
 	ml.catalog = NewCatalog()
 	ml.clone = &Clone{
@@ -121,7 +121,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 		err := ml.run(lg.WithContext(ctx))
 		if err != nil {
 			ml.mu.Lock()
-			ml.state = FailedState
+			ml.state = StateFailed
 			ml.mu.Unlock()
 
 			lg.Error(err, "cluster replication has failed")
@@ -130,7 +130,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 		}
 
 		ml.mu.Lock()
-		ml.state = FinalizedState
+		ml.state = StateFinalized
 		ml.mu.Unlock()
 	}()
 
@@ -251,7 +251,7 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 	ml.mu.Lock()
 	defer ml.mu.Unlock()
 
-	if ml.state != RunningState {
+	if ml.state != StateRunning {
 		return errors.New(string(ml.state))
 	}
 
@@ -278,7 +278,7 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 	}
 
 	ml.repl.Pause()
-	ml.state = FinalizingState
+	ml.state = StateFinalizing
 
 	log.New("mongolink").Info("finalizing")
 
@@ -292,7 +292,7 @@ func (ml *MongoLink) Status(_ context.Context) (*Status, error) {
 
 	s := &Status{State: ml.state}
 
-	if ml.state == IdleState {
+	if ml.state == StateIdle {
 		return s, nil
 	}
 
@@ -309,11 +309,11 @@ func (ml *MongoLink) Status(_ context.Context) (*Status, error) {
 	}
 
 	switch {
-	case ml.state == IdleState:
+	case ml.state == StateIdle:
 		s.Info = "waiting for start"
-	case ml.state == RunningState && !cloneStatus.Finished:
+	case ml.state == StateRunning && !cloneStatus.Finished:
 		s.Info = "cloning data"
-	case ml.state == RunningState && !replStatus.LastAppliedOpTime.IsZero():
+	case ml.state == StateRunning && !replStatus.LastAppliedOpTime.IsZero():
 		s.Info = "replicating changes"
 	}
 

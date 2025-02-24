@@ -314,7 +314,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		EventsProcessed: replStatus.EventsProcessed,
 	}
 
-	if replStatus.State != mongolink.IdleState {
+	if replStatus.State != mongolink.StateIdle {
 		res.Clone = &CloneStatus{
 			EstimatedTotalBytes:  replStatus.Clone.EstimatedTotalBytes,
 			EstimatedClonedBytes: replStatus.Clone.EstimatedClonedBytes,
