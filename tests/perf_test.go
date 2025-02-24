@@ -14,7 +14,6 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
@@ -231,7 +230,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	}
 
 	if collStats.Count == 0 {
-		log.Ctx(ctx).Debug("empty collection")
+		b.Log("empty collection")
 
 		return 0, nil
 	}
