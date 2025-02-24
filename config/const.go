@@ -64,6 +64,9 @@ const MaxMessageSizeBytes = 48 * MB
 // db.hello().maxWriteBatchSize => 100000.
 const MaxWriteBatchSize = 100_000
 
+// MaxCollectionCloneBatchSize is the maximum size of a collection clone batch.
+const MaxCollectionCloneBatchSize = 10 * MaxBSONSize
+
 // Size constants for data storage.
 const (
 	KB = 1000
