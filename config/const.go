@@ -38,7 +38,7 @@ const (
 )
 
 // CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning process.
-const CloneMaxWriteSizePerCollection = MaxMessageSizeBytes - KB
+const CloneMaxWriteSizePerCollection = 100 * MB
 
 // MaxBSONSize is hardcoded maximum BSON document size. 16 mebibytes.
 //

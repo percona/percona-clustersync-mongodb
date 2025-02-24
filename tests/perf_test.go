@@ -219,9 +219,8 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 // copyDocuments copies documents from the source to the target MongoDB collection.
 func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) (int64, error) {
 	b.Helper()
-	ctx := b.Context()
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
 	collStats, err := topo.GetCollStats(ctx, source, db, coll)
@@ -230,7 +229,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	}
 
 	if collStats.Count == 0 {
-		b.Log("empty collection")
+		// b.Log("empty collection")
 
 		return 0, nil
 	}
@@ -247,8 +246,8 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	go func() {
 		defer close(doneSig)
 
-		b.Logf("avg_doc_size=%d max_read_count=%d max_write_size=%d max_write_count=%d",
-			averageDocumentSize, maxReadCount, maxWriteSize, maxWriteCount)
+		// b.Logf("avg_doc_size=%d max_read_count=%d max_write_size=%d max_write_count=%d",
+		// 	averageDocumentSize, maxReadCount, maxWriteSize, maxWriteCount)
 
 		targetCollection := target.Database(db).Collection(coll)
 		insertOptions := options.InsertMany().SetOrdered(false)
@@ -266,7 +265,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 					return
 				}
 
-				b.Logf("inserted_count=%d inserted_size=%d", len(batch), batchSize)
+				// b.Logf("inserted_count=%d inserted_size=%d", len(batch), batchSize)
 
 				totalCopiedBytes += int64(batchSize)
 
@@ -288,7 +287,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 				return
 			}
 
-			b.Logf("inserted %d documents [size in bytes: %d]", len(batch), batchSize)
+			// b.Logf("inserted_count=%d inserted_size=%d", len(batch), batchSize)
 
 			totalCopiedBytes += int64(batchSize)
 		}
