@@ -354,29 +354,20 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.mlink.Status(ctx)
-	if err != nil {
-		writeResponse(w, statusResponse{Error: err.Error()})
-
-		return
-	}
-
-	errorMessage := ""
-	if status.Clone.Error != nil {
-		errorMessage = status.Clone.Error.Error()
-	} else if status.Error != nil {
-		errorMessage = status.Error.Error()
-	}
+	status := s.mlink.Status(ctx)
 
 	res := statusResponse{
 		Ok:    status.Error == nil,
-		Error: errorMessage,
 		State: status.State,
+	}
+
+	if err := status.Error; err != nil {
+		res.Error = err.Error()
 	}
 
 	if status.State != mongolink.StateIdle {
 		res.EventsProcessed = &status.Repl.EventsProcessed
-		res.LagTime = status.LagTime
+		res.LagTime = status.TotalLagTime
 
 		if !status.Repl.LastReplicatedOpTime.IsZero() {
 			res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
@@ -385,9 +376,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 
 		res.InitialSync = &statusInitialSyncResponse{
-			PauseOnInitialSync:   status.PauseOnInitialSync,
-			InitialSyncCompleted: status.InitialSyncCompleted,
-			InitialSyncLagTime:   status.InitialSyncLagTime,
+			PauseOnInitialSync: status.PauseOnInitialSync,
+			Completed:          status.InitialSyncCompleted,
+			LagTime:            status.InitialSyncLagTime,
 		}
 
 		res.InitialSync.CloneCompleted = status.Clone.Completed
@@ -470,16 +461,19 @@ type statusResponse struct {
 	// LastReplicatedOpTime is the last replicated operation time.
 	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
 
+	// InitialSync contains the initial sync status details.
 	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
 }
 
+// statusInitialSyncResponse represents the initial sync status in the /status response.
 type statusInitialSyncResponse struct {
 	// PauseOnInitialSync indicates if the replication is paused on initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
-	// InitialSyncCompleted indicates if the initial sync is completed.
-	InitialSyncCompleted bool `json:"completed"`
-	// InitialSyncLagTime is the lag time in logical seconds until the initial sync completed.
-	InitialSyncLagTime int64 `json:"lagTime,omitempty"`
+
+	// Completed indicates if the initial sync is completed.
+	Completed bool `json:"completed"`
+	// LagTime is the lag time in logical seconds until the initial sync completed.
+	LagTime *int64 `json:"lagTime,omitempty"`
 
 	// CloneCompleted indicates if the cloning process is completed.
 	CloneCompleted bool `json:"cloneCompleted"`

@@ -220,7 +220,7 @@ process, including its progress, lag, and event processing details.
 
 - `initialSync.pauseOnInitialSync` (optional): indicates if the replication is paused on initial sync.
 - `initialSync.completed`: indicates if the initial sync is completed.
-- `initialSync.lagTime` (optional): the lag time in logical seconds until the initial sync completed.
+- `initialSync.lagTime`: the lag time in logical seconds until the initial sync completed.
 
 - `initialSync.cloneCompleted`: indicates if the cloning process is completed.
 - `initialSync.estimatedCloneSize` (optional): the estimated total size of the clone.

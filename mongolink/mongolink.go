@@ -34,17 +34,24 @@ const (
 
 // Status represents the status of the MongoLink.
 type Status struct {
-	State State // Current state of the MongoLink
+	// State is the current state of the MongoLink.
+	State State
+	// Error is the error message if the operation failed.
 	Error error
 
-	PauseOnInitialSync   bool
-	InitialSyncCompleted bool // Indicates if the process can be finalized
-	InitialSyncLagTime   int64
+	// TotalLagTime is the current lag time in logical seconds between source and target clusters.
+	TotalLagTime *int64
+	// InitialSyncLagTime is the lag time during the initial sync.
+	InitialSyncLagTime *int64
+	// InitialSyncCompleted indicates if the initial sync is completed.
+	InitialSyncCompleted bool
+	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	PauseOnInitialSync bool
 
-	LagTime *int64
-
-	Repl  ReplStatus
-	Clone CloneStatus // Status of the cloning process
+	// Repl is the status of the replication process.
+	Repl ReplStatus
+	// Clone is the status of the cloning process.
+	Clone CloneStatus
 }
 
 // MongoLink manages the replication process.
@@ -303,45 +310,21 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 }
 
 // Status returns the current status of the MongoLink.
-func (ml *MongoLink) Status(ctx context.Context) (*Status, error) {
+func (ml *MongoLink) Status(ctx context.Context) *Status {
 	ml.mu.Lock()
 	defer ml.mu.Unlock()
 
-	s := &Status{
-		State:              ml.state,
-		PauseOnInitialSync: ml.pauseOnInitialSync,
-	}
-
 	if ml.state == StateIdle {
-		return s, nil
+		return &Status{State: StateIdle}
 	}
 
-	sourceTime, err := topo.ClusterTime(ctx, ml.source)
-	if err != nil {
-		// Do not block status if source cluster is lost
-		log.New("mongolink").Error(err, "Status: get source cluster time")
-	}
+	s := &Status{
+		State: ml.state,
 
-	s.Clone = ml.clone.Status()
-	s.Repl = ml.repl.Status()
+		Clone: ml.clone.Status(),
+		Repl:  ml.repl.Status(),
 
-	if s.Clone.Completed && !s.Repl.LastReplicatedOpTime.IsZero() {
-		s.InitialSyncCompleted = !s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS)
-		if !s.InitialSyncCompleted {
-			var lag int64
-			if !s.Repl.LastReplicatedOpTime.IsZero() {
-				lag = int64(ml.cloneFinishedAtTS.T) - int64(s.Repl.LastReplicatedOpTime.T)
-			} else { // replication has not processed its first operation
-				lag = int64(ml.cloneFinishedAtTS.T) - int64(ml.cloneStartedAtTS.T)
-			}
-
-			s.InitialSyncLagTime = lag
-		}
-	}
-
-	if !s.Repl.LastReplicatedOpTime.IsZero() && !sourceTime.IsZero() {
-		lag := max(int64(sourceTime.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
-		s.LagTime = &lag
+		PauseOnInitialSync: ml.pauseOnInitialSync,
 	}
 
 	switch {
@@ -351,5 +334,52 @@ func (ml *MongoLink) Status(ctx context.Context) (*Status, error) {
 		s.Error = errors.Wrap(s.Clone.Error, "Clone")
 	}
 
-	return s, nil
+	switch {
+	case ml.state == StateFinalizing || ml.state == StateFinalized:
+		zero := int64(0)
+		s.TotalLagTime = &zero
+		s.InitialSyncLagTime = &zero
+		s.InitialSyncCompleted = true
+
+		return s
+
+	case ml.state == StateFailed:
+		return s
+	}
+
+	sourceTime, err := topo.ClusterTime(ctx, ml.source)
+	if err != nil {
+		// Do not block status if source cluster is lost
+		log.New("mongolink").Error(err, "Status: get source cluster time")
+	} else {
+		switch {
+		case !s.Repl.LastReplicatedOpTime.IsZero():
+			// max() in case, sourceTime and more have already been processed
+			totalLag := max(int64(sourceTime.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
+			s.TotalLagTime = &totalLag
+		case !ml.cloneStartedAtTS.IsZero():
+			totalLag := int64(sourceTime.T) - int64(ml.cloneStartedAtTS.T)
+			s.TotalLagTime = &totalLag
+		}
+	}
+
+	switch {
+	case ml.cloneStartedAtTS.IsZero():
+		s.InitialSyncLagTime = s.TotalLagTime
+
+	case s.Repl.LastReplicatedOpTime.IsZero():
+		intialSyncLag := int64(ml.cloneFinishedAtTS.T) - int64(ml.cloneStartedAtTS.T)
+		s.InitialSyncLagTime = &intialSyncLag
+
+	case s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS):
+		intialSyncLag := int64(ml.cloneFinishedAtTS.T) - int64(s.Repl.LastReplicatedOpTime.T)
+		s.InitialSyncLagTime = &intialSyncLag
+
+	default:
+		zero := int64(0)
+		s.InitialSyncLagTime = &zero
+		s.InitialSyncCompleted = true
+	}
+
+	return s
 }
