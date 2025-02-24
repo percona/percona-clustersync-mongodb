@@ -375,30 +375,30 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status.State != mongolink.StateIdle {
-		res.PauseOnInitialSync = status.PauseOnInitialSync
-		res.InitialSyncComplete = status.InitialSyncComplete
-		res.InitialSyncLagTime = status.InitialSyncLagTime
-
 		res.EventsProcessed = &status.Repl.EventsProcessed
 		res.LagTime = status.LagTime
 
-		if status.Clone.Complete {
+		if !status.Repl.LastReplicatedOpTime.IsZero() {
 			res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
 				status.Repl.LastReplicatedOpTime.T,
 				status.Repl.LastReplicatedOpTime.I)
 		}
 
-		res.CloneComplete = status.Clone.Complete
-		if status.Clone.Complete {
-			res.EstimatedCloneSize = &status.Clone.EstimatedTotalSize
-			res.ClonedSize = &status.Clone.CopiedSize
+		res.InitialSync = &statusInitialSyncResponse{
+			PauseOnInitialSync:   status.PauseOnInitialSync,
+			InitialSyncCompleted: status.InitialSyncCompleted,
+			InitialSyncLagTime:   status.InitialSyncLagTime,
 		}
+
+		res.InitialSync.CloneCompleted = status.Clone.Completed
+		res.InitialSync.EstimatedCloneSize = &status.Clone.EstimatedTotalSize
+		res.InitialSync.ClonedSize = status.Clone.CopiedSize
 	}
 
 	switch {
-	case status.State == mongolink.StateRunning && !status.Clone.Complete:
+	case status.State == mongolink.StateRunning && !status.Clone.Completed:
 		res.Info = "Initial Sync: Cloning Data"
-	case status.State == mongolink.StateRunning && !status.InitialSyncComplete:
+	case status.State == mongolink.StateRunning && !status.InitialSyncCompleted:
 		res.Info = "Initial Sync: Replicating Changes"
 	case status.State == mongolink.StateRunning:
 		res.Info = "Replicating Changes"
@@ -463,26 +463,30 @@ type statusResponse struct {
 	// Error is the error message if the operation failed.
 	Error string `json:"error,omitempty"`
 
-	// PauseOnInitialSync indicates if the replication is paused on initial sync.
-	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
-	// InitialSyncComplete indicates if the initial sync is complete.
-	InitialSyncComplete bool `json:"initialSyncComplete,omitempty"`
-	// InitialSyncLagTime is the lag time during the initial sync.
-	InitialSyncLagTime int64 `json:"initialSyncLagTime,omitempty"`
-
+	// LagTime is the current lag time in logical seconds.
+	LagTime *int64 `json:"lagTime,omitempty"`
 	// EventsProcessed is the number of events processed.
 	EventsProcessed *int64 `json:"eventsProcessed,omitempty"`
 	// LastReplicatedOpTime is the last replicated operation time.
 	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
-	// LagTime is the current lag time.
-	LagTime *int64 `json:"lagTime,omitempty"`
 
-	// CloneComplete indicates if the cloning process is complete.
-	CloneComplete bool `json:"cloneComplete,omitempty"`
+	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
+}
+
+type statusInitialSyncResponse struct {
+	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
+	// InitialSyncCompleted indicates if the initial sync is completed.
+	InitialSyncCompleted bool `json:"completed"`
+	// InitialSyncLagTime is the lag time in logical seconds until the initial sync completed.
+	InitialSyncLagTime int64 `json:"lagTime,omitempty"`
+
+	// CloneCompleted indicates if the cloning process is completed.
+	CloneCompleted bool `json:"cloneCompleted"`
 	// EstimatedCloneSize is the estimated total size of the clone.
 	EstimatedCloneSize *int64 `json:"estimatedCloneSize,omitempty"`
 	// ClonedSize is the size of the data that has been cloned.
-	ClonedSize *int64 `json:"clonedSize,omitempty"`
+	ClonedSize int64 `json:"clonedSize"`
 }
 
 type Client struct {

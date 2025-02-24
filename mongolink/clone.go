@@ -30,8 +30,8 @@ type Clone struct {
 	totalSize  int64        // Estimated total bytes to be cloned
 	clonedSize atomic.Int64 // Bytes cloned so far
 
-	err      error // Error encountered during the cloning process
-	complete bool  // Indicates if the cloning process is finished
+	err       error // Error encountered during the cloning process
+	completed bool  // Indicates if the cloning process is completed
 
 	mu sync.Mutex
 }
@@ -41,8 +41,8 @@ type CloneStatus struct {
 	EstimatedTotalSize int64 // Estimated total bytes to be copied
 	CopiedSize         int64 // Bytes copied so far
 
-	Error    error // Error encountered during the cloning process
-	Complete bool  // Indicates if the cloning process is completed
+	Error     error // Error encountered during the cloning process
+	Completed bool  // Indicates if the cloning process is completed
 }
 
 // Status returns the current status of the cloning process.
@@ -54,8 +54,8 @@ func (c *Clone) Status() CloneStatus {
 		EstimatedTotalSize: c.totalSize,
 		CopiedSize:         c.clonedSize.Load(),
 
-		Error:    c.err,
-		Complete: c.complete,
+		Error:     c.err,
+		Completed: c.completed,
 	}
 }
 
@@ -111,7 +111,7 @@ func (c *Clone) Clone(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.err = err
-	c.complete = true
+	c.completed = true
 	c.mu.Unlock()
 
 	return err //nolint:wrapcheck

@@ -209,22 +209,22 @@ process, including its progress, lag, and event processing details.
 
 #### Response
 
-- `ok`: Ok indicates if the operation was successful.
-- `state`: State is the current state of the replication.
-- `info` (optional): Info provides additional information about the current state.
-- `error` (optional): Error is the error message if the operation failed.
+- `ok`: indicates if the operation was successful.
+- `state`: the current state of the replication.
+- `info` (optional): provides additional information about the current state.
+- `error` (optional): the error message if the operation failed.
 
-- `pauseOnInitialSync` (optional): PauseOnInitialSync indicates if the replication is paused on initial sync.
-- `initialSyncComplete` (optional): InitialSyncComplete indicates if the initial sync is complete.
-- `initialSyncLagTime` (optional): InitialSyncLagTime is the lag time during the initial sync.
+- `lagTime` (optional): the current lag time in logical seconds between source and target clusters.
+- `eventsProcessed` (optional): the number of events processed.
+- `lastReplicatedOpTime` (optional): the last replicated operation time.
 
-- `eventsProcessed` (optional): EventsProcessed is the number of events processed.
-- `lastReplicatedOpTime` (optional): LastReplicatedOpTime is the last replicated operation time.
-- `lagTime` (optional): LagTime is the current lag time.
+- `initialSync.pauseOnInitialSync` (optional): indicates if the replication is paused on initial sync.
+- `initialSync.completed`: indicates if the initial sync is completed.
+- `initialSync.lagTime` (optional): the lag time in logical seconds until the initial sync completed.
 
-- `cloneComplete` (optional): CloneComplete indicates if the cloning process is complete.
-- `estimatedCloneSize` (optional): EstimatedCloneSize is the estimated total size of the clone.
-- `clonedSize` (optional): ClonedSize is the size of the data that has been cloned.
+- `initialSync.cloneCompleted`: indicates if the cloning process is completed.
+- `initialSync.estimatedCloneSize` (optional): the estimated total size of the clone.
+- `initialSync.clonedSize` (optional): the size of the data that has been cloned.
 
 Example:
 
@@ -232,15 +232,20 @@ Example:
 {
   "ok": true,
   "state": "running",
-  "info": "replicating changes",
-  "initialSyncComplete": false,
-  "initialSyncLagTime": 5,
+  "info": "Initial Sync",
+
+  "lagTime": 22,
   "eventsProcessed": 5000,
   "lastReplicatedOpTime": "1740335200.5",
-  "lagTime": 2,
-  "cloneComplete": false,
-  "estimatedCloneSize": 5000000000,
-  "clonedSize": 2500000000
+
+  "initialSync": {
+    "completed": false,
+    "lagTime": 5,
+
+    "cloneCompleted": false,
+    "estimatedCloneSize": 5000000000,
+    "clonedSize": 2500000000
+  }
 }
 ```
 

@@ -37,9 +37,9 @@ type Status struct {
 	State State // Current state of the MongoLink
 	Error error
 
-	PauseOnInitialSync  bool
-	InitialSyncComplete bool // Indicates if the process can be finalized
-	InitialSyncLagTime  int64
+	PauseOnInitialSync   bool
+	InitialSyncCompleted bool // Indicates if the process can be finalized
+	InitialSyncLagTime   int64
 
 	LagTime *int64
 
@@ -186,7 +186,7 @@ func (ml *MongoLink) run(ctx context.Context) error {
 
 	lg.InfoWith("Data clone is completed",
 		log.Elapsed(cloneFinishedAt.Sub(cloneStartedAt)))
-	lg.Infof("Remaining logical seconds until Initial Sync complete: %d",
+	lg.Infof("Remaining logical seconds until Initial Sync completed: %d",
 		cloneFinishedAtSourceTS.T-cloneStartedAtSourceTS.T)
 	lg.Infof("Starting Change Replication since %d.%d source cluster time",
 		cloneStartedAtSourceTS.T, cloneStartedAtSourceTS.I)
@@ -232,7 +232,7 @@ func (ml *MongoLink) run(ctx context.Context) error {
 				return
 			}
 
-			lg.Debugf("Remaining logical seconds until Initial Sync complete: %d",
+			lg.Debugf("Remaining logical seconds until Initial Sync completed: %d",
 				cloneFinishedAtSourceTS.T-replStatus.LastReplicatedOpTime.T)
 		}
 	}()
@@ -277,7 +277,7 @@ func (ml *MongoLink) Finalize(_ context.Context) error {
 		return errors.Wrap(cloneStatus.Error, "clone failed")
 	}
 
-	if !cloneStatus.Complete {
+	if !cloneStatus.Completed {
 		return errors.New("clone has not been completed")
 	}
 
@@ -307,7 +307,10 @@ func (ml *MongoLink) Status(ctx context.Context) (*Status, error) {
 	ml.mu.Lock()
 	defer ml.mu.Unlock()
 
-	s := &Status{State: ml.state}
+	s := &Status{
+		State:              ml.state,
+		PauseOnInitialSync: ml.pauseOnInitialSync,
+	}
 
 	if ml.state == StateIdle {
 		return s, nil
@@ -322,11 +325,9 @@ func (ml *MongoLink) Status(ctx context.Context) (*Status, error) {
 	s.Clone = ml.clone.Status()
 	s.Repl = ml.repl.Status()
 
-	s.PauseOnInitialSync = ml.pauseOnInitialSync
-
-	if s.Clone.Complete && !s.Repl.LastReplicatedOpTime.IsZero() {
-		s.InitialSyncComplete = !s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS)
-		if !s.InitialSyncComplete {
+	if s.Clone.Completed && !s.Repl.LastReplicatedOpTime.IsZero() {
+		s.InitialSyncCompleted = !s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS)
+		if !s.InitialSyncCompleted {
 			var lag int64
 			if !s.Repl.LastReplicatedOpTime.IsZero() {
 				lag = int64(ml.cloneFinishedAtTS.T) - int64(s.Repl.LastReplicatedOpTime.T)

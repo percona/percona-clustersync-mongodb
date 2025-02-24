@@ -186,13 +186,13 @@ class Runner:
     def wait_for_initial_sync(self, timeout=10):
         """Wait for the MongoLink service to be finalizable."""
         status = self.mlink.status()
-        if status.get("initialSyncComplete"):
+        if status.get("initialSync", {}).get("completed"):
             return
 
         assert status["state"] == MongoLink.State.RUNNING, status
 
         for _ in range(timeout * 10):
-            if status.get("initialSyncComplete"):
+            if status.get("initialSync", {}).get("completed"):
                 return
 
             time.sleep(0.1)
