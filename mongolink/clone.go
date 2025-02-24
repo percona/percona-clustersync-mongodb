@@ -230,11 +230,12 @@ func (c *Clone) cloneCollection(
 	batchSize := 0
 
 	targetColl := c.Target.Database(db).Collection(spec.Name)
+
 	for cur.Next(ctx) {
 		if batchSize >= config.MaxCollectionCloneBatchSize {
 			_, err = targetColl.InsertMany(ctx, docs)
 			if err != nil {
-				return errors.Wrap(err, "insert one")
+				return errors.Wrap(err, "insert documents")
 			}
 
 			c.clonedSize.Add(int64(batchSize))
@@ -255,6 +256,17 @@ func (c *Clone) cloneCollection(
 	err = cur.Err()
 	if err != nil {
 		return errors.Wrapf(err, "cloning failed %s.%s", db, spec.Name)
+	}
+
+	if len(docs) > 0 {
+		_, err = targetColl.InsertMany(ctx, docs)
+		if err != nil {
+			return errors.Wrap(err, "insert documents")
+		}
+
+		c.clonedSize.Add(int64(batchSize))
+		lg.Debugf("cloning collection: %s.%s, inserted last docs batch: %d, batch size: %d",
+			db, spec.Name, batch, batchSize)
 	}
 
 	return nil
