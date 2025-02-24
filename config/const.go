@@ -9,10 +9,8 @@ import (
 // MongoDB logging configuration constants.
 const (
 	// MongoLogEnabled indicates if MongoDB logging is enabled.
-	// Set to true to enable logging, false to disable.
 	MongoLogEnabled = false
 	// MongoLogComponent specifies the MongoDB log component.
-	// Use options.LogComponentAll to log all components.
 	MongoLogComponent = options.LogComponentAll
 	// MongoLogLevel specifies the MongoDB log level.
 	MongoLogLevel = options.LogLevelInfo

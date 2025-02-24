@@ -105,8 +105,8 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 
 	ml.repl = nil
-	ml.cloneStartedAtSourceTS = bson.Timestamp{}
-	ml.cloneFinishedAtSourceTS = bson.Timestamp{}
+	ml.cloneStartedAtTS = bson.Timestamp{}
+	ml.cloneFinishedAtTS = bson.Timestamp{}
 	ml.state = StateRunning
 
 	ml.catalog = NewCatalog()
