@@ -84,6 +84,8 @@ func (c *Clone) Clone(ctx context.Context) error {
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.SetLimit(runtime.GOMAXPROCS(0))
 
+	startTtime := time.Now()
+
 	for _, db := range databases {
 		colls, err := c.Source.Database(db).ListCollectionSpecifications(grpCtx, bson.D{})
 		if err != nil {
@@ -108,6 +110,8 @@ func (c *Clone) Clone(ctx context.Context) error {
 	}
 
 	err = grp.Wait()
+
+	log.Infof(ctx, "cloning finished in %s", time.Since(startTtime))
 
 	c.mu.Lock()
 	c.err = err
