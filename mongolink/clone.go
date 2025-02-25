@@ -221,7 +221,8 @@ func (c *Clone) cloneCollection(
 	}
 	defer cur.Close(ctx)
 
-	docs := make([]interface{}, 0, 1000)
+	const initialBufferSize = 1000
+	docs := make([]any, 0, initialBufferSize)
 	batch := 0
 	batchSize := 0
 
