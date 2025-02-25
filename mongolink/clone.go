@@ -242,8 +242,6 @@ func (c *Clone) cloneCollection(
 			docs = docs[:0]
 			batch++
 			batchSize = 0
-
-			continue
 		}
 
 		docs = append(docs, cur.Current)
