@@ -229,7 +229,7 @@ func (c *Clone) cloneCollection(
 	targetColl := c.Target.Database(db).Collection(spec.Name)
 
 	for cur.Next(ctx) {
-		if batchSize >= config.MaxCollectionCloneBatchSize {
+		if batchSize+len(cur.Current) > config.MaxCollectionCloneBatchSize {
 			_, err = targetColl.InsertMany(ctx, docs)
 			if err != nil {
 				return errors.Wrap(err, "insert documents")
