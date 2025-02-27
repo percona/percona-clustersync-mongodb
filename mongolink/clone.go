@@ -236,8 +236,11 @@ func (c *Clone) cloneCollection(
 			}
 
 			c.clonedSize.Add(int64(batchSize))
-			lg.Debugf("cloning collection: %s.%s, inserted docs batch: %d, batch size: %d",
-				db, spec.Name, batch, batchSize)
+
+			lg.Unwrap().Trace().
+				Int("count", len(docs)).
+				Int("size", batchSize).
+				Msgf("insert batch #%d", batch)
 
 			docs = docs[:0]
 			batch++
@@ -260,8 +263,11 @@ func (c *Clone) cloneCollection(
 		}
 
 		c.clonedSize.Add(int64(batchSize))
-		lg.Debugf("cloning collection: %s.%s, inserted last docs batch: %d, batch size: %d",
-			db, spec.Name, batch, batchSize)
+
+		lg.Unwrap().Trace().
+			Int("count", len(docs)).
+			Int("size", batchSize).
+			Msgf("insert batch #%d", batch)
 	}
 
 	return nil
