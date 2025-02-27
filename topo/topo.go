@@ -91,9 +91,9 @@ type DBStats struct {
 	// Indexes is the number of indexes in the database.
 	Indexes int64 `bson:"indexes"`
 	// IndexSize is the total size of indexes in the database.
-	IndexSize int32 `bson:"indexSize"`
+	IndexSize int64 `bson:"indexSize"`
 	// TotalSize is the total size of the database.
-	TotalSize int32 `bson:"totalSize"`
+	TotalSize int64 `bson:"totalSize"`
 }
 
 // CollStats represents the result of the collStats command.
@@ -101,17 +101,17 @@ type CollStats struct {
 	// Namespace is the full namespace of the collection.
 	Namespace string `bson:"ns"`
 	// Count is the number of documents in the collection.
-	Count int32 `bson:"count"`
+	Count int64 `bson:"count"`
 	// Size is the total size of the collection.
-	Size int32 `bson:"size"`
+	Size int64 `bson:"size"`
 	// AvgObjSize is the average size of documents in the collection.
-	AvgObjSize int32 `bson:"avgObjSize"`
+	AvgObjSize int64 `bson:"avgObjSize"`
 	// StorageSize is the total storage size of the collection.
-	StorageSize int32 `bson:"storageSize"`
+	StorageSize int64 `bson:"storageSize"`
 	// TotalIndexSize is the total size of indexes in the collection.
-	TotalIndexSize int32 `bson:"totalIndexSize"`
+	TotalIndexSize int64 `bson:"totalIndexSize"`
 	// TotalSize is the total size of the collection including indexes.
-	TotalSize int32 `bson:"totalSize"`
+	TotalSize int64 `bson:"totalSize"`
 }
 
 // SayHello runs the db.hello() command and returns the result as a Hello struct.
