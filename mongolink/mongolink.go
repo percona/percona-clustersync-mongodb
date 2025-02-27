@@ -362,22 +362,15 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 		}
 	}
 
-	switch {
-	case ml.cloneStartedAtTS.IsZero():
-		s.InitialSyncLagTime = s.TotalLagTime
+	s.InitialSyncLagTime = s.TotalLagTime
 
-	case s.Repl.LastReplicatedOpTime.IsZero():
-		intialSyncLag := int64(ml.cloneFinishedAtTS.T) - int64(ml.cloneStartedAtTS.T)
+	if !ml.cloneFinishedAtTS.IsZero() && !s.Repl.LastReplicatedOpTime.IsZero() {
+		intialSyncLag := max(int64(ml.cloneFinishedAtTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
 		s.InitialSyncLagTime = &intialSyncLag
 
-	case s.Repl.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS):
-		intialSyncLag := int64(ml.cloneFinishedAtTS.T) - int64(s.Repl.LastReplicatedOpTime.T)
-		s.InitialSyncLagTime = &intialSyncLag
-
-	default:
-		zero := int64(0)
-		s.InitialSyncLagTime = &zero
-		s.InitialSyncCompleted = true
+		if intialSyncLag == 0 {
+			s.InitialSyncCompleted = true
+		}
 	}
 
 	return s
