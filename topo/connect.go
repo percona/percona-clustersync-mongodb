@@ -2,7 +2,6 @@ package topo
 
 import (
 	"context"
-	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -19,10 +18,6 @@ import (
 func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("invalid MongoDB URI")
-	}
-
-	if !strings.HasPrefix(uri, "mongodb://") {
-		uri = "mongodb://" + uri
 	}
 
 	opts := options.Client().ApplyURI(uri).
