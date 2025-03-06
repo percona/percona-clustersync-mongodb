@@ -390,7 +390,7 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].rename("coll_2")
+            self.source["db_1"]["coll_1"].rename("coll_2", dropTarget=True)
 
         self.compare_all()
 

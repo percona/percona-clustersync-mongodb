@@ -547,13 +547,7 @@ type RenameEvent struct {
 // renameOpDesc represents the description of the rename operation.
 type renameOpDesc struct {
 	DropTarget *bson.Binary `bson:"dropTarget,omitempty"`
-	To         to           `bson:"to"`
-}
-
-// to represents the target namespace of the rename operation.
-type to struct {
-	Database   string `bson:"db"`
-	Collection string `bson:"coll"`
+	To         Namespace    `bson:"to"`
 }
 
 // ParsingError represents an error that occurred during parsing.
