@@ -368,6 +368,8 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) (bson.Timestamp, error)
 		err = r.handleReplace(ctx, data)
 	case Update:
 		err = r.handleUpdate(ctx, data)
+	case Rename:
+		err = r.handleRename(ctx, data)
 
 	case Invalidate:
 		err := errors.New("invalidate")
@@ -375,8 +377,6 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) (bson.Timestamp, error)
 
 		return opTime, nil
 
-	case Rename:
-		fallthrough
 	case ShardCollection:
 		fallthrough
 	case ReshardCollection:
@@ -624,6 +624,30 @@ func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 	_, err = r.Target.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
 		UpdateOne(ctx, event.DocumentKey, ops)
+
+	return err //nolint:wrapcheck
+}
+
+// handleRename handles rename events.
+func (r *Repl) handleRename(ctx context.Context, data bson.Raw) error {
+	event, err := parseEvent[RenameEvent](data)
+	if err != nil {
+		return errors.Wrap(err, "parse")
+	}
+
+	opts := bson.D{
+		{"renameCollection", event.Namespace.Database + "." + event.Namespace.Collection},
+		{"to", event.OperationDescription.To.Database + "." + event.OperationDescription.To.Collection},
+	}
+
+	if event.OperationDescription.DropTarget != nil {
+		opts = append(opts, bson.E{"dropTarget", true})
+	}
+
+	err = r.Target.Database("admin").RunCommand(ctx, opts).Err()
+	if err != nil {
+		return errors.Wrap(err, "rename collection")
+	}
 
 	return err //nolint:wrapcheck
 }
