@@ -636,12 +636,9 @@ func (r *Repl) handleRename(ctx context.Context, data bson.Raw) error {
 	}
 
 	opts := bson.D{
-		{"renameCollection", event.Namespace.Database + "." + event.Namespace.Collection},
-		{"to", event.OperationDescription.To.Database + "." + event.OperationDescription.To.Collection},
-	}
-
-	if event.OperationDescription.DropTarget != nil {
-		opts = append(opts, bson.E{"dropTarget", true})
+		{"renameCollection", event.Namespace.String()},
+		{"to", event.OperationDescription.To.String()},
+		{"dropTarget", true},
 	}
 
 	err = r.Target.Database("admin").RunCommand(ctx, opts).Err()

@@ -390,17 +390,6 @@ class TestCollection(BaseTesting):
         self.compare_all()
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].rename("coll_2", dropTarget=True)
+            self.source["db_1"]["coll_1"].rename("coll_2")
 
         self.compare_all()
-
-    # def test_rename_with_drop_target(self, phase):
-    #     self.drop_all_database()
-    #     self.create_collection("db_1", "coll_1")
-
-    #     self.compare_all()
-
-    #     with self.perform(phase):
-    #         self.source["db_1"]["coll_1"].rename("coll_2", dropTarget=True)
-
-    #     self.compare_all()
