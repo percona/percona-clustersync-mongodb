@@ -12,6 +12,7 @@ linters:
     - dupl
     - funlen
     - tenv
+    - wsl
 
 linters-settings:
   govet:

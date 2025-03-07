@@ -28,8 +28,7 @@
   "go.useLanguageServer": true,
   "gopls": {
     "analyses": {
-      "composites": false,
-      "fieldalignment": false
+      "composites": false
     },
     "formatting.gofumpt": true,
     "formatting.local": "github.com/percona",
