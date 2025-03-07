@@ -2,11 +2,9 @@ package mongolink
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona-lab/percona-mongolink/config"
@@ -26,6 +24,8 @@ const (
 	StateIdle = "idle"
 	// StateRunning indicates that the mongolink is running.
 	StateRunning = "running"
+	// StatePaused indicates that the mongolink is paused.
+	StatePaused = "paused"
 	// StateFinalizing indicates that the mongolink is finalizing.
 	StateFinalizing = "finalizing"
 	// StateFinalized indicates that the mongolink has been finalized.
@@ -45,8 +45,6 @@ type Status struct {
 	InitialSyncLagTime *int64
 	// InitialSyncCompleted indicates if the initial sync is completed.
 	InitialSyncCompleted bool
-	// PauseOnInitialSync indicates if the replication is paused on initial sync.
-	PauseOnInitialSync bool
 
 	// Repl is the status of the replication process.
 	Repl ReplStatus
@@ -59,7 +57,10 @@ type MongoLink struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
-	nsFilter           sel.NSFilter // Namespace filter
+	nsInclude []string
+	nsExclude []string
+	nsFilter  sel.NSFilter // Namespace filter
+
 	pauseOnInitialSync bool
 
 	state State // Current state of the MongoLink
@@ -68,10 +69,9 @@ type MongoLink struct {
 	clone   *Clone   // Clone process
 	repl    *Repl    // Replication process
 
-	cloneStartedAtTS  bson.Timestamp // Timestamp when the process started
-	cloneFinishedAtTS bson.Timestamp // Timestamp when the cloning finished
+	err error
 
-	mu sync.Mutex
+	lock sync.Mutex
 }
 
 // New creates a new MongoLink.
@@ -81,6 +81,58 @@ func New(source, target *mongo.Client) *MongoLink {
 		target: target,
 		state:  StateIdle,
 	}
+}
+
+// Status returns the current status of the MongoLink.
+func (ml *MongoLink) Status(ctx context.Context) *Status {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
+
+	if ml.state == StateIdle {
+		return &Status{State: StateIdle}
+	}
+
+	s := &Status{
+		State: ml.state,
+		Clone: ml.clone.Status(),
+		Repl:  ml.repl.Status(),
+	}
+
+	switch {
+	case s.Repl.Err != nil:
+		s.Error = errors.Wrap(s.Repl.Err, "Change Replication")
+	case s.Clone.Err != nil:
+		s.Error = errors.Wrap(s.Clone.Err, "Clone")
+	}
+
+	if ml.state == StateFailed {
+		return s
+	}
+
+	sourceTime, err := topo.ClusterTime(ctx, ml.source)
+	if err != nil {
+		// Do not block status if source cluster is lost
+		log.New("mongolink").Error(err, "Status: get source cluster time")
+	} else {
+		switch {
+		case !s.Repl.LastReplicatedOpTime.IsZero():
+			totalLag := int64(sourceTime.T) - int64(s.Repl.LastReplicatedOpTime.T)
+			s.TotalLagTime = &totalLag
+		case !s.Clone.StartTS.IsZero():
+			totalLag := int64(sourceTime.T) - int64(s.Clone.StartTS.T)
+			s.TotalLagTime = &totalLag
+		}
+	}
+
+	s.InitialSyncLagTime = s.TotalLagTime
+
+	if s.Repl.IsStarted() {
+		intialSyncLag := max(int64(s.Clone.FinishTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
+		s.InitialSyncLagTime = &intialSyncLag
+		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
+	}
+
+	return s
 }
 
 // StartOptions represents the options for starting the MongoLink.
@@ -95,283 +147,285 @@ type StartOptions struct {
 
 // Start starts the replication process with the given options.
 func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
-	ml.mu.Lock()
-	defer ml.mu.Unlock()
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
 
-	lg := log.New("mongolink")
+	switch ml.state {
+	case StateRunning:
+		err := errors.New("already running")
+		log.New("mongolink:start").Error(err, "")
 
-	if ml.state != StateIdle && ml.state != StateFinalized && ml.state != StateFailed {
-		return errors.New(string(ml.state))
+		return err
+
+	case StatePaused:
+		err := errors.New("paused")
+		log.New("mongolink:start").Error(err, "")
+
+		return err
 	}
 
 	if options == nil {
 		options = &StartOptions{}
 	}
 
+	ml.nsInclude = options.IncludeNamespaces
+	ml.nsExclude = options.ExcludeNamespaces
 	ml.nsFilter = sel.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
-
-	ml.repl = nil
-	ml.cloneStartedAtTS = bson.Timestamp{}
-	ml.cloneFinishedAtTS = bson.Timestamp{}
+	ml.catalog = NewCatalog(ml.target)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
 	ml.state = StateRunning
 
-	ml.catalog = NewCatalog()
-	ml.clone = &Clone{
-		Source:   ml.source,
-		Target:   ml.target,
-		NSFilter: ml.nsFilter,
-		Catalog:  ml.catalog,
-	}
-
-	ml.repl = &Repl{
-		Source:   ml.source,
-		Target:   ml.target,
-		NSFilter: ml.nsFilter,
-		Catalog:  ml.catalog,
-	}
-
-	go func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		err := ml.run(lg.WithContext(ctx))
-		if err != nil {
-			ml.mu.Lock()
-			ml.state = StateFailed
-			ml.mu.Unlock()
-
-			lg.Error(err, "Cluster replication has failed")
-
-			return
-		}
-
-		ml.mu.Lock()
-		ml.state = StateFinalized
-		ml.mu.Unlock()
-	}()
-
-	lg.Info("Cluster replication has started")
+	go ml.run()
 
 	return nil
 }
 
-// run executes the replication process.
-func (ml *MongoLink) run(ctx context.Context) error {
+func (ml *MongoLink) setFailed(err error) {
+	ml.lock.Lock()
+	ml.state = StateFailed
+	ml.err = err
+	ml.lock.Unlock()
+
+	log.New("mongolink").Error(err, "Cluster replication has failed")
+}
+
+// run executes the cluster replication.
+func (ml *MongoLink) run() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	lg := log.Ctx(ctx)
 
-	lg.Info("Starting data clone")
+	lg.Info("Starting Cluster replication")
 
-	clusterReplStartedAt := time.Now()
-
-	cloneStartedAtSourceTS, err := topo.ClusterTime(ctx, ml.source)
-	if err != nil {
-		return errors.Wrap(err, "get cluster time")
-	}
-
-	ml.mu.Lock()
-	ml.cloneStartedAtTS = cloneStartedAtSourceTS
-	ml.mu.Unlock()
-
-	cloneStartAt := time.Now()
-
-	err = ml.clone.Clone(ctx)
-	if err != nil {
-		return errors.Wrap(err, "clone")
-	}
-
-	lg.InfoWith("Data clone is completed",
-		log.Elapsed(time.Since(cloneStartAt)))
-
-	cloneFinishedAtSourceTS, err := topo.ClusterTime(ctx, ml.source)
-	if err != nil {
-		return errors.Wrap(err, "get cluster time")
-	}
-
-	ml.mu.Lock()
-	ml.cloneFinishedAtTS = cloneFinishedAtSourceTS
-	ml.mu.Unlock()
-
-	lg.Infof("Remaining logical seconds until Initial Sync completed: %d",
-		cloneFinishedAtSourceTS.T-cloneStartedAtSourceTS.T)
-	lg.Infof("Starting Change Replication since %d.%d source cluster time",
-		cloneStartedAtSourceTS.T, cloneStartedAtSourceTS.I)
-
-	replStartedAt := time.Now()
-
-	err = ml.repl.Start(ctx, cloneStartedAtSourceTS)
-	if err != nil {
-		return errors.Wrap(err, "start change replication")
-	}
-
-	replDoneSig := ml.repl.Done()
-
-	go func() {
-		// make sure the repl processes its first operation
-		<-time.After(config.ReplTickInteral)
-
-		t := time.NewTicker(config.ReplInitialSyncCheckInterval)
-		defer t.Stop()
-
-		for {
-			select {
-			case <-t.C:
-			case <-replDoneSig:
-				return
-			}
-
-			replStatus := ml.repl.Status()
-			if replStatus.Error != nil {
-				return
-			}
-
-			if !replStatus.LastReplicatedOpTime.Before(cloneFinishedAtSourceTS) {
-				lg.InfoWith("Initial sync has been completed",
-					log.Elapsed(time.Since(replStartedAt)),
-					log.TotalElapsed(time.Since(clusterReplStartedAt)))
-
-				if ml.pauseOnInitialSync {
-					lg.Info("Pausing [PauseOnInitialSync]")
-					ml.repl.Pause()
-				}
-
-				return
-			}
-
-			lg.Debugf("Remaining logical seconds until Initial Sync completed: %d",
-				cloneFinishedAtSourceTS.T-replStatus.LastReplicatedOpTime.T)
+	cloneStatus := ml.clone.Status()
+	if !cloneStatus.IsFinished() {
+		err := ml.clone.Start(ctx)
+		if err != nil {
+			lg.Error(err, "Clone has failed")
 		}
-	}()
 
-	<-replDoneSig
+		<-ml.clone.Done()
 
-	replFinishedAt := time.Now()
+		cloneStatus = ml.clone.Status()
+		if cloneStatus.Err != nil {
+			ml.setFailed(errors.Wrap(cloneStatus.Err, "clone"))
+
+			return
+		}
+	}
 
 	replStatus := ml.repl.Status()
-	if replStatus.Error != nil {
-		return errors.Wrap(err, "change replication")
+	if !replStatus.IsStarted() {
+		err := ml.repl.Start(ctx, cloneStatus.StartTS)
+		if err != nil {
+			lg.Error(errors.Wrap(err, "start"), "")
+
+			return
+		}
+	} else {
+		err := ml.repl.Resume(ctx)
+		if err != nil {
+			lg.Error(errors.Wrap(err, "resume"), "")
+
+			return
+		}
 	}
 
-	lg.InfoWith(
-		fmt.Sprintf("Change replication stopped at %d.%d source cluster time",
-			replStatus.LastReplicatedOpTime.T, replStatus.LastReplicatedOpTime.T),
-		log.Elapsed(replFinishedAt.Sub(replStartedAt)))
+	go ml.monitorInitialSync(ctx)
+	<-ml.repl.Done()
 
-	err = ml.catalog.FinalizeIndexes(ctx, ml.target)
+	replStatus = ml.repl.Status()
+	if replStatus.Err != nil {
+		ml.setFailed(errors.Wrap(replStatus.Err, "repl"))
+	}
+}
+
+func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
+	lg := log.Ctx(ctx)
+
+	t := time.NewTicker(config.ReplInitialSyncCheckInterval)
+	defer t.Stop()
+
+	cloneStatus := ml.clone.Status()
+	if cloneStatus.Err != nil {
+		return
+	}
+
+	replStatus := ml.repl.Status()
+	if replStatus.Err != nil {
+		return
+	}
+
+	if replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-t.C:
+		}
+
+		replStatus = ml.repl.Status()
+		if replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
+			lg.With(log.Elapsed(time.Since(replStatus.StartTime))).
+				Info("Clone event backlog processed")
+			lg.With(log.Elapsed(time.Since(cloneStatus.StartTime))).
+				Info("Initial Sync has been completed")
+
+			if ml.pauseOnInitialSync {
+				lg.Info("Pausing [PauseOnInitialSync]")
+
+				err := ml.Pause(ctx)
+				if err != nil {
+					lg.Error(err, "PauseOnInitialSync")
+				}
+			}
+
+			return
+		}
+
+		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d",
+			cloneStatus.FinishTS.T-replStatus.LastReplicatedOpTime.T)
+	}
+}
+
+// Pause pauses the replication process.
+func (ml *MongoLink) Pause(ctx context.Context) error {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
+
+	err := ml.doPause(ctx)
 	if err != nil {
-		return errors.Wrap(err, "finalize indexes")
+		log.New("mongolink").Error(err, "Pause Cluster Replication")
+
+		return err
 	}
 
-	lg.InfoWith("Cluster replication is finalized",
-		log.Elapsed(time.Since(replFinishedAt)),
-		log.TotalElapsed(time.Since(clusterReplStartedAt)))
+	log.New("mongolink").Info("Cluster Replication paused")
+
+	return nil
+}
+
+func (ml *MongoLink) doPause(ctx context.Context) error {
+	replStatus := ml.repl.Status()
+
+	if !replStatus.IsRunning() {
+		return errors.New("cannot pause: Change Replication is not runnning")
+	}
+
+	err := ml.repl.Pause(ctx)
+	if err != nil {
+		return err
+	}
+
+	ml.state = StatePaused
+
+	return nil
+}
+
+// Resume resumes the replication process.
+func (ml *MongoLink) Resume(ctx context.Context) error {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
+
+	if ml.state != StatePaused {
+		return errors.New("cannot resume: not paused")
+	}
+
+	err := ml.doResume(ctx)
+	if err != nil {
+		log.New("mongolink").Error(err, "Resume Cluster Replication")
+
+		return err
+	}
+
+	log.New("mongolink").Info("Cluster Replication resumed")
+
+	return nil
+}
+
+func (ml *MongoLink) doResume(_ context.Context) error {
+	replStatus := ml.repl.Status()
+
+	if replStatus.IsRunning() {
+		return errors.New("cannot resume: replication is not paused")
+	}
+
+	if !replStatus.IsStarted() || !replStatus.IsPaused() {
+		return errors.ErrUnsupported
+	}
+
+	ml.state = StateRunning
+
+	go ml.run()
 
 	return nil
 }
 
 // Finalize finalizes the replication process.
-func (ml *MongoLink) Finalize(_ context.Context) error {
-	ml.mu.Lock()
-	defer ml.mu.Unlock()
-
-	if ml.state != StateRunning {
-		return errors.New(string(ml.state))
-	}
+func (ml *MongoLink) Finalize(ctx context.Context) error {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
 
 	cloneStatus := ml.clone.Status()
-	if cloneStatus.Error != nil {
-		return errors.Wrap(cloneStatus.Error, "clone failed")
-	}
-
-	if !cloneStatus.Completed {
-		return errors.New("clone has not been completed")
+	if !cloneStatus.IsFinished() {
+		return errors.New("clone is not completed")
 	}
 
 	replStatus := ml.repl.Status()
-	if replStatus.Error != nil {
-		return errors.Wrap(replStatus.Error, "cannot finalize due to existing error")
+	if !replStatus.IsStarted() {
+		return errors.New("change replication is not started")
 	}
 
-	if replStatus.LastReplicatedOpTime.IsZero() {
-		return errors.New("replication has not been started")
+	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
+		return errors.New("initial sync is not completed")
 	}
 
-	if replStatus.LastReplicatedOpTime.Before(ml.cloneFinishedAtTS) {
-		return errors.New("not finalizable")
+	lg := log.Ctx(ctx)
+	lg.Info("Starting finalization")
+
+	if replStatus.IsRunning() {
+		err := ml.repl.Pause(ctx)
+		if err != nil {
+			return err
+		}
+
+		<-ml.repl.Done()
+
+		replStatus = ml.repl.Status()
+		if replStatus.Err != nil {
+			ml.setFailed(errors.Wrap(replStatus.Err, "repl"))
+
+			return err
+		}
 	}
 
-	ml.repl.Pause()
+	startedTime := time.Now()
 	ml.state = StateFinalizing
+
+	go func() {
+		err := ml.catalog.Finalize(context.Background())
+		if err != nil {
+			ml.setFailed(errors.Wrap(err, "finalization"))
+
+			return
+		}
+
+		ml.lock.Lock()
+		ml.state = StateFinalized
+		ml.lock.Unlock()
+
+		lg.With(log.Elapsed(time.Since(startedTime))).
+			Info("Finalization is completed")
+	}()
 
 	log.New("mongolink").Info("Finalizing")
 
 	return nil
-}
-
-// Status returns the current status of the MongoLink.
-func (ml *MongoLink) Status(ctx context.Context) *Status {
-	ml.mu.Lock()
-	defer ml.mu.Unlock()
-
-	if ml.state == StateIdle {
-		return &Status{State: StateIdle}
-	}
-
-	s := &Status{
-		State: ml.state,
-
-		Clone: ml.clone.Status(),
-		Repl:  ml.repl.Status(),
-
-		PauseOnInitialSync: ml.pauseOnInitialSync,
-	}
-
-	switch {
-	case s.Repl.Error != nil:
-		s.Error = errors.Wrap(s.Repl.Error, "Change Replication")
-	case s.Clone.Error != nil:
-		s.Error = errors.Wrap(s.Clone.Error, "Clone")
-	}
-
-	switch {
-	case ml.state == StateFinalizing || ml.state == StateFinalized:
-		zero := int64(0)
-		s.TotalLagTime = &zero
-		s.InitialSyncLagTime = &zero
-		s.InitialSyncCompleted = true
-
-		return s
-
-	case ml.state == StateFailed:
-		return s
-	}
-
-	sourceTime, err := topo.ClusterTime(ctx, ml.source)
-	if err != nil {
-		// Do not block status if source cluster is lost
-		log.New("mongolink").Error(err, "Status: get source cluster time")
-	} else {
-		switch {
-		case !s.Repl.LastReplicatedOpTime.IsZero():
-			// max() in case, sourceTime and more have already been processed
-			totalLag := max(int64(sourceTime.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
-			s.TotalLagTime = &totalLag
-		case !ml.cloneStartedAtTS.IsZero():
-			totalLag := int64(sourceTime.T) - int64(ml.cloneStartedAtTS.T)
-			s.TotalLagTime = &totalLag
-		}
-	}
-
-	s.InitialSyncLagTime = s.TotalLagTime
-
-	if !ml.cloneFinishedAtTS.IsZero() && !s.Repl.LastReplicatedOpTime.IsZero() {
-		intialSyncLag := max(int64(ml.cloneFinishedAtTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
-		s.InitialSyncLagTime = &intialSyncLag
-
-		if intialSyncLag == 0 {
-			s.InitialSyncCompleted = true
-		}
-	}
-
-	return s
 }

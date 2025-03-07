@@ -41,7 +41,7 @@ class BaseTesting:
         """Return all namespaces in the target MongoDB."""
         rv = set()
         for db in cls.target.list_database_names():
-            if db in ("admin", "config", "local"):
+            if db in ("admin", "config", "local", "percona_mongolink"):
                 continue
             for coll in cls.target[db].list_collection_names():
                 rv.add(f"{db}.{coll}")

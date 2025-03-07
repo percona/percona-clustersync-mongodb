@@ -85,34 +85,32 @@ func BenchmarkReplaceOne(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		_, err := collection.ReplaceOne(b.Context(),
-			key, doc, options.Replace().SetUpsert(true))
+		_, err := collection.ReplaceOne(b.Context(), key, doc, options.Replace().SetUpsert(true))
 		if err != nil && !mongo.IsDuplicateKeyError(err) {
 			b.Fatalf("Failed to insert document: %v", err)
 		}
 	}
 }
 
-// Benchmark_NoIndex benchmarks the performance of copying documents
-// without any index.
+// Benchmark_NoIndex benchmarks the performance of copying documents without any index.
 func Benchmark_NoIndex(b *testing.B) {
 	performIndexTest(b, performIndexTestOptions{NoIndex: true})
 }
 
-// Benchmark_UniquePostBuild benchmarks the performance of copying documents
-// with a unique index created post-build.
+// Benchmark_UniquePostBuild benchmarks the performance of copying documents with a unique index
+// created post-build.
 func Benchmark_UniquePostBuild(b *testing.B) {
 	performIndexTest(b, performIndexTestOptions{PostBuild: true})
 }
 
-// Benchmark_UniquePrepared benchmarks the performance of copying documents
-// with a prepared unique index.
+// Benchmark_UniquePrepared benchmarks the performance of copying documents with a prepared unique
+// index.
 func Benchmark_UniquePrepared(b *testing.B) {
 	performIndexTest(b, performIndexTestOptions{Prepared: true})
 }
 
-// Benchmark_UniquePreBuild benchmarks the performance of copying documents
-// with a unique index created pre-build.
+// Benchmark_UniquePreBuild benchmarks the performance of copying documents with a unique index
+// created pre-build.
 func Benchmark_UniquePreBuild(b *testing.B) {
 	performIndexTest(b, performIndexTestOptions{PreBuild: true})
 }

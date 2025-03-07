@@ -10,8 +10,8 @@ import (
 	"github.com/percona-lab/percona-mongolink/errors"
 )
 
-// errMissedClusterTime is returned when the cluster time is missing.
-var errMissedClusterTime = errors.New("missed clusterTime")
+// errMissingClusterTime is returned when the cluster time is missing.
+var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
@@ -22,7 +22,7 @@ func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 
 	t, i, ok := raw.Lookup("$clusterTime", "clusterTime").TimestampOK()
 	if !ok {
-		return bson.Timestamp{}, errMissedClusterTime
+		return bson.Timestamp{}, errMissingClusterTime
 	}
 
 	return bson.Timestamp{T: t, I: i}, nil
@@ -133,7 +133,11 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 }
 
 // GetCollStats runs the collStats command and returns the result as a CollStats struct.
-func GetCollStats(ctx context.Context, m *mongo.Client, dbName, collName string) (*CollStats, error) {
+func GetCollStats(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName, collName string,
+) (*CollStats, error) {
 	var result *CollStats
 
 	err := m.Database(dbName).RunCommand(ctx, bson.D{{"collStats", collName}}).Decode(&result)

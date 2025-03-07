@@ -218,7 +218,6 @@ process, including its progress, lag, and event processing details.
 - `eventsProcessed` (optional): the number of events processed.
 - `lastReplicatedOpTime` (optional): the last replicated operation time.
 
-- `initialSync.pauseOnInitialSync` (optional): indicates if the replication is paused on initial sync.
 - `initialSync.completed`: indicates if the initial sync is completed.
 - `initialSync.lagTime`: the lag time in logical seconds until the initial sync completed.
 

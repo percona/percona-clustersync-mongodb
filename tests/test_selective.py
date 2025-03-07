@@ -42,14 +42,7 @@ class TestSelective(BaseTesting):
     def test_create_collection_with_exclude_only(self, phase):
         self.drop_all_database()
 
-        with self.perform_with_options(
-            phase,
-            exclude_ns=[
-                "db_0.*",
-                "db_1.coll_0",
-                "db_1.coll_1",
-            ],
-        ):
+        with self.perform_with_options(phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]):
             for db in range(3):
                 for coll in range(3):
                     self.source["db_1"]["coll_1"].create_index({"i": 1})

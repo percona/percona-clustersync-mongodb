@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/percona-lab/percona-mongolink/topo"
 )
 
 type OperationType string
@@ -56,8 +58,8 @@ const (
 	// Update occurs when an operation updates a document in a collection.
 	Update OperationType = "update"
 
-	// Replace occurs when an update operation removes a document from
-	// a collection and replaces it with a new document.
+	// Replace occurs when an update operation removes a document from a collection and replaces it
+	// with a new document.
 	Replace OperationType = "replace"
 
 	// Delete occurs when a document is removed from the collection.
@@ -70,8 +72,8 @@ const (
 	// New in version 6.0.
 	ShardCollection OperationType = "shardCollection"
 
-	// ReshardCollection occurs when the shard key for a collection and
-	// the distribution of data changes.
+	// ReshardCollection occurs when the shard key for a collection and the distribution of data
+	// changes.
 	//
 	// Requires that you set the showExpandedEvents option to true.
 	//
@@ -84,8 +86,7 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
-// Namespace is the namespace (database and/or collection) affected by
-// the event.
+// Namespace is the namespace (database and/or collection) affected by the event.
 type Namespace struct {
 	// Database is the name of the database where the event occurred.
 	Database string `bson:"db"`
@@ -106,46 +107,39 @@ func (ns Namespace) String() string {
 	return rv
 }
 
-// InvalidateEvent occurs when an operation renders the change stream invalid.
-// For example, a change stream opened on a collection that was later dropped or
-// renamed would cause an invalidate event.
+// InvalidateEvent occurs when an operation renders the change stream invalid. For example, a change
+// stream opened on a collection that was later dropped or renamed would cause an invalidate event.
 type InvalidateEvent struct {
-	// OperationType is the type of operation that the change notification
-	// reports.
+	// OperationType is the type of operation that the change notification reports.
 	//
 	// Returns a value of create for these change events.
 	OperationType OperationType `bson:"operationType"`
 
-	// ID is a BSON object which serves as an identifier for the change stream
-	// event.
+	// ID is a BSON object which serves as an identifier for the change stream event.
 	//
-	// This value is used as the resumeToken for the resumeAfter parameter when
-	// resuming a change stream. The _id object has the following form:
-	// { "_data" : <BinData|hex string> }
+	// This value is used as the resumeToken for the resumeAfter parameter when resuming a change
+	// stream. The _id object has the following form: `{ "_data" : <BinData|hex string> }`
 	ID bson.Raw `bson:"_id"`
 
-	// ClusterTime is the timestamp from the oplog entry associated with
-	// the event.
+	// ClusterTime is the timestamp from the oplog entry associated with the event.
 	//
-	// Change stream event notifications associated with a multi-document
-	// transaction all have the same clusterTime value: the time when
-	// the transaction was committed.
+	// Change stream event notifications associated with a multi-document transaction all have the
+	// same clusterTime value: the time when the transaction was committed.
 	//
-	// Events with the same clusterTime may not all relate to the same
-	// transaction. Some events don't relate to a transaction at all.
-	// Starting in MongoDB 8.0, this may be true for events on any deployment.
-	// In previous versions, this behavior was possible only for events on
-	// a sharded cluster.
+	// Events with the same clusterTime may not all relate to the same transaction. Some events
+	// don't relate to a transaction at all. Starting in MongoDB 8.0, this may be true for events on
+	// any deployment. In previous versions, this behavior was possible only for events on a sharded
+	// cluster.
 	//
-	// To identify events for a single transaction, you can use the combination
-	// of lsid and txnNumber in the change stream event document.
+	// To identify events for a single transaction, you can use the combination of lsid and
+	// txnNumber in the change stream event document.
 	//
 	// Changed in version 8.0.
 	ClusterTime bson.Timestamp `bson:"clusterTime"`
 
-	// WallTime is the server date and time of the database operation.
-	// WallTime differs from clusterTime in that clusterTime is a timestamp
-	// taken from the oplog entry associated with the database operation event.
+	// WallTime is the server date and time of the database operation. WallTime differs from
+	// clusterTime in that clusterTime is a timestamp taken from the oplog entry associated with the
+	// database operation event.
 	//
 	// New in version 6.0.
 	// WallTime bsonDateTime `bson:"wallTime"`
@@ -153,27 +147,23 @@ type InvalidateEvent struct {
 
 // BaseEvent is the base structure for all events.
 type BaseEvent struct {
-	// OperationType is the type of operation that the change notification
-	// reports.
+	// OperationType is the type of operation that the change notification reports.
 	//
 	// Returns a value of create for these change events.
 	OperationType OperationType `bson:"operationType"`
 
-	// Namespace is the namespace (database and/or collection) affected by
-	// the event.
+	// Namespace is the namespace (database and/or collection) affected by the event.
 	Namespace Namespace `bson:"ns"`
 
 	// CollectionUUID is the collection's UUID.
 	//
-	// If the change occurred on a collection, CollectionUUID indicates
-	// the collection's UUID. If the change occurred on a view, CollectionUUID
-	// doesn't exist.
+	// If the change occurred on a collection, CollectionUUID indicates the collection's UUID. If
+	// the change occurred on a view, CollectionUUID doesn't exist.
 	//
 	// New in version 6.0.
 	CollectionUUID *bson.Binary `bson:"collectionUUID,omitempty"`
 
-	// TxnNumber together with the lsid, a number that helps uniquely identify
-	// a transaction.
+	// TxnNumber together with the lsid, a number that helps uniquely identify a transaction.
 	//
 	// Only present if the operation is part of a multi-document transaction.
 	TxnNumber *int64 `bson:"txnNumber,omitempty"`
@@ -183,53 +173,47 @@ type BaseEvent struct {
 	// Only present if the operation is part of a multi-document transaction.
 	LSID bson.Raw `bson:"lsid,omitempty"`
 
-	// ID is a BSON object which serves as an identifier for the change stream
-	// event.
+	// ID is a BSON object which serves as an identifier for the change stream event.
 	//
-	// This value is used as the resumeToken for the resumeAfter parameter
-	// when resuming a change stream. The _id object has the following form:
-	// { "_data" : <BinData|hex string> }
+	// This value is used as the resumeToken for the resumeAfter parameter when resuming a change
+	// stream. The _id object has the following form: `{ "_data" : <BinData|hex string> }`
 	ID bson.Raw `bson:"_id"`
 
-	// ClusterTime is the timestamp from the oplog entry associated with
-	// the event.
+	// ClusterTime is the timestamp from the oplog entry associated with the event.
 	//
-	// Change stream event notifications associated with a multi-document
-	// transaction all have the same clusterTime value: the time when
-	// the transaction was committed.
+	// Change stream event notifications associated with a multi-document transaction all have the
+	// same clusterTime value: the time when the transaction was committed.
 	//
-	// Events with the same clusterTime may not all relate to the same
-	// transaction. Some events don't relate to a transaction at all.
-	// Starting in MongoDB 8.0, this may be true for events on any deployment.
-	// In previous versions, this behavior was possible only for events on
-	// a sharded cluster.
+	// Events with the same clusterTime may not all relate to the same transaction. Some events
+	// don't relate to a transaction at all. Starting in MongoDB 8.0, this may be true for events on
+	// any deployment. In previous versions, this behavior was possible only for events on a sharded
+	// cluster.
 	//
-	// To identify events for a single transaction, you can use the combination
-	// of lsid and txnNumber in the change stream event document.
+	// To identify events for a single transaction, you can use the combination of lsid and
+	// txnNumber in the change stream event document.
 	//
 	// Changed in version 8.0.
 	ClusterTime bson.Timestamp `bson:"clusterTime"`
 
-	// WallTime is the server date and time of the database operation.
-	// WallTime differs from clusterTime in that clusterTime is a timestamp
-	// taken from the oplog entry associated with the database operation event.
+	// WallTime is the server date and time of the database operation. WallTime differs from
+	// clusterTime in that clusterTime is a timestamp taken from the oplog entry associated with the
+	// database operation event.
 	//
 	// New in version 6.0.
 	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
-// CreateEvent occurs when a collection is created on a watched database and
-// the change stream has the showExpandedEvents option set to true.
+// CreateEvent occurs when a collection is created on a watched database and the change stream has
+// the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type CreateEvent struct {
 	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appear when the change stream uses
-	// expanded events.
+	// This document and its subfields only appear when the change stream uses expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription createCollectionOptions `bson:"operationDescription"`
+	OperationDescription CreateCollectionOptions `bson:"operationDescription"`
 
 	BaseEvent `bson:",inline"`
 }
@@ -244,23 +228,6 @@ func (e CreateEvent) IsTimeseries() bool {
 	return strings.HasPrefix(e.OperationDescription.ViewOn, "system.buckets.")
 }
 
-// createCollectionOptions represents the options for creating a collection.
-type createCollectionOptions struct {
-	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
-
-	Capped *bool  `bson:"capped,omitempty"`
-	Size   *int32 `bson:"size,omitempty"`
-	Max    *int32 `bson:"max,omitempty"`
-
-	ViewOn   string `bson:"viewOn,omitempty"`
-	Pipeline any    `bson:"pipeline,omitempty"`
-
-	Collation bson.Raw `bson:"collation,omitempty"`
-
-	StorageEngine       bson.Raw `bson:"storageEngine,omitempty"`
-	IndexOptionDefaults bson.Raw `bson:"indexOptionDefaults,omitempty"`
-}
-
 // DropEvent occurs when a collection is dropped from a database.
 type DropEvent struct {
 	BaseEvent `bson:",inline"`
@@ -271,8 +238,8 @@ type DropDatabaseEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
-// CreateIndexesEvent occurs when an index is created on the collection and
-// the change stream has the showExpandedEvents option set to true.
+// CreateIndexesEvent occurs when an index is created on the collection and the change stream has
+// the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type CreateIndexesEvent struct {
@@ -280,8 +247,7 @@ type CreateIndexesEvent struct {
 
 	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appear when the change stream uses
-	// expanded events.
+	// This document and its subfields only appear when the change stream uses expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription createIndexesOpDesc `bson:"operationDescription"`
@@ -289,11 +255,11 @@ type CreateIndexesEvent struct {
 
 // createIndexesOpDesc represents the description of the create indexes operation.
 type createIndexesOpDesc struct {
-	Indexes []*IndexSpecification `bson:"indexes"`
+	Indexes []*topo.IndexSpecification `bson:"indexes"`
 }
 
-// DropIndexesEvent occurs when an index is dropped from the collection and
-// the change stream has the showExpandedEvents option set to true.
+// DropIndexesEvent occurs when an index is dropped from the collection and the change stream has
+// the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type DropIndexesEvent struct {
@@ -301,8 +267,7 @@ type DropIndexesEvent struct {
 
 	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appear when the change stream uses
-	// expanded events.
+	// This document and its subfields only appear when the change stream uses expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription dropIndexesOpDesc `bson:"operationDescription"`
@@ -315,9 +280,9 @@ type dropIndexesOpDesc struct {
 	} `bson:"indexes"`
 }
 
-// ModifyEvent occurs when a collection is modified, such as when the collMod command
-// adds or removes options from a collection or view. This event is received only
-// if the change stream has the showExpandedEvents option set to true.
+// ModifyEvent occurs when a collection is modified, such as when the collMod command adds or
+// removes options from a collection or view. This event is received only if the change stream has
+// the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type ModifyEvent struct {
@@ -325,8 +290,7 @@ type ModifyEvent struct {
 
 	// OperationDescription is additional information on the change operation.
 	//
-	// This document and its subfields only appear when the change stream uses
-	// expanded events.
+	// This document and its subfields only appear when the change stream uses expanded events.
 	//
 	// New in version 6.0.
 	OperationDescription modifyOpDesc `bson:"operationDescription"`
@@ -337,7 +301,7 @@ type modifyOpDesc struct {
 	// Index is the index that was modified.
 	//
 	// New in version 6.0.
-	Index *modifyIndexOption `bson:"index,omitempty"`
+	Index *ModifyIndexOption `bson:"index,omitempty"`
 
 	CappedSize *int64 `bson:"cappedSize,omitempty"`
 	CappedMax  *int64 `bson:"cappedMax,omitempty"`
@@ -358,48 +322,36 @@ type modifyOpDesc struct {
 	Unknown map[string]any `bson:",inline"`
 }
 
-// modifyIndexOption represents the options for modifying an index.
-type modifyIndexOption struct {
-	Name               string `bson:"name"`
-	Hidden             *bool  `bson:"hidden,omitempty"`
-	Unique             *bool  `bson:"unique,omitempty"`
-	PrepareUnique      *bool  `bson:"prepareUnique,omitempty"`
-	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
-}
-
 // InsertEvent occurs when an operation adds documents to a collection.
 type InsertEvent struct {
-	// DocumentKey is the document that contains the _id value of the document
-	// created or modified by the CRUD operation.
+	// DocumentKey is the document that contains the _id value of the document created or modified
+	// by the CRUD operation.
 	//
-	// For sharded collections, this field also displays the full shard key for
-	// the document. The _id field is not repeated if it is already a part of
-	// the shard key.
+	// For sharded collections, this field also displays the full shard key for the document. The
+	// _id field is not repeated if it is already a part of the shard key.
 	DocumentKey bson.D `bson:"documentKey"`
 
 	// FullDocument is the document created by the operation.
 	//
 	// Changed in version 6.0.
 	//
-	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages
-	// option using db.createCollection(), create, or collMod, then
-	// the fullDocument field shows the document after it was inserted,
-	// replaced, or updated (the document post-image).
-	// fullDocument is always included for insert events.
+	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages option using
+	// db.createCollection(), create, or collMod, then the fullDocument field shows the document
+	// after it was inserted, replaced, or updated (the document post-image). fullDocument is always
+	// included for insert events.
 	FullDocument bson.Raw `bson:"fullDocument"`
 
 	BaseEvent `bson:",inline"`
 }
 
-// DeleteEvent occurs when operations remove documents from a collection,
-// such as when a user or application executes the delete command.
+// DeleteEvent occurs when operations remove documents from a collection, such as when a user or
+// application executes the delete command.
 type DeleteEvent struct {
-	// DocumentKey is the document that contains the _id value of the document
-	// created or modified by the CRUD operation.
+	// DocumentKey is the document that contains the _id value of the document created or modified
+	// by the CRUD operation.
 	//
-	// For sharded collections, this field also displays the full shard key for
-	// the document. The _id field is not repeated if it is already a part of
-	// the shard key.
+	// For sharded collections, this field also displays the full shard key for the document. The
+	// _id field is not repeated if it is already a part of the shard key.
 	DocumentKey bson.D `bson:"documentKey"`
 
 	BaseEvent `bson:",inline"`
@@ -407,42 +359,39 @@ type DeleteEvent struct {
 
 // UpdateEvent occurs when an operation updates a document in a collection.
 type UpdateEvent struct {
-	// DocumentKey is the document that contains the _id value of the document
-	// created or modified by the CRUD operation.
+	// DocumentKey is the document that contains the _id value of the document created or modified
+	// by the CRUD operation.
 	//
-	// For sharded collections, this field also displays the full shard key for
-	// the document. The _id field is not repeated if it is already a part of
-	// the shard key.
+	// For sharded collections, this field also displays the full shard key for the document. The
+	// _id field is not repeated if it is already a part of the shard key.
 	DocumentKey bson.D `bson:"documentKey"`
 
 	// FullDocument is the document created or modified by a CRUD operation.
 	//
-	// This field only appears if you configured the change stream with
-	// fullDocument set to updateLookup. When you configure the change stream
-	// with updateLookup, the field represents the current majority-committed
-	// version of the document modified by the update operation.
-	// The document may differ from the changes described in updateDescription
-	// if any other majority-committed operations have modified the document
-	// between the original update operation and the full document lookup.
+	// This field only appears if you configured the change stream with fullDocument set to
+	// updateLookup. When you configure the change stream with updateLookup, the field represents
+	// the current majority-committed version of the document modified by the update operation. The
+	// document may differ from the changes described in updateDescription if any other
+	// majority-committed operations have modified the document between the original update
+	// operation and the full document lookup.
 	//
-	// For more information, see [Lookup Full Document for Update Operations](
-	//   https://www.mongodb.com/docs/v8.0/changeStreams/#std-label-change-streams-updateLookup).
+	// For more information, see [Lookup Full Document for Update
+	// Operations](
+	// https://www.mongodb.com/docs/v8.0/changeStreams/#std-label-change-streams-updateLookup).
 	//
-	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages
-	// option using db.createCollection(), create, or collMod, then
-	// the fullDocument field shows the document after it was inserted,
-	// replaced, or updated (the document post-image). fullDocument is always
+	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages option using
+	// db.createCollection(), create, or collMod, then the fullDocument field shows the document
+	// after it was inserted, replaced, or updated (the document post-image). fullDocument is always
 	// included for insert events.
 	//
 	// Changed in version 6.0.
 	FullDocument bson.D `bson:"fullDocument"`
 
-	// FullDocumentBeforeChange is the document before changes were applied by
-	// the operation. That is, the document pre-image.
+	// FullDocumentBeforeChange is the document before changes were applied by the operation. That
+	// is, the document pre-image.
 	//
-	// This field is available when you enable the changeStreamPreAndPostImages
-	// field for a collection using db.createCollection() method or the create
-	// or collMod commands.
+	// This field is available when you enable the changeStreamPreAndPostImages field for a
+	// collection using db.createCollection() method or the create or collMod commands.
 	//
 	// New in version 6.0.
 	// FullDocumentBeforeChange bson.D `bson:"fullDocumentBeforeChange,omitempty"`
@@ -452,16 +401,15 @@ type UpdateEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
-// UpdateDescription is a document describing the fields that were updated or
-// removed by the update operation.
+// UpdateDescription is a document describing the fields that were updated or removed by the update
+// operation.
 type UpdateDescription struct {
-	// DisambiguatedPaths provides clarification of ambiguous field descriptors
-	// in updateDescription.
+	// DisambiguatedPaths provides clarification of ambiguous field descriptors in
+	// updateDescription.
 	//
-	// When the update change event describes changes on a field where the path
-	// contains a period (.) or where the path includes a non-array numeric
-	// subfield, the disambiguatedPath field provides a document with an array
-	// that lists each entry in the path to the modified field.
+	// When the update change event describes changes on a field where the path contains a period
+	// (.) or where the path includes a non-array numeric subfield, the disambiguatedPath field
+	// provides a document with an array that lists each entry in the path to the modified field.
 	//
 	// Requires that you set the showExpandedEvents option to true.
 	//
@@ -471,8 +419,8 @@ type UpdateDescription struct {
 	// An array of fields that were removed by the update operation.
 	RemovedFields []string `bson:"removedFields,omitempty"`
 
-	// An array of documents which record array truncations performed with
-	// pipeline-based updates using one or more of the following stages:
+	// An array of documents which record array truncations performed with pipeline-based updates
+	// using one or more of the following stages:
 	//  - $addFields
 	//  - $set
 	//  - $replaceRoot
@@ -488,42 +436,37 @@ type UpdateDescription struct {
 		NewSize int32 `bson:"newSize"`
 	} `bson:"truncatedArrays,omitempty"`
 
-	// A document whose keys correspond to the fields that were modified by
-	// the update operation. The value of each field corresponds to the new
-	// value of those fields, rather than the operation that resulted in
-	// the new value.
+	// A document whose keys correspond to the fields that were modified by the update operation.
+	// The value of each field corresponds to the new value of those fields, rather than the
+	// operation that resulted in the new value.
 	UpdatedFields bson.D `bson:"updatedFields,omitempty"`
 }
 
-// ReplaceEvent occurs when an update operation removes a document from
-// a collection and replaces it with a new document, such as when the replaceOne
-// method is called.
+// ReplaceEvent occurs when an update operation removes a document from a collection and replaces it
+// with a new document, such as when the replaceOne method is called.
 type ReplaceEvent struct {
-	// DocumentKey is the document that contains the _id value of the document
-	// created or modified by the CRUD operation.
+	// DocumentKey is the document that contains the _id value of the document created or modified
+	// by the CRUD operation.
 	//
-	// For sharded collections, this field also displays the full shard key for
-	// the document. The _id field is not repeated if it is already a part of
-	// the shard key.
+	// For sharded collections, this field also displays the full shard key for the document. The
+	// _id field is not repeated if it is already a part of the shard key.
 	DocumentKey bson.Raw `bson:"documentKey"`
 
 	// FullDocument is the new document created by the operation.
 	//
-	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages
-	// option using db.createCollection(), create, or collMod, then
-	// the fullDocument field shows the document after it was inserted,
-	// replaced, or updated (the document post-image). fullDocument is always
+	// Starting in MongoDB 6.0, if you set the changeStreamPreAndPostImages option using
+	// db.createCollection(), create, or collMod, then the fullDocument field shows the document
+	// after it was inserted, replaced, or updated (the document post-image). fullDocument is always
 	// included for insert events.
 	//
 	// Changed in version 6.0.
 	FullDocument bson.Raw `bson:"fullDocument"`
 
-	// FullDocumentBeforeChange is the document before changes were applied by
-	// the operation. That is, the document pre-image.
+	// FullDocumentBeforeChange is the document before changes were applied by the operation. That
+	// is, the document pre-image.
 	//
-	// This field is available when you enable the changeStreamPreAndPostImages
-	// field for a collection using db.createCollection() method or the create
-	// or collMod commands.
+	// This field is available when you enable the changeStreamPreAndPostImages field for a
+	// collection using db.createCollection() method or the create or collMod commands.
 	//
 	// New in version 6.0.
 	// FullDocumentBeforeChange bson.Raw `bson:"fullDocumentBeforeChange,omitempty"`
@@ -546,6 +489,10 @@ type RenameEvent struct {
 
 // renameOpDesc represents the description of the rename operation.
 type renameOpDesc struct {
+	// DropTarget is UUID of the collection that was dropped in the rename operation.
+	// DropTarget bson.Binary `bson:"dropTarget,omitempty"`
+
+	// To is the new namespace of the collection after the rename.
 	To Namespace `bson:"to"`
 }
 

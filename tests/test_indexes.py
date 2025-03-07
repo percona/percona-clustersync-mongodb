@@ -75,7 +75,7 @@ class TestIndexes(BaseTesting):
             self.source["db_1"]["coll_1"].create_index({"i": 1}, name=name, hidden=True)
             assert self.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 assert "hidden" not in self.target["db_1"]["coll_1"].index_information()[name]
 
@@ -126,27 +126,17 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
-    @pytest.mark.xfail(reason="IndexOptionsConflict")
     def test_create_geospatial(self, phase):
-        # FIXME(phase:clone): create indexes error
-        #   (IndexOptionsConflict) An equivalent index already exists with the same name but different options.
-        #       Requested index: { v: 2, key: { loc2: \"2dsphere\" }, name: \"loc2_2dsphere\",
-        #                          bits: 30, min: -179.0, max: 178.0, 2dsphereIndexVersion: 2 },
-        #       existing index: { v: 2, key: { loc2: \"2dsphere\" }, name: \"loc2_2dsphere\",
-        #                          2dsphereIndexVersion: 2 }
-        # op=createIndexes
-        # s=repl:apply
-        #
-        # reason:
-        #  [clone] (1) create with 2dsphere index.
-        #  [repl]  (1) create 2dsphere with empty bits, min, max fields.
         self.drop_all_database()
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            options = {"bits": 30, "min": -179.0, "max": 178.0, "2dsphereIndexVersion": 2}
-            self.source["db_1"]["coll_1"].create_index({"loc1": pymongo.GEO2D}, **options)
-            self.source["db_1"]["coll_1"].create_index({"loc2": pymongo.GEOSPHERE}, **options)
+            self.source["db_1"]["coll_1"].create_index(
+                {"loc1": pymongo.GEO2D}, bits=30, min=-179.0, max=178.0
+            )
+            self.source["db_1"]["coll_1"].create_index(
+                {"loc2": pymongo.GEOSPHERE}, **{"2dsphereIndexVersion": 2}
+            )
 
         self.compare_all()
 
@@ -323,7 +313,7 @@ class TestIndexes(BaseTesting):
             for prop, val in options.items():
                 assert source_index.get(prop) == val
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 for prop, val in options.items():
@@ -349,7 +339,7 @@ class TestIndexes(BaseTesting):
             source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
             assert source_index["prepareUnique"]
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 assert "prepareUnique" not in target_index
@@ -370,7 +360,7 @@ class TestIndexes(BaseTesting):
             for prop, val in modify_options.items():
                 assert source_index.get(prop) == val
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 for prop, val in modify_options.items():
@@ -393,7 +383,7 @@ class TestIndexes(BaseTesting):
         assert "expireAfterSeconds" not in source_index1
 
         with self.perform(phase) as mlink:
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 assert "prepareUnique" not in target_index
@@ -420,7 +410,7 @@ class TestIndexes(BaseTesting):
             assert source_index2["hidden"]
             assert source_index2["expireAfterSeconds"] == 132
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 assert "prepareUnique" not in target_index
@@ -445,7 +435,7 @@ class TestIndexes(BaseTesting):
             assert source_index3["hidden"]
             assert source_index3["expireAfterSeconds"] == 133
 
-            if phase is Runner.Phase.APPLY:
+            if phase == Runner.Phase.APPLY:
                 mlink.wait_for_current_optime()
                 target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
                 assert "prepareUnique" not in target_index
@@ -475,7 +465,7 @@ class TestIndexesManually(BaseTesting):
             self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
             mlink.finalize()
         except:
-            mlink.finalize_fast()
+            mlink.finalize(fast=True)
             raise
 
         self.compare_all()

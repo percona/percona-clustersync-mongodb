@@ -228,7 +228,7 @@ class TestCollection(BaseTesting):
             )
             self.source.drop_database("db_1")
 
-        if phase is Runner.Phase.CLONE:
+        if phase == Runner.Phase.CLONE:
             # clone started after view has been dropped
             assert self.target["db_1"].list_collection_names() == []
         else:

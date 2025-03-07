@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,7 +27,7 @@ import (
 const (
 	ServerReadTimeout       = 30 * time.Second
 	ServerReadHeaderTimeout = 3 * time.Second
-	MaxRequestSize          = config.KiB
+	MaxRequestSize          = config.MiB
 	ServerResponseTimeout   = 5 * time.Second
 )
 
@@ -90,9 +89,17 @@ func main() {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Get the status of the replication process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(port).Status(cmd.Context())
+		},
+	}
+
 	startCmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start the replication process",
+		Short: "Start Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			pauseOnInitialSync, err := cmd.Flags().GetBool("pause-on-initial-sync")
 			if err != nil {
@@ -106,26 +113,35 @@ func main() {
 			return NewClient(port).Start(cmd.Context(), startOptions)
 		},
 	}
+
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+	startCmd.Flags().MarkHidden("pause-on-initial-sync")
 
 	finalizeCmd := &cobra.Command{
 		Use:   "finalize",
-		Short: "Finalize the replication process",
+		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return NewClient(port).Finalize(cmd.Context())
 		},
 	}
-	finalizeCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get the status of the replication process",
+	pauseCmd := &cobra.Command{
+		Use:   "pause",
+		Short: "Pause Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return NewClient(port).Status(cmd.Context())
+			return NewClient(port).Pause(cmd.Context())
 		},
 	}
 
-	rootCmd.AddCommand(startCmd, finalizeCmd, statusCmd)
+	resumeCmd := &cobra.Command{
+		Use:   "resume",
+		Short: "Resume Cluster Replication",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(port).Resume(cmd.Context())
+		},
+	}
+
+	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd)
 
 	err := rootCmd.Execute()
 	if err != nil {
@@ -151,7 +167,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 		return errors.Wrap(err, "build server address")
 	}
 
-	srv, err := newServer(ctx, sourceURI, targetURI)
+	srv, err := createServer(ctx, sourceURI, targetURI)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
@@ -200,12 +216,12 @@ type server struct {
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-	// mlink is the MongoLink instance for replication.
+	// mlink is the MongoLink instance for cluster replication.
 	mlink *mongolink.MongoLink
 }
 
-// newServer creates a new server with the given options.
-func newServer(ctx context.Context, sourceURI, targetURI string) (*server, error) {
+// createServer creates a new server with the given options.
+func createServer(ctx context.Context, sourceURI, targetURI string) (*server, error) {
 	lg := log.Ctx(ctx)
 
 	source, err := topo.Connect(ctx, sourceURI)
@@ -213,12 +229,34 @@ func newServer(ctx context.Context, sourceURI, targetURI string) (*server, error
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
 
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		err1 := source.Disconnect(ctx)
+		if err1 != nil {
+			log.Ctx(ctx).Warn("Disconnect Source Cluster: " + err1.Error())
+		}
+	}()
+
 	lg.Debug("Connected to source cluster")
 
 	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		err1 := target.Disconnect(ctx)
+		if err1 != nil {
+			log.Ctx(ctx).Warn("Disconnect Target Cluster: " + err1.Error())
+		}
+	}()
 
 	lg.Debug("Connected to target cluster")
 
@@ -243,14 +281,90 @@ func (s *server) Close(ctx context.Context) error {
 func (s *server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/finalize", s.handleFinalize)
-	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/pause", s.handlePause)
+	mux.HandleFunc("/resume", s.handleResume)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.New("http").Info(r.Method + " " + r.URL.String())
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// handleStatus handles the /status endpoint.
+func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
+	defer cancel()
+
+	if r.Method != http.MethodGet {
+		http.Error(w,
+			http.StatusText(http.StatusMethodNotAllowed),
+			http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	if r.ContentLength > MaxRequestSize {
+		http.Error(w,
+			http.StatusText(http.StatusRequestEntityTooLarge),
+			http.StatusRequestEntityTooLarge)
+
+		return
+	}
+
+	status := s.mlink.Status(ctx)
+
+	res := statusResponse{
+		Ok:    status.Error == nil,
+		State: status.State,
+	}
+
+	if err := status.Error; err != nil {
+		res.Err = err.Error()
+	}
+
+	if status.State == mongolink.StateIdle {
+		writeResponse(w, res)
+
+		return
+	}
+
+	res.EventsProcessed = &status.Repl.EventsProcessed
+	res.LagTime = status.TotalLagTime
+
+	if !status.Repl.LastReplicatedOpTime.IsZero() {
+		res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
+			status.Repl.LastReplicatedOpTime.T,
+			status.Repl.LastReplicatedOpTime.I)
+	}
+
+	res.InitialSync = &statusInitialSyncResponse{
+		Completed: status.InitialSyncCompleted,
+		LagTime:   status.InitialSyncLagTime,
+
+		CloneCompleted:     status.Clone.IsFinished(),
+		EstimatedCloneSize: &status.Clone.EstimatedTotalSize,
+		ClonedSize:         status.Clone.CopiedSize,
+	}
+
+	switch {
+	case status.State == mongolink.StateRunning && !status.Clone.IsFinished():
+		res.Info = "Initial Sync: Cloning Data"
+	case status.State == mongolink.StateRunning && !status.InitialSyncCompleted:
+		res.Info = "Initial Sync: Replicating Changes"
+	case status.State == mongolink.StateRunning:
+		res.Info = "Replicating Changes"
+	case status.State == mongolink.StateFinalizing:
+		res.Info = "Finalizing"
+	case status.State == mongolink.StateFinalized:
+		res.Info = "Finalized"
+	case status.State == mongolink.StateFailed:
+		res.Info = "Failed"
+	}
+
+	writeResponse(w, res)
 }
 
 // handleStart handles the /start endpoint.
@@ -274,24 +388,26 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w,
-			http.StatusText(http.StatusInternalServerError),
-			http.StatusInternalServerError)
-
-		return
-	}
-
 	var params startRequest
 
-	err = json.Unmarshal(data, &params)
-	if err != nil {
-		http.Error(w,
-			http.StatusText(http.StatusBadRequest),
-			http.StatusBadRequest)
+	if r.ContentLength != 0 {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError)
 
-		return
+			return
+		}
+
+		err = json.Unmarshal(data, &params)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusBadRequest),
+				http.StatusBadRequest)
+
+			return
+		}
 	}
 
 	options := &mongolink.StartOptions{
@@ -300,9 +416,9 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		ExcludeNamespaces:  params.ExcludeNamespaces,
 	}
 
-	err = s.mlink.Start(ctx, options)
+	err := s.mlink.Start(ctx, options)
 	if err != nil {
-		writeResponse(w, startResponse{Error: err.Error()})
+		writeResponse(w, startResponse{Err: err.Error()})
 
 		return
 	}
@@ -333,7 +449,7 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 
 	err := s.mlink.Finalize(ctx)
 	if err != nil {
-		writeResponse(w, finalizeResponse{Error: err.Error()})
+		writeResponse(w, finalizeResponse{Err: err.Error()})
 
 		return
 	}
@@ -341,12 +457,12 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, finalizeResponse{Ok: true})
 }
 
-// handleStatus handles the /status endpoint.
-func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
+// handlePause handles the /pause endpoint.
+func (s *server) handlePause(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		http.Error(w,
 			http.StatusText(http.StatusMethodNotAllowed),
 			http.StatusMethodNotAllowed)
@@ -354,54 +470,53 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := s.mlink.Status(ctx)
+	if r.ContentLength > MaxRequestSize {
+		http.Error(w,
+			http.StatusText(http.StatusRequestEntityTooLarge),
+			http.StatusRequestEntityTooLarge)
 
-	res := statusResponse{
-		Ok:    status.Error == nil,
-		State: status.State,
+		return
 	}
 
-	if err := status.Error; err != nil {
-		res.Error = err.Error()
+	err := s.mlink.Pause(ctx)
+	if err != nil {
+		writeResponse(w, pauseResponse{Err: err.Error()})
+
+		return
 	}
 
-	if status.State != mongolink.StateIdle {
-		res.EventsProcessed = &status.Repl.EventsProcessed
-		res.LagTime = status.TotalLagTime
+	writeResponse(w, pauseResponse{Ok: true})
+}
 
-		if !status.Repl.LastReplicatedOpTime.IsZero() {
-			res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
-				status.Repl.LastReplicatedOpTime.T,
-				status.Repl.LastReplicatedOpTime.I)
-		}
+// handleResume handles the /resume endpoint.
+func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
+	defer cancel()
 
-		res.InitialSync = &statusInitialSyncResponse{
-			PauseOnInitialSync: status.PauseOnInitialSync,
-			Completed:          status.InitialSyncCompleted,
-			LagTime:            status.InitialSyncLagTime,
-		}
+	if r.Method != http.MethodPost {
+		http.Error(w,
+			http.StatusText(http.StatusMethodNotAllowed),
+			http.StatusMethodNotAllowed)
 
-		res.InitialSync.CloneCompleted = status.Clone.Completed
-		res.InitialSync.EstimatedCloneSize = &status.Clone.EstimatedTotalSize
-		res.InitialSync.ClonedSize = status.Clone.CopiedSize
+		return
 	}
 
-	switch {
-	case status.State == mongolink.StateRunning && !status.Clone.Completed:
-		res.Info = "Initial Sync: Cloning Data"
-	case status.State == mongolink.StateRunning && !status.InitialSyncCompleted:
-		res.Info = "Initial Sync: Replicating Changes"
-	case status.State == mongolink.StateRunning:
-		res.Info = "Replicating Changes"
-	case status.State == mongolink.StateFinalizing:
-		res.Info = "Finalizing"
-	case status.State == mongolink.StateFinalized:
-		res.Info = "Finalized"
-	case status.State == mongolink.StateFailed:
-		res.Info = "Failed"
+	if r.ContentLength > MaxRequestSize {
+		http.Error(w,
+			http.StatusText(http.StatusRequestEntityTooLarge),
+			http.StatusRequestEntityTooLarge)
+
+		return
 	}
 
-	writeResponse(w, res)
+	err := s.mlink.Resume(ctx)
+	if err != nil {
+		writeResponse(w, resumeResponse{Err: err.Error()})
+
+		return
+	}
+
+	writeResponse(w, resumeResponse{Ok: true})
 }
 
 // writeResponse writes the response as JSON to the ResponseWriter.
@@ -411,8 +526,6 @@ func writeResponse[T any](w http.ResponseWriter, resp T) {
 		http.Error(w,
 			http.StatusText(http.StatusInternalServerError),
 			http.StatusInternalServerError)
-
-		return
 	}
 }
 
@@ -431,28 +544,32 @@ type startRequest struct {
 type startResponse struct {
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
-	// Error is the error message if the operation failed.
-	Error string `json:"error,omitempty"`
+	// Err is the error message if the operation failed.
+	Err string `json:"error,omitempty"`
 }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
-	// Error is the error message if the operation failed.
-	Error string `json:"error,omitempty"`
+	// Err is the error message if the operation failed.
+	Err string `json:"error,omitempty"`
 }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
+	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
+
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
+	// Err is the error message if the operation failed.
+	Err string `json:"error,omitempty"`
+
 	// State is the current state of the replication.
 	State mongolink.State `json:"state"`
 	// Info provides additional information about the current state.
 	Info string `json:"info,omitempty"`
-	// Error is the error message if the operation failed.
-	Error string `json:"error,omitempty"`
 
 	// LagTime is the current lag time in logical seconds.
 	LagTime *int64 `json:"lagTime,omitempty"`
@@ -467,45 +584,88 @@ type statusResponse struct {
 
 // statusInitialSyncResponse represents the initial sync status in the /status response.
 type statusInitialSyncResponse struct {
-	// PauseOnInitialSync indicates if the replication is paused on initial sync.
-	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
-
-	// Completed indicates if the initial sync is completed.
-	Completed bool `json:"completed"`
 	// LagTime is the lag time in logical seconds until the initial sync completed.
 	LagTime *int64 `json:"lagTime,omitempty"`
 
-	// CloneCompleted indicates if the cloning process is completed.
-	CloneCompleted bool `json:"cloneCompleted"`
 	// EstimatedCloneSize is the estimated total size of the clone.
 	EstimatedCloneSize *int64 `json:"estimatedCloneSize,omitempty"`
 	// ClonedSize is the size of the data that has been cloned.
 	ClonedSize int64 `json:"clonedSize"`
+
+	// Completed indicates if the initial sync is completed.
+	Completed bool `json:"completed"`
+	// CloneCompleted indicates if the cloning process is completed.
+	CloneCompleted bool `json:"cloneCompleted"`
 }
 
-type Client struct {
+// pauseResponse represents the response body for the /pause endpoint.
+type pauseResponse struct {
+	// Ok indicates if the operation was successful.
+	Ok bool `json:"ok"`
+	// Err is the error message if the operation failed.
+	Err string `json:"error,omitempty"`
+}
+
+// resumeResponse represents the response body for the /resume
+// endpoint.
+type resumeResponse struct {
+	// Ok indicates if the operation was successful.
+	Ok bool `json:"ok"`
+	// Err is the error message if the operation failed.
+	Err string `json:"error,omitempty"`
+}
+
+type MongoLinkClient struct {
 	port string
 }
 
-func NewClient(port string) Client {
-	return Client{port: port}
+func NewClient(port string) MongoLinkClient {
+	return MongoLinkClient{port: port}
 }
 
-// Start sends a request to start the replication process.
-func (c Client) Start(ctx context.Context, startOptions startRequest) error {
-	url := fmt.Sprintf("http://localhost:%s/start", c.port)
+// Status sends a request to get the status of the cluster replication.
+func (c MongoLinkClient) Status(ctx context.Context) error {
+	return doClientRequest[statusResponse](ctx, c.port, http.MethodGet, "status", nil)
+}
 
-	payload, err := json.MarshalIndent(startOptions, "", "  ")
-	if err != nil {
-		return errors.Wrap(err, "marshal request")
+// Start sends a request to start the cluster replication.
+func (c MongoLinkClient) Start(ctx context.Context, startOptions startRequest) error {
+	return doClientRequest[startResponse](ctx, c.port, http.MethodPost, "start", startOptions)
+}
+
+// Finalize sends a request to finalize the cluster replication.
+func (c MongoLinkClient) Finalize(ctx context.Context) error {
+	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", nil)
+}
+
+// Pause sends a request to pause the cluster replication.
+func (c MongoLinkClient) Pause(ctx context.Context) error {
+	return doClientRequest[pauseResponse](ctx, c.port, http.MethodPost, "pause", nil)
+}
+
+// Resume sends a request to resume the cluster replication.
+func (c MongoLinkClient) Resume(ctx context.Context) error {
+	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", nil)
+}
+
+func doClientRequest[T any](ctx context.Context, port, method, path string, options any) error {
+	url := fmt.Sprintf("http://localhost:%s/%s", port, path)
+
+	data := []byte("")
+	if options != nil {
+		var err error
+		data, err = json.Marshal(options)
+		if err != nil {
+			return errors.Wrap(err, "encode request")
+		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil {
 		return errors.Wrap(err, "build request")
 	}
 
-	log.Ctx(ctx).Debug("POST /start\n" + string(payload))
+	log.Ctx(ctx).Debugf("POST /%s %s", path, string(data))
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -513,85 +673,11 @@ func (c Client) Start(ctx context.Context, startOptions startRequest) error {
 	}
 	defer res.Body.Close()
 
-	var resp startResponse
+	var resp T
 
 	err = json.NewDecoder(res.Body).Decode(&resp)
 	if err != nil {
 		return errors.Wrap(err, "decode response")
-	}
-
-	if !resp.Ok {
-		return errors.New(resp.Error)
-	}
-
-	j := json.NewEncoder(os.Stdout)
-	j.SetIndent("", "  ")
-	err = j.Encode(resp)
-
-	return errors.Wrap(err, "print response")
-}
-
-// Finalize sends a request to finalize the replication process.
-func (c Client) Finalize(ctx context.Context) error {
-	url := fmt.Sprintf("http://localhost:%s/finalize", c.port)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
-	if err != nil {
-		return errors.Wrap(err, "build request")
-	}
-
-	log.Ctx(ctx).Debug("POST /finalize {}")
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return errors.Wrap(err, "request")
-	}
-	defer res.Body.Close()
-
-	var resp finalizeResponse
-
-	err = json.NewDecoder(res.Body).Decode(&resp)
-	if err != nil {
-		return errors.Wrap(err, "decode response")
-	}
-
-	if !resp.Ok {
-		return errors.New(resp.Error)
-	}
-
-	j := json.NewEncoder(os.Stdout)
-	j.SetIndent("", "  ")
-	err = j.Encode(resp)
-
-	return errors.Wrap(err, "print response")
-}
-
-// Status sends a request to get the status of the replication process.
-func (c Client) Status(ctx context.Context) error {
-	url := fmt.Sprintf("http://localhost:%s/status", c.port)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return errors.Wrap(err, "build request")
-	}
-
-	log.Ctx(ctx).Debug("GET /status")
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return errors.Wrap(err, "request")
-	}
-	defer res.Body.Close()
-
-	var resp statusResponse
-
-	err = json.NewDecoder(res.Body).Decode(&resp)
-	if err != nil {
-		return errors.Wrap(err, "decode response")
-	}
-
-	if !resp.Ok {
-		return errors.New(resp.Error)
 	}
 
 	j := json.NewEncoder(os.Stdout)

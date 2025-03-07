@@ -49,13 +49,13 @@ class TestTransaction(BaseTesting):
 
                 mlink.start()
                 self.source["db_1"]["coll_1"].insert_one({"i": 3})
-                mlink.wait_for_initial_sync()
 
                 self.source["db_1"]["coll_1"].insert_one({"i": 4, "trx": i}, session=sess)
                 self.source["db_1"]["coll_1"].insert_one({"i": 5})
                 sess.commit_transaction()
 
-            mlink.finalize()
+                mlink.wait_for_current_optime()
+                mlink.finalize()
 
         assert self.source["db_1"]["coll_1"].count_documents({}) == 10
 
