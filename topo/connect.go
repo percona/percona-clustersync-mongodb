@@ -30,7 +30,7 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().
-			SetSink(log.NewMongoLogger(ctx)).
+			SetSink(log.MongoLogger(ctx)).
 			SetComponentLevel(config.MongoLogComponent, config.MongoLogLevel))
 	}
 
