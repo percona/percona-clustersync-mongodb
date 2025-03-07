@@ -8,7 +8,15 @@ import (
 // NSFilter returns true if a namespace is allowed.
 type NSFilter func(db, coll string) bool
 
+func AllowAllFilter(string, string) bool {
+	return true
+}
+
 func MakeFilter(include, exclude []string) NSFilter {
+	if len(include) == 0 && len(exclude) == 0 {
+		return AllowAllFilter
+	}
+
 	includeFilter := doMakeFitler(include)
 	excludeFilter := doMakeFitler(exclude)
 
