@@ -42,13 +42,7 @@ type AttrFn func(l zerolog.Context) zerolog.Context
 
 func Elapsed(dur time.Duration) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		return l.Dur("elapsed_secs", dur.Round(time.Millisecond))
-	}
-}
-
-func TotalElapsed(dur time.Duration) AttrFn {
-	return func(l zerolog.Context) zerolog.Context {
-		return l.Dur("total_elapsed_secs", dur)
+		return l.Dur("elapsed_secs", dur)
 	}
 }
 
@@ -87,10 +81,6 @@ func Tx(txn *int64, lsid []byte) AttrFn {
 	encoded := base64.RawStdEncoding.EncodeToString(hash[:8])
 
 	return func(l zerolog.Context) zerolog.Context {
-		if txn == nil {
-			return l
-		}
-
 		return l.Int64("txn", *txn).Str("sid", encoded)
 	}
 }
@@ -98,9 +88,8 @@ func Tx(txn *int64, lsid []byte) AttrFn {
 // New creates a new Logger with the specified scope.
 func New(scope string) Logger {
 	log := zerolog.Ctx(context.Background()).With().Logger()
-	// replace. (With() adds one more "s" to JSON)
 	log.UpdateContext(func(logContext zerolog.Context) zerolog.Context {
-		return logContext.Str("s", scope)
+		return logContext.Str("s", scope) // replace "s". (With() adds one more "s" to JSON)
 	})
 
 	return Logger{&log}
@@ -112,16 +101,22 @@ type Logger struct {
 }
 
 // Ctx returns a Logger from the context.
+//
+//go:inline
 func Ctx(ctx context.Context) Logger {
 	return Logger{zerolog.Ctx(ctx)}
 }
 
 // WithContext returns a new context with the Logger.
+//
+//go:inline
 func (l Logger) WithContext(ctx context.Context) context.Context {
 	return l.zl.WithContext(ctx)
 }
 
 // With returns a new Logger with the specified attributes.
+//
+//go:inline
 func (l Logger) With(opts ...AttrFn) Logger {
 	c := l.zl.With()
 	for _, opt := range opts {
@@ -133,67 +128,77 @@ func (l Logger) With(opts ...AttrFn) Logger {
 	return Logger{&zl}
 }
 
+//go:inline
 func (l Logger) Unwrap() *zerolog.Logger {
 	return l.zl
 }
 
 // Trace logs a trace level message.
+//
+//go:inline
 func (l Logger) Trace(msg string) {
 	l.zl.Trace().Msg(msg)
 }
 
 // Tracef logs a formatted trace level message.
+//
+//go:inline
 func (l Logger) Tracef(msg string, args ...any) {
 	l.zl.Trace().Msgf(msg, args...)
 }
 
 // Debug logs a debug level message.
+//
+//go:inline
 func (l Logger) Debug(msg string) {
 	l.zl.Debug().Msg(msg)
 }
 
 // Debugf logs a formatted debug level message.
+//
+//go:inline
 func (l Logger) Debugf(msg string, args ...any) {
 	l.zl.Debug().Msgf(msg, args...)
 }
 
 // Info logs an info level message.
+//
+//go:inline
 func (l Logger) Info(msg string) {
 	l.zl.Info().Msg(msg)
 }
 
 // Infof logs a formatted info level message.
+//
+//go:inline
 func (l Logger) Infof(msg string, args ...any) {
 	l.zl.Info().Msgf(msg, args...)
 }
 
-// Info logs an info level message.
-func (l Logger) InfoWith(msg string, attrs ...AttrFn) {
-	c := l.zl.With()
-	for _, apply := range attrs {
-		c = apply(c)
-	}
-
-	lz := c.Logger()
-	lz.Info().Msg(msg)
-}
-
 // Warn logs a warning level message.
+//
+//go:inline
 func (l Logger) Warn(msg string) {
 	l.zl.Warn().Msg(msg)
 }
 
 // Warnf logs a formatted warning level message.
+//
+//go:inline
 func (l Logger) Warnf(msg string, args ...any) {
 	l.zl.Warn().Msgf(msg, args...)
 }
 
 // Error logs an error level message with an error.
+//
+//go:inline
 func (l Logger) Error(err error, msg string) {
 	l.zl.Error().Err(err).Msg(msg)
 }
 
 // Errorf logs a formatted error level message with an error.
+//
+//go:inline
 func (l Logger) Errorf(err error, msg string, args ...any) {
 	l.zl.Error().Err(err).Msgf(msg, args...)
 }

@@ -14,14 +14,14 @@ type MongoLogSink struct {
 
 var _ options.LogSink = MongoLogSink{}
 
-// NewMongoLogger returns a logSink for MongoDB logging.
-func NewMongoLogger(ctx context.Context) MongoLogSink {
+// MongoLogger returns a logSink for MongoDB logging.
+func MongoLogger(ctx context.Context) MongoLogSink {
 	return MongoLogSink{zerolog.Ctx(ctx)}
 }
 
 // Info logs an info level message with additional key-value pairs.
 func (s MongoLogSink) Info(level int, message string, keysAndValues ...any) {
-	s.zl.Info().Int("level", level).Fields(keysAndValues).Msg(message)
+	s.zl.Debug().Int("level", level).Fields(keysAndValues).Msg(message)
 }
 
 // Error logs an error level message with an error and additional key-value pairs.
