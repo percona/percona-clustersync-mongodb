@@ -115,7 +115,7 @@ func main() {
 	}
 
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
-	startCmd.Flags().MarkHidden("pause-on-initial-sync")
+	_ = startCmd.Flags().MarkHidden("pause-on-initial-sync")
 
 	finalizeCmd := &cobra.Command{
 		Use:   "finalize",

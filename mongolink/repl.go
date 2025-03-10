@@ -106,7 +106,7 @@ func (r *Repl) Done() <-chan struct{} {
 }
 
 // Start begins the replication process from the specified start timestamp.
-func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
+func (r *Repl) Start(_ context.Context, startAt bson.Timestamp) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -129,7 +129,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 }
 
 // Pause pauses the change replication.
-func (r *Repl) Pause(ctx context.Context) error {
+func (r *Repl) Pause(context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -167,7 +167,7 @@ func (r *Repl) Pause(ctx context.Context) error {
 	return nil
 }
 
-func (r *Repl) Resume(ctx context.Context) error {
+func (r *Repl) Resume(context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
