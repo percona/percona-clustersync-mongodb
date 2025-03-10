@@ -8,7 +8,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 - **Real-Time Replication**: Tail the oplog to keep your target cluster up to date.
 - **Namespace Filtering**: Specify which databases and collections to include or exclude.
 - **Automatic Index Management**: Ensure necessary indexes are created on the target.
-- **HTTP API**: Start, finalize, and check replication status via REST endpoints.
+- **HTTP API**: Start, finalize, pause, resume, and check replication status via REST endpoints.
 
 ## Setup
 
@@ -87,6 +87,38 @@ bin/mongolink finalize
 curl -X POST http://localhost:2242/finalize
 ```
 
+### Pausing the Replication
+
+To pause the replication process, you can either use the command-line interface or send a POST request to the `/pause` endpoint:
+
+#### Using Command-Line Interface
+
+```sh
+bin/mongolink pause
+```
+
+#### Using HTTP API
+
+```sh
+curl -X POST http://localhost:2242/pause
+```
+
+### Resuming the Replication
+
+To resume the replication process, you can either use the command-line interface or send a POST request to the `/resume` endpoint:
+
+#### Using Command-Line Interface
+
+```sh
+bin/mongolink resume
+```
+
+#### Using HTTP API
+
+```sh
+curl -X POST http://localhost:2242/resume
+```
+
 ### Checking the Status
 
 To check the current status of the replication process, you can either use the command-line interface or send a GET request to the `/status` endpoint:
@@ -131,12 +163,10 @@ When using the `--log-json` option, the logs will be output in JSON format with 
 - `s`: Scope of the log entry.
 - `ns`: Namespace (database.collection format).
 - `elapsed_secs`: The duration in seconds for the specific operation to complete.
-- `total_elapsed_secs`: The cumulative time in seconds for the entire process, including all operations.
 
 Example:
 
 ```json
-
 { "level": "info",
   "s": "clone",
   "ns": "db_1.coll_1",
@@ -149,7 +179,6 @@ Example:
   "elapsed_secs": 0,
   "time": "2025-02-23 11:26:03.857",
   "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
-
 ```
 
 ## HTTP API
@@ -202,28 +231,61 @@ Example:
 }
 ```
 
+### POST /pause
+
+Pauses the replication process.
+
+#### Response
+
+- `ok`: Boolean indicating if the operation was successful.
+- `error` (optional): Error message if the operation failed.
+
+Example:
+
+```json
+{
+  "ok": true
+}
+```
+
+### POST /resume
+
+Resumes the replication process.
+
+#### Response
+
+- `ok`: Boolean indicating if the operation was successful.
+- `error` (optional): Error message if the operation failed.
+
+Example:
+
+```json
+{
+  "ok": true
+}
+```
+
 ### GET /status
 
-The /status endpoint provides the current state of the MongoLink replication
-process, including its progress, lag, and event processing details.
+The /status endpoint provides the current state of the MongoLink replication process, including its progress, lag, and event processing details.
 
 #### Response
 
 - `ok`: indicates if the operation was successful.
 - `state`: the current state of the replication.
-- `info` (optional): provides additional information about the current state.
+- `info`: provides additional information about the current state.
 - `error` (optional): the error message if the operation failed.
 
-- `lagTime` (optional): the current lag time in logical seconds between source and target clusters.
-- `eventsProcessed` (optional): the number of events processed.
-- `lastReplicatedOpTime` (optional): the last replicated operation time.
+- `lagTime`: the current lag time in logical seconds between source and target clusters.
+- `eventsProcessed`: the number of events processed.
+- `lastReplicatedOpTime`: the last replicated operation time.
 
 - `initialSync.completed`: indicates if the initial sync is completed.
 - `initialSync.lagTime`: the lag time in logical seconds until the initial sync completed.
 
 - `initialSync.cloneCompleted`: indicates if the cloning process is completed.
-- `initialSync.estimatedCloneSize` (optional): the estimated total size of the clone.
-- `initialSync.clonedSize` (optional): the size of the data that has been cloned.
+- `initialSync.estimatedCloneSize`: the estimated total size of the clone.
+- `initialSync.clonedSize`: the size of the data that has been cloned.
 
 Example:
 
