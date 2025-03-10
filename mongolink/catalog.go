@@ -404,6 +404,32 @@ func (c *Catalog) ModifyIndex(
 	return nil
 }
 
+func (c *Catalog) Rename(
+	ctx context.Context,
+	db DBName,
+	coll CollName,
+	targetDB DBName,
+	targetColl CollName,
+) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	opts := bson.D{
+		{"renameCollection", db + "." + coll},
+		{"to", targetDB + "." + targetColl},
+		{"dropTarget", true},
+	}
+
+	err := c.target.Database("admin").RunCommand(ctx, opts).Err()
+	if err != nil {
+		return errors.Wrap(err, "rename collection")
+	}
+
+	c.renameCollectionEntry(db, coll, targetColl)
+
+	return nil
+}
+
 // DropIndex drops an index in the target MongoDB.
 func (c *Catalog) DropIndex(ctx context.Context, db DBName, coll CollName, name IndexName) error {
 	c.lock.Lock()
@@ -579,4 +605,22 @@ func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
 
 func (c *Catalog) deleteDatabaseEntry(dbName string) {
 	delete(c.cat, dbName)
+}
+
+func (c *Catalog) renameCollectionEntry(db DBName, coll, targetColl CollName) {
+	databaseEntry := c.cat[db]
+	if len(databaseEntry) == 0 {
+		log.New("catalog:rename").Errorf(nil, "database %q is empty", db)
+
+		databaseEntry = make(map[CollName]map[string]*topo.IndexSpecification)
+		c.cat[db] = databaseEntry
+	}
+
+	collectionEntry := databaseEntry[coll]
+	if len(collectionEntry) == 0 {
+		log.New("catalog:rename").Errorf(nil, `collection "%s.%s" is empty`, db, coll)
+	}
+
+	databaseEntry[targetColl] = databaseEntry[coll]
+	delete(databaseEntry, coll)
 }

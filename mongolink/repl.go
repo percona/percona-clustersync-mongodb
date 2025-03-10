@@ -593,16 +593,11 @@ func (r *Repl) handleRename(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
-	opts := bson.D{
-		{"renameCollection", event.Namespace.String()},
-		{"to", event.OperationDescription.To.String()},
-		{"dropTarget", true},
-	}
-
-	err = r.target.Database("admin").RunCommand(ctx, opts).Err()
-	if err != nil {
-		return errors.Wrap(err, "rename collection")
-	}
+	err = r.catalog.Rename(ctx,
+		event.Namespace.Database,
+		event.Namespace.Collection,
+		event.OperationDescription.To.Database,
+		event.OperationDescription.To.Collection)
 
 	return err //nolint:wrapcheck
 }
