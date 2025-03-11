@@ -125,10 +125,10 @@ class BaseTesting:
     def drop_all_database(self):
         """Drop all databases in the source and target MongoDB."""
         for db in self.source.list_database_names():
-            if db not in ("admin", "config", "local"):
+            if db not in ("admin", "config", "local", "percona_mongolink"):
                 self.source.drop_database(db)
         for db in self.target.list_database_names():
-            if db not in ("admin", "config", "local"):
+            if db not in ("admin", "config", "local", "percona_mongolink"):
                 self.target.drop_database(db)
 
     def drop_database(self, db: str):

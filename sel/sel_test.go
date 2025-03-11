@@ -78,10 +78,6 @@ func TestFilter(t *testing.T) {
 
 		for db, colls := range namespaces {
 			for coll, expected := range colls {
-				if db == "db_1" {
-					_ = coll
-				}
-
 				if got := isIncluded(db, coll); got != expected {
 					t.Errorf("%s.%s: expected %v, got %v", db, coll, expected, got)
 				}
