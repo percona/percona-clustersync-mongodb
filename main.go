@@ -273,10 +273,19 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "run heartbeat")
 	}
 
+	mlink := mongolink.New(source, target)
+
+	err = Restore(ctx, target, mlink)
+	if err != nil {
+		return nil, errors.Wrap(err, "recover MongoLink")
+	}
+
+	go RunCheckpointing(ctx, target, mlink)
+
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		mlink:         mongolink.New(source, target),
+		mlink:         mlink,
 		stopHeartbeat: stopHB,
 	}
 

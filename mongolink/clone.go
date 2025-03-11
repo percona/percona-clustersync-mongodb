@@ -80,6 +80,60 @@ func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFil
 	}
 }
 
+type cloneCheckpoint struct {
+	TotalSize  int64 `bson:"totalSize,omitempty"`
+	CopiedSize int64 `bson:"copiedSize,omitempty"`
+
+	StartTS  bson.Timestamp `bson:"startTS,omitempty"`
+	FinishTS bson.Timestamp `bson:"finishTS,omitempty"`
+
+	StartTime  time.Time `bson:"startTime,omitempty"`
+	FinishTime time.Time `bson:"finishTime,omitempty"`
+
+	Error string `bson:"error,omitempty"`
+}
+
+func (c *Clone) Checkpoint() *cloneCheckpoint {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	cp := &cloneCheckpoint{
+		TotalSize:  c.totalSize,
+		CopiedSize: c.clonedSize.Load(),
+		StartTS:    c.startTS,
+		FinishTS:   bson.Timestamp{},
+		StartTime:  c.startTime,
+		FinishTime: c.finishTime,
+	}
+	if c.err != nil {
+		cp.Error = c.err.Error()
+	}
+
+	return cp
+}
+
+func (c *Clone) Recover(cp *cloneCheckpoint) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if !c.startTS.IsZero() {
+		return errors.New("cannot restore: already used")
+	}
+
+	c.totalSize = cp.TotalSize // XXX: re-calculate
+	c.clonedSize.Store(cp.CopiedSize)
+	c.startTS = cp.StartTS
+	c.finishTS = cp.FinishTS
+	c.startTime = cp.StartTime
+	c.finishTime = cp.FinishTime
+
+	if cp.Error != "" {
+		c.err = errors.New(cp.Error)
+	}
+
+	return nil
+}
+
 // Status returns the current status of the cloning process.
 func (c *Clone) Status() CloneStatus {
 	c.lock.Lock()
@@ -104,7 +158,7 @@ func (c *Clone) Done() <-chan struct{} {
 }
 
 // Start starts the cloning process.
-func (c *Clone) Start(_ context.Context) error {
+func (c *Clone) Start(context.Context) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 

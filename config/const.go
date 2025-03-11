@@ -22,11 +22,15 @@ const (
 	MongoLinkDatabase = "percona_mongolink"
 	// TickCollection is the name of the collection used for ticks during change replication.
 	TickCollection = "ticks"
+	// RecoveryCollection is the name of the collection used for recovery data.
+	RecoveryCollection = "checkpoints"
 	// HeartbeatCollection is the name of the collection used for heartbeats.
 	HeartbeatCollection = "heartbeats"
 )
 
 const (
+	// RecoveryCheckpointingInternal is the interval for recovery checkpointing.
+	RecoveryCheckpointingInternal = time.Minute
 	// HeartbeatInternal is the interval for heartbeats.
 	HeartbeatInternal = 30 * time.Minute
 	// HeartbeatTimeout is the timeout duration for heartbeats.

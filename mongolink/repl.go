@@ -81,6 +81,64 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 	}
 }
 
+type replCheckpoint struct {
+	StartTime            time.Time      `bson:"startTime,omitempty"`
+	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
+	ResumeToken          bson.Raw       `bson:"resumeToken,omitempty"`
+	EventsProcessed      int64          `bson:"events,omitempty"`
+	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
+	Error                string         `bson:"error,omitempty"`
+}
+
+func (r *Repl) Checkpoint() *replCheckpoint {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	cp := &replCheckpoint{
+		StartTime:            r.startTime,
+		PauseTime:            r.pauseTime,
+		ResumeToken:          r.resumeToken,
+		EventsProcessed:      r.eventsProcessed,
+		LastReplicatedOpTime: r.lastReplicatedOpTime,
+	}
+
+	if r.err != nil {
+		cp.Error = r.err.Error()
+	}
+
+	return cp
+}
+
+func (r *Repl) Recover(cp *replCheckpoint) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	if r.err != nil {
+		return errors.Wrap(r.err, "cannot recover due an existing error")
+	}
+
+	if !r.startTime.IsZero() {
+		return errors.New("cannot recovery: already used")
+	}
+
+	pauseTime := cp.PauseTime
+	if pauseTime.IsZero() {
+		pauseTime = time.Now()
+	}
+
+	r.startTime = cp.StartTime
+	r.pauseTime = pauseTime
+	r.resumeToken = cp.ResumeToken
+	r.eventsProcessed = cp.EventsProcessed
+	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
+
+	if cp.Error != "" {
+		r.err = errors.New(cp.Error)
+	}
+
+	return nil
+}
+
 // Status returns the current replication status.
 func (r *Repl) Status() ReplStatus {
 	r.lock.Lock()

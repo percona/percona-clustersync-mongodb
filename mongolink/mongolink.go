@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona-lab/percona-mongolink/config"
@@ -81,6 +82,112 @@ func New(source, target *mongo.Client) *MongoLink {
 		target: target,
 		state:  StateIdle,
 	}
+}
+
+type checkpoint struct {
+	NSInclude []string `bson:"nsInclude,omitempty"`
+	NSExclude []string `bson:"nsExclude,omitempty"`
+
+	Catalog *catalogCheckpoint `bson:"catalog,omitempty"`
+	Clone   *cloneCheckpoint   `bson:"clone,omitempty"`
+	Repl    *replCheckpoint    `bson:"repl,omitempty"`
+
+	State State  `bson:"state"`
+	Error string `bson:"error,omitempty"`
+}
+
+func (ml *MongoLink) Checkpoint(context.Context) ([]byte, error) {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
+
+	if ml.state == StateIdle {
+		return nil, nil
+	}
+
+	// lock writes during checkpoint
+	ml.catalog.LockWrite()
+	defer ml.catalog.UnlockWrite()
+
+	cp := &checkpoint{
+		NSInclude: ml.nsInclude,
+		NSExclude: ml.nsExclude,
+
+		Catalog: ml.catalog.Checkpoint(),
+		Clone:   ml.clone.Checkpoint(),
+		Repl:    ml.repl.Checkpoint(),
+
+		State: ml.state,
+	}
+
+	if ml.err != nil {
+		cp.Error = ml.err.Error()
+	}
+
+	return bson.Marshal(cp) //nolint:wrapcheck
+}
+
+func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
+	ml.lock.Lock()
+	defer ml.lock.Unlock()
+
+	if ml.state != StateIdle {
+		return errors.New("cannot recover: invalid MongoLink state")
+	}
+
+	var cp checkpoint
+
+	err := bson.Unmarshal(data, &cp)
+	if err != nil {
+		return errors.Wrap(err, "unmarshal")
+	}
+
+	if cp.State == StateIdle {
+		return nil
+	}
+
+	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
+	catalog := NewCatalog(ml.target)
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter)
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
+
+	if cp.Catalog != nil {
+		err = catalog.Recover(cp.Catalog)
+		if err != nil {
+			return errors.Wrap(err, "recover catalog")
+		}
+	}
+
+	if cp.Clone != nil {
+		err = clone.Recover(cp.Clone)
+		if err != nil {
+			return errors.Wrap(err, "recover clone")
+		}
+	}
+
+	if cp.Repl != nil {
+		err = repl.Recover(cp.Repl)
+		if err != nil {
+			return errors.Wrap(err, "recover repl")
+		}
+	}
+
+	ml.nsInclude = cp.NSInclude
+	ml.nsExclude = cp.NSExclude
+	ml.nsFilter = nsFilter
+	ml.catalog = catalog
+	ml.clone = clone
+	ml.repl = repl
+	ml.state = cp.State
+
+	if cp.Error != "" {
+		ml.err = errors.New(cp.Error)
+	}
+
+	if cp.State == StateRunning {
+		return ml.doResume(ctx)
+	}
+
+	return nil
 }
 
 // Status returns the current status of the MongoLink.
@@ -196,7 +303,7 @@ func (ml *MongoLink) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lg := log.Ctx(ctx)
+	lg := log.New("mongolink")
 
 	lg.Info("Starting Cluster replication")
 
@@ -350,7 +457,7 @@ func (ml *MongoLink) Resume(ctx context.Context) error {
 	return nil
 }
 
-func (ml *MongoLink) doResume(_ context.Context) error {
+func (ml *MongoLink) doResume(context.Context) error {
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsStarted() {

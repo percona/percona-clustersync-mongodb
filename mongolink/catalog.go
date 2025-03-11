@@ -87,6 +87,42 @@ func NewCatalog(target *mongo.Client) *Catalog {
 	}
 }
 
+type catalogCheckpoint struct {
+	Catalog map[DBName]map[CollName]map[string]*topo.IndexSpecification `bson:"catalog"`
+}
+
+func (c *Catalog) LockWrite() {
+	c.lock.RLock()
+}
+
+func (c *Catalog) UnlockWrite() {
+	c.lock.RUnlock()
+}
+
+func (c *Catalog) Checkpoint() *catalogCheckpoint {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	if len(c.cat) == 0 {
+		return nil
+	}
+
+	return &catalogCheckpoint{Catalog: c.cat}
+}
+
+func (c *Catalog) Recover(cp *catalogCheckpoint) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if len(c.cat) != 0 {
+		return errors.New("cannot restore")
+	}
+
+	c.cat = cp.Catalog
+
+	return nil
+}
+
 func (c *Catalog) CreateCollection(
 	ctx context.Context,
 	db DBName,
