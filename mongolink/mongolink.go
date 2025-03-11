@@ -353,12 +353,12 @@ func (ml *MongoLink) Resume(ctx context.Context) error {
 func (ml *MongoLink) doResume(_ context.Context) error {
 	replStatus := ml.repl.Status()
 
-	if replStatus.IsRunning() {
-		return errors.New("cannot resume: replication is not paused")
+	if !replStatus.IsStarted() {
+		return errors.New("cannot resume: replication is not started")
 	}
 
-	if !replStatus.IsStarted() || !replStatus.IsPaused() {
-		return errors.ErrUnsupported
+	if !replStatus.IsPaused() {
+		return errors.New("cannot resume: replication is not paused")
 	}
 
 	ml.state = StateRunning
