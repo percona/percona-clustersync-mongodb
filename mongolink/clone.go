@@ -19,8 +19,6 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-var ErrCanceled = errors.New("canceled")
-
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
 	source   *mongo.Client // Source MongoDB client
