@@ -99,7 +99,7 @@ func (c *Catalog) UnlockWrite() {
 	c.lock.RUnlock()
 }
 
-func (c *Catalog) Checkpoint() *catalogCheckpoint {
+func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 

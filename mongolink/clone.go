@@ -93,7 +93,7 @@ type cloneCheckpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (c *Clone) Checkpoint() *cloneCheckpoint {
+func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 	c.lock.Lock()
 	defer c.lock.Unlock()
 

@@ -19,10 +19,10 @@ const heartbeatID = "mongolink"
 
 type StopHeartbeat func(context.Context) error
 
-func RunHeartbeat(ctx context.Context, m *mongo.Client) (error, StopHeartbeat) {
+func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 	lastBeat, err := doFirstHeartbeat(ctx, m)
 	if err != nil {
-		return errors.Wrap(err, "first"), nil
+		return nil, errors.Wrap(err, "first")
 	}
 
 	lg := log.New("heartbeat")
@@ -48,11 +48,13 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (error, StopHeartbeat) {
 		}
 	}()
 
-	return nil, func(ctx context.Context) error {
+	stop := func(ctx context.Context) error {
 		cancel()
 
 		return DeleteHeartbeat(ctx, m)
 	}
+
+	return stop, nil
 }
 
 func doFirstHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {

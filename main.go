@@ -98,7 +98,7 @@ func main() {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
-	rootCmd.Flags().MarkHidden("reset-state")
+	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -126,7 +126,7 @@ func main() {
 	}
 
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
-	_ = startCmd.Flags().MarkHidden("pause-on-initial-sync")
+	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	finalizeCmd := &cobra.Command{
 		Use:   "finalize",
@@ -253,10 +253,10 @@ func main() {
 	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd, resetCmd)
 
 	viper.AutomaticEnv()
-	viper.BindPFlag("PML_PORT", rootCmd.Flags().Lookup("port"))
-	viper.BindPFlag("PML_SOURCE_URI", rootCmd.Flags().Lookup("source"))
-	viper.BindPFlag("PML_TARGET_URI", rootCmd.Flags().Lookup("target"))
-	viper.BindPFlag("PML_TARGET_URI", resetCmd.Flags().Lookup("target"))
+	viper.BindPFlag("PML_PORT", rootCmd.Flags().Lookup("port"))          //nolint:errcheck
+	viper.BindPFlag("PML_SOURCE_URI", rootCmd.Flags().Lookup("source"))  //nolint:errcheck
+	viper.BindPFlag("PML_TARGET_URI", rootCmd.Flags().Lookup("target"))  //nolint:errcheck
+	viper.BindPFlag("PML_TARGET_URI", resetCmd.Flags().Lookup("target")) //nolint:errcheck
 
 	err := rootCmd.Execute()
 	if err != nil {
@@ -332,7 +332,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 
 	log.Ctx(ctx).Info("Starting server at http://" + addr)
 
-	return httpServer.ListenAndServe()
+	return httpServer.ListenAndServe() //nolint:wrapcheck
 }
 
 var errUnsupportedPortRange = errors.New("port value is outside the supported range [1024 - 65535]")
@@ -403,7 +403,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	lg.Debug("Connected to target cluster")
 
-	err, stopHB := RunHeartbeat(ctx, target)
+	stopHB, err := RunHeartbeat(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "run heartbeat")
 	}

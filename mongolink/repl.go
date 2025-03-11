@@ -90,7 +90,7 @@ type replCheckpoint struct {
 	Error                string         `bson:"error,omitempty"`
 }
 
-func (r *Repl) Checkpoint() *replCheckpoint {
+func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
