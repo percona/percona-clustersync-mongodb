@@ -15,9 +15,6 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-// ErrUnsupportedTimeseries indicates an unsupported timeseries operation.
-var ErrUnsupportedTimeseries = errors.New("unsupported timeseries")
-
 // IDIndex is the name of the default index.
 const IDIndex IndexName = "_id_"
 
@@ -101,7 +98,7 @@ func (c *Catalog) CreateCollection(
 
 	if opts.ViewOn != "" {
 		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
-			return errors.Wrap(ErrUnsupportedTimeseries, db+"."+coll)
+			return errors.New("timeseries is not supported: " + db + "." + coll)
 		}
 
 		return c.doCreateView(ctx, db, coll, opts)
