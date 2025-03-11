@@ -97,7 +97,6 @@ func (r *Repl) Status() ReplStatus {
 	}
 }
 
-// Pause pauses the replication process.
 func (r *Repl) Done() <-chan struct{} {
 	r.lock.Lock()
 	defer r.lock.Unlock()
