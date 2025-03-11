@@ -85,6 +85,12 @@ func Tx(txn *int64, lsid []byte) AttrFn {
 	}
 }
 
+func Int64(key string, val int64) AttrFn {
+	return func(l zerolog.Context) zerolog.Context {
+		return l.Int64(key, val)
+	}
+}
+
 // New creates a new Logger with the specified scope.
 func New(scope string) Logger {
 	log := zerolog.Ctx(context.Background()).With().Logger()

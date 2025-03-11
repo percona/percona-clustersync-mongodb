@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"time"
 
@@ -167,10 +168,24 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 		return errors.Wrap(err, "build server address")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	defer stop()
+
 	srv, err := createServer(ctx, sourceURI, targetURI)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
+
+	go func() {
+		<-ctx.Done()
+
+		err := srv.Close(context.Background())
+		if err != nil {
+			log.New("server").Error(err, "close server")
+		}
+
+		os.Exit(0)
+	}()
 
 	httpServer := http.Server{
 		Addr:    addr,
@@ -182,16 +197,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 
 	log.Ctx(ctx).Info("Starting server at http://" + addr)
 
-	err = httpServer.ListenAndServe()
-	if err != nil {
-		return errors.Wrap(err, "listen")
-	}
-
-	if err := srv.Close(ctx); err != nil {
-		return errors.Wrap(err, "close server")
-	}
-
-	return nil
+	return httpServer.ListenAndServe()
 }
 
 var errUnsupportedPortRange = errors.New("port value is outside the supported range [1024 - 65535]")
@@ -218,6 +224,8 @@ type server struct {
 	targetCluster *mongo.Client
 	// mlink is the MongoLink instance for cluster replication.
 	mlink *mongolink.MongoLink
+
+	stopHeartbeat func(context.Context) error
 }
 
 // createServer creates a new server with the given options.
@@ -260,21 +268,28 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	lg.Debug("Connected to target cluster")
 
+	err, stopHB := RunHeartbeat(ctx, target)
+	if err != nil {
+		return nil, errors.Wrap(err, "run heartbeat")
+	}
+
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
 		mlink:         mongolink.New(source, target),
+		stopHeartbeat: stopHB,
 	}
 
 	return s, nil
 }
 
-// Close closes the server connections.
+// Close stops heartbeat and closes the server connections.
 func (s *server) Close(ctx context.Context) error {
-	err0 := s.sourceCluster.Disconnect(ctx)
-	err1 := s.targetCluster.Disconnect(ctx)
+	err0 := s.stopHeartbeat(ctx)
+	err1 := s.sourceCluster.Disconnect(ctx)
+	err2 := s.targetCluster.Disconnect(ctx)
 
-	return errors.Join(err0, err1)
+	return errors.Join(err0, err1, err2)
 }
 
 // Handler returns the HTTP handler for the server.

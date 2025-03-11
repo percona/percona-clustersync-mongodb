@@ -20,9 +20,19 @@ const (
 const (
 	// MongoLinkDatabase is the name of the MongoDB database used by MongoLink.
 	MongoLinkDatabase = "percona_mongolink"
+	// TickCollection is the name of the collection used for ticks during change replication.
+	TickCollection = "ticks"
+	// HeartbeatCollection is the name of the collection used for heartbeats.
+	HeartbeatCollection = "heartbeats"
+)
 
-	// TickCollection is the name of the collection used for ticks.
-	TickCollection = "tick"
+const (
+	// HeartbeatInternal is the interval for heartbeats.
+	HeartbeatInternal = 30 * time.Minute
+	// HeartbeatTimeout is the timeout duration for heartbeats.
+	HeartbeatTimeout = 5 * time.Second
+	// StaleHeartbeatDuration is the duration after which a heartbeat is considered stale.
+	StaleHeartbeatDuration = HeartbeatInternal + HeartbeatTimeout
 )
 
 // Change stream and replication settings.
