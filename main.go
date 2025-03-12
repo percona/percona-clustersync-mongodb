@@ -42,10 +42,10 @@ func main() {
 	)
 
 	rootCmd := &cobra.Command{
-		Use:           "mongolink",
-		Short:         "Percona MongoLink replication tool",
-		SilenceErrors: false,
-		SilenceUsage:  true,
+		Use:   "mongolink",
+		Short: "Percona MongoLink replication tool",
+
+		SilenceUsage: true,
 
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			logLevel, err := zerolog.ParseLevel(logLevelFlag)
