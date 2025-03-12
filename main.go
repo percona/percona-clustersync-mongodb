@@ -360,7 +360,7 @@ type server struct {
 	// mlink is the MongoLink instance for cluster replication.
 	mlink *mongolink.MongoLink
 
-	stopHeartbeat func(context.Context) error
+	stopHeartbeat StopHeartbeat
 }
 
 // createServer creates a new server with the given options.
@@ -403,7 +403,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	lg.Debug("Connected to target cluster")
 
-	stopHB, err := RunHeartbeat(ctx, target)
+	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "run heartbeat")
 	}
@@ -421,7 +421,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		sourceCluster: source,
 		targetCluster: target,
 		mlink:         mlink,
-		stopHeartbeat: stopHB,
+		stopHeartbeat: stopHeartbeat,
 	}
 
 	return s, nil
