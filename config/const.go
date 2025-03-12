@@ -32,7 +32,7 @@ const (
 	// RecoveryCheckpointingInternal is the interval for recovery checkpointing.
 	RecoveryCheckpointingInternal = time.Minute
 	// HeartbeatInternal is the interval for heartbeats.
-	HeartbeatInternal = 30 * time.Minute
+	HeartbeatInternal = 30 * time.Second
 	// HeartbeatTimeout is the timeout duration for heartbeats.
 	HeartbeatTimeout = 5 * time.Second
 	// StaleHeartbeatDuration is the duration after which a heartbeat is considered stale.
