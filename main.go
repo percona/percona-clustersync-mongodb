@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/rs/zerolog"
@@ -45,7 +44,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:           "mongolink",
 		Short:         "Percona MongoLink replication tool",
-		SilenceErrors: true,
+		SilenceErrors: false,
 		SilenceUsage:  true,
 
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
@@ -65,14 +64,23 @@ func main() {
 				return nil
 			}
 
-			port := viper.GetString("PML_PORT")
+			port, _ := cmd.Flags().GetString("port")
+			if port == "" {
+				port = os.Getenv("PML_PORT")
+			}
 
-			sourceURI := viper.GetString("PML_SOURCE_URI")
+			sourceURI, _ := cmd.Flags().GetString("source")
+			if sourceURI == "" {
+				sourceURI = os.Getenv("PML_SOURCE_URI")
+			}
 			if sourceURI == "" {
 				return errors.New("required flag --source not set")
 			}
 
-			targetURI := viper.GetString("PML_TARGET_URI")
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
 			if targetURI == "" {
 				return errors.New("required flag --target not set")
 			}
@@ -158,14 +166,14 @@ func main() {
 		Hidden: true,
 	}
 
-	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	resetCmd.Flags().Bool("all", false, "Reset all state")
-
 	resetAllCmd := &cobra.Command{
 		Use:   "all",
 		Short: "Reset MongoLink state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI := viper.GetString("PML_TARGET_URI")
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
 			if targetURI == "" {
 				return errors.New("required flag --target not set")
 			}
@@ -185,7 +193,10 @@ func main() {
 		Use:   "recovery",
 		Short: "Reset recovery state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI := viper.GetString("PML_TARGET_URI")
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
 			if targetURI == "" {
 				return errors.New("required flag --target not set")
 			}
@@ -219,7 +230,10 @@ func main() {
 		Use:   "heartbeat",
 		Short: "Reset heartbeat state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI := viper.GetString("PML_TARGET_URI")
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
 			if targetURI == "" {
 				return errors.New("required flag --target not set")
 			}
@@ -249,14 +263,12 @@ func main() {
 		},
 	}
 
+	resetAllCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	resetHeartbeatCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	resetRecoveryCmd.Flags().String("target", "", "MongoDB connection string for the target")
+
 	resetCmd.AddCommand(resetAllCmd, resetRecoveryCmd, resetHeartbeatCmd)
 	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd, resetCmd)
-
-	viper.AutomaticEnv()
-	viper.BindPFlag("PML_PORT", rootCmd.Flags().Lookup("port"))          //nolint:errcheck
-	viper.BindPFlag("PML_SOURCE_URI", rootCmd.Flags().Lookup("source"))  //nolint:errcheck
-	viper.BindPFlag("PML_TARGET_URI", rootCmd.Flags().Lookup("target"))  //nolint:errcheck
-	viper.BindPFlag("PML_TARGET_URI", resetCmd.Flags().Lookup("target")) //nolint:errcheck
 
 	err := rootCmd.Execute()
 	if err != nil {
