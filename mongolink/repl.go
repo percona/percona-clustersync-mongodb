@@ -273,7 +273,11 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	go func() {
 		err := r.watchChangeStream(watchCtx, opts, eventC)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.New("repl:loop").Error(err, "change stream")
+			r.lock.Lock()
+			r.err = err
+			r.lock.Unlock()
+
+			log.New("repl:loop").Error(err, "watch change stream")
 		}
 	}()
 
@@ -282,6 +286,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 	err := r.replication(replCtx, eventC)
 	if err != nil {
+		r.lock.Lock()
+		r.err = err
+		r.lock.Unlock()
+
 		log.New("repl:loop").Error(err, "")
 	}
 }
@@ -316,7 +324,7 @@ func (r *Repl) watchChangeStream(
 	}
 
 	if err := cur.Err(); err != nil {
-		return errors.Wrap(err, "next")
+		return errors.Wrap(err, "cursor")
 	}
 
 	return nil

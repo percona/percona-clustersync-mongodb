@@ -477,27 +477,31 @@ func (ml *MongoLink) doResume(context.Context) error {
 
 // Finalize finalizes the replication process.
 func (ml *MongoLink) Finalize(ctx context.Context) error {
+	status := ml.Status(ctx)
+
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	cloneStatus := ml.clone.Status()
-	if !cloneStatus.IsFinished() {
+	if status.State == StateFailed {
+		return errors.New("failed state")
+	}
+
+	if !status.Clone.IsFinished() {
 		return errors.New("clone is not completed")
 	}
 
-	replStatus := ml.repl.Status()
-	if !replStatus.IsStarted() {
+	if !status.Repl.IsStarted() {
 		return errors.New("change replication is not started")
 	}
 
-	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
+	if status.Repl.LastReplicatedOpTime.Before(status.Clone.FinishTS) {
 		return errors.New("initial sync is not completed")
 	}
 
 	lg := log.Ctx(ctx)
 	lg.Info("Starting finalization")
 
-	if replStatus.IsRunning() {
+	if status.Repl.IsRunning() {
 		err := ml.repl.Pause(ctx)
 		if err != nil {
 			return err
@@ -505,9 +509,8 @@ func (ml *MongoLink) Finalize(ctx context.Context) error {
 
 		<-ml.repl.Done()
 
-		replStatus = ml.repl.Status()
-		if replStatus.Err != nil {
-			ml.setFailed(errors.Wrap(replStatus.Err, "repl"))
+		if status.Repl.Err != nil {
+			ml.setFailed(errors.Wrap(status.Repl.Err, "repl"))
 
 			return err
 		}
