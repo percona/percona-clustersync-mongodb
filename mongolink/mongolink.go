@@ -206,6 +206,8 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 	}
 
 	switch {
+	case ml.err != nil:
+		s.Error = ml.err
 	case s.Repl.Err != nil:
 		s.Error = errors.Wrap(s.Repl.Err, "Change Replication")
 	case s.Clone.Err != nil:
@@ -476,7 +478,7 @@ func (ml *MongoLink) doResume(context.Context) error {
 }
 
 type FinalizeOptions struct {
-	AllowOnOplogOORError bool
+	IgnoreHistoryLost bool
 }
 
 // Finalize finalizes the replication process.
@@ -486,8 +488,10 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	if status.State == StateFailed && !options.AllowOnOplogOORError {
-		return errors.New("failed state")
+	if status.State == StateFailed {
+		if !(options.IgnoreHistoryLost && errors.Is(status.Repl.Err, ErrOplogHistoryLost)) {
+			return errors.Wrap(status.Error, "failed state")
+		}
 	}
 
 	if !status.Clone.IsFinished() {
@@ -498,27 +502,26 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 		return errors.New("change replication is not started")
 	}
 
-	if status.Repl.LastReplicatedOpTime.Before(status.Clone.FinishTS) {
+	if !status.InitialSyncCompleted {
 		return errors.New("initial sync is not completed")
 	}
 
 	lg := log.Ctx(ctx)
 	lg.Info("Starting finalization")
 
-	oplogOORError := options.AllowOnOplogOORError && status.Repl.IsOplogOORError()
-
-	if status.Repl.IsRunning() && !oplogOORError {
+	if status.Repl.IsRunning() {
 		err := ml.repl.Pause(ctx)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "pause change replication")
 		}
 
 		<-ml.repl.Done()
 
-		if status.Repl.Err != nil {
-			ml.setFailed(errors.Wrap(status.Repl.Err, "repl"))
-
-			return err
+		err = ml.repl.Status().Err
+		if err != nil {
+			// no need to set the MongoLink failed status here.
+			// [MongoLink.setFailed] is called in [MongoLink.run].
+			return errors.Wrap(err, "post-pause change replication")
 		}
 	}
 

@@ -16,6 +16,10 @@ func IsIndexOptionsConflict(err error) bool {
 	return isMongoCommandError(err, "IndexOptionsConflict")
 }
 
+func IsChangeStreamHistoryLost(err error) bool {
+	return isMongoCommandError(err, "ChangeStreamHistoryLost")
+}
+
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	for err != nil {

@@ -16,9 +16,13 @@ import (
 	"github.com/percona-lab/percona-mongolink/list"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/sel"
+	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-var ErrInvalidateEvent = errors.New("invalidate")
+var (
+	ErrInvalidateEvent  = errors.New("invalidate")
+	ErrOplogHistoryLost = errors.New("oplog history is lost")
+)
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
@@ -68,11 +72,6 @@ func (rs *ReplStatus) IsRunning() bool {
 //go:inline
 func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
-}
-
-//go:inline
-func (rs *ReplStatus) IsOplogOORError() bool {
-	return rs.Err != nil && strings.Contains(rs.Err.Error(), "resume point may no longer be in the oplog")
 }
 
 func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Repl {
@@ -278,8 +277,12 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	go func() {
 		err := r.watchChangeStream(watchCtx, opts, eventC)
 		if err != nil && !errors.Is(err, context.Canceled) {
+			if topo.IsChangeStreamHistoryLost(err) {
+				err = ErrOplogHistoryLost
+			}
+
 			r.lock.Lock()
-			r.err = err
+			r.err = errors.Wrap(err, "watch change stream")
 			r.lock.Unlock()
 
 			log.New("repl:loop").Error(err, "watch change stream")
@@ -292,10 +295,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	err := r.replication(replCtx, eventC)
 	if err != nil {
 		r.lock.Lock()
-		r.err = err
+		r.err = errors.Wrap(err, "replication")
 		r.lock.Unlock()
 
-		log.New("repl:loop").Error(err, "")
+		log.New("repl:loop").Error(err, "replication")
 	}
 }
 

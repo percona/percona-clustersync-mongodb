@@ -140,20 +140,18 @@ func main() {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			allowOnOplogOORerror, err := cmd.Flags().GetBool("allow-on-oplog-oor-error")
-			if err != nil {
-				return err //nolint:wrapcheck
-			}
+			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
 			finalizeOptions := finalizeRequest{
-				AllowOnOplogOORerror: allowOnOplogOORerror,
+				IgnoreHistoryLost: ignoreHistoryLost,
 			}
 
 			return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
 		},
 	}
 
-	finalizeCmd.Flags().Bool("allow-on-oplog-oor-error", false, "Allow on oplog out of range error")
+	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore ChangeStreamHistoryLost error")
+	finalizeCmd.Flags().MarkHidden("ignore-history-lost")
 
 	pauseCmd := &cobra.Command{
 		Use:   "pause",
@@ -652,7 +650,7 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	options := &mongolink.FinalizeOptions{
-		AllowOnOplogOORError: params.AllowOnOplogOORerror,
+		IgnoreHistoryLost: params.IgnoreHistoryLost,
 	}
 
 	err := s.mlink.Finalize(ctx, *options)
@@ -758,8 +756,9 @@ type startResponse struct {
 
 // finalizeRequest represents the request body for the /finalize endpoint.
 type finalizeRequest struct {
-	// AllowOnOplogOORerror indicates if the operation should be allowed on oplog out of range error.
-	AllowOnOplogOORerror bool `json:"allowOnOplogOorError,omitempty"`
+	// IgnoreHistoryLost indicates whether the operation can ignore the ChangeStreamHistoryLost
+	// error.
+	IgnoreHistoryLost bool `json:"ignoreChangeStreamHistoryLost,omitempty"`
 }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
