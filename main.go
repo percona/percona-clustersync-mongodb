@@ -150,7 +150,7 @@ func main() {
 		},
 	}
 
-	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore ChangeStreamHistoryLost error")
+	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
 	finalizeCmd.Flags().MarkHidden("ignore-history-lost")
 
 	pauseCmd := &cobra.Command{
@@ -758,7 +758,7 @@ type startResponse struct {
 type finalizeRequest struct {
 	// IgnoreHistoryLost indicates whether the operation can ignore the ChangeStreamHistoryLost
 	// error.
-	IgnoreHistoryLost bool `json:"ignoreChangeStreamHistoryLost,omitempty"`
+	IgnoreHistoryLost bool `json:"ignoreHistoryLost,omitempty"`
 }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
