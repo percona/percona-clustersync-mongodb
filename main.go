@@ -140,9 +140,20 @@ func main() {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return NewClient(port).Finalize(cmd.Context())
+			allowOnOplogOORerror, err := cmd.Flags().GetBool("allow-on-oplog-oor-error")
+			if err != nil {
+				return err //nolint:wrapcheck
+			}
+
+			finalizeOptions := finalizeRequest{
+				AllowOnOplogOORerror: allowOnOplogOORerror,
+			}
+
+			return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
 		},
 	}
+
+	finalizeCmd.Flags().Bool("allow-on-oplog-oor-error", false, "Allow on oplog out of range error")
 
 	pauseCmd := &cobra.Command{
 		Use:   "pause",
@@ -618,7 +629,33 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.mlink.Finalize(ctx)
+	var params finalizeRequest
+
+	if r.ContentLength != 0 {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError)
+
+			return
+		}
+
+		err = json.Unmarshal(data, &params)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusBadRequest),
+				http.StatusBadRequest)
+
+			return
+		}
+	}
+
+	options := &mongolink.FinalizeOptions{
+		AllowOnOplogOORError: params.AllowOnOplogOORerror,
+	}
+
+	err := s.mlink.Finalize(ctx, *options)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -719,6 +756,12 @@ type startResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
+// finalizeRequest represents the request body for the /finalize endpoint.
+type finalizeRequest struct {
+	// AllowOnOplogOORerror indicates if the operation should be allowed on oplog out of range error.
+	AllowOnOplogOORerror bool `json:"allowOnOplogOorError,omitempty"`
+}
+
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
 	// Ok indicates if the operation was successful.
@@ -800,13 +843,13 @@ func (c MongoLinkClient) Status(ctx context.Context) error {
 }
 
 // Start sends a request to start the cluster replication.
-func (c MongoLinkClient) Start(ctx context.Context, startOptions startRequest) error {
-	return doClientRequest[startResponse](ctx, c.port, http.MethodPost, "start", startOptions)
+func (c MongoLinkClient) Start(ctx context.Context, req startRequest) error {
+	return doClientRequest[startResponse](ctx, c.port, http.MethodPost, "start", req)
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c MongoLinkClient) Finalize(ctx context.Context) error {
-	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", nil)
+func (c MongoLinkClient) Finalize(ctx context.Context, req finalizeRequest) error {
+	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
 }
 
 // Pause sends a request to pause the cluster replication.
@@ -819,24 +862,24 @@ func (c MongoLinkClient) Resume(ctx context.Context) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", nil)
 }
 
-func doClientRequest[T any](ctx context.Context, port, method, path string, options any) error {
+func doClientRequest[T any](ctx context.Context, port, method, path string, body any) error {
 	url := fmt.Sprintf("http://localhost:%s/%s", port, path)
 
-	data := []byte("")
-	if options != nil {
+	bodyData := []byte("")
+	if body != nil {
 		var err error
-		data, err = json.Marshal(options)
+		bodyData, err = json.Marshal(body)
 		if err != nil {
 			return errors.Wrap(err, "encode request")
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyData))
 	if err != nil {
 		return errors.Wrap(err, "build request")
 	}
 
-	log.Ctx(ctx).Debugf("POST /%s %s", path, string(data))
+	log.Ctx(ctx).Debugf("POST /%s %s", path, string(bodyData))
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -70,6 +70,11 @@ func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
+//go:inline
+func (rs *ReplStatus) IsOplogOORError() bool {
+	return rs.Err != nil && strings.Contains(rs.Err.Error(), "resume point may no longer be in the oplog")
+}
+
 func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Repl {
 	return &Repl{
 		source:   source,

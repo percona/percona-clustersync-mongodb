@@ -475,14 +475,18 @@ func (ml *MongoLink) doResume(context.Context) error {
 	return nil
 }
 
+type FinalizeOptions struct {
+	AllowOnOplogOORError bool
+}
+
 // Finalize finalizes the replication process.
-func (ml *MongoLink) Finalize(ctx context.Context) error {
+func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) error {
 	status := ml.Status(ctx)
 
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	if status.State == StateFailed {
+	if status.State == StateFailed && !options.AllowOnOplogOORError {
 		return errors.New("failed state")
 	}
 
@@ -501,7 +505,9 @@ func (ml *MongoLink) Finalize(ctx context.Context) error {
 	lg := log.Ctx(ctx)
 	lg.Info("Starting finalization")
 
-	if status.Repl.IsRunning() {
+	oplogOORError := options.AllowOnOplogOORError && status.Repl.IsOplogOORError()
+
+	if status.Repl.IsRunning() && !oplogOORError {
 		err := ml.repl.Pause(ctx)
 		if err != nil {
 			return err
