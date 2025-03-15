@@ -1,101 +1,117 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
-from _base import BaseTesting
+import testing
+import testing as testing
 from mlink import Runner
+from pymongo import MongoClient
+
+
+def perform_with_options(source, mlink, phase: Runner.Phase, include_ns=None, exclude_ns=None):
+    """Perform the MongoLink operation with the given options."""
+    mlink_options = {}
+    if include_ns:
+        mlink_options["include_namespaces"] = include_ns
+    if exclude_ns:
+        mlink_options["exclude_namespaces"] = exclude_ns
+
+    return Runner(source, mlink, phase, mlink_options)
+
+
+def check_if_target_is_subset(source: MongoClient, target: MongoClient):
+    """Check if the target MongoDB is a subset of the source MongoDB."""
+    source_dbs = set(testing.list_databases(source))
+    target_dbs = set(testing.list_databases(target))
+    assert set(target_dbs).issubset(source_dbs)
+
+    for db in target_dbs:
+        source_colls = set(testing.list_collections(source, db))
+        target_colls = set(testing.list_collections(target, db))
+        assert set(target_colls).issubset(source_colls)
+
+        for coll in target_colls:
+            testing.compare_namespace(source, target, db, coll)
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-class TestSelective(BaseTesting):
-    def test_create_collection_with_include_only(self, phase):
-        self.drop_all_database()
+def test_create_collection_with_include_only(t: testing.Testing, phase: Runner.Phase):
+    with perform_with_options(
+        t.source,
+        t.mlink,
+        phase,
+        include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
+    ):
+        for db in range(3):
+            for coll in range(3):
+                t.source["db_1"]["coll_1"].create_index({"i": 1})
+                t.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
 
-        with self.perform_with_options(
-            phase,
-            include_ns=[
-                "db_0.*",
-                "db_1.coll_0",
-                "db_1.coll_1",
-                "db_2.coll_0",
-                "db_2.coll_1",
-            ],
-        ):
-            for db in range(3):
-                for coll in range(3):
-                    self.source["db_1"]["coll_1"].create_index({"i": 1})
-                    self.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
+    expected = {
+        "db_0.coll_0",
+        "db_0.coll_1",
+        "db_0.coll_2",
+        "db_1.coll_0",
+        "db_1.coll_1",
+        # "db_1.coll_2",
+        "db_2.coll_0",
+        "db_2.coll_1",
+        # "db_2.coll_2",
+    }
 
-        expected = {
-            "db_0.coll_0",
-            "db_0.coll_1",
-            "db_0.coll_2",
-            "db_1.coll_0",
-            "db_1.coll_1",
-            # "db_1.coll_2",
-            "db_2.coll_0",
-            "db_2.coll_1",
-            # "db_2.coll_2",
-        }
+    assert expected == set(t.list_all_namespaces(t.target))
+    check_if_target_is_subset(t.source, t.target)
 
-        assert expected == self.all_target_namespaces()
-        self.check_if_target_is_subset()
 
-    def test_create_collection_with_exclude_only(self, phase):
-        self.drop_all_database()
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.Phase):
+    with perform_with_options(
+        t.source, t.mlink, phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]
+    ):
+        for db in range(3):
+            for coll in range(3):
+                t.source["db_1"]["coll_1"].create_index({"i": 1})
+                t.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
 
-        with self.perform_with_options(phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]):
-            for db in range(3):
-                for coll in range(3):
-                    self.source["db_1"]["coll_1"].create_index({"i": 1})
-                    self.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
+    expected = {
+        # "db_0.coll_0",
+        # "db_0.coll_1",
+        # "db_0.coll_2",
+        # "db_1.coll_0",
+        # "db_1.coll_1",
+        "db_1.coll_2",
+        "db_2.coll_0",
+        "db_2.coll_1",
+        "db_2.coll_2",
+    }
 
-        expected = {
-            # "db_0.coll_0",
-            # "db_0.coll_1",
-            # "db_0.coll_2",
-            # "db_1.coll_0",
-            # "db_1.coll_1",
-            "db_1.coll_2",
-            "db_2.coll_0",
-            "db_2.coll_1",
-            "db_2.coll_2",
-        }
+    assert expected == set(t.list_all_namespaces(t.target))
+    check_if_target_is_subset(t.source, t.target)
 
-        assert expected == self.all_target_namespaces()
-        self.check_if_target_is_subset()
 
-    def test_create_collection(self, phase):
-        self.drop_all_database()
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_create_collection(t: testing.Testing, phase: Runner.Phase):
+    with perform_with_options(
+        t.source,
+        t.mlink,
+        phase,
+        include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
+        exclude_ns=["db_0.*", "db_1.coll_0"],
+    ):
+        for db in range(3):
+            for coll in range(3):
+                t.source["db_1"]["coll_1"].create_index({"i": 1})
+                t.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
 
-        with self.perform_with_options(
-            phase,
-            include_ns=[
-                "db_0.*",
-                "db_1.coll_0",
-                "db_1.coll_1",
-                "db_2.coll_0",
-                "db_2.coll_1",
-            ],
-            exclude_ns=[
-                "db_0.*",
-                "db_1.coll_0",
-            ],
-        ):
-            for db in range(3):
-                for coll in range(3):
-                    self.source["db_1"]["coll_1"].create_index({"i": 1})
-                    self.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
+    expected = {
+        # "db_0.coll_0",
+        # "db_0.coll_1",
+        # "db_0.coll_2",
+        # "db_1.coll_0",
+        "db_1.coll_1",
+        # "db_1.coll_2",
+        "db_2.coll_0",
+        "db_2.coll_1",
+        # "db_2.coll_2",
+    }
 
-        expected = {
-            # "db_0.coll_0",
-            # "db_0.coll_1",
-            # "db_0.coll_2",
-            # "db_1.coll_0",
-            "db_1.coll_1",
-            # "db_1.coll_2",
-            "db_2.coll_0",
-            "db_2.coll_1",
-            # "db_2.coll_2",
-        }
-
-        assert expected == self.all_target_namespaces()
-        self.check_if_target_is_subset()
+    assert expected == set(t.list_all_namespaces(t.target))
+    check_if_target_is_subset(t.source, t.target)

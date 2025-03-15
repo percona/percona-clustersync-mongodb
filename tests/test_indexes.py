@@ -3,497 +3,489 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from _base import BaseTesting
 from mlink import Runner
+from testing import Testing
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-class TestIndexes(BaseTesting):
-    def test_create(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+def test_create(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1})
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1})
 
-        self.compare_all()
+    t.compare_all()
 
-    def test_create_with_collation(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, collation={"locale": "en_US"})
+def test_create_with_collation(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, collation={"locale": "en_US"})
 
-    def test_create_unique(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    t.compare_all()
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
 
-        self.compare_all()
+def test_create_unique(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-    def test_create_prepare_unique(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
+    t.compare_all()
 
-        self.compare_all()
 
-    def test_create_sparse(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, sparse=True)
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
 
-        self.compare_all()
+    t.compare_all()
 
-    def test_create_partial(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index(
-                {"i": 1},
-                partialFilterExpression={"j": {"$gt": 5}},
-            )
+def test_create_sparse(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, sparse=True)
 
-    def test_create_hidden(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    t.compare_all()
 
-        with self.perform(phase) as mlink:
-            name = "i_1"
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, name=name, hidden=True)
-            assert self.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                assert "hidden" not in self.target["db_1"]["coll_1"].index_information()[name]
+def test_create_partial(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index(
+            {"i": 1},
+            partialFilterExpression={"j": {"$gt": 5}},
+        )
 
-    def test_create_hashed(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    t.compare_all()
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": pymongo.HASHED})
 
-        self.compare_all()
+def test_create_hidden(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-    def test_create_compound(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    with t.run(phase) as mlink:
+        name = "i_1"
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, name=name, hidden=True)
+        assert t.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1, "j": -1})
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            assert "hidden" not in t.target["db_1"]["coll_1"].index_information()[name]
 
-        self.compare_all()
+    t.compare_all()
 
-    def test_create_multikey(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i.j": 1})
+def test_create_hashed(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": pymongo.HASHED})
 
-    def test_create_wildcard(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    t.compare_all()
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"$**": 1})
 
-        self.compare_all()
+def test_create_compound(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-    def test_create_wildcard_projection(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": -1})
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"$**": 1}, wildcardProjection={"a.*": 1})
+    t.compare_all()
 
-        self.compare_all()
 
-    def test_create_geospatial(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+def test_create_multikey(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index(
-                {"loc1": pymongo.GEO2D}, bits=30, min=-179.0, max=178.0
-            )
-            self.source["db_1"]["coll_1"].create_index(
-                {"loc2": pymongo.GEOSPHERE}, **{"2dsphereIndexVersion": 2}
-            )
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i.j": 1})
 
-        self.compare_all()
+    t.compare_all()
 
-    def test_create_text(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index(
-                [("title", pymongo.TEXT), ("description", pymongo.TEXT)],
-                name="ArticlesTextIndex",
-                default_language="english",
-                language_override="language",
-                weights={"title": 10, "description": 5},
-            )
+def test_create_wildcard(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        self.compare_all()
-
-    def test_create_text_wildcard(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
-
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"$**": "text"})
-
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"$**": 1})
 
-    def test_create_ttl(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+    t.compare_all()
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=1)
 
-        self.compare_all()
+def test_create_wildcard_projection(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-    def test_drop_cloned(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
-        self.create_index("db_1", "coll_1", [("i", 1)])
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"$**": 1}, wildcardProjection={"a.*": 1})
 
-        with self.perform(phase):
-            self.source["db_1"]["coll_1"].drop_index([("i", 1)])
+    t.compare_all()
 
-        self.compare_all()
 
-    def test_drop_created(self, phase):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+def test_create_geospatial(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
-            self.source["db_1"]["coll_1"].drop_index(index_name)
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index(
+            {"loc1": pymongo.GEO2D}, bits=30, min=-179.0, max=178.0
+        )
+        t.source["db_1"]["coll_1"].create_index(
+            {"loc2": pymongo.GEOSPHERE}, **{"2dsphereIndexVersion": 2}
+        )
 
-        self.compare_all()
+    t.compare_all()
 
-    def test_modify_hide(self, phase):
-        self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert "hidden" not in indexes[index_name]
+def test_create_text(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "name": index_name,
-                        "hidden": True,
-                    },
-                }
-            )
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index(
+            [("title", pymongo.TEXT), ("description", pymongo.TEXT)],
+            name="ArticlesTextIndex",
+            default_language="english",
+            language_override="language",
+            weights={"title": 10, "description": 5},
+        )
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name]["hidden"]
+    t.compare_all()
 
-        self.compare_all()
 
-    def test_modify_unhide(self, phase):
-        self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
+def test_create_text_wildcard(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert "hidden" in indexes[index_name]
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"$**": "text"})
 
-        with self.perform(phase):
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "keyPattern": {"i": 1},
-                        "hidden": False,
-                    },
-                }
-            )
+    t.compare_all()
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert "hidden" not in indexes[index_name]
 
-        self.compare_all()
+def test_create_ttl(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
 
-    def test_modify_ttl(self, phase):
-        self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=123)
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=1)
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name]["expireAfterSeconds"] == 123
+    t.compare_all()
 
-        with self.perform(phase):
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "keyPattern": {"i": 1},
-                        "expireAfterSeconds": 432,
-                    },
-                }
-            )
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert indexes[index_name]["expireAfterSeconds"] == 432
+def test_drop_cloned(t: Testing, phase: Runner.Phase):
+    t.source["db_1"]["coll_1"].create_index([("i", 1)])
+    t.target["db_1"]["coll_1"].create_index([("i", 1)])
 
-        self.compare_all()
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].drop_index([("i", 1)])
 
-    def test_modify_unique(self, phase):
-        self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
+    t.compare_all()
 
-        indexes = self.source["db_1"]["coll_1"].index_information()
-        assert "prepareUnique" not in indexes[index_name]
+
+def test_drop_created(t: Testing, phase: Runner.Phase):
+    t.ensure_collection("db_1", "coll_1")
+
+    with t.run(phase):
+        index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
+        t.source["db_1"]["coll_1"].drop_index(index_name)
+
+    t.compare_all()
+
+
+def test_modify_hide(t: Testing, phase: Runner.Phase):
+    index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert "hidden" not in indexes[index_name]
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "name": index_name,
+                    "hidden": True,
+                },
+            }
+        )
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert indexes[index_name]["hidden"]
+
+    t.compare_all()
+
+
+def test_modify_unhide(t: Testing, phase: Runner.Phase):
+    index_name = t.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert "hidden" in indexes[index_name]
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "keyPattern": {"i": 1},
+                    "hidden": False,
+                },
+            }
+        )
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert "hidden" not in indexes[index_name]
+
+    t.compare_all()
+
+
+def test_modify_ttl(t: Testing, phase: Runner.Phase):
+    index_name = t.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=123)
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert indexes[index_name]["expireAfterSeconds"] == 123
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "keyPattern": {"i": 1},
+                    "expireAfterSeconds": 432,
+                },
+            }
+        )
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert indexes[index_name]["expireAfterSeconds"] == 432
+
+    t.compare_all()
+
+
+def test_modify_unique(t: Testing, phase: Runner.Phase):
+    index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
+
+    indexes = t.source["db_1"]["coll_1"].index_information()
+    assert "prepareUnique" not in indexes[index_name]
+    assert "unique" not in indexes[index_name]
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {"keyPattern": {"i": 1}, "prepareUnique": True},
+            }
+        )
+
+        indexes = t.source["db_1"]["coll_1"].index_information()
+        assert indexes[index_name]["prepareUnique"]
         assert "unique" not in indexes[index_name]
 
-        with self.perform(phase):
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {"keyPattern": {"i": 1}, "prepareUnique": True},
-                }
-            )
-
-            indexes = self.source["db_1"]["coll_1"].index_information()
-            assert indexes[index_name]["prepareUnique"]
-            assert "unique" not in indexes[index_name]
-
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "keyPattern": {"i": 1},
-                        "unique": True,
-                    },
-                }
-            )
-
-            indexes = self.source["db_1"]["coll_1"].index_information()
-            assert "prepareUnique" not in indexes[index_name]
-            assert indexes[index_name]["unique"]
-
-        self.compare_all()
-
-    def test_internal_create_many_props(self, phase):
-        self.drop_all_database()
-
-        with self.perform(phase) as mlink:
-            options = {
-                "unique": True,
-                "hidden": True,
-                "expireAfterSeconds": 3600,
-            }
-            index_name = self.source["db_1"]["coll_1"].create_index({"i": 1}, **options)
-
-            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
-            for prop, val in options.items():
-                assert source_index.get(prop) == val
-
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                for prop, val in options.items():
-                    if prop == "expireAfterSeconds":
-                        assert target_index["expireAfterSeconds"] == (2**31) - 1
-                    else:
-                        assert not target_index.get(prop)
-
-        self.compare_all()
-
-    def test_internal_modify_many_props(self, phase):
-        self.drop_all_database()
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
-
-        with self.perform(phase) as mlink:
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {"name": index_name, "prepareUnique": True},
-                }
-            )
-
-            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
-            assert source_index["prepareUnique"]
-
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                assert "prepareUnique" not in target_index
-
-            modify_options = {
-                "unique": True,
-                "hidden": True,
-                "expireAfterSeconds": 3600,
-            }
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {"name": index_name, **modify_options},
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "keyPattern": {"i": 1},
+                    "unique": True,
                 },
-            )
+            }
+        )
 
-            source_index = self.source["db_1"]["coll_1"].index_information()[index_name]
+        indexes = t.source["db_1"]["coll_1"].index_information()
+        assert "prepareUnique" not in indexes[index_name]
+        assert indexes[index_name]["unique"]
+
+    t.compare_all()
+
+
+def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
+    with t.run(phase) as mlink:
+        options = {
+            "unique": True,
+            "hidden": True,
+            "expireAfterSeconds": 3600,
+        }
+        index_name = t.source["db_1"]["coll_1"].create_index({"i": 1}, **options)
+
+        source_index = t.source["db_1"]["coll_1"].index_information()[index_name]
+        for prop, val in options.items():
+            assert source_index.get(prop) == val
+
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            for prop, val in options.items():
+                if prop == "expireAfterSeconds":
+                    assert target_index["expireAfterSeconds"] == (2**31) - 1
+                else:
+                    assert not target_index.get(prop)
+
+    t.compare_all()
+
+
+def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
+    index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
+
+    with t.run(phase) as mlink:
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {"name": index_name, "prepareUnique": True},
+            }
+        )
+
+        source_index = t.source["db_1"]["coll_1"].index_information()[index_name]
+        assert source_index["prepareUnique"]
+
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in target_index
+
+        modify_options = {
+            "unique": True,
+            "hidden": True,
+            "expireAfterSeconds": 3600,
+        }
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {"name": index_name, **modify_options},
+            },
+        )
+
+        source_index = t.source["db_1"]["coll_1"].index_information()[index_name]
+        for prop, val in modify_options.items():
+            assert source_index.get(prop) == val
+
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             for prop, val in modify_options.items():
-                assert source_index.get(prop) == val
+                if prop == "expireAfterSeconds":
+                    assert target_index["expireAfterSeconds"] == (2**31) - 1
+                else:
+                    assert not target_index.get(prop)
 
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                for prop, val in modify_options.items():
-                    if prop == "expireAfterSeconds":
-                        assert target_index["expireAfterSeconds"] == (2**31) - 1
-                    else:
-                        assert not target_index.get(prop)
-
-        self.compare_all()
-
-    def test_internal_modify_index_props_complex(self, phase):
-        self.drop_all_database()
-        index_key = {"i": 1}
-        index_name = self.source["db_1"]["coll_1"].create_index(index_key, prepareUnique=True)
-
-        source_index1 = self.source["db_1"]["coll_1"].index_information()[index_name]
-        assert source_index1["prepareUnique"]
-        assert "unique" not in source_index1
-        assert "hidden" not in source_index1
-        assert "expireAfterSeconds" not in source_index1
-
-        with self.perform(phase) as mlink:
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                assert "prepareUnique" not in target_index
-                assert "unique" not in target_index
-                assert "hidden" not in target_index
-                assert "expireAfterSeconds" not in target_index
-
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "keyPattern": index_key,
-                        "prepareUnique": True,
-                        "unique": True,
-                        "hidden": True,
-                        "expireAfterSeconds": 132,
-                    },
-                }
-            )
-
-            source_index2 = self.source["db_1"]["coll_1"].index_information()[index_name]
-            assert "prepareUnique" not in source_index2
-            assert source_index2["unique"]
-            assert source_index2["hidden"]
-            assert source_index2["expireAfterSeconds"] == 132
-
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                assert "prepareUnique" not in target_index
-                assert "unique" not in target_index
-                assert "hidden" not in target_index
-                assert target_index["expireAfterSeconds"] == (2**31) - 1
-
-            self.source["db_1"].command(
-                {
-                    "collMod": "coll_1",
-                    "index": {
-                        "keyPattern": index_key,
-                        "prepareUnique": True,  # do nothing
-                        "expireAfterSeconds": 133,
-                    },
-                }
-            )
-
-            source_index3 = self.source["db_1"]["coll_1"].index_information()[index_name]
-            assert "prepareUnique" not in source_index2
-            assert source_index3["unique"]
-            assert source_index3["hidden"]
-            assert source_index3["expireAfterSeconds"] == 133
-
-            if phase == Runner.Phase.APPLY:
-                mlink.wait_for_current_optime()
-                target_index = self.target["db_1"]["coll_1"].index_information()[index_name]
-                assert "prepareUnique" not in target_index
-                assert "unique" not in target_index
-                assert "hidden" not in target_index
-                assert target_index["expireAfterSeconds"] == (2**31) - 1
-
-        target_index = self.source["db_1"]["coll_1"].index_information()[index_name]
-        assert target_index["unique"]
-        assert target_index["hidden"]
-        assert target_index["expireAfterSeconds"] == 133
-
-        self.compare_all()
+    t.compare_all()
 
 
-class TestIndexesManually(BaseTesting):
-    def test_create_ttl_manual(self):
-        self.drop_all_database()
-        self.create_collection("db_1", "coll_1")
+def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
+    index_key = {"i": 1}
+    index_name = t.source["db_1"]["coll_1"].create_index(index_key, prepareUnique=True)
 
-        mlink = self.perform(None)
-        try:
-            self.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
-            mlink.start()
-            self.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
-            mlink.wait_for_initial_sync()
-            self.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
-            mlink.finalize()
-        except:
-            mlink.finalize(fast=True)
-            raise
+    source_index1 = t.source["db_1"]["coll_1"].index_information()[index_name]
+    assert source_index1["prepareUnique"]
+    assert "unique" not in source_index1
+    assert "hidden" not in source_index1
+    assert "expireAfterSeconds" not in source_index1
 
-        self.compare_all()
+    with t.run(phase) as mlink:
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in target_index
+            assert "unique" not in target_index
+            assert "hidden" not in target_index
+            assert "expireAfterSeconds" not in target_index
+
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "keyPattern": index_key,
+                    "prepareUnique": True,
+                    "unique": True,
+                    "hidden": True,
+                    "expireAfterSeconds": 132,
+                },
+            }
+        )
+
+        source_index2 = t.source["db_1"]["coll_1"].index_information()[index_name]
+        assert "prepareUnique" not in source_index2
+        assert source_index2["unique"]
+        assert source_index2["hidden"]
+        assert source_index2["expireAfterSeconds"] == 132
+
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in target_index
+            assert "unique" not in target_index
+            assert "hidden" not in target_index
+            assert target_index["expireAfterSeconds"] == (2**31) - 1
+
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "index": {
+                    "keyPattern": index_key,
+                    "prepareUnique": True,  # do nothing
+                    "expireAfterSeconds": 133,
+                },
+            }
+        )
+
+        source_index3 = t.source["db_1"]["coll_1"].index_information()[index_name]
+        assert "prepareUnique" not in source_index2
+        assert source_index3["unique"]
+        assert source_index3["hidden"]
+        assert source_index3["expireAfterSeconds"] == 133
+
+        if phase == Runner.Phase.APPLY:
+            mlink.wait_for_current_optime()
+            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            assert "prepareUnique" not in target_index
+            assert "unique" not in target_index
+            assert "hidden" not in target_index
+            assert target_index["expireAfterSeconds"] == (2**31) - 1
+
+    target_index = t.source["db_1"]["coll_1"].index_information()[index_name]
+    assert target_index["unique"]
+    assert target_index["hidden"]
+    assert target_index["expireAfterSeconds"] == 133
+
+    t.compare_all()
 
 
-class TestIndexFixes(BaseTesting):
-    @pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
-    def test_pml_56_ttl_mismatch(self, phase):
-        self.drop_all_database()
+def test_manual_create_ttl(t: Testing):
+    t.ensure_collection("db_1", "coll_1")
 
-        with self.perform(phase):
-            self.source["db_1"].drop_collection("coll_1")
-            self.source["db_1"]["coll_1"].insert_many(
-                [
-                    {"created_at": datetime.now(), "short_lived": True},
-                    {"created_at": datetime.now(), "long_lived": True},
-                ]
-            )
-            self.source["db_1"]["coll_1"].create_index(
-                {"created_at": 1},
-                name="short_ttl_index",
-                expireAfterSeconds=1260,
-            )
+    mlink = t.run(Runner.Phase.MANUAL)
+    try:
+        t.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
+        mlink.start()
+        t.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
+        mlink.wait_for_initial_sync()
+        t.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
+        mlink.finalize()
+    except:
+        mlink.finalize(fast=True)
+        raise
 
-            source_indexes = self.source["db_1"]["coll_1"].index_information()
-            assert source_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
+    t.compare_all()
 
-        target_indexes = self.target["db_1"]["coll_1"].index_information()
-        assert target_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
 
-        self.compare_all()
+@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+def test_pml_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"].drop_collection("coll_1")
+        t.source["db_1"]["coll_1"].insert_many(
+            [
+                {"created_at": datetime.now(), "short_lived": True},
+                {"created_at": datetime.now(), "long_lived": True},
+            ]
+        )
+        t.source["db_1"]["coll_1"].create_index(
+            {"created_at": 1},
+            name="short_ttl_index",
+            expireAfterSeconds=1260,
+        )
+
+        source_indexes = t.source["db_1"]["coll_1"].index_information()
+        assert source_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
+
+    target_indexes = t.target["db_1"]["coll_1"].index_information()
+    assert target_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
+
+    t.compare_all()
