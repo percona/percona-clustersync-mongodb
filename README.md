@@ -34,6 +34,15 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
     go build -o bin/mongolink .
     ```
 
+Alternatively, you can install MongoLink from the cloned repo using `go install`:
+
+```sh
+go install .
+```
+
+
+This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by simply typing `percona-mongolink` in your terminal.
+
 3. Run the server:
 
     ```sh
@@ -331,7 +340,11 @@ Example:
 To run the tests, use the following command:
 
 ```sh
-poetry run pytest --source-uri <source-mongodb-uri> --target-uri <target-mongodb-uri> --mongolink-url http://localhost:2242
+poetry run pytest \
+    --source-uri <source-mongodb-uri> \
+    --target-uri <target-mongodb-uri> \
+    --mongolink-url http://localhost:2242 \
+    --mongolink-bin <path-to-mongolink-binary>
 ```
 
 Alternatively, you can use environment variables:
@@ -340,8 +353,11 @@ Alternatively, you can use environment variables:
 export TEST_SOURCE_URI=<source-mongodb-uri>
 export TEST_TARGET_URI=<target-mongodb-uri>
 export TEST_MONGOLINK_URL=http://localhost:2242
+export TEST_MONGOLINK_BIN=<path-to-mongolink-binary>
 poetry run pytest
 ```
+
+The `--mongolink-bin` flag or `TEST_MONGOLINK_BIN` environment variable specifies the path to the MongoLink binary. This allows the test suite to manage the MongoLink process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run MongoLink externally before running the tests.
 
 ## Contributing
 
