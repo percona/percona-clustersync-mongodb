@@ -298,7 +298,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		r.err = errors.Wrap(err, "replication")
 		r.lock.Unlock()
 
-		log.New("repl:loop").Error(err, "replication")
+		log.New("repl:loop").Error(err, "Change Replication")
 	}
 }
 
