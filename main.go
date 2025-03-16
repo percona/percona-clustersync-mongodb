@@ -12,10 +12,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"github.com/rs/zerolog"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -171,13 +170,8 @@ func main() {
 
 	resetCmd := &cobra.Command{
 		Use:    "reset",
-		Short:  "Reset state",
+		Short:  "Reset MongoLink state",
 		Hidden: true,
-	}
-
-	resetAllCmd := &cobra.Command{
-		Use:   "all",
-		Short: "Reset MongoLink state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			targetURI, _ := cmd.Flags().GetString("target")
 			if targetURI == "" {
@@ -192,7 +186,7 @@ func main() {
 				return err
 			}
 
-			log.New("cli").Info("OK")
+			log.New("cli").Info("OK: reset all")
 
 			return nil
 		},
@@ -202,7 +196,7 @@ func main() {
 		Use:   "recovery",
 		Short: "Reset recovery state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI, _ := cmd.Flags().GetString("target")
+			targetURI, _ := cmd.InheritedFlags().GetString("target")
 			if targetURI == "" {
 				targetURI = os.Getenv("PML_TARGET_URI")
 			}
@@ -229,7 +223,7 @@ func main() {
 				return err
 			}
 
-			log.New("cli").Info("OK")
+			log.New("cli").Info("OK: reset recovery")
 
 			return nil
 		},
@@ -239,7 +233,7 @@ func main() {
 		Use:   "heartbeat",
 		Short: "Reset heartbeat state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI, _ := cmd.Flags().GetString("target")
+			targetURI, _ := cmd.InheritedFlags().GetString("target")
 			if targetURI == "" {
 				targetURI = os.Getenv("PML_TARGET_URI")
 			}
@@ -266,17 +260,15 @@ func main() {
 				return err
 			}
 
-			log.New("cli").Info("OK")
+			log.New("cli").Info("OK: reset heartbeat")
 
 			return nil
 		},
 	}
 
-	resetAllCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	resetHeartbeatCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	resetRecoveryCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
-	resetCmd.AddCommand(resetAllCmd, resetRecoveryCmd, resetHeartbeatCmd)
+	resetCmd.AddCommand(resetRecoveryCmd, resetHeartbeatCmd)
 	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd, resetCmd)
 
 	err := rootCmd.Execute()
