@@ -421,6 +421,17 @@ def test_rename(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_rename_created(t: Testing, phase: Runner.Phase):
+    # (phase:clone): repl: replication: apply change: rename: rename collection:
+    #    (NamespaceNotFound) Source collection db_1.coll_1 does not exist
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1")
+        t.source["db_1"]["coll_1"].rename("coll_2")
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
     t.ensure_collection("db_1", "coll_2")
