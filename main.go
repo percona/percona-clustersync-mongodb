@@ -150,7 +150,7 @@ func main() {
 	}
 
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
-	finalizeCmd.Flags().MarkHidden("ignore-history-lost")
+	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	pauseCmd := &cobra.Command{
 		Use:   "pause",
