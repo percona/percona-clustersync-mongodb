@@ -8,6 +8,8 @@ from pymongo.collection import Collection
 
 
 class Testing:
+    __test__ = False
+
     def __init__(self, source: MongoClient, target: MongoClient, mlink: MongoLink):
         self.source: MongoClient = source
         self.target: MongoClient = target

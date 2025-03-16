@@ -17,6 +17,7 @@ def test_create(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_with_collation(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -26,6 +27,7 @@ def test_create_with_collation(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_unique(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -35,6 +37,7 @@ def test_create_unique(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -44,6 +47,7 @@ def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_sparse(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -53,6 +57,7 @@ def test_create_sparse(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_partial(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -65,6 +70,7 @@ def test_create_partial(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hidden(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -80,6 +86,7 @@ def test_create_hidden(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hashed(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -89,6 +96,7 @@ def test_create_hashed(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_compound(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -98,6 +106,7 @@ def test_create_compound(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_multikey(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -107,6 +116,7 @@ def test_create_multikey(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_wildcard(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -116,6 +126,7 @@ def test_create_wildcard(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_wildcard_projection(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -125,6 +136,7 @@ def test_create_wildcard_projection(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_geospatial(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -139,6 +151,7 @@ def test_create_geospatial(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_text(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -154,6 +167,7 @@ def test_create_text(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_text_wildcard(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -163,6 +177,7 @@ def test_create_text_wildcard(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_ttl(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -172,6 +187,7 @@ def test_create_ttl(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_cloned(t: Testing, phase: Runner.Phase):
     t.source["db_1"]["coll_1"].create_index([("i", 1)])
     t.target["db_1"]["coll_1"].create_index([("i", 1)])
@@ -182,6 +198,7 @@ def test_drop_cloned(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_created(t: Testing, phase: Runner.Phase):
     t.ensure_collection("db_1", "coll_1")
 
@@ -192,6 +209,7 @@ def test_drop_created(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_hide(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
 
@@ -215,6 +233,7 @@ def test_modify_hide(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_unhide(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
 
@@ -238,6 +257,7 @@ def test_modify_unhide(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_ttl(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=123)
 
@@ -261,6 +281,7 @@ def test_modify_ttl(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_unique(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
 
@@ -297,6 +318,7 @@ def test_modify_unique(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
     with t.run(phase) as mlink:
         options = {
@@ -322,6 +344,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
 
@@ -369,6 +392,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
     index_key = {"i": 1}
     index_name = t.source["db_1"]["coll_1"].create_index(index_key, prepareUnique=True)
@@ -466,7 +490,7 @@ def test_manual_create_ttl(t: Testing):
     t.compare_all()
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE, Runner.Phase.APPLY])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_pml_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].drop_collection("coll_1")

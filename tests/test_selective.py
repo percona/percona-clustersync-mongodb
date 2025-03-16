@@ -1,7 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
 import testing
-import testing as testing
 from mlink import Runner
 from pymongo import MongoClient
 
@@ -57,7 +56,7 @@ def test_create_collection_with_include_only(t: testing.Testing, phase: Runner.P
         # "db_2.coll_2",
     }
 
-    assert expected == set(t.list_all_namespaces(t.target))
+    assert expected == set(testing.list_all_namespaces(t.target))
     check_if_target_is_subset(t.source, t.target)
 
 
@@ -83,7 +82,7 @@ def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.P
         "db_2.coll_2",
     }
 
-    assert expected == set(t.list_all_namespaces(t.target))
+    assert expected == set(testing.list_all_namespaces(t.target))
     check_if_target_is_subset(t.source, t.target)
 
 
@@ -113,5 +112,5 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
         # "db_2.coll_2",
     }
 
-    assert expected == set(t.list_all_namespaces(t.target))
+    assert expected == set(testing.list_all_namespaces(t.target))
     check_if_target_is_subset(t.source, t.target)
