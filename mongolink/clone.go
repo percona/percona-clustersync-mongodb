@@ -400,6 +400,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 	}()
 
 	const initialBufferSize = 1000
+	const maxBufferSize = 10000
 	docs := make([]any, 0, initialBufferSize)
 	batch := 1
 	batchSize := 0
@@ -407,7 +408,8 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 	targetColl := c.target.Database(db).Collection(spec.Name)
 
 	for cur.Next(ctx) {
-		if batchSize+len(cur.Current) > config.MaxCollectionCloneBatchSize {
+		if batchSize+len(cur.Current) > config.MaxCollectionCloneBatchSize ||
+			len(docs) == maxBufferSize {
 			_, err = targetColl.InsertMany(ctx, docs)
 			if err != nil {
 				return errors.Wrap(err, "insert documents")
