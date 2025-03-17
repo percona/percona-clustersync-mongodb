@@ -39,12 +39,17 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 			savedBeat, err := doHeartbeat(ctx, m, lastBeat)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					lg.Info("heartbeat canceled")
+					lg.Info("Heartbeat canceled")
 
 					return
 				}
-
-				lg.Error(err, "beat")
+				if errors.Is(err, mongo.ErrNoDocuments) {
+					lastBeat = savedBeat
+					lg.Warn("The previous heartbeat is missing")
+					lg.With(log.Int64("hb", lastBeat)).Trace("")
+				} else {
+					lg.Error(err, "beat")
+				}
 
 				continue
 			}
@@ -116,7 +121,7 @@ func doHeartbeat(ctx context.Context, m *mongo.Client, lastBeat int64) (int64, e
 			options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.Before)).
 		Raw()
 	if err != nil {
-		return 0, err //nolint:wrapcheck
+		return currBeat, err //nolint:wrapcheck
 	}
 
 	savedBeat, _ := raw.Lookup("time").AsInt64OK()
