@@ -7,8 +7,6 @@ from testing import Testing
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_insert_one(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].insert_one({"i": i})
@@ -18,8 +16,6 @@ def test_insert_one(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_insert_many(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].insert_many([{"i": i} for i in range(5)])
 
@@ -64,10 +60,7 @@ def test_replace_one(t: Testing, phase: Runner.Phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].replace_one(
                 {"i": i},
-                {
-                    "i": (i * 100) - i,
-                    f"field_{i}": f"value_{i}",
-                },
+                {"i": (i * 100) - i, f"field_{i}": f"value_{i}"},
             )
 
     t.compare_all()
@@ -148,8 +141,6 @@ def test_find_one_and_delete(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_upsert_by_update_one(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].update_one(
@@ -166,8 +157,6 @@ def test_upsert_by_update_one(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_upsert_by_update_many(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].update_many({}, {"$inc": {"i": 100}}, upsert=True)
 
@@ -176,8 +165,6 @@ def test_upsert_by_update_many(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_upsert_by_replace_one(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].replace_one(
@@ -194,8 +181,6 @@ def test_upsert_by_replace_one(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_upsert_by_find_one_and_update(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].find_one_and_update(
@@ -212,8 +197,6 @@ def test_upsert_by_find_one_and_update(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_upsert_by_find_one_and_replace(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         for i in range(5):
             t.source["db_1"]["coll_1"].find_one_and_replace(
@@ -230,8 +213,6 @@ def test_upsert_by_find_one_and_replace(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_bulk_write(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         ops = [
             pymongo.InsertOne({"i": 1}),
@@ -250,4 +231,5 @@ def test_bulk_write(t: Testing, phase: Runner.Phase):
         coll_1.append(doc)
 
     assert coll_1 == [{"i": "1"}, {"i": 3}, {"k": "4"}]
+
     t.compare_all()

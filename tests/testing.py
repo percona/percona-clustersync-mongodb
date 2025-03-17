@@ -33,13 +33,6 @@ class Testing:
             for coll in source_colls:
                 compare_namespace(self.source, self.target, db, coll)
 
-    def ensure_collection(self, db: str, coll: str, **kwargs):
-        """Create a collection in the source and target MongoDB."""
-        self.source[db].drop_collection(coll)
-        self.target[db].drop_collection(coll)
-        self.source[db].create_collection(coll, **kwargs)
-        self.target[db].create_collection(coll, **kwargs)
-
 
 def list_databases(client: MongoClient):
     """List all databases in the given MongoClient."""

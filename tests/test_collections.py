@@ -3,7 +3,16 @@ from datetime import datetime
 
 import pytest
 from mlink import Runner
+from pymongo import MongoClient
 from testing import Testing
+
+
+def ensure_collection(source: MongoClient, target: MongoClient, db: str, coll: str, **kwargs):
+    """Create a collection in the source and target MongoDB."""
+    source[db].drop_collection(coll)
+    target[db].drop_collection(coll)
+    source[db].create_collection(coll, **kwargs)
+    target[db].create_collection(coll, **kwargs)
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -179,7 +188,7 @@ def test_create_with_validator_ignored(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_collection(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
+    ensure_collection(t.source, t.target, "db_1", "coll_1")
 
     with t.run(phase):
         t.source["db_1"].drop_collection("coll_1")
@@ -200,13 +209,11 @@ def test_drop_capped_collection(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_view(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-    t.source["db_1"].create_collection(
-        "view_1",
-        viewOn="coll_1",
-        pipeline=[{"$match": {"i": {"$gt": 3}}}],
-    )
-    t.target["db_1"].create_collection(
+    ensure_collection(t.source, t.target, "db_1", "coll_1")
+    ensure_collection(
+        t.source,
+        t.target,
+        "db_1",
         "view_1",
         viewOn="coll_1",
         pipeline=[{"$match": {"i": {"$gt": 3}}}],
@@ -221,13 +228,11 @@ def test_drop_view(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_view_source_collection(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-    t.source["db_1"].create_collection(
-        "view_1",
-        viewOn="coll_1",
-        pipeline=[{"$match": {"i": {"$gt": 3}}}],
-    )
-    t.target["db_1"].create_collection(
+    ensure_collection(t.source, t.target, "db_1", "coll_1")
+    ensure_collection(
+        t.source,
+        t.target,
+        "db_1",
         "view_1",
         viewOn="coll_1",
         pipeline=[{"$match": {"i": {"$gt": 3}}}],
@@ -285,21 +290,21 @@ def test_modify_clustered_ttl_ignored(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_capped_size(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1", capped=True, size=1111, max=222)
-    t.ensure_collection("db_1", "coll_2", capped=True, size=1111, max=222)
-    t.ensure_collection("db_1", "coll_3", capped=True, size=1111, max=222)
+    ensure_collection(t.source, t.target, "db_1", "coll_1", capped=True, size=1111, max=222)
+    ensure_collection(t.source, t.target, "db_1", "coll_2", capped=True, size=1111, max=222)
+    ensure_collection(t.source, t.target, "db_1", "coll_3", capped=True, size=1111, max=222)
 
     for coll in t.source["db_1"].list_collections():
-        assert coll["options"] == dict(capped=True, size=1111, max=222)
+        assert coll["options"] == {"capped": True, "size": 1111, "max": 222}
 
     with t.run(phase):
         t.source["db_1"].command({"collMod": "coll_1", "cappedSize": 3333, "cappedMax": 444})
         t.source["db_1"].command({"collMod": "coll_2", "cappedSize": 3333})
         t.source["db_1"].command({"collMod": "coll_3", "cappedMax": 444})
 
-    assert t.source["db_1"]["coll_1"].options() == dict(capped=True, size=3333, max=444)
-    assert t.source["db_1"]["coll_2"].options() == dict(capped=True, size=3333, max=222)
-    assert t.source["db_1"]["coll_3"].options() == dict(capped=True, size=1111, max=444)
+    assert t.source["db_1"]["coll_1"].options() == {"capped": True, "size": 3333, "max": 444}
+    assert t.source["db_1"]["coll_2"].options() == {"capped": True, "size": 3333, "max": 222}
+    assert t.source["db_1"]["coll_3"].options() == {"capped": True, "size": 1111, "max": 444}
 
     t.compare_all()
 
@@ -412,18 +417,6 @@ def test_modify_validator_unset_ignored(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_rename(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
-    with t.run(phase):
-        t.source["db_1"]["coll_1"].rename("coll_2")
-
-    t.compare_all()
-
-
-@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_rename_created(t: Testing, phase: Runner.Phase):
-    # (phase:clone): repl: replication: apply change: rename: rename collection:
-    #    (NamespaceNotFound) Source collection db_1.coll_1 does not exist
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1")
         t.source["db_1"]["coll_1"].rename("coll_2")
@@ -432,10 +425,20 @@ def test_rename_created(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_rename_created(t: Testing, phase: Runner.Phase):
+    t.source["db_1"].create_collection("coll_1")
+
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].rename("coll_2")
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-    t.ensure_collection("db_1", "coll_2")
-    t.ensure_collection("db_1", "target_coll_1")
+    t.source["db_1"].create_collection("coll_1")
+    t.source["db_1"].create_collection("coll_2")
+    t.source["db_1"].create_collection("target_coll_1")
 
     with t.run(phase):
         t.source["db_1"]["coll_1"].rename("target_coll_1", dropTarget=True)

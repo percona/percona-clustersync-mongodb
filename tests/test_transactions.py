@@ -20,8 +20,6 @@ def test_simple(t: Testing):
 
 
 def test_simple_aborted(t: Testing):
-    t.ensure_collection("db_3", "coll_3")
-
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:
             sess.start_transaction()

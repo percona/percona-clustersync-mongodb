@@ -9,18 +9,14 @@ from testing import Testing
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
-        t.source["db_1"]["coll_1"].create_index({"i": 1})
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, name="idx+1")
 
     t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_with_collation(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, collation={"locale": "en_US"})
 
@@ -29,8 +25,6 @@ def test_create_with_collation(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_unique(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
 
@@ -39,8 +33,6 @@ def test_create_unique(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
 
@@ -49,8 +41,6 @@ def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_sparse(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, sparse=True)
 
@@ -59,8 +49,6 @@ def test_create_sparse(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_partial(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index(
             {"i": 1},
@@ -72,11 +60,8 @@ def test_create_partial(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hidden(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase) as mlink:
-        name = "i_1"
-        t.source["db_1"]["coll_1"].create_index({"i": 1}, name=name, hidden=True)
+        name = t.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
         assert t.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
         if phase == Runner.Phase.APPLY:
@@ -88,8 +73,6 @@ def test_create_hidden(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hashed(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": pymongo.HASHED})
 
@@ -98,8 +81,6 @@ def test_create_hashed(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_compound(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1, "j": -1})
 
@@ -108,8 +89,6 @@ def test_create_compound(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_multikey(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i.j": 1})
 
@@ -118,8 +97,6 @@ def test_create_multikey(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_wildcard(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"$**": 1})
 
@@ -128,8 +105,6 @@ def test_create_wildcard(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_wildcard_projection(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"$**": 1}, wildcardProjection={"a.*": 1})
 
@@ -138,8 +113,6 @@ def test_create_wildcard_projection(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_geospatial(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index(
             {"loc1": pymongo.GEO2D}, bits=30, min=-179.0, max=178.0
@@ -153,8 +126,6 @@ def test_create_geospatial(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_text(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index(
             [("title", pymongo.TEXT), ("description", pymongo.TEXT)],
@@ -169,8 +140,6 @@ def test_create_text(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_text_wildcard(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"$**": "text"})
 
@@ -179,8 +148,6 @@ def test_create_text_wildcard(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_ttl(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, expireAfterSeconds=1)
 
@@ -200,8 +167,6 @@ def test_drop_cloned(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_created(t: Testing, phase: Runner.Phase):
-    t.ensure_collection("db_1", "coll_1")
-
     with t.run(phase):
         index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
         t.source["db_1"]["coll_1"].drop_index(index_name)
@@ -473,8 +438,6 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
 
 
 def test_manual_create_ttl(t: Testing):
-    t.ensure_collection("db_1", "coll_1")
-
     mlink = t.run(Runner.Phase.MANUAL)
     try:
         t.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
