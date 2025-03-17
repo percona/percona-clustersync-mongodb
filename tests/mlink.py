@@ -165,8 +165,8 @@ class Runner:
         if self.mlink.status()["state"] == state:
             return
 
-        for _ in range(timeout * 10):
-            time.sleep(0.1)
+        for _ in range(timeout * 2):
+            time.sleep(0.5)
             if self.mlink.status()["state"] == state:
                 return
 
@@ -178,11 +178,11 @@ class Runner:
         assert status["state"] == MongoLink.State.RUNNING, status
 
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
-        for _ in range(timeout * 10):
+        for _ in range(timeout * 2):
             if curr_optime <= self.last_applied_op:
                 return
 
-            time.sleep(0.1)
+            time.sleep(0.5)
             status = self.mlink.status()
 
         raise WaitTimeoutError()
@@ -197,11 +197,11 @@ class Runner:
 
         assert status["state"] == MongoLink.State.RUNNING, status
 
-        for _ in range(timeout * 10):
+        for _ in range(timeout * 2):
             if status["initialSync"]["completed"]:
                 return
 
-            time.sleep(0.1)
+            time.sleep(0.5)
             status = self.mlink.status()
 
         raise WaitTimeoutError()

@@ -274,7 +274,7 @@ func (c *Clone) run() error {
 			}
 
 			if !c.nsFilter(db, collName) {
-				lg.With(log.NS(db, collName)).Debug("not selected")
+				lg.With(log.NS(db, collName)).Debug("Not selected")
 
 				continue
 			}
@@ -283,7 +283,7 @@ func (c *Clone) run() error {
 				err := c.cloneCollection(grpCtx, db, collName)
 				if err != nil {
 					if e := (CollectionNotFoundError{}); errors.As(err, &e) {
-						log.Ctx(ctx).Error(err, "")
+						log.New("clone").With(log.NS(db, collName)).Error(err, "")
 
 						return nil
 					}

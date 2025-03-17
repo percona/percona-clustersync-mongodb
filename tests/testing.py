@@ -28,7 +28,7 @@ class Testing:
         for db in source_dbs:
             source_colls = set(list_collections(self.source, db))
             target_colls = set(list_collections(self.target, db))
-            assert source_colls == target_colls, f"{source_colls} != {target_colls}"
+            assert source_colls == target_colls, f"{db} :: {source_colls} != {target_colls}"
 
             for coll in source_colls:
                 compare_namespace(self.source, self.target, db, coll)
@@ -57,20 +57,21 @@ def list_all_namespaces(client: MongoClient):
 
 def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: str):
     """Compare the given namespace between source and target MongoDB."""
+    ns = f"{db}.{coll}"
     source_options = source[db][coll].options()
     target_options = target[db][coll].options()
-    assert source_options == target_options, f"{source_options=} != {target_options=}"
+    assert source_options == target_options, f"{ns}: {source_options=} != {target_options=}"
 
     if "viewOn" not in source_options:
         source_indexes = source[db][coll].index_information()
         target_indexes = target[db][coll].index_information()
-        assert source_indexes == target_indexes, f"{source_indexes=} != {target_indexes=}"
+        assert source_indexes == target_indexes, f"{ns}: {source_indexes=} != {target_indexes=}"
 
     source_docs, source_hash = _coll_content(source[db][coll])
     target_docs, target_hash = _coll_content(target[db][coll])
-    assert len(source_docs) == len(target_docs), f"{source_docs=} != {target_docs=}"
-    assert source_docs == target_docs, f"{source_docs=} != {target_docs=}"
-    assert source_hash == target_hash, f"{source_hash=} != {target_hash=}"
+    assert len(source_docs) == len(target_docs), f"{ns}: {source_docs=} != {target_docs=}"
+    assert source_docs == target_docs, f"{ns}: {source_docs=} != {target_docs=}"
+    assert source_hash == target_hash, f"{ns}: {source_hash=} != {target_hash=}"
 
 
 def _coll_content(coll: Collection):

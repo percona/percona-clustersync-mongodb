@@ -341,7 +341,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 
 		err := srv.Close(context.Background())
 		if err != nil {
-			log.New("server").Error(err, "close server")
+			log.New("server").Error(err, "Close server")
 		}
 
 		os.Exit(0)
@@ -384,7 +384,7 @@ type server struct {
 	targetCluster *mongo.Client
 	// mlink is the MongoLink instance for cluster replication.
 	mlink *mongolink.MongoLink
-
+	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
 }
 
