@@ -198,6 +198,13 @@ func (c *Clone) Start(context.Context) error {
 
 		c.finishTime = time.Now()
 
+		if err != nil {
+			lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
+				Error(err, "Data cloning has failed")
+
+			return
+		}
+
 		lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
 			Info("Data cloning completed")
 	}()
