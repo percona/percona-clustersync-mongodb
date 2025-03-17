@@ -28,6 +28,7 @@ const (
 	HeartbeatCollection = "heartbeats"
 )
 
+// Recovery and heartbeat settings.
 const (
 	// RecoveryCheckpointingInternal is the interval for recovery checkpointing.
 	RecoveryCheckpointingInternal = time.Minute
@@ -42,13 +43,18 @@ const (
 // Change stream and replication settings.
 const (
 	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
-	ChangeStreamBatchSize = 100
-
-	// ReplTickInteral is the interval for replication ticks.
-	ReplTickInteral = time.Second
-
-	// ReplInitialSyncCheckInterval is the interval for initial sync checks.
-	ReplInitialSyncCheckInterval = time.Second
+	ChangeStreamBatchSize = 1000
+	// ReplQueueSize defines the buffer size of the internal channel used to transfer
+	// events between the change stream read and the change replication.
+	ReplQueueSize = ChangeStreamBatchSize
+	// BulkOpsSize is the maximum number of operations in a bulk write.
+	BulkOpsSize = ChangeStreamBatchSize
+	// BulkOpsInterval is the maximum interval between bulk write operations.
+	BulkOpsInterval = TickInterval
+	// TickInterval is the interval for cluster time ticks.
+	TickInterval = 1 * time.Second
+	// InitialSyncCheckInterval is the interval for checking the initial sync status.
+	InitialSyncCheckInterval = 10 * time.Second
 )
 
 // CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning

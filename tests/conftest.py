@@ -1,7 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import os
 import subprocess
-import threading
 import time
 
 import pytest
@@ -65,7 +64,9 @@ MLINK_PROC: subprocess.Popen = None
 
 
 def start_mongolink(mlink_bin: str):
-    return subprocess.Popen([mlink_bin, "--reset-state"])
+    rv = subprocess.Popen([mlink_bin, "--reset-state", "--log-level=trace"])
+    time.sleep(1)
+    return rv
 
 
 def stop_mongolink(proc: subprocess.Popen):
@@ -92,7 +93,7 @@ def manage_mongolink_process(request: pytest.FixtureRequest, mlink_bin: str):
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):
+def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
     """Attach test results to each test item for later inspection."""
     outcome = yield
     rep = outcome.get_result()

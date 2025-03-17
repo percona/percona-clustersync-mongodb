@@ -279,7 +279,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 
 	ml.nsInclude = options.IncludeNamespaces
 	ml.nsExclude = options.ExcludeNamespaces
-	ml.nsFilter = sel.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
 	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
@@ -355,7 +355,7 @@ func (ml *MongoLink) run() {
 func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 	lg := log.Ctx(ctx)
 
-	t := time.NewTicker(config.ReplInitialSyncCheckInterval)
+	t := time.NewTicker(config.InitialSyncCheckInterval)
 	defer t.Stop()
 
 	cloneStatus := ml.clone.Status()

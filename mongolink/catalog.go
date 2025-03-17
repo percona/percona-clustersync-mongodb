@@ -47,7 +47,7 @@ type CreateCollectionOptions struct {
 	// ViewOn is the source collection or view for a view.
 	ViewOn string `bson:"viewOn,omitempty"`
 	// Pipeline is the aggregation pipeline for a view.
-	Pipeline any `bson:"pipeline,omitempty"`
+	Pipeline bson.A `bson:"pipeline,omitempty"`
 
 	// Collation is the collation options for the collection.
 	Collation bson.Raw `bson:"collation,omitempty"`

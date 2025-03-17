@@ -1,7 +1,6 @@
 package mongolink
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"sync"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/list"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
@@ -46,6 +44,10 @@ type Repl struct {
 	pausing bool
 	pauseC  chan struct{}
 	doneSig chan struct{}
+
+	bulkOps   bulkOps
+	bulkToken bson.Raw
+	bulkTS    bson.Timestamp
 }
 
 // ReplStatus represents the status of change replication.
@@ -80,6 +82,7 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 		target:   target,
 		nsFilter: nsFilter,
 		catalog:  catalog,
+		bulkOps:  newBulkOps(config.BulkOpsSize),
 		pauseC:   make(chan struct{}),
 		doneSig:  make(chan struct{}),
 	}
@@ -206,6 +209,12 @@ func (r *Repl) Pause(context.Context) error {
 		return errors.New("already paused")
 	}
 
+	r.doPause()
+
+	return nil
+}
+
+func (r *Repl) doPause() {
 	r.pausing = true
 	doneSig := r.doneSig
 
@@ -221,11 +230,21 @@ func (r *Repl) Pause(context.Context) error {
 		optime := r.lastReplicatedOpTime
 		r.lock.Unlock()
 
-		log.New("repl").With(log.OpTime(optime.T, optime.I)).
+		log.New("repl").
+			With(log.OpTime(optime.T, optime.I)).
 			Info("Change Replication paused")
 	}()
+}
 
-	return nil
+func (r *Repl) setFailed(err error, msg string) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.err = err
+
+	log.New("repl").Error(err, msg)
+
+	r.doPause()
 }
 
 func (r *Repl) Resume(context.Context) error {
@@ -261,60 +280,24 @@ func (r *Repl) Resume(context.Context) error {
 	return nil
 }
 
-func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
-	defer close(r.doneSig)
+func (r *Repl) watchChangeEvents(
+	streamOptions *options.ChangeStreamOptionsBuilder,
+	changeC chan<- *ChangeEvent,
+) error {
+	defer close(changeC)
 
-	watchCtx, stopWatch := context.WithCancel(context.Background())
-	defer stopWatch()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
 		<-r.pauseC
-		stopWatch()
+		cancel()
 	}()
 
-	eventC := make(chan bson.Raw, config.ChangeStreamBatchSize)
-
-	go func() {
-		err := r.watchChangeStream(watchCtx, opts, eventC)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			if topo.IsChangeStreamHistoryLost(err) {
-				err = ErrOplogHistoryLost
-			}
-
-			r.lock.Lock()
-			r.err = errors.Wrap(err, "watch change stream")
-			r.lock.Unlock()
-
-			log.New("repl:loop").Error(err, "watch change stream")
-		}
-	}()
-
-	replCtx, stopRepl := context.WithCancel(context.Background())
-	defer stopRepl()
-
-	err := r.replication(replCtx, eventC)
-	if err != nil {
-		r.lock.Lock()
-		r.err = errors.Wrap(err, "replication")
-		r.lock.Unlock()
-
-		log.New("repl:loop").Error(err, "Change Replication")
-	}
-}
-
-func (r *Repl) watchChangeStream(
-	ctx context.Context,
-	streamOptions *options.ChangeStreamOptionsBuilder,
-	eventC chan<- bson.Raw,
-) error {
-	defer close(eventC)
-
-	ticker := time.NewTicker(config.ReplTickInteral)
-	defer ticker.Stop()
-
-	go r.doTicks(ctx, ticker.C)
-
-	cur, err := r.source.Watch(ctx, mongo.Pipeline{}, streamOptions.SetShowExpandedEvents(true))
+	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
+		streamOptions.SetShowExpandedEvents(true).
+			SetBatchSize(config.ChangeStreamBatchSize).
+			SetMaxAwaitTime(config.TickInterval))
 	if err != nil {
 		return errors.Wrap(err, "open")
 	}
@@ -325,168 +308,303 @@ func (r *Repl) watchChangeStream(
 		}
 	}()
 
-	for cur.Next(ctx) {
-		eventC <- cur.Current
+	// txnOps stores transaction operations during processing.
+	// This buffer is reused to minimize memory allocations.
+	var txnOps []*ChangeEvent
 
-		ticker.Reset(config.ReplTickInteral)
+	for {
+		for cur.TryNext(ctx) {
+			change := &ChangeEvent{}
+			err := parseChangeEvent(cur.Current, change)
+			if err != nil {
+				return err
+			}
+
+			if !change.IsTransaction() {
+				changeC <- change
+
+				continue
+			}
+
+			txn0 := change // the first transaction operation
+			for done := false; !done; {
+				for cur.TryNext(ctx) {
+					change := &ChangeEvent{}
+					err := parseChangeEvent(cur.Current, change)
+					if err != nil {
+						return err
+					}
+
+					if txn0.IsSameTransaction(&change.EventHeader) {
+						txnOps = append(txnOps, change)
+
+						continue
+					}
+
+					// send the entire transaction for replication
+					changeC <- txn0
+					for i, txn := range txnOps {
+						changeC <- txn
+						txnOps[i] = nil // release to GC
+					}
+					txnOps = txnOps[:0]
+
+					if !change.IsTransaction() {
+						changeC <- change
+						done = true
+
+						break // return to non-transactional processing
+					}
+
+					txn0 = change // process the new transaction
+				}
+
+				if err := cur.Err(); err != nil || cur.ID() == 0 {
+					return errors.Wrap(err, "cursor")
+				}
+
+				go r.doTick(ctx)
+			}
+		}
+
+		if err := cur.Err(); err != nil || cur.ID() == 0 {
+			return errors.Wrap(err, "cursor")
+		}
+
+		go r.doTick(ctx)
+	}
+}
+
+// doTick updates a document in `percona_mongolink.ticks` to advance cluster time
+// when no events are received, preventing the status from appearing stuck.
+func (r *Repl) doTick(ctx context.Context) {
+	_, err := r.source.Database(config.MongoLinkDatabase).
+		Collection(config.TickCollection).
+		UpdateOne(ctx,
+			bson.D{{"_id", ""}},
+			bson.D{{"$set", bson.D{{"t", time.Now().Unix()}}}},
+			options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		log.New("repl:tick").Error(err, "")
+	}
+}
+
+func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
+	defer close(r.doneSig)
+
+	changeC := make(chan *ChangeEvent, config.ReplQueueSize)
+
+	go func() {
+		err := r.watchChangeEvents(opts, changeC)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			if topo.IsChangeStreamHistoryLost(err) {
+				err = ErrOplogHistoryLost
+			}
+
+			r.setFailed(err, "Watch change stream")
+		}
+	}()
+
+	ctx := context.Background()
+	lastBulkDone := time.Now()
+
+	for change := range changeC {
+		if time.Since(lastBulkDone) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
+			err := r.doBulkOps(ctx)
+			if err != nil {
+				return
+			}
+
+			lastBulkDone = time.Now()
+		}
+
+		if change.Namespace.Database == config.MongoLinkDatabase {
+			if r.bulkOps.Empty() {
+				r.lock.Lock()
+				r.resumeToken = change.ID
+				r.lastReplicatedOpTime = change.ClusterTime
+				r.eventsProcessed++
+				r.lock.Unlock()
+			}
+
+			if change.Namespace.Collection == config.TickCollection {
+				log.New("repl").
+					With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).
+					Trace("tick")
+			}
+
+			continue
+		}
+
+		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
+			if r.bulkOps.Empty() {
+				r.lock.Lock()
+				r.resumeToken = change.ID
+				r.lastReplicatedOpTime = change.ClusterTime
+				r.eventsProcessed++
+				r.lock.Unlock()
+			}
+
+			continue
+		}
+
+		switch change.OperationType { //nolint:exhaustive
+		case Insert:
+			event := change.Event.(InsertEvent) //nolint:forcetypeassert
+			r.bulkOps.Insert(change.Namespace, &event)
+			r.bulkToken = change.ID
+			r.bulkTS = change.ClusterTime
+
+		case Update:
+			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
+			r.bulkOps.Update(change.Namespace, &event)
+			r.bulkToken = change.ID
+			r.bulkTS = change.ClusterTime
+
+		case Delete:
+			event := change.Event.(DeleteEvent) //nolint:forcetypeassert
+			r.bulkOps.Delete(change.Namespace, &event)
+			r.bulkToken = change.ID
+			r.bulkTS = change.ClusterTime
+
+		case Replace:
+			event := change.Event.(ReplaceEvent) //nolint:forcetypeassert
+			r.bulkOps.Replace(change.Namespace, &event)
+			r.bulkToken = change.ID
+			r.bulkTS = change.ClusterTime
+
+		default:
+			if !r.bulkOps.Empty() {
+				err := r.doBulkOps(ctx)
+				if err != nil {
+					return
+				}
+
+				lastBulkDone = time.Now()
+			}
+
+			err := r.applySchemaChange(ctx, change)
+			if err != nil {
+				loggerForEvent(change).Error(err, "Apply change")
+			}
+
+			r.lock.Lock()
+			r.resumeToken = change.ID
+			r.lastReplicatedOpTime = change.ClusterTime
+			r.eventsProcessed++
+			r.lock.Unlock()
+		}
+
+		if r.bulkOps.Full() {
+			err := r.doBulkOps(ctx)
+			if err != nil {
+				return
+			}
+
+			lastBulkDone = time.Now()
+		}
+	}
+}
+
+func (r *Repl) doBulkOps(ctx context.Context) error {
+	size, err := r.bulkOps.Do(ctx, r.target)
+	if err != nil {
+		r.setFailed(err, "Flush bulk ops")
+
+		return err
 	}
 
-	if err := cur.Err(); err != nil {
-		return errors.Wrap(err, "cursor")
+	if size == 0 {
+		return nil
 	}
+
+	r.lock.Lock()
+	r.resumeToken = r.bulkToken
+	r.lastReplicatedOpTime = r.bulkTS
+	r.eventsProcessed += int64(size)
+	r.lock.Unlock()
+
+	log.New("bulk:write").With(log.Int64("size", int64(size))).Debug("BulkOps applied")
 
 	return nil
 }
 
-func (r *Repl) doTicks(ctx context.Context, tickC <-chan time.Time) {
-	coll := r.source.Database(config.MongoLinkDatabase).Collection(config.TickCollection)
+// applySchemaChange applies a schema change event to the target MongoDB.
+func (r *Repl) applySchemaChange(ctx context.Context, change *ChangeEvent) error {
+	var err error
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	lg := loggerForEvent(change)
+	ctx = lg.WithContext(ctx)
 
-		case t := <-tickC:
-			_, err := coll.UpdateOne(ctx,
-				bson.D{{"_id", ""}},
-				bson.D{{"$set", bson.D{{"t", t}}}},
-				options.UpdateOne().SetUpsert(true))
-			if err != nil {
-				log.New("repl:tick").Error(err, "")
-			}
-		}
-	}
-}
+	switch change.OperationType { //nolint:exhaustive
+	case Create:
+		event := change.Event.(CreateEvent) //nolint:forcetypeassert
+		if event.IsTimeseries() {
+			lg.Warn("Timeseries is not supported. skipping")
 
-func (r *Repl) replication(ctx context.Context, eventC <-chan bson.Raw) error {
-	lg := log.New("repl:apply")
-
-	var txBuffer list.List[bson.Raw]
-
-	for {
-		event, ok := <-eventC
-		if !ok {
 			return nil
 		}
 
-		firstTxOp := parseTxnEvent(event)
-		for firstTxOp.IsTxn() {
-			txBuffer.Push(event)
-
-			for {
-				innerEvent, ok := <-eventC
-				if !ok {
-					return nil
-				}
-
-				txOp := parseTxnEvent(innerEvent)
-				if !firstTxOp.Equal(txOp) {
-					event = innerEvent
-					firstTxOp = txOp
-
-					break
-				}
-
-				txBuffer.Push(innerEvent)
-			}
-
-			var opTime bson.Timestamp
-			// apply all transactional ops
-			for event := range txBuffer.All() {
-				var err error
-
-				opTime, err = r.apply(ctx, event)
-				if err != nil {
-					lg.Error(err, "Apply transaction")
-
-					return errors.Wrap(err, "apply transaction")
-				}
-			}
-
-			lg.With(log.Tx(&firstTxOp.TxnNumber, firstTxOp.LSID)).Trace("transaction applied")
-
-			r.lock.Lock()
-			r.lastReplicatedOpTime = opTime
-			r.lock.Unlock()
-
-			txBuffer.Clear()
-		}
-
-		opTime, err := r.apply(ctx, event)
+		err = r.catalog.DropCollection(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection)
 		if err != nil {
-			lg.Error(err, "Apply change")
-
-			return errors.Wrap(err, "apply change")
+			return errors.Wrap(err, "drop before create")
 		}
 
-		r.lock.Lock()
-		r.lastReplicatedOpTime = opTime
-		r.lock.Unlock()
-	}
-}
+		err = r.catalog.CreateCollection(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection,
+			&event.OperationDescription)
+		if err != nil {
+			return errors.Wrap(err, "create")
+		}
 
-// apply applies a change event to the target MongoDB.
-func (r *Repl) apply(ctx context.Context, data bson.Raw) (bson.Timestamp, error) {
-	var baseEvent BaseEvent
+		return nil
 
-	err := bson.Unmarshal(data, &baseEvent)
-	if err != nil {
-		return bson.Timestamp{}, errors.Wrap(
-			err,
-			"failed to decode BaseEvent",
-		)
-	}
-
-	opTime := baseEvent.ClusterTime
-	lg := log.Ctx(ctx).With(
-		log.OpTime(opTime.T, opTime.I),
-		log.Op(string(baseEvent.OperationType)),
-		log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection),
-		log.Tx(baseEvent.TxnNumber, baseEvent.LSID))
-	ctx = lg.WithContext(ctx)
-
-	if !r.nsFilter(baseEvent.Namespace.Database, baseEvent.Namespace.Collection) {
-		lg.Debug("not selected")
-
-		r.lock.Lock()
-		r.resumeToken = baseEvent.ID
-		r.lock.Unlock()
-
-		return opTime, nil
-	}
-
-	lg.Trace("")
-
-	switch baseEvent.OperationType {
-	case Create:
-		err = r.handleCreate(ctx, data)
 	case Drop:
-		err = r.handleDrop(ctx, data)
+		err = r.catalog.DropCollection(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection)
+
 	case DropDatabase:
-		err = r.handleDropDatabase(ctx, data)
+		err = r.catalog.DropDatabase(ctx, change.Namespace.Database)
+
 	case CreateIndexes:
-		err = r.handleCreateIndexes(ctx, data)
+		event := change.Event.(CreateIndexesEvent) //nolint:forcetypeassert
+		err = r.catalog.CreateIndexes(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection,
+			event.OperationDescription.Indexes)
+
 	case DropIndexes:
-		err = r.handleDropIndexes(ctx, data)
+		event := change.Event.(DropIndexesEvent) //nolint:forcetypeassert
+		for _, index := range event.OperationDescription.Indexes {
+			err = r.catalog.DropIndex(ctx,
+				change.Namespace.Database,
+				change.Namespace.Collection,
+				index.Name)
+			if err != nil {
+				lg.Error(err, "Drop index "+index.Name)
+			}
+		}
 
 	case Modify:
-		err = r.handleModify(ctx, data)
-	case Rename:
-		err = r.handleRename(ctx, data)
+		event := change.Event.(ModifyEvent) //nolint:forcetypeassert
+		r.doModify(ctx, change.Namespace, &event)
 
-	case Insert:
-		err = r.handleInsert(ctx, data)
-	case Delete:
-		err = r.handleDelete(ctx, data)
-	case Replace:
-		err = r.handleReplace(ctx, data)
-	case Update:
-		err = r.handleUpdate(ctx, data)
+	case Rename:
+		event := change.Event.(RenameEvent) //nolint:forcetypeassert
+		err = r.catalog.Rename(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection,
+			event.OperationDescription.To.Database,
+			event.OperationDescription.To.Collection)
 
 	case Invalidate:
 		lg.Error(ErrInvalidateEvent, "")
 
-		return opTime, ErrInvalidateEvent
+		return ErrInvalidateEvent
 
 	case ShardCollection:
 		fallthrough
@@ -496,223 +614,137 @@ func (r *Repl) apply(ctx context.Context, data bson.Raw) (bson.Timestamp, error)
 		fallthrough
 
 	default:
-		lg.Warn("Unsupported type: " + string(baseEvent.OperationType))
-
-		return opTime, nil
-	}
-
-	if err != nil {
-		return opTime, errors.Wrap(err, string(baseEvent.OperationType))
-	}
-
-	r.lock.Lock()
-	r.resumeToken = baseEvent.ID
-	r.eventsProcessed++
-	r.lock.Unlock()
-
-	return opTime, nil
-}
-
-// handleCreate handles create events.
-func (r *Repl) handleCreate(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[CreateEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	if event.IsTimeseries() {
-		log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
+		lg.Warn("Unsupported type: " + string(change.OperationType))
 
 		return nil
 	}
 
-	err = r.catalog.DropCollection(ctx, event.Namespace.Database, event.Namespace.Collection)
 	if err != nil {
-		return errors.Wrap(err, "drop before create")
-	}
-
-	return r.catalog.CreateCollection(ctx,
-		event.Namespace.Database,
-		event.Namespace.Collection,
-		&event.OperationDescription)
-}
-
-// handleDrop handles drop events.
-func (r *Repl) handleDrop(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[DropEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	err = r.catalog.DropCollection(ctx, event.Namespace.Database, event.Namespace.Collection)
-
-	return err
-}
-
-// handleDropDatabase handles drop database events.
-func (r *Repl) handleDropDatabase(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[DropDatabaseEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	err = r.catalog.DropDatabase(ctx, event.Namespace.Database)
-
-	return err
-}
-
-// handleCreateIndexes handles create indexes events.
-func (r *Repl) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[CreateIndexesEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	err = r.catalog.CreateIndexes(ctx,
-		event.Namespace.Database,
-		event.Namespace.Collection,
-		event.OperationDescription.Indexes)
-
-	return err
-}
-
-// handleDropIndexes handles drop indexes events.
-func (r *Repl) handleDropIndexes(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[DropIndexesEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	for _, index := range event.OperationDescription.Indexes {
-		err = r.catalog.DropIndex(ctx,
-			event.Namespace.Database,
-			event.Namespace.Collection,
-			index.Name)
-		if err != nil {
-			return errors.Wrap(err, "drop index "+index.Name)
-		}
+		return errors.Wrap(err, string(change.OperationType))
 	}
 
 	return nil
 }
 
-// handleModify handles modify events.
-func (r *Repl) handleModify(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[ModifyEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	lg := log.Ctx(ctx)
-
-	db := event.Namespace.Database
-	coll := event.Namespace.Collection
+func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 	opts := event.OperationDescription
 
 	switch {
 	case opts.Index != nil:
-		err = r.catalog.ModifyIndex(ctx, db, coll, opts.Index)
+		err := r.catalog.ModifyIndex(ctx, ns.Database, ns.Collection, opts.Index)
 		if err != nil {
-			lg.Error(err, "Modify index: "+opts.Index.Name)
+			log.Ctx(ctx).Error(err, "Modify index: "+opts.Index.Name)
 
-			return nil
+			return
 		}
 
 	case opts.CappedSize != nil || opts.CappedMax != nil:
-		err = r.catalog.ModifyCappedCollection(ctx, db, coll, opts.CappedSize, opts.CappedMax)
+		err := r.catalog.ModifyCappedCollection(ctx,
+			ns.Database, ns.Collection, opts.CappedSize, opts.CappedMax)
 		if err != nil {
-			lg.Error(err, "Resize capped collection")
+			log.Ctx(ctx).Error(err, "Resize capped collection")
 
-			return nil
+			return
 		}
 
 	case opts.ViewOn != "":
 		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
-			lg.Warn("Timeseries is not supported. skipping")
+			log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
 
-			return nil
+			return
 		}
 
-		err = r.catalog.ModifyView(ctx, db, coll, opts.ViewOn, opts.Pipeline)
+		err := r.catalog.ModifyView(ctx, ns.Database, ns.Collection, opts.ViewOn, opts.Pipeline)
 		if err != nil {
-			lg.Error(err, "Modify view")
+			log.Ctx(ctx).Error(err, "Modify view")
 
-			return nil
+			return
 		}
 
 	case opts.ExpireAfterSeconds != nil:
-		lg.Warn("Collection TTL modification is not supported")
+		log.Ctx(ctx).Warn("Collection TTL modification is not supported")
 
 	case opts.ChangeStreamPreAndPostImages != nil:
-		lg.Warn("changeStreamPreAndPostImages is not supported")
+		log.Ctx(ctx).Warn("changeStreamPreAndPostImages is not supported")
 
 	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
-		lg.Warn("validator, validatorLevel, and validatorAction are not supported")
+		log.Ctx(ctx).Warn("validator, validatorLevel, and validatorAction are not supported")
 
 	case opts.Unknown == nil:
-		lg.Debug("empty modify event")
+		log.Ctx(ctx).Debug("Empty modify event")
 
 	default:
-		lg.Warn("unknown modify options")
+		log.Ctx(ctx).Warn("Unknown modify options")
 	}
-
-	return nil
 }
 
-// handleRename handles rename events.
-func (r *Repl) handleRename(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[RenameEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	err = r.catalog.Rename(ctx,
-		event.Namespace.Database,
-		event.Namespace.Collection,
-		event.OperationDescription.To.Database,
-		event.OperationDescription.To.Collection)
-
-	return err //nolint:wrapcheck
+func loggerForEvent(change *ChangeEvent) log.Logger {
+	return log.New("repl").With(
+		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+		log.Op(string(change.OperationType)),
+		log.NS(change.Namespace.Database, change.Namespace.Collection),
+		log.Tx(change.TxnNumber, change.LSID))
 }
 
-var insertDocOptions = options.Replace().SetUpsert(true) //nolint:gochecknoglobals
-
-// handleInsert handles insert events.
-func (r *Repl) handleInsert(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[InsertEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
-
-	_, err = r.target.Database(event.Namespace.Database).
-		Collection(event.Namespace.Collection).
-		ReplaceOne(ctx, event.DocumentKey, event.FullDocument, insertDocOptions)
-
-	return err //nolint:wrapcheck
+type bulkOps struct {
+	writes []mongo.ClientBulkWrite
 }
 
-// handleDelete handles delete events.
-func (r *Repl) handleDelete(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[DeleteEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
-	}
+//nolint:gochecknoglobals
+var bulkWriteOptions = options.ClientBulkWrite().SetOrdered(true).SetBypassDocumentValidation(true)
 
-	_, err = r.target.Database(event.Namespace.Database).
-		Collection(event.Namespace.Collection).
-		DeleteOne(ctx, event.DocumentKey)
+//nolint:gochecknoglobals
+var trueVal = true
 
-	return err //nolint:wrapcheck
+func newBulkOps(size int) bulkOps {
+	return bulkOps{make([]mongo.ClientBulkWrite, 0, size)}
 }
 
-// handleUpdate handles update events.
-func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[UpdateEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
+//go:inline
+func (o *bulkOps) Full() bool {
+	return len(o.writes) == cap(o.writes)
+}
+
+//go:inline
+func (o *bulkOps) Empty() bool {
+	return len(o.writes) == 0
+}
+
+func (o *bulkOps) Do(ctx context.Context, m *mongo.Client) (int, error) {
+	if len(o.writes) == 0 {
+		return 0, nil
 	}
 
+	_, err := m.BulkWrite(ctx, o.writes, bulkWriteOptions)
+	if err != nil {
+		return 0, errors.Wrap(err, "bulk write")
+	}
+
+	size := len(o.writes)
+	o.writes = o.writes[:0]
+
+	return size, nil
+}
+
+//go:inline
+func (o *bulkOps) Insert(ns Namespace, event *InsertEvent) {
+	bw := mongo.ClientBulkWrite{
+		Database:   ns.Database,
+		Collection: ns.Collection,
+		Model: &mongo.ClientReplaceOneModel{
+			Filter:      event.DocumentKey,
+			Replacement: event.FullDocument,
+			Upsert:      &trueVal,
+		},
+	}
+
+	o.writes = append(o.writes, bw)
+}
+
+//go:inline
+func (o *bulkOps) Update(ns Namespace, event *UpdateEvent) {
 	ops := bson.D{}
+
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
 		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
 	}
@@ -727,47 +759,42 @@ func (r *Repl) handleUpdate(ctx context.Context, data bson.Raw) error {
 		ops = append(ops, bson.E{"$unset", fields})
 	}
 
-	_, err = r.target.Database(event.Namespace.Database).
-		Collection(event.Namespace.Collection).
-		UpdateOne(ctx, event.DocumentKey, ops)
-
-	return err //nolint:wrapcheck
-}
-
-// handleReplace handles replace events.
-func (r *Repl) handleReplace(ctx context.Context, data bson.Raw) error {
-	event, err := parseEvent[ReplaceEvent](data)
-	if err != nil {
-		return errors.Wrap(err, "parse")
+	bw := mongo.ClientBulkWrite{
+		Database:   ns.Database,
+		Collection: ns.Collection,
+		Model: &mongo.ClientUpdateOneModel{
+			Filter: event.DocumentKey,
+			Update: ops,
+		},
 	}
 
-	_, err = r.target.Database(event.Namespace.Database).
-		Collection(event.Namespace.Collection).
-		ReplaceOne(ctx, event.DocumentKey, event.FullDocument)
-
-	return err //nolint:wrapcheck
+	o.writes = append(o.writes, bw)
 }
 
-// txnEvent represents a transaction event.
-type txnEvent struct {
-	TxnNumber int64    `bson:"txnNumber"` // Transaction number
-	LSID      bson.Raw `bson:"lsid"`      // Logical session ID
+//go:inline
+func (o *bulkOps) Replace(ns Namespace, event *ReplaceEvent) {
+	bw := mongo.ClientBulkWrite{
+		Database:   ns.Database,
+		Collection: ns.Collection,
+		Model: &mongo.ClientReplaceOneModel{
+			Filter:      event.DocumentKey,
+			Replacement: event.FullDocument,
+			Upsert:      &trueVal,
+		},
+	}
+
+	o.writes = append(o.writes, bw)
 }
 
-// parseTxnEvent extracts a transaction event from raw BSON data.
-func parseTxnEvent(data bson.Raw) txnEvent {
-	var e txnEvent
-	_ = bson.Unmarshal(data, &e)
+//go:inline
+func (o *bulkOps) Delete(ns Namespace, event *DeleteEvent) {
+	bw := mongo.ClientBulkWrite{
+		Database:   ns.Database,
+		Collection: ns.Collection,
+		Model: &mongo.ClientDeleteOneModel{
+			Filter: event.DocumentKey,
+		},
+	}
 
-	return e
-}
-
-// IsTxn checks if the event is part of a transaction.
-func (t txnEvent) IsTxn() bool {
-	return t.TxnNumber != 0
-}
-
-// Equal checks if two transaction events are equal.
-func (t txnEvent) Equal(o txnEvent) bool {
-	return t.TxnNumber == o.TxnNumber && bytes.Equal(t.LSID, o.LSID)
+	o.writes = append(o.writes, bw)
 }

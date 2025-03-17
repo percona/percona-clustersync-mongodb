@@ -1,10 +1,12 @@
 package mongolink
 
 import (
+	"bytes"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
@@ -145,8 +147,8 @@ type InvalidateEvent struct {
 	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
-// BaseEvent is the base structure for all events.
-type BaseEvent struct {
+// EventHeader is the base structure for all events.
+type EventHeader struct {
 	// OperationType is the type of operation that the change notification reports.
 	//
 	// Returns a value of create for these change events.
@@ -203,6 +205,31 @@ type BaseEvent struct {
 	// WallTime bsonDateTime `bson:"wallTime"`
 }
 
+// IsTransaction returns true if the event is part of a transaction.
+//
+//go:inline
+func (e *EventHeader) IsTransaction() bool {
+	return e.TxnNumber != nil
+}
+
+// IsSameTransaction returns true if the events belong to the same transaction.
+//
+//go:inline
+func (e *EventHeader) IsSameTransaction(other *EventHeader) bool {
+	if e.TxnNumber == nil || other.TxnNumber == nil {
+		return false
+	}
+
+	return *e.TxnNumber == *other.TxnNumber && bytes.Equal(e.LSID, other.LSID)
+}
+
+// IsView returns true if the event is for a view.
+//
+//go:inline
+func (e *EventHeader) IsView() bool {
+	return e.CollectionUUID == nil
+}
+
 // CreateEvent occurs when a collection is created on a watched database and the change stream has
 // the showExpandedEvents option set to true.
 //
@@ -214,13 +241,6 @@ type CreateEvent struct {
 	//
 	// New in version 6.0.
 	OperationDescription CreateCollectionOptions `bson:"operationDescription"`
-
-	BaseEvent `bson:",inline"`
-}
-
-// IsView returns true if the event is for a view.
-func (e CreateEvent) IsView() bool {
-	return e.CollectionUUID == nil
 }
 
 // IsTimeseries returns true if the event is for a timeseries collection.
@@ -229,22 +249,16 @@ func (e CreateEvent) IsTimeseries() bool {
 }
 
 // DropEvent occurs when a collection is dropped from a database.
-type DropEvent struct {
-	BaseEvent `bson:",inline"`
-}
+type DropEvent struct{}
 
 // DropDatabaseEvent occurs when a database is dropped.
-type DropDatabaseEvent struct {
-	BaseEvent `bson:",inline"`
-}
+type DropDatabaseEvent struct{}
 
 // CreateIndexesEvent occurs when an index is created on the collection and the change stream has
 // the showExpandedEvents option set to true.
 //
 // New in version 6.0.
 type CreateIndexesEvent struct {
-	BaseEvent `bson:",inline"`
-
 	// OperationDescription is additional information on the change operation.
 	//
 	// This document and its subfields only appear when the change stream uses expanded events.
@@ -263,8 +277,6 @@ type createIndexesOpDesc struct {
 //
 // New in version 6.0.
 type DropIndexesEvent struct {
-	BaseEvent `bson:",inline"`
-
 	// OperationDescription is additional information on the change operation.
 	//
 	// This document and its subfields only appear when the change stream uses expanded events.
@@ -286,8 +298,6 @@ type dropIndexesOpDesc struct {
 //
 // New in version 6.0.
 type ModifyEvent struct {
-	BaseEvent `bson:",inline"`
-
 	// OperationDescription is additional information on the change operation.
 	//
 	// This document and its subfields only appear when the change stream uses expanded events.
@@ -340,8 +350,6 @@ type InsertEvent struct {
 	// after it was inserted, replaced, or updated (the document post-image). fullDocument is always
 	// included for insert events.
 	FullDocument bson.Raw `bson:"fullDocument"`
-
-	BaseEvent `bson:",inline"`
 }
 
 // DeleteEvent occurs when operations remove documents from a collection, such as when a user or
@@ -353,8 +361,6 @@ type DeleteEvent struct {
 	// For sharded collections, this field also displays the full shard key for the document. The
 	// _id field is not repeated if it is already a part of the shard key.
 	DocumentKey bson.D `bson:"documentKey"`
-
-	BaseEvent `bson:",inline"`
 }
 
 // UpdateEvent occurs when an operation updates a document in a collection.
@@ -397,8 +403,6 @@ type UpdateEvent struct {
 	// FullDocumentBeforeChange bson.D `bson:"fullDocumentBeforeChange,omitempty"`
 
 	UpdateDescription UpdateDescription `bson:"updateDescription"`
-
-	BaseEvent `bson:",inline"`
 }
 
 // UpdateDescription is a document describing the fields that were updated or removed by the update
@@ -470,8 +474,6 @@ type ReplaceEvent struct {
 	//
 	// New in version 6.0.
 	// FullDocumentBeforeChange bson.Raw `bson:"fullDocumentBeforeChange,omitempty"`
-
-	BaseEvent `bson:",inline"`
 }
 
 // RenameEvent occurs when a collection is renamed.
@@ -483,8 +485,6 @@ type RenameEvent struct {
 	//
 	// New in version 6.0.
 	OperationDescription renameOpDesc `bson:"operationDescription"`
-
-	BaseEvent `bson:",inline"`
 }
 
 // renameOpDesc represents the description of the rename operation.
@@ -511,14 +511,83 @@ func (e ParsingError) Unwrap() error {
 	return e.cause
 }
 
-// parseEvent parses the given BSON data into the specified event type.
-func parseEvent[T any](data bson.Raw) (*T, error) {
-	var event T
+type ChangeEvent struct {
+	EventHeader
+	Event any
+}
 
-	err := bson.Unmarshal(data, &event)
+func parseChangeEvent(data bson.Raw, change *ChangeEvent) error {
+	err := bson.Unmarshal(data, &change.EventHeader)
 	if err != nil {
-		return nil, ParsingError{cause: err}
+		return ParsingError{cause: err}
 	}
 
-	return &event, nil
+	switch change.OperationType {
+	case Insert:
+		var e InsertEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Update:
+		var e UpdateEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Replace:
+		var e ReplaceEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Delete:
+		var e DeleteEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Create:
+		var e CreateEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Drop:
+		change.Event = DropEvent{}
+
+	case DropDatabase:
+		change.Event = DropDatabaseEvent{}
+
+	case CreateIndexes:
+		var e CreateIndexesEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case DropIndexes:
+		var e DropIndexesEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Modify:
+		var e ModifyEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case Rename:
+		var e RenameEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
+	case ShardCollection:
+		return errors.ErrUnsupported
+	case ReshardCollection:
+		return errors.ErrUnsupported
+	case RefineCollectionShardKey:
+		return errors.ErrUnsupported
+
+	case Invalidate:
+		return ErrInvalidateEvent
+	}
+
+	if err != nil {
+		return ParsingError{cause: err}
+	}
+
+	return nil
 }
