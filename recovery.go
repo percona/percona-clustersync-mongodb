@@ -13,6 +13,8 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
+var errNoRecoveryData = errors.New("no recovery data")
+
 const recoveryID = "mongolink"
 
 type Recoverable interface {
@@ -60,14 +62,19 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 }
 
 func RunCheckpointing(ctx context.Context, m *mongo.Client, rec Recoverable) {
+	lg := log.New("checkpointing")
+
 	for {
 		err := doCheckpoint(ctx, m, rec)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-
-			log.New("recovery").Error(err, "save")
+			if !errors.Is(err, errNoRecoveryData) {
+				lg.Error(err, "Failed to save a checkpoint")
+			}
+		} else {
+			lg.Debug("Checkpoint saved")
 		}
 
 		time.Sleep(config.RecoveryCheckpointingInternal)
@@ -80,7 +87,7 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		return errors.Wrap(err, "checkpoint")
 	}
 	if len(data) == 0 {
-		return nil
+		return errNoRecoveryData
 	}
 
 	_, err = m.Database(config.MongoLinkDatabase).
