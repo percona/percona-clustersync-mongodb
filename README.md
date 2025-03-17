@@ -28,25 +28,24 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
     cd percona-mongolink
     ```
 
-2. Build the project:
+2. Build the project using the Makefile:
 
     ```sh
-    go build -o bin/mongolink .
+    make build
     ```
 
 Alternatively, you can install MongoLink from the cloned repo using `go install`:
 
-```sh
-go install .
-```
-
+    ```sh
+    go install .
+    ```
 
 This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by simply typing `percona-mongolink` in your terminal.
 
 3. Run the server:
 
     ```sh
-    bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri>
+    bin/percona-mongolink --source <source-mongodb-uri> --target <target-mongodb-uri>
     ```
 
     Alternatively, you can use environment variables:
@@ -54,7 +53,7 @@ This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is
     ```sh
     export SOURCE_URI=<source-mongodb-uri>
     export TARGET_URI=<target-mongodb-uri>
-    bin/mongolink --source $SOURCE_URI --target $TARGET_URI
+    bin/percona-mongolink --source $SOURCE_URI --target $TARGET_URI
     ```
 
     **Note:** Connections to the source and target must have `readPreference=primary` and `writeConcern=majority` explicitly or unset.
@@ -68,17 +67,17 @@ To start the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/mongolink start
+bin/percona-mongolink start
 ```
 
 #### Using HTTP API
 
-```sh
-curl -X POST http://localhost:2242/start -d '{
-  "includeNamespaces": ["db1.collection1", "db2.collection2"],
-  "excludeNamespaces": ["db3.collection3"]
-}'
-```
+    ```sh
+    curl -X POST http://localhost:2242/start -d '{
+    "includeNamespaces": ["db1.collection1", "db2.collection2"],
+    "excludeNamespaces": ["db3.collection3"]
+    }'
+    ```
 
 ### Finalizing the Replication
 
@@ -86,15 +85,15 @@ To finalize the replication process, you can either use the command-line interfa
 
 #### Using Command-Line Interface
 
-```sh
-bin/mongolink finalize
-```
+    ```sh
+    bin/percona-mongolink finalize
+    ```
 
 #### Using HTTP API
 
-```sh
-curl -X POST http://localhost:2242/finalize
-```
+    ```sh
+    curl -X POST http://localhost:2242/finalize
+    ```
 
 ### Pausing the Replication
 
@@ -102,15 +101,15 @@ To pause the replication process, you can either use the command-line interface 
 
 #### Using Command-Line Interface
 
-```sh
-bin/mongolink pause
-```
+    ```sh
+    bin/percona-mongolink pause
+    ```
 
 #### Using HTTP API
 
-```sh
-curl -X POST http://localhost:2242/pause
-```
+    ```sh
+    curl -X POST http://localhost:2242/pause
+    ```
 
 ### Resuming the Replication
 
@@ -118,15 +117,15 @@ To resume the replication process, you can either use the command-line interface
 
 #### Using Command-Line Interface
 
-```sh
-bin/mongolink resume
-```
+    ```sh
+    bin/percona-mongolink resume
+    ```
 
 #### Using HTTP API
 
-```sh
-curl -X POST http://localhost:2242/resume
-```
+    ```sh
+    curl -X POST http://localhost:2242/resume
+    ```
 
 ### Checking the Status
 
@@ -134,15 +133,15 @@ To check the current status of the replication process, you can either use the c
 
 #### Using Command-Line Interface
 
-```sh
-bin/mongolink status
-```
+    ```sh
+    bin/percona-mongolink status
+    ```
 
 #### Using HTTP API
 
-```sh
-curl http://localhost:2242/status
-```
+    ```sh
+    curl http://localhost:2242/status
+    ```
 
 ## MongoLink Options
 
@@ -157,9 +156,9 @@ When starting the MongoLink server, you can use the following options:
 
 Example:
 
-```sh
-bin/mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 2242 --log-level debug --log-json
-```
+    ```sh
+    bin/percona-mongolink --source <source-mongodb-uri> --target <target-mongodb-uri> --port 2242 --log-level debug --log-json
+    ```
 
 ## Log JSON Fields
 
@@ -175,20 +174,20 @@ When using the `--log-json` option, the logs will be output in JSON format with 
 
 Example:
 
-```json
-{ "level": "info",
-  "s": "clone",
-  "ns": "db_1.coll_1",
-  "elapsed_secs": 0,
-  "time": "2025-02-23 11:26:03.758",
-  "message": "Cloned db_1.coll_1" }
+    ```json
+    { "level": "info",
+    "s": "clone",
+    "ns": "db_1.coll_1",
+    "elapsed_secs": 0,
+    "time": "2025-02-23 11:26:03.758",
+    "message": "Cloned db_1.coll_1" }
 
-{ "level": "info",
-  "s": "mongolink",
-  "elapsed_secs": 0,
-  "time": "2025-02-23 11:26:03.857",
-  "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
-```
+    { "level": "info",
+    "s": "mongolink",
+    "elapsed_secs": 0,
+    "time": "2025-02-23 11:26:03.857",
+    "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
+    ```
 
 ## HTTP API
 
@@ -203,12 +202,12 @@ Starts the replication process.
 
 Example:
 
-```json
-{
-  "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
-  "excludeNamespaces": ["dbName.collName"]
-}
-```
+    ```json
+    {
+    "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
+    "excludeNamespaces": ["dbName.collName"]
+    }
+    ```
 
 #### Response
 
@@ -217,11 +216,11 @@ Example:
 
 Example:
 
-```json
-{
-  "ok": true
-}
-```
+    ```json
+    {
+    "ok": true
+    }
+    ```
 
 ### POST /finalize
 
@@ -234,11 +233,11 @@ Finalizes the replication process.
 
 Example:
 
-```json
-{
-  "ok": true
-}
-```
+    ```json
+    {
+    "ok": true
+    }
+    ```
 
 ### POST /pause
 
@@ -251,11 +250,11 @@ Pauses the replication process.
 
 Example:
 
-```json
-{
-  "ok": true
-}
-```
+    ```json
+    {
+    "ok": true
+    }
+    ```
 
 ### POST /resume
 
@@ -268,11 +267,11 @@ Resumes the replication process.
 
 Example:
 
-```json
-{
-  "ok": true
-}
-```
+    ```json
+    {
+    "ok": true
+    }
+    ```
 
 ### GET /status
 
@@ -298,26 +297,26 @@ The /status endpoint provides the current state of the MongoLink replication pro
 
 Example:
 
-```json
-{
-  "ok": true,
-  "state": "running",
-  "info": "Initial Sync",
+    ```json
+    {
+    "ok": true,
+    "state": "running",
+    "info": "Initial Sync",
 
-  "lagTime": 22,
-  "eventsProcessed": 5000,
-  "lastReplicatedOpTime": "1740335200.5",
+    "lagTime": 22,
+    "eventsProcessed": 5000,
+    "lastReplicatedOpTime": "1740335200.5",
 
-  "initialSync": {
-    "completed": false,
-    "lagTime": 5,
+    "initialSync": {
+        "completed": false,
+        "lagTime": 5,
 
-    "cloneCompleted": false,
-    "estimatedCloneSize": 5000000000,
-    "clonedSize": 2500000000
-  }
-}
-```
+        "cloneCompleted": false,
+        "estimatedCloneSize": 5000000000,
+        "clonedSize": 2500000000
+    }
+    }
+    ```
 
 ## Testing
 
@@ -339,23 +338,23 @@ Example:
 
 To run the tests, use the following command:
 
-```sh
-poetry run pytest \
-    --source-uri <source-mongodb-uri> \
-    --target-uri <target-mongodb-uri> \
-    --mongolink-url http://localhost:2242 \
-    --mongolink-bin <path-to-mongolink-binary>
-```
+    ```sh
+    poetry run pytest \
+        --source-uri <source-mongodb-uri> \
+        --target-uri <target-mongodb-uri> \
+        --mongolink-url http://localhost:2242 \
+        --mongolink-bin <path-to-mongolink-binary>
+    ```
 
 Alternatively, you can use environment variables:
 
-```sh
-export TEST_SOURCE_URI=<source-mongodb-uri>
-export TEST_TARGET_URI=<target-mongodb-uri>
-export TEST_MONGOLINK_URL=http://localhost:2242
-export TEST_MONGOLINK_BIN=<path-to-mongolink-binary>
-poetry run pytest
-```
+    ```sh
+    export TEST_SOURCE_URI=<source-mongodb-uri>
+    export TEST_TARGET_URI=<target-mongodb-uri>
+    export TEST_MONGOLINK_URL=http://localhost:2242
+    export TEST_MONGOLINK_BIN=<path-to-mongolink-binary>
+    poetry run pytest
+    ```
 
 The `--mongolink-bin` flag or `TEST_MONGOLINK_BIN` environment variable specifies the path to the MongoLink binary. This allows the test suite to manage the MongoLink process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run MongoLink externally before running the tests.
 
