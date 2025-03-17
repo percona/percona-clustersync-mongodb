@@ -259,6 +259,10 @@ func (c *Clone) run() error {
 	grp.SetLimit(runtime.GOMAXPROCS(0))
 
 	for _, db := range databases {
+		if db == config.MongoLinkDatabase {
+			continue
+		}
+
 		collections, err := topo.ListCollectionNames(grpCtx, c.source, db)
 		if err != nil {
 			return errors.Wrap(err, "list collection names")
