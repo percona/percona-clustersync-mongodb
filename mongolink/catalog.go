@@ -455,6 +455,12 @@ func (c *Catalog) Rename(
 
 	err := c.target.Database("admin").RunCommand(ctx, opts).Err()
 	if err != nil {
+		if topo.IsNamespaceNotFound(err) {
+			log.Ctx(ctx).Errorf(err, "")
+
+			return nil
+		}
+
 		return errors.Wrap(err, "rename collection")
 	}
 
@@ -645,13 +651,14 @@ func (c *Catalog) renameCollectionEntry(db DBName, coll, targetColl CollName) {
 	if len(databaseEntry) == 0 {
 		log.New("catalog:rename").Errorf(nil, "database %q is empty", db)
 
-		databaseEntry = make(map[CollName]map[string]*topo.IndexSpecification)
-		c.cat[db] = databaseEntry
+		return
 	}
 
 	collectionEntry := databaseEntry[coll]
 	if len(collectionEntry) == 0 {
 		log.New("catalog:rename").Errorf(nil, `collection "%s.%s" is empty`, db, coll)
+
+		return
 	}
 
 	databaseEntry[targetColl] = databaseEntry[coll]

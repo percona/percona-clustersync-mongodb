@@ -16,6 +16,10 @@ func IsIndexOptionsConflict(err error) bool {
 	return isMongoCommandError(err, "IndexOptionsConflict")
 }
 
+func IsNamespaceNotFound(err error) bool {
+	return isMongoCommandError(err, "NamespaceNotFound")
+}
+
 func IsChangeStreamHistoryLost(err error) bool {
 	return isMongoCommandError(err, "ChangeStreamHistoryLost")
 }

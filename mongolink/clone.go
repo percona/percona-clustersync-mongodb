@@ -269,7 +269,18 @@ func (c *Clone) run() error {
 			}
 
 			grp.Go(func() error {
-				return c.cloneCollection(grpCtx, db, collName)
+				err := c.cloneCollection(grpCtx, db, collName)
+				if err != nil {
+					if e := (CollectionNotFoundError{}); errors.As(err, &e) {
+						log.Ctx(ctx).Error(err, "")
+
+						return nil
+					}
+
+					return errors.Wrap(err, db+"."+collName)
+				}
+
+				return nil
 			})
 		}
 	}
@@ -315,6 +326,15 @@ func (c *Clone) getTotalSize(ctx context.Context, databases []string) (int64, er
 	return total.Load(), err //nolint:wrapcheck
 }
 
+type CollectionNotFoundError struct {
+	Database   string
+	Collection string
+}
+
+func (e CollectionNotFoundError) Error() string {
+	return "collection not found: " + e.Database + "." + e.Collection
+}
+
 // cloneCollection clones a collection (or view) from the source to the target.
 func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 	lg := log.Ctx(ctx).With(log.NS(db, coll))
@@ -322,7 +342,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 
 	spec, err := topo.GetCollectionSpec(ctx, c.source, db, coll)
 	if err != nil {
-		return errors.Wrap(err, "collection not found")
+		return CollectionNotFoundError{Database: db, Collection: coll}
 	}
 
 	startedAt := time.Now()
