@@ -334,6 +334,14 @@ Example:
     poetry install
     ```
 
+### Build for Testing
+
+To build the project for testing, use the following command:
+
+    ```sh
+    make test-build
+    ```
+
 ### Running Tests
 
 To run the tests, use the following command:
@@ -343,7 +351,7 @@ To run the tests, use the following command:
         --source-uri <source-mongodb-uri> \
         --target-uri <target-mongodb-uri> \
         --mongolink-url http://localhost:2242 \
-        --mongolink-bin <path-to-mongolink-binary>
+        --mongolink-bin bin/percona-mongolink_test
     ```
 
 Alternatively, you can use environment variables:

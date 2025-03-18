@@ -510,12 +510,15 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 	lg.Info("Starting finalization")
 
 	if status.Repl.IsRunning() {
+		lg.Info("Pausing Change Replication")
+
 		err := ml.repl.Pause(ctx)
 		if err != nil {
 			return errors.Wrap(err, "pause change replication")
 		}
 
 		<-ml.repl.Done()
+		lg.Info("Change Replication is paused")
 
 		err = ml.repl.Status().Err
 		if err != nil {

@@ -281,19 +281,10 @@ func (r *Repl) Resume(context.Context) error {
 }
 
 func (r *Repl) watchChangeEvents(
+	ctx context.Context,
 	streamOptions *options.ChangeStreamOptionsBuilder,
 	changeC chan<- *ChangeEvent,
 ) error {
-	defer close(changeC)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		<-r.pauseC
-		cancel()
-	}()
-
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
 			SetBatchSize(config.ChangeStreamBatchSize).
@@ -327,9 +318,9 @@ func (r *Repl) watchChangeEvents(
 			}
 
 			txn0 := change // the first transaction operation
-			for done := false; !done; {
+			for txn0 != nil {
 				for cur.TryNext(ctx) {
-					change := &ChangeEvent{}
+					change = &ChangeEvent{}
 					err := parseChangeEvent(cur.Current, change)
 					if err != nil {
 						return err
@@ -351,7 +342,7 @@ func (r *Repl) watchChangeEvents(
 
 					if !change.IsTransaction() {
 						changeC <- change
-						done = true
+						txn0 = nil // no more transaction
 
 						break // return to non-transactional processing
 					}
@@ -392,10 +383,21 @@ func (r *Repl) doTick(ctx context.Context) {
 func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	defer close(r.doneSig)
 
+	ctx := context.Background()
 	changeC := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
-		err := r.watchChangeEvents(opts, changeC)
+		defer close(changeC)
+
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		go func() {
+			<-r.pauseC
+			cancel()
+		}()
+
+		err := r.watchChangeEvents(ctx, opts, changeC)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) {
 				err = ErrOplogHistoryLost
@@ -405,7 +407,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 	}()
 
-	ctx := context.Background()
 	lastBulkDone := time.Now()
 
 	for change := range changeC {
@@ -503,6 +504,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 			lastBulkDone = time.Now()
 		}
+	}
+
+	if !r.bulkOps.Empty() {
+		r.doBulkOps(ctx) //nolint:errcheck
 	}
 }
 
@@ -711,10 +716,6 @@ func (o *bulkOps) Empty() bool {
 }
 
 func (o *bulkOps) Do(ctx context.Context, m *mongo.Client) (int, error) {
-	if len(o.writes) == 0 {
-		return 0, nil
-	}
-
 	_, err := m.BulkWrite(ctx, o.writes, bulkWriteOptions)
 	if err != nil {
 		return 0, errors.Wrap(err, "bulk write")
