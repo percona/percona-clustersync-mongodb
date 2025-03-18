@@ -238,7 +238,7 @@ func (c *Clone) run() error {
 	}
 
 	// XXX: Should the total size be adjusted on collection/database drop?
-	// FIXME: calculate differently for selective
+	// XXX: calculate differently for selective
 	totalSize, err := c.getTotalSize(ctx, databases)
 	if err != nil {
 		return errors.Wrap(err, "get database stats")
