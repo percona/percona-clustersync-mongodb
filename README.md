@@ -10,6 +10,12 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 - **Automatic Index Management**: Ensure necessary indexes are created on the target.
 - **HTTP API**: Start, finalize, pause, resume, and check replication status via REST endpoints.
 
+## Know Limitations
+
+- Rename collection during clone phase is not supported.
+
+  The reason is because when backlog processing is done after clone phase (completing initial sync), the renamed collection is already dropped and thus rename event apply fails since it is missing.
+
 ## Setup
 
 ### Prerequisites

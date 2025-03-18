@@ -5,6 +5,7 @@ import pytest
 from mlink import Runner
 from pymongo import MongoClient
 from testing import Testing
+import time
 
 
 def ensure_collection(source: MongoClient, target: MongoClient, db: str, coll: str, **kwargs):
@@ -441,6 +442,14 @@ def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection("target_coll_1")
 
     with t.run(phase):
+        if phase == Runner.Phase.APPLY:
+            # Known limitation: rename with dropTarget is not supported during clone because
+            # because when catching up is done after clone, the renamed collection is already
+            # dropped and thus rename event apply fails since it is missing.
+            #
+            # Waiting so clone can finish before rename is done on source.
+            time.sleep(2)
+
         t.source["db_1"]["coll_1"].rename("target_coll_1", dropTarget=True)
         t.source["db_1"]["coll_2"].rename("target_coll_2", dropTarget=True)
 
