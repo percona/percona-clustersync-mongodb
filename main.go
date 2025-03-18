@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -31,14 +32,7 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
-var (
-	logLevelFlag string
-	logJSON      bool
-	logNoColor   bool
-
-	port string
-)
-
+//nolint:gochecknoglobals
 var rootCmd = &cobra.Command{
 	Use:   "mongolink",
 	Short: "Percona MongoLink replication tool",
@@ -46,6 +40,10 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 
 	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+		logLevelFlag, _ := cmd.PersistentFlags().GetString("log-level")
+		logJSON, _ := cmd.PersistentFlags().GetBool("log-json")
+		logNoColor, _ := cmd.PersistentFlags().GetBool("log-no-color")
+
 		logLevel, err := zerolog.ParseLevel(logLevelFlag)
 		if err != nil {
 			log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
@@ -96,22 +94,24 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+//nolint:gochecknoglobals
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+
 		return NewClient(port).Status(cmd.Context())
 	},
 }
 
+//nolint:gochecknoglobals
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		pauseOnInitialSync, err := cmd.Flags().GetBool("pause-on-initial-sync")
-		if err != nil {
-			return err //nolint:wrapcheck
-		}
+		port, _ := cmd.Flags().GetString("port")
+		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 
 		startOptions := startRequest{
 			PauseOnInitialSync: pauseOnInitialSync,
@@ -121,10 +121,12 @@ var startCmd = &cobra.Command{
 	},
 }
 
+//nolint:gochecknoglobals
 var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
 		finalizeOptions := finalizeRequest{
@@ -135,22 +137,29 @@ var finalizeCmd = &cobra.Command{
 	},
 }
 
+//nolint:gochecknoglobals
 var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+
 		return NewClient(port).Pause(cmd.Context())
 	},
 }
 
+//nolint:gochecknoglobals
 var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+
 		return NewClient(port).Resume(cmd.Context())
 	},
 }
 
+//nolint:gochecknoglobals
 var resetCmd = &cobra.Command{
 	Use:    "reset",
 	Short:  "Reset MongoLink state",
@@ -175,6 +184,7 @@ var resetCmd = &cobra.Command{
 	},
 }
 
+//nolint:gochecknoglobals
 var resetRecoveryCmd = &cobra.Command{
 	Use:   "recovery",
 	Short: "Reset recovery state",
@@ -212,6 +222,7 @@ var resetRecoveryCmd = &cobra.Command{
 	},
 }
 
+//nolint:gochecknoglobals
 var resetHeartbeatCmd = &cobra.Command{
 	Use:   "heartbeat",
 	Short: "Reset heartbeat state",
@@ -250,11 +261,11 @@ var resetHeartbeatCmd = &cobra.Command{
 }
 
 func main() {
-	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
-	rootCmd.PersistentFlags().BoolVar(&logJSON, "log-json", false, "Output log in JSON format")
-	rootCmd.PersistentFlags().BoolVar(&logNoColor, "no-color", false, "Disable log color")
+	rootCmd.PersistentFlags().String("log-level", "info", "Log level")
+	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
+	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-	rootCmd.Flags().StringVar(&port, "port", "2242", "Port number")
+	rootCmd.Flags().String("port", "2242", "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
