@@ -40,7 +40,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
     go install .
     ```
 
-    > This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by simply typing `percona-mongolink` in your terminal.
+    > This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by typing `percona-mongolink` in your terminal.
 
 3. Run the server:
 
