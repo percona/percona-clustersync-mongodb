@@ -47,9 +47,10 @@ type Repl struct {
 	pauseC  chan struct{}
 	doneSig chan struct{}
 
-	bulkOps   bulkOps
-	bulkToken bson.Raw
-	bulkTS    bson.Timestamp
+	bulkOps      bulkOps
+	bulkToken    bson.Raw
+	bulkTS       bson.Timestamp
+	lastBulkDone time.Time
 }
 
 // ReplStatus represents the status of change replication.
@@ -416,14 +417,13 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 	}()
 
-	lastBulkDone := time.Now()
+	r.lastBulkDone = time.Now()
 
 	lg := log.New("repl")
 
 	for change := range changeC {
-		if time.Since(lastBulkDone) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
-			err := r.doBulkOps(ctx)
-			if err != nil {
+		if time.Since(r.lastBulkDone) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
+			if !r.doBulkOps(ctx) {
 				return
 			}
 		}
@@ -489,12 +489,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 		default:
 			if !r.bulkOps.Empty() {
-				err := r.doBulkOps(ctx)
-				if err != nil {
+				if !r.doBulkOps(ctx) {
 					return
 				}
-
-				lastBulkDone = time.Now()
 			}
 
 			err := r.applySchemaChange(ctx, change)
@@ -510,12 +507,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if r.bulkOps.Full() {
-			err := r.doBulkOps(ctx)
-			if err != nil {
+			if !r.doBulkOps(ctx) {
 				return
 			}
-
-			lastBulkDone = time.Now()
 		}
 	}
 
@@ -524,16 +518,16 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	}
 }
 
-func (r *Repl) doBulkOps(ctx context.Context) error {
+func (r *Repl) doBulkOps(ctx context.Context) bool {
 	size, err := r.bulkOps.Do(ctx, r.target)
 	if err != nil {
 		r.setFailed(err, "Flush bulk ops")
 
-		return err
+		return false
 	}
 
 	if size == 0 {
-		return nil
+		return true
 	}
 
 	r.lock.Lock()
@@ -542,9 +536,13 @@ func (r *Repl) doBulkOps(ctx context.Context) error {
 	r.eventsProcessed += int64(size)
 	r.lock.Unlock()
 
-	log.New("bulk:write").With(log.Int64("size", int64(size))).Debug("BulkOps applied")
+	log.New("bulk:write").
+		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDone))).
+		Debug("BulkOps applied")
 
-	return nil
+	r.lastBulkDone = time.Now()
+
+	return true
 }
 
 // applySchemaChange applies a schema change event to the target MongoDB.
