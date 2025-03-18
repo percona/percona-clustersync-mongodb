@@ -50,7 +50,7 @@ const (
 	// BulkOpsInterval is the maximum interval between bulk write operations.
 	BulkOpsInterval = AdvanceClusterTimeInterval
 	// AdvanceClusterTimeInterval is the interval for cluster time ticks.
-	AdvanceClusterTimeInterval = 5 * time.Second
+	AdvanceClusterTimeInterval = time.Second
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
 	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.
