@@ -418,6 +418,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 	lastBulkDone := time.Now()
 
+	lg := log.New("repl")
+
 	for change := range changeC {
 		if time.Since(lastBulkDone) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
 			err := r.doBulkOps(ctx)
