@@ -24,6 +24,10 @@ func IsChangeStreamHistoryLost(err error) bool {
 	return isMongoCommandError(err, "ChangeStreamHistoryLost")
 }
 
+func IsCappedPositionLost(err error) bool {
+	return isMongoCommandError(err, "CappedPositionLost")
+}
+
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	for err != nil {

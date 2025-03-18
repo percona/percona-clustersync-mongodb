@@ -409,7 +409,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 		err := r.watchChangeEvents(ctx, opts, changeC)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			if topo.IsChangeStreamHistoryLost(err) {
+			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
 			}
 
