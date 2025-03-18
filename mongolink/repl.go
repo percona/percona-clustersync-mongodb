@@ -310,7 +310,7 @@ func (r *Repl) watchChangeEvents(
 		lastEventTS := bson.Timestamp{}
 		sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
 		if err != nil {
-			log.New("watch").Error(err, "Unable to retrieve the source cluster time")
+			log.New("watch").Error(err, "Unable to advance the source cluster time")
 		}
 
 		for cur.TryNext(ctx) {

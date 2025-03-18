@@ -434,7 +434,7 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 		}
 
 		lastTS := ml.repl.Status().LastReplicatedOpTime
-		lg.Infof("Current Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
+		lg.Infof("Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
 	}
 }
 
