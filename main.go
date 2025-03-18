@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -407,7 +408,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
-	lg.Debug("Connected to source cluster")
+	cs, _ := connstring.Parse(sourceURI)
+	lg.Infof("Connected to source cluster: %s://%s:***@%s",
+		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
 
 	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
@@ -425,7 +428,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
-	lg.Debug("Connected to target cluster")
+	cs, _ = connstring.Parse(targetURI)
+	lg.Infof("Connected to target cluster: %s://%s:***@%s",
+		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
 
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
