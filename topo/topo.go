@@ -28,6 +28,24 @@ func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 	return bson.Timestamp{T: t, I: i}, nil
 }
 
+// AdvanceClusterTime advances the cluster time of a MongoDB deployment by appending an oplog note.
+func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{
+		{"appendOplogNote", 1},
+		{"data", bson.D{{"msg", "mongolink:tick"}}},
+	}).Raw()
+	if err != nil {
+		return bson.Timestamp{}, err //nolint:wrapcheck
+	}
+
+	t, i, ok := raw.Lookup("$clusterTime", "clusterTime").TimestampOK()
+	if !ok {
+		return bson.Timestamp{}, errMissingClusterTime
+	}
+
+	return bson.Timestamp{T: t, I: i}, nil
+}
+
 // Hello represents the result of the db.hello() command.
 type Hello struct {
 	// IsWritablePrimary indicates if the node is writable primary.

@@ -22,6 +22,8 @@ var (
 	ErrOplogHistoryLost = errors.New("oplog history is lost")
 )
 
+const advanceTimePseudoEvent = "@tick"
+
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
 	source *mongo.Client // Source MongoDB client
@@ -288,7 +290,7 @@ func (r *Repl) watchChangeEvents(
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
 			SetBatchSize(config.ChangeStreamBatchSize).
-			SetMaxAwaitTime(config.TickInterval))
+			SetMaxAwaitTime(config.AdvanceClusterTimeInterval))
 	if err != nil {
 		return errors.Wrap(err, "open")
 	}
@@ -304,6 +306,12 @@ func (r *Repl) watchChangeEvents(
 	var txnOps []*ChangeEvent
 
 	for {
+		lastEventTS := bson.Timestamp{}
+		sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
+		if err != nil {
+			log.New("watch").Error(err, "Unable to retrieve the source cluster time")
+		}
+
 		for cur.TryNext(ctx) {
 			change := &ChangeEvent{}
 			err := parseChangeEvent(cur.Current, change)
@@ -313,6 +321,7 @@ func (r *Repl) watchChangeEvents(
 
 			if !change.IsTransaction() {
 				changeC <- change
+				lastEventTS = change.ClusterTime
 
 				continue
 			}
@@ -354,7 +363,13 @@ func (r *Repl) watchChangeEvents(
 					return errors.Wrap(err, "cursor")
 				}
 
-				go r.doTick(ctx)
+				changeC <- txn0
+				for i, txn := range txnOps {
+					changeC <- txn
+					txnOps[i] = nil
+				}
+				txnOps = txnOps[:0]
+				txn0 = nil
 			}
 		}
 
@@ -362,21 +377,15 @@ func (r *Repl) watchChangeEvents(
 			return errors.Wrap(err, "cursor")
 		}
 
-		go r.doTick(ctx)
-	}
-}
-
-// doTick updates a document in `percona_mongolink.ticks` to advance cluster time
-// when no events are received, preventing the status from appearing stuck.
-func (r *Repl) doTick(ctx context.Context) {
-	_, err := r.source.Database(config.MongoLinkDatabase).
-		Collection(config.TickCollection).
-		UpdateOne(ctx,
-			bson.D{{"_id", ""}},
-			bson.D{{"$set", bson.D{{"t", time.Now().Unix()}}}},
-			options.UpdateOne().SetUpsert(true))
-	if err != nil {
-		log.New("repl:tick").Error(err, "")
+		// no event available yet. progress mongolink time.
+		if sourceTS.After(lastEventTS) {
+			changeC <- &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType: advanceTimePseudoEvent,
+					ClusterTime:   sourceTS,
+				},
+			}
+		}
 	}
 }
 
@@ -415,8 +424,16 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			if err != nil {
 				return
 			}
+		}
 
-			lastBulkDone = time.Now()
+		if change.OperationType == advanceTimePseudoEvent {
+			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
+
+			r.lock.Lock()
+			r.lastReplicatedOpTime = change.ClusterTime
+			r.lock.Unlock()
+
+			continue
 		}
 
 		if change.Namespace.Database == config.MongoLinkDatabase {
@@ -426,12 +443,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
 				r.lock.Unlock()
-			}
-
-			if change.Namespace.Collection == config.TickCollection {
-				log.New("repl").
-					With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).
-					Trace("tick")
 			}
 
 			continue

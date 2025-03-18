@@ -20,8 +20,6 @@ const (
 const (
 	// MongoLinkDatabase is the name of the MongoDB database used by MongoLink.
 	MongoLinkDatabase = "percona_mongolink"
-	// TickCollection is the name of the collection used for ticks during change replication.
-	TickCollection = "ticks"
 	// RecoveryCollection is the name of the collection used for recovery data.
 	RecoveryCollection = "checkpoints"
 	// HeartbeatCollection is the name of the collection used for heartbeats.
@@ -50,9 +48,9 @@ const (
 	// BulkOpsSize is the maximum number of operations in a bulk write.
 	BulkOpsSize = ChangeStreamBatchSize
 	// BulkOpsInterval is the maximum interval between bulk write operations.
-	BulkOpsInterval = TickInterval
-	// TickInterval is the interval for cluster time ticks.
-	TickInterval = 1 * time.Second
+	BulkOpsInterval = AdvanceClusterTimeInterval
+	// AdvanceClusterTimeInterval is the interval for cluster time ticks.
+	AdvanceClusterTimeInterval = 5 * time.Second
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
 )
