@@ -53,6 +53,8 @@ const (
 	AdvanceClusterTimeInterval = 5 * time.Second
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
+	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.
+	PrintLagTimeInterval = InitialSyncCheckInterval
 )
 
 // CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning

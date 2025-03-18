@@ -343,7 +343,15 @@ func (ml *MongoLink) run() {
 		}
 	}
 
-	go ml.monitorInitialSync(ctx)
+	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
+		go func() {
+			ml.monitorInitialSync(ctx)
+			ml.monitorLagTime(ctx)
+		}()
+	} else {
+		go ml.monitorLagTime(ctx)
+	}
+
 	<-ml.repl.Done()
 
 	replStatus = ml.repl.Status()
@@ -404,6 +412,32 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 	}
 }
 
+func (ml *MongoLink) monitorLagTime(ctx context.Context) {
+	lg := log.Ctx(ctx)
+
+	t := time.NewTicker(config.AdvanceClusterTimeInterval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-t.C:
+		}
+
+		sourceTS, err := topo.ClusterTime(ctx, ml.source)
+		if err != nil {
+			lg.Error(err, "")
+
+			continue
+		}
+
+		lastTS := ml.repl.Status().LastReplicatedOpTime
+		lg.Infof("Current Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
+	}
+}
+
 // Pause pauses the replication process.
 func (ml *MongoLink) Pause(ctx context.Context) error {
 	ml.lock.Lock()
@@ -422,6 +456,10 @@ func (ml *MongoLink) Pause(ctx context.Context) error {
 }
 
 func (ml *MongoLink) doPause(ctx context.Context) error {
+	if ml.state != StateRunning {
+		return errors.New("cannot pause: not running")
+	}
+
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsRunning() {
