@@ -47,10 +47,10 @@ type Repl struct {
 	pauseC  chan struct{}
 	doneSig chan struct{}
 
-	bulkOps      bulkOps
-	bulkToken    bson.Raw
-	bulkTS       bson.Timestamp
-	lastBulkDone time.Time
+	bulkOps        bulkOps
+	bulkToken      bson.Raw
+	bulkTS         bson.Timestamp
+	lastBulkDoneAt time.Time
 }
 
 // ReplStatus represents the status of change replication.
@@ -418,12 +418,12 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 	}()
 
-	r.lastBulkDone = time.Now()
+	r.lastBulkDoneAt = time.Now()
 
 	lg := log.New("repl")
 
 	for change := range changeC {
-		if time.Since(r.lastBulkDone) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
+		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
 			if !r.doBulkOps(ctx) {
 				return
 			}
@@ -540,10 +540,10 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	r.lock.Unlock()
 
 	log.New("bulk:write").
-		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDone))).
+		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDoneAt))).
 		Debug("BulkOps applied")
 
-	r.lastBulkDone = time.Now()
+	r.lastBulkDoneAt = time.Now()
 
 	return true
 }
