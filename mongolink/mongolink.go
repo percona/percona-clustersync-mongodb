@@ -313,7 +313,7 @@ func (ml *MongoLink) run() {
 	if !cloneStatus.IsFinished() {
 		err := ml.clone.Start(ctx)
 		if err != nil {
-			lg.Error(err, "Clone has failed")
+			ml.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
 		}
 
 		<-ml.clone.Done()
@@ -330,14 +330,14 @@ func (ml *MongoLink) run() {
 	if !replStatus.IsStarted() {
 		err := ml.repl.Start(ctx, cloneStatus.StartTS)
 		if err != nil {
-			lg.Error(errors.Wrap(err, "start"), "")
+			ml.setFailed(errors.Wrap(err, "start change replication"))
 
 			return
 		}
 	} else {
 		err := ml.repl.Resume(ctx)
 		if err != nil {
-			lg.Error(errors.Wrap(err, "resume"), "")
+			ml.setFailed(errors.Wrap(err, "resume change replication"))
 
 			return
 		}
@@ -356,7 +356,7 @@ func (ml *MongoLink) run() {
 
 	replStatus = ml.repl.Status()
 	if replStatus.Err != nil {
-		ml.setFailed(errors.Wrap(replStatus.Err, "repl"))
+		ml.setFailed(errors.Wrap(replStatus.Err, "change replication"))
 	}
 }
 
