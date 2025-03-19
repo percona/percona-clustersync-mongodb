@@ -42,15 +42,15 @@ const (
 const (
 	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
 	ChangeStreamBatchSize = 1000
+	// ChangeStreamAwaitTime is the maximum amount of time to wait for new change event.
+	ChangeStreamAwaitTime = time.Second
 	// ReplQueueSize defines the buffer size of the internal channel used to transfer
 	// events between the change stream read and the change replication.
 	ReplQueueSize = ChangeStreamBatchSize
 	// BulkOpsSize is the maximum number of operations in a bulk write.
 	BulkOpsSize = ChangeStreamBatchSize
 	// BulkOpsInterval is the maximum interval between bulk write operations.
-	BulkOpsInterval = AdvanceClusterTimeInterval
-	// AdvanceClusterTimeInterval is the interval for cluster time ticks.
-	AdvanceClusterTimeInterval = time.Second
+	BulkOpsInterval = ChangeStreamAwaitTime
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
 	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.

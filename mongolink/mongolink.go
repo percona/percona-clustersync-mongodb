@@ -415,7 +415,7 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 	lg := log.Ctx(ctx)
 
-	t := time.NewTicker(config.AdvanceClusterTimeInterval)
+	t := time.NewTicker(config.PrintLagTimeInterval)
 	defer t.Stop()
 
 	for {

@@ -291,7 +291,7 @@ func (r *Repl) watchChangeEvents(
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
 			SetBatchSize(config.ChangeStreamBatchSize).
-			SetMaxAwaitTime(config.AdvanceClusterTimeInterval))
+			SetMaxAwaitTime(config.ChangeStreamAwaitTime))
 	if err != nil {
 		return errors.Wrap(err, "open")
 	}
