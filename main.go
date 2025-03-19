@@ -93,10 +93,13 @@ var rootCmd = &cobra.Command{
 			log.New("cli").Info("State has been reset")
 		}
 
+		startMongoLink, _ := cmd.Flags().GetBool("start")
+
 		return runServer(cmd.Context(), serverOptions{
 			port:      port,
 			sourceURI: sourceURI,
 			targetURI: targetURI,
+			start:     startMongoLink,
 		})
 	},
 }
@@ -365,6 +368,7 @@ type serverOptions struct {
 	port      int
 	sourceURI string
 	targetURI string
+	start     bool
 }
 
 func (s serverOptions) validate() error {
@@ -399,6 +403,13 @@ func runServer(ctx context.Context, options serverOptions) error {
 	srv, err := createServer(ctx, options.sourceURI, options.targetURI)
 	if err != nil {
 		return errors.Wrap(err, "new server")
+	}
+
+	if options.start {
+		err = srv.mlink.Start(ctx, nil)
+		if err != nil {
+			log.New("cli").Error(err, "Failed to start Cluster Replication")
+		}
 	}
 
 	go func() {
