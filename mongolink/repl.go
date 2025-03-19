@@ -364,13 +364,14 @@ func (r *Repl) watchChangeEvents(
 					return errors.Wrap(err, "cursor")
 				}
 
+				// no event available. the entire transaction is received
 				changeC <- txn0
 				for i, txn := range txnOps {
 					changeC <- txn
 					txnOps[i] = nil
 				}
 				txnOps = txnOps[:0]
-				txn0 = nil
+				txn0 = nil // return to non-transactional processing
 			}
 		}
 
@@ -378,7 +379,7 @@ func (r *Repl) watchChangeEvents(
 			return errors.Wrap(err, "cursor")
 		}
 
-		// no event available yet. progress mongolink time.
+		// no event available yet. progress mongolink time
 		if sourceTS.After(lastEventTS) {
 			changeC <- &ChangeEvent{
 				EventHeader: EventHeader{
@@ -496,7 +497,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 			err := r.applySchemaChange(ctx, change)
 			if err != nil {
-				loggerForEvent(change).Error(err, "Apply change")
+				r.setFailed(err, "Apply change")
+
+				return
 			}
 
 			r.lock.Lock()
@@ -547,10 +550,10 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 
 // applySchemaChange applies a schema change event to the target MongoDB.
 func (r *Repl) applySchemaChange(ctx context.Context, change *ChangeEvent) error {
-	var err error
-
 	lg := loggerForEvent(change)
 	ctx = lg.WithContext(ctx)
+
+	var err error
 
 	switch change.OperationType { //nolint:exhaustive
 	case Create:
@@ -565,7 +568,9 @@ func (r *Repl) applySchemaChange(ctx context.Context, change *ChangeEvent) error
 			change.Namespace.Database,
 			change.Namespace.Collection)
 		if err != nil {
-			return errors.Wrap(err, "drop before create")
+			err = errors.Wrap(err, "drop before create")
+
+			break
 		}
 
 		err = r.catalog.CreateCollection(ctx,
@@ -573,10 +578,8 @@ func (r *Repl) applySchemaChange(ctx context.Context, change *ChangeEvent) error
 			change.Namespace.Collection,
 			&event.OperationDescription)
 		if err != nil {
-			return errors.Wrap(err, "create")
+			err = errors.Wrap(err, "create")
 		}
-
-		return nil
 
 	case Drop:
 		err = r.catalog.DropCollection(ctx,
