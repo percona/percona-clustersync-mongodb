@@ -495,7 +495,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				}
 			}
 
-			err := r.applySchemaChange(ctx, change)
+			err := r.applyDDLChange(ctx, change)
 			if err != nil {
 				r.setFailed(err, "Apply change")
 
@@ -548,8 +548,8 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	return true
 }
 
-// applySchemaChange applies a schema change event to the target MongoDB.
-func (r *Repl) applySchemaChange(ctx context.Context, change *ChangeEvent) error {
+// applyDDLChange applies a schema change to the target MongoDB.
+func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
 	ctx = lg.WithContext(ctx)
 
