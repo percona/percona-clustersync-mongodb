@@ -495,7 +495,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
-		return nil, errors.Wrap(err, "run heartbeat")
+		return nil, errors.Wrap(err, "heartbeat")
 	}
 
 	mlink := mongolink.New(source, target)

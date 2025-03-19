@@ -13,19 +13,36 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
-var errConcurrentProcess = errors.New("detected concurrent process")
+var (
+	errConcurrentProcess = errors.New("detected concurrent process")
+	errStaleHeartbeat    = errors.New("stale heartbeat")
+)
 
 const heartbeatID = "mongolink"
 
 type StopHeartbeat func(context.Context) error
 
 func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
+	lg := log.New("heartbeat")
+
 	lastBeat, err := doFirstHeartbeat(ctx, m)
-	if err != nil {
+	switch {
+	case err == nil:
+		// nothing
+
+	case errors.Is(err, errConcurrentProcess):
+		lastBeat, err = retryHeartbeat(ctx, m)
+		if err != nil {
+			return nil, errors.Wrap(err, "retry")
+		}
+
+	case errors.Is(err, errStaleHeartbeat):
+		lg.Warn("Detected stale concurrent heartbeat")
+
+	default:
 		return nil, errors.Wrap(err, "first")
 	}
 
-	lg := log.New("heartbeat")
 	lg.With(log.Int64("hb", lastBeat)).Trace("")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -37,19 +54,26 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 			time.Sleep(config.HeartbeatInternal)
 
 			savedBeat, err := doHeartbeat(ctx, m, lastBeat)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					lg.Info("Heartbeat canceled")
+			switch {
+			case err == nil:
+				// nothing
 
-					return
-				}
-				if errors.Is(err, mongo.ErrNoDocuments) {
-					lastBeat = savedBeat
-					lg.Warn("The previous heartbeat is missing")
-					lg.With(log.Int64("hb", lastBeat)).Trace("")
-				} else {
-					lg.Error(err, "beat")
-				}
+			case errors.Is(err, context.Canceled):
+				lg.Info("Heartbeat canceled")
+
+				return
+
+			case errors.Is(err, errConcurrentProcess):
+				lg.Error(err, "Detected concurrent heartbeat")
+
+			case errors.Is(err, errStaleHeartbeat):
+				lg.Warn("Detected stale concurrent heartbeat")
+
+			case errors.Is(err, mongo.ErrNoDocuments):
+				lg.Warn("The previous heartbeat is missing")
+
+			default:
+				lg.Error(err, "beat")
 
 				continue
 			}
@@ -66,6 +90,50 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 	}
 
 	return stop, nil
+}
+
+func retryHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
+	lg := log.New("heartbeat")
+
+	lastBeat, err := doFirstHeartbeat(ctx, m)
+	if err == nil {
+		return lastBeat, nil
+	}
+	if errors.Is(err, errStaleHeartbeat) {
+		lg.Warn("Detected stale concurrent heartbeat")
+	} else {
+		lg.Error(err, "Heartbeat error")
+	}
+
+	lg.Infof("Try heartbeat again in %s", config.HeartbeatTimeout)
+
+	t := time.NewTicker(config.HeartbeatTimeout)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+
+		case <-t.C:
+		}
+
+		stopHeartbeat, err := doFirstHeartbeat(ctx, m)
+		if err != nil {
+			if errors.Is(err, errStaleHeartbeat) {
+				lg.Warn("Detected stale concurrent heartbeat")
+
+				return stopHeartbeat, nil
+			}
+
+			lg.Error(err, "Heartbeat error")
+			lg.Infof("Try heartbeat again in %s", config.HeartbeatTimeout)
+
+			continue
+		}
+
+		return stopHeartbeat, nil
+	}
 }
 
 func doFirstHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
@@ -101,7 +169,7 @@ func doFirstHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 
 	currBeat, err = doHeartbeat(ctx, m, lastBeat)
 	if err != nil {
-		return 0, errors.Wrap(err, "beat")
+		return currBeat, errors.Wrap(err, "beat")
 	}
 
 	return currBeat, nil
@@ -125,8 +193,13 @@ func doHeartbeat(ctx context.Context, m *mongo.Client, lastBeat int64) (int64, e
 	}
 
 	savedBeat, _ := raw.Lookup("time").AsInt64OK()
+
+	if time.Since(time.Unix(savedBeat, 0)) >= config.StaleHeartbeatDuration {
+		return currBeat, errStaleHeartbeat
+	}
+
 	if savedBeat != lastBeat {
-		return 0, errConcurrentProcess
+		return currBeat, errConcurrentProcess
 	}
 
 	return currBeat, nil
