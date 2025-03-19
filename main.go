@@ -238,7 +238,7 @@ var resetRecoveryCmd = &cobra.Command{
 			}
 		}()
 
-		err = ClearRecoveryData(ctx, target)
+		err = DeleteRecoveryData(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -356,9 +356,14 @@ func resetState(ctx context.Context, targetURI string) error {
 		}
 	}()
 
-	err = target.Database(config.MongoLinkDatabase).Drop(ctx)
+	err = DeleteHeartbeat(ctx, target)
 	if err != nil {
-		return errors.Wrap(err, "drop database")
+		return errors.Wrap(err, "delete heartbeat")
+	}
+
+	err = DeleteRecoveryData(ctx, target)
+	if err != nil {
+		return errors.Wrap(err, "delete heartbeat")
 	}
 
 	return nil

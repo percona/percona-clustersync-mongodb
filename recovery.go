@@ -107,7 +107,7 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 	return nil
 }
 
-func ClearRecoveryData(ctx context.Context, m *mongo.Client) error {
+func DeleteRecoveryData(ctx context.Context, m *mongo.Client) error {
 	_, err := m.Database(config.MongoLinkDatabase).
 		Collection(config.RecoveryCollection).
 		DeleteOne(ctx, bson.D{{"_id", recoveryID}})
