@@ -410,7 +410,7 @@ func runServer(ctx context.Context, options serverOptions) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start {
+	if options.start && srv.mlink.Status(ctx).State == mongolink.StateIdle {
 		err = srv.mlink.Start(ctx, nil)
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")

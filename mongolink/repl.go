@@ -33,7 +33,6 @@ type Repl struct {
 	catalog  *Catalog     // Catalog for managing collections and indexes
 
 	lastReplicatedOpTime bson.Timestamp
-	resumeToken          bson.Raw
 
 	lock sync.Mutex
 	err  error
@@ -94,7 +93,6 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 type replCheckpoint struct {
 	StartTime            time.Time      `bson:"startTime,omitempty"`
 	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
-	ResumeToken          bson.Raw       `bson:"resumeToken,omitempty"`
 	EventsProcessed      int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
@@ -107,7 +105,6 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		ResumeToken:          r.resumeToken,
 		EventsProcessed:      r.eventsProcessed,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
@@ -138,7 +135,6 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 
 	r.startTime = cp.StartTime
 	r.pauseTime = pauseTime
-	r.resumeToken = cp.ResumeToken
 	r.eventsProcessed = cp.EventsProcessed
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
@@ -268,14 +264,14 @@ func (r *Repl) Resume(context.Context) error {
 		return errors.New("not paused")
 	}
 
-	if r.resumeToken == nil {
-		return errors.New("no resume token")
+	if r.lastReplicatedOpTime.IsZero() {
+		return errors.New("missing optime")
 	}
 
 	r.pauseTime = time.Time{}
 	r.doneSig = make(chan struct{})
 
-	go r.run(options.ChangeStream().SetResumeAfter(r.resumeToken))
+	go r.run(options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
 	log.New("repl").With(log.OpTime(r.lastReplicatedOpTime.T, r.lastReplicatedOpTime.I)).
 		Info("Change Replication resumed")
@@ -442,7 +438,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		if change.Namespace.Database == config.MongoLinkDatabase {
 			if r.bulkOps.Empty() {
 				r.lock.Lock()
-				r.resumeToken = change.ID
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
 				r.lock.Unlock()
@@ -454,7 +449,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
 			if r.bulkOps.Empty() {
 				r.lock.Lock()
-				r.resumeToken = change.ID
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
 				r.lock.Unlock()
@@ -503,7 +497,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			}
 
 			r.lock.Lock()
-			r.resumeToken = change.ID
 			r.lastReplicatedOpTime = change.ClusterTime
 			r.eventsProcessed++
 			r.lock.Unlock()
@@ -534,7 +527,6 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	}
 
 	r.lock.Lock()
-	r.resumeToken = r.bulkToken
 	r.lastReplicatedOpTime = r.bulkTS
 	r.eventsProcessed += int64(size)
 	r.lock.Unlock()
