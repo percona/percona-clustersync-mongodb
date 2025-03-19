@@ -113,7 +113,7 @@ func retryHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return 0, ctx.Err()
+			return 0, ctx.Err() //nolint:wrapcheck
 
 		case <-t.C:
 		}
