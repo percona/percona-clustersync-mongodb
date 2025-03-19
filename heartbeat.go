@@ -37,7 +37,7 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 		}
 
 	case errors.Is(err, errStaleHeartbeat):
-		lg.Warn("Detected stale concurrent heartbeat")
+		lg.Warn("Detected stale heartbeat")
 
 	default:
 		return nil, errors.Wrap(err, "first")
@@ -67,7 +67,7 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 				lg.Error(err, "Detected concurrent heartbeat")
 
 			case errors.Is(err, errStaleHeartbeat):
-				lg.Warn("Detected stale concurrent heartbeat")
+				lg.Warn("Detected stale heartbeat")
 
 			case errors.Is(err, mongo.ErrNoDocuments):
 				lg.Warn("The previous heartbeat is missing")
@@ -100,7 +100,7 @@ func retryHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 		return lastBeat, nil
 	}
 	if errors.Is(err, errStaleHeartbeat) {
-		lg.Warn("Detected stale concurrent heartbeat")
+		lg.Warn("Detected stale heartbeat")
 	} else {
 		lg.Error(err, "Heartbeat error")
 	}
@@ -121,7 +121,7 @@ func retryHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 		stopHeartbeat, err := doFirstHeartbeat(ctx, m)
 		if err != nil {
 			if errors.Is(err, errStaleHeartbeat) {
-				lg.Warn("Detected stale concurrent heartbeat")
+				lg.Warn("Detected stale heartbeat")
 
 				return stopHeartbeat, nil
 			}
