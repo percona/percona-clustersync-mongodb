@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
@@ -27,6 +28,7 @@ import (
 
 // Constants for server configuration.
 const (
+	DefaultServerPort       = 2242
 	ServerReadTimeout       = 30 * time.Second
 	ServerReadHeaderTimeout = 3 * time.Second
 	MaxRequestSize          = config.MiB
@@ -61,9 +63,9 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port, _ := cmd.Flags().GetString("port")
-		if port == "" {
-			port = os.Getenv("PML_PORT")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
 		}
 
 		sourceURI, _ := cmd.Flags().GetString("source")
@@ -91,7 +93,11 @@ var rootCmd = &cobra.Command{
 			log.New("cli").Info("State has been reset")
 		}
 
-		return runServer(cmd.Context(), port, sourceURI, targetURI)
+		return runServer(cmd.Context(), serverOptions{
+			port:      port,
+			sourceURI: sourceURI,
+			targetURI: targetURI,
+		})
 	},
 }
 
@@ -100,7 +106,10 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, _ := cmd.Flags().GetString("port")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
+		}
 
 		return NewClient(port).Status(cmd.Context())
 	},
@@ -111,7 +120,11 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, _ := cmd.Flags().GetString("port")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
+		}
+
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 
 		startOptions := startRequest{
@@ -127,7 +140,11 @@ var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, _ := cmd.Flags().GetString("port")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
+		}
+
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
 		finalizeOptions := finalizeRequest{
@@ -143,7 +160,10 @@ var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, _ := cmd.Flags().GetString("port")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
+		}
 
 		return NewClient(port).Pause(cmd.Context())
 	},
@@ -154,7 +174,10 @@ var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, _ := cmd.Flags().GetString("port")
+		port, err := getPort(cmd.Flags())
+		if err != nil {
+			return err
+		}
 
 		return NewClient(port).Resume(cmd.Context())
 	},
@@ -261,20 +284,48 @@ var resetHeartbeatCmd = &cobra.Command{
 	},
 }
 
+func getPort(flags *pflag.FlagSet) (int, error) {
+	port, _ := flags.GetInt("port")
+	if flags.Changed("port") {
+		return port, nil
+	}
+
+	portVar := os.Getenv("PML_PORT")
+	if portVar == "" {
+		return port, nil
+	}
+
+	parsedPort, err := strconv.ParseInt(portVar, 10, 32)
+	if err != nil {
+		return 0, errors.Errorf("invalid environment variable PML_PORT='%s'", portVar)
+	}
+
+	return int(parsedPort), nil
+}
+
 func main() {
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level")
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-	rootCmd.Flags().String("port", "2242", "Port number")
+	rootCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
 	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
+	rootCmd.Flags().MarkHidden("start")       //nolint:errcheck
 	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
 
+	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
+
+	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
+	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	resumeCmd.Flags().Int("port", DefaultServerPort, "Port number")
+
+	finalizeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
 	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
@@ -310,28 +361,42 @@ func resetState(ctx context.Context, targetURI string) error {
 	return nil
 }
 
-// runServer starts the HTTP server with the provided configuration.
-func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
+type serverOptions struct {
+	port      int
+	sourceURI string
+	targetURI string
+}
+
+func (s serverOptions) validate() error {
+	if s.port <= 1024 || s.port > 65535 {
+		return errors.New("port value is outside the supported range [1024 - 65535]")
+	}
+
 	switch {
-	case sourceURI == "" && targetURI == "":
+	case s.sourceURI == "" && s.targetURI == "":
 		return errors.New("source URI and target URI are empty")
-	case sourceURI == "":
+	case s.sourceURI == "":
 		return errors.New("source URI is empty")
-	case targetURI == "":
+	case s.targetURI == "":
 		return errors.New("target URI is empty")
-	case sourceURI == targetURI:
+	case s.sourceURI == s.targetURI:
 		return errors.New("source URI and target URI are identical")
 	}
 
-	addr, err := buildServerAddr(port)
+	return nil
+}
+
+// runServer starts the HTTP server with the provided configuration.
+func runServer(ctx context.Context, options serverOptions) error {
+	err := options.validate()
 	if err != nil {
-		return errors.Wrap(err, "build server address")
+		return errors.Wrap(err, "validate options")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	srv, err := createServer(ctx, sourceURI, targetURI)
+	srv, err := createServer(ctx, options.sourceURI, options.targetURI)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
@@ -347,6 +412,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 		os.Exit(0)
 	}()
 
+	addr := fmt.Sprintf("localhost:%d", options.port)
 	httpServer := http.Server{
 		Addr:    addr,
 		Handler: srv.Handler(),
@@ -358,22 +424,6 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 	log.Ctx(ctx).Info("Starting server at http://" + addr)
 
 	return httpServer.ListenAndServe() //nolint:wrapcheck
-}
-
-var errUnsupportedPortRange = errors.New("port value is outside the supported range [1024 - 65535]")
-
-// buildServerAddr constructs the server address from the port.
-func buildServerAddr(port string) (string, error) {
-	i, err := strconv.ParseInt(port, 10, 32)
-	if err != nil {
-		return "", errors.Wrap(err, "invalid port value format")
-	}
-
-	if i < 1024 || i > 65535 {
-		return "", errUnsupportedPortRange
-	}
-
-	return "localhost:" + port, nil
 }
 
 // server represents the replication server.
@@ -837,10 +887,10 @@ type resumeResponse struct {
 }
 
 type MongoLinkClient struct {
-	port string
+	port int
 }
 
-func NewClient(port string) MongoLinkClient {
+func NewClient(port int) MongoLinkClient {
 	return MongoLinkClient{port: port}
 }
 
@@ -869,8 +919,8 @@ func (c MongoLinkClient) Resume(ctx context.Context) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", nil)
 }
 
-func doClientRequest[T any](ctx context.Context, port, method, path string, body any) error {
-	url := fmt.Sprintf("http://localhost:%s/%s", port, path)
+func doClientRequest[T any](ctx context.Context, port int, method, path string, body any) error {
+	url := fmt.Sprintf("http://localhost:%d/%s", port, path)
 
 	bodyData := []byte("")
 	if body != nil {
