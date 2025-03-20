@@ -50,6 +50,8 @@ type Repl struct {
 	bulkToken      bson.Raw
 	bulkTS         bson.Timestamp
 	lastBulkDoneAt time.Time
+
+	metrics *metrics
 }
 
 // ReplStatus represents the status of change replication.
@@ -78,7 +80,7 @@ func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
-func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Repl {
+func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics) *Repl {
 	return &Repl{
 		source:   source,
 		target:   target,
@@ -87,6 +89,7 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 		bulkOps:  newBulkOps(config.BulkOpsSize),
 		pauseC:   make(chan struct{}),
 		doneSig:  make(chan struct{}),
+		metrics:  metrics,
 	}
 }
 
@@ -444,6 +447,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
+				r.metrics.EventsProcessed.Inc()
 				r.lock.Unlock()
 			}
 
@@ -455,6 +459,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
+				r.metrics.EventsProcessed.Inc()
 				r.lock.Unlock()
 			}
 
@@ -503,6 +508,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime
 			r.eventsProcessed++
+			r.metrics.EventsProcessed.Inc()
 			r.lock.Unlock()
 		}
 
@@ -533,6 +539,7 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	r.lock.Lock()
 	r.lastReplicatedOpTime = r.bulkTS
 	r.eventsProcessed += int64(size)
+	r.metrics.EventsProcessed.Add(float64(size))
 	r.lock.Unlock()
 
 	log.New("bulk:write").

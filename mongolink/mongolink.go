@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
@@ -53,6 +54,60 @@ type Status struct {
 	Clone CloneStatus
 }
 
+type metrics struct {
+	LagTime            prometheus.Gauge
+	InitialSyncLagTime prometheus.Gauge
+
+	EventsProcessed prometheus.Counter
+
+	EstimatedTotalSize prometheus.Gauge
+	CopiedSize         prometheus.Counter
+}
+
+const metricNamespace = "percona-mongolink"
+
+// newMetrics creates a new Metrics.
+func newMetrics(req prometheus.Registerer) *metrics {
+	m := &metrics{}
+
+	m.LagTime = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "lag_time",
+		Help:      "Current lag time in logical seconds between source and target clusters.",
+		Namespace: metricNamespace,
+	})
+	req.MustRegister(m.LagTime)
+
+	m.InitialSyncLagTime = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "initial_sync_lag_time",
+		Help:      "Lag time during the initial sync.",
+		Namespace: metricNamespace,
+	})
+	req.MustRegister(m.InitialSyncLagTime)
+
+	m.EventsProcessed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "events_processed_total",
+		Help:      "Total number of events processed.",
+		Namespace: metricNamespace,
+	})
+	req.MustRegister(m.EventsProcessed)
+
+	m.EstimatedTotalSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "estimated_total_size",
+		Help:      "Estimated total size of the data to be replicated in bytes.",
+		Namespace: metricNamespace,
+	})
+	req.MustRegister(m.EstimatedTotalSize)
+
+	m.CopiedSize = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copied_size_total",
+		Help:      "Total size of the data copied in bytes.",
+		Namespace: metricNamespace,
+	})
+	req.MustRegister(m.CopiedSize)
+
+	return m
+}
+
 // MongoLink manages the replication process.
 type MongoLink struct {
 	source *mongo.Client // Source MongoDB client
@@ -70,17 +125,20 @@ type MongoLink struct {
 	clone   *Clone   // Clone process
 	repl    *Repl    // Replication process
 
+	metrics *metrics // Metrics
+
 	err error
 
 	lock sync.Mutex
 }
 
 // New creates a new MongoLink.
-func New(source, target *mongo.Client) *MongoLink {
+func New(source, target *mongo.Client, promRegisterer prometheus.Registerer) *MongoLink {
 	return &MongoLink{
-		source: source,
-		target: target,
-		state:  StateIdle,
+		source:  source,
+		target:  target,
+		state:   StateIdle,
+		metrics: newMetrics(promRegisterer),
 	}
 }
 
@@ -147,8 +205,8 @@ func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter)
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter, ml.metrics)
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, ml.metrics)
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -282,8 +340,8 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, ml.metrics)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, ml.metrics)
 	ml.state = StateRunning
 
 	go ml.run()
@@ -407,8 +465,9 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 			return
 		}
 
-		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d",
-			cloneStatus.FinishTS.T-replStatus.LastReplicatedOpTime.T)
+		intialSyncLag := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
+		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", intialSyncLag)
+		ml.metrics.InitialSyncLagTime.Set(float64(intialSyncLag))
 	}
 }
 
@@ -434,7 +493,9 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 		}
 
 		lastTS := ml.repl.Status().LastReplicatedOpTime
-		lg.Infof("Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
+		l := max(sourceTS.T-lastTS.T, 0)
+		lg.Infof("Lag Time: %d", l)
+		ml.metrics.LagTime.Set(float64(l))
 	}
 }
 

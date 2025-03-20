@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -481,6 +484,9 @@ type server struct {
 	mlink *mongolink.MongoLink
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
+
+	// prometheusReg is the Prometheus registry for metrics.
+	prometheusReg *prometheus.Registry
 }
 
 // createServer creates a new server with the given options.
@@ -532,7 +538,11 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "heartbeat")
 	}
 
-	mlink := mongolink.New(source, target)
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	mlink := mongolink.New(source, target, reg)
 
 	err = Restore(ctx, target, mlink)
 	if err != nil {
@@ -546,6 +556,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		targetCluster: target,
 		mlink:         mlink,
 		stopHeartbeat: stopHeartbeat,
+		prometheusReg: reg,
 	}
 
 	return s, nil
@@ -569,6 +580,7 @@ func (s *server) Handler() http.Handler {
 	mux.HandleFunc("/finalize", s.handleFinalize)
 	mux.HandleFunc("/pause", s.handlePause)
 	mux.HandleFunc("/resume", s.handleResume)
+	mux.Handle("/metrics", s.handleMetrics())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.New("http").Info(r.Method + " " + r.URL.String())
@@ -826,6 +838,12 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeResponse(w, resumeResponse{Ok: true})
+}
+
+func (s *server) handleMetrics() http.Handler {
+	promHandler := promhttp.HandlerFor(s.prometheusReg, promhttp.HandlerOpts{})
+
+	return promHandler
 }
 
 // writeResponse writes the response as JSON to the ResponseWriter.
