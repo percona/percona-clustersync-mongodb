@@ -360,6 +360,10 @@ func (r *Repl) watchChangeEvents(
 					return errors.Wrap(err, "cursor")
 				}
 
+				if txn0 == nil {
+					continue
+				}
+
 				// no event available. the entire transaction is received
 				changeC <- txn0
 				for i, txn := range txnOps {
