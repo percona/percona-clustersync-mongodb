@@ -1,8 +1,12 @@
+GIT_HASH := $(shell git rev-parse --short HEAD)
+BUILD_ID := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+SET_VER := -X main.GitCommit=$(GIT_HASH) -X main.BuildID=$(BUILD_ID)
+
 # Flags for production build
-BUILD_FLAGS := -ldflags="-s -w" -trimpath -buildvcs=false -tags=performance
+BUILD_FLAGS := -ldflags="-s -w $(SET_VER)" -trimpath -buildvcs=false -tags=performance
 
 # Flags for test build (debugging, race detection, and more)
-TEST_BUILD_FLAGS := -race -gcflags=all="-N -l" -trimpath -tags=debug
+TEST_BUILD_FLAGS := -ldflags="$(SET_VER)" -gcflags=all="-N -l" -trimpath -race -tags=debug
 
 # Default target: build for production
 all: build

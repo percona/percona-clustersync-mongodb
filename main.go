@@ -35,6 +35,16 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
+var (
+	Version   = "v0.1" //nolint:gochecknoglobals
+	GitCommit = ""     //nolint:gochecknoglobals
+	BuildID   = ""     //nolint:gochecknoglobals
+)
+
+func buildVersion() string {
+	return Version + " " + GitCommit + " " + BuildID
+}
+
 //nolint:gochecknoglobals
 var rootCmd = &cobra.Command{
 	Use:   "mongolink",
@@ -95,12 +105,23 @@ var rootCmd = &cobra.Command{
 
 		startMongoLink, _ := cmd.Flags().GetBool("start")
 
+		log.Ctx(cmd.Context()).Info("Percona MongoLink " + buildVersion())
+
 		return runServer(cmd.Context(), serverOptions{
 			port:      port,
 			sourceURI: sourceURI,
 			targetURI: targetURI,
 			start:     startMongoLink,
 		})
+	},
+}
+
+//nolint:gochecknoglobals
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version",
+	Run: func(cmd *cobra.Command, _ []string) {
+		cmd.Println(buildVersion())
 	},
 }
 
@@ -335,7 +356,15 @@ func main() {
 	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
 	resetCmd.AddCommand(resetRecoveryCmd, resetHeartbeatCmd)
-	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd, resetCmd)
+	rootCmd.AddCommand(
+		versionCmd,
+		statusCmd,
+		startCmd,
+		finalizeCmd,
+		pauseCmd,
+		resumeCmd,
+		resetCmd,
+	)
 
 	err := rootCmd.Execute()
 	if err != nil {
