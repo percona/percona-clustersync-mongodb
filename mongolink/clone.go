@@ -15,6 +15,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -40,7 +41,7 @@ type Clone struct {
 	startTime  time.Time
 	finishTime time.Time
 
-	metrics *metrics
+	metrics *metrics.M
 }
 
 // CloneStatus represents the status of the cloning process.
@@ -72,7 +73,7 @@ func (cs *CloneStatus) IsFinished() bool {
 	return !cs.FinishTime.IsZero()
 }
 
-func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics) *Clone {
+func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics.M) *Clone {
 	return &Clone{
 		source:   source,
 		target:   target,
@@ -256,7 +257,7 @@ func (c *Clone) run() error {
 
 	c.lock.Lock()
 	c.totalSize = totalSize
-	c.metrics.EstimatedTotalSize.Set(float64(totalSize))
+	c.metrics.CollectEstimatedTotalSize(float64(totalSize))
 	c.lock.Unlock()
 
 	grp, grpCtx := errgroup.WithContext(ctx)
@@ -431,7 +432,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 			}
 
 			c.clonedSize.Add(int64(batchSize))
-			c.metrics.CopiedSize.Add(float64(batchSize))
+			c.metrics.CollectCopiedSize(float64(batchSize))
 
 			lg.Unwrap().Trace().
 				Int("count", len(docs)).
@@ -459,7 +460,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 		}
 
 		c.clonedSize.Add(int64(batchSize))
-		c.metrics.CopiedSize.Add(float64(batchSize))
+		c.metrics.CollectCopiedSize(float64(batchSize))
 
 		lg.Unwrap().Trace().
 			Int("count", len(docs)).

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -25,6 +24,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -485,8 +485,8 @@ type server struct {
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
 
-	// prometheusReg is the Prometheus registry for metrics.
-	prometheusReg *prometheus.Registry
+	// promRegistry is the Prometheus registry for metrics.
+	promRegistry *prometheus.Registry
 }
 
 // createServer creates a new server with the given options.
@@ -538,11 +538,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "heartbeat")
 	}
 
-	reg := prometheus.NewRegistry()
-	reg.MustRegister(collectors.NewGoCollector())
-	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	promRegistry := prometheus.NewRegistry()
 
-	mlink := mongolink.New(source, target, reg)
+	mlink := mongolink.New(source, target, metrics.New(promRegistry))
 
 	err = Restore(ctx, target, mlink)
 	if err != nil {
@@ -556,7 +554,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		targetCluster: target,
 		mlink:         mlink,
 		stopHeartbeat: stopHeartbeat,
-		prometheusReg: reg,
+		promRegistry:  promRegistry,
 	}
 
 	return s, nil
@@ -841,9 +839,7 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleMetrics() http.Handler {
-	promHandler := promhttp.HandlerFor(s.prometheusReg, promhttp.HandlerOpts{})
-
-	return promHandler
+	return promhttp.HandlerFor(s.promRegistry, promhttp.HandlerOpts{})
 }
 
 // writeResponse writes the response as JSON to the ResponseWriter.

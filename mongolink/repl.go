@@ -13,6 +13,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -51,7 +52,7 @@ type Repl struct {
 	bulkTS         bson.Timestamp
 	lastBulkDoneAt time.Time
 
-	metrics *metrics
+	metrics *metrics.M
 }
 
 // ReplStatus represents the status of change replication.
@@ -80,7 +81,7 @@ func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
-func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics) *Repl {
+func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics.M) *Repl {
 	return &Repl{
 		source:   source,
 		target:   target,
@@ -447,7 +448,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
-				r.metrics.EventsProcessed.Inc()
+				r.metrics.CollectEventsProcessed(1)
 				r.lock.Unlock()
 			}
 
@@ -459,7 +460,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
-				r.metrics.EventsProcessed.Inc()
+				r.metrics.CollectEventsProcessed(1)
 				r.lock.Unlock()
 			}
 
@@ -508,7 +509,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime
 			r.eventsProcessed++
-			r.metrics.EventsProcessed.Inc()
+			r.metrics.CollectEventsProcessed(1)
 			r.lock.Unlock()
 		}
 
@@ -539,7 +540,7 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	r.lock.Lock()
 	r.lastReplicatedOpTime = r.bulkTS
 	r.eventsProcessed += int64(size)
-	r.metrics.EventsProcessed.Add(float64(size))
+	r.metrics.CollectEventsProcessed(float64(size))
 	r.lock.Unlock()
 
 	log.New("bulk:write").
