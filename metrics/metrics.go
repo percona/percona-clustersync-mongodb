@@ -5,8 +5,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-const metricNamespace = "percona-mongolink"
+const metricNamespace = "percona_mongolink"
 
+// M represents PML specific metrics.
 type M struct {
 	lagTime            prometheus.Gauge
 	initialSyncLagTime prometheus.Gauge
