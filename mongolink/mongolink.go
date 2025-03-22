@@ -314,7 +314,9 @@ func (ml *MongoLink) run() {
 	if !cloneStatus.IsFinished() {
 		err := ml.clone.Start(ctx)
 		if err != nil {
-			lg.Error(err, "Clone has failed")
+			ml.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
+
+			return
 		}
 
 		<-ml.clone.Done()
@@ -331,14 +333,14 @@ func (ml *MongoLink) run() {
 	if !replStatus.IsStarted() {
 		err := ml.repl.Start(ctx, cloneStatus.StartTS)
 		if err != nil {
-			lg.Error(errors.Wrap(err, "start"), "")
+			ml.setFailed(errors.Wrap(err, "start change replication"))
 
 			return
 		}
 	} else {
 		err := ml.repl.Resume(ctx)
 		if err != nil {
-			lg.Error(errors.Wrap(err, "resume"), "")
+			ml.setFailed(errors.Wrap(err, "resume change replication"))
 
 			return
 		}
@@ -357,7 +359,7 @@ func (ml *MongoLink) run() {
 
 	replStatus = ml.repl.Status()
 	if replStatus.Err != nil {
-		ml.setFailed(errors.Wrap(replStatus.Err, "repl"))
+		ml.setFailed(errors.Wrap(replStatus.Err, "change replication"))
 	}
 }
 
@@ -408,9 +410,9 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 			return
 		}
 
-		intialSyncLag := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
-		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", intialSyncLag)
-		metrics.SetInitialSyncLagTimeSeconds(intialSyncLag)
+		lagTime := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
+		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", lagTime)
+		metrics.SetInitialSyncLagTimeSeconds(lagTime)
 	}
 }
 
