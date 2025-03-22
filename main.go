@@ -539,8 +539,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	}
 
 	promRegistry := prometheus.NewRegistry()
+	metrics.Init(promRegistry)
 
-	mlink := mongolink.New(source, target, metrics.New(promRegistry))
+	mlink := mongolink.New(source, target)
 
 	err = Restore(ctx, target, mlink)
 	if err != nil {
@@ -581,7 +582,11 @@ func (s *server) Handler() http.Handler {
 	mux.Handle("/metrics", s.handleMetrics())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.New("http").Info(r.Method + " " + r.URL.String())
+		if r.URL.Path == "/metrics" {
+			log.New("http").Debug(r.Method + " " + r.URL.String())
+		} else {
+			log.New("http").Info(r.Method + " " + r.URL.String())
+		}
 		mux.ServeHTTP(w, r)
 	})
 }

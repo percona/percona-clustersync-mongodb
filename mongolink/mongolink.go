@@ -71,20 +71,17 @@ type MongoLink struct {
 	clone   *Clone   // Clone process
 	repl    *Repl    // Replication process
 
-	metrics *metrics.M // Metrics
-
 	err error
 
 	lock sync.Mutex
 }
 
 // New creates a new MongoLink.
-func New(source, target *mongo.Client, metrics *metrics.M) *MongoLink {
+func New(source, target *mongo.Client) *MongoLink {
 	return &MongoLink{
-		source:  source,
-		target:  target,
-		state:   StateIdle,
-		metrics: metrics,
+		source: source,
+		target: target,
+		state:  StateIdle,
 	}
 }
 
@@ -151,8 +148,8 @@ func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter, ml.metrics)
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, ml.metrics)
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter)
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -286,8 +283,8 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, ml.metrics)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, ml.metrics)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
 	ml.state = StateRunning
 
 	go ml.run()
@@ -413,7 +410,7 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 
 		intialSyncLag := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
 		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", intialSyncLag)
-		ml.metrics.CollectInitialSyncLagTime(float64(intialSyncLag))
+		metrics.SetInitialSyncLagTimeSeconds(intialSyncLag)
 	}
 }
 
@@ -441,7 +438,7 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 		lastTS := ml.repl.Status().LastReplicatedOpTime
 		l := max(sourceTS.T-lastTS.T, 0)
 		lg.Infof("Lag Time: %d", l)
-		ml.metrics.CollectLagTime(float64(l))
+		metrics.SetLagTimeSeconds(l)
 	}
 }
 

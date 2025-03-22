@@ -40,8 +40,6 @@ type Clone struct {
 
 	startTime  time.Time
 	finishTime time.Time
-
-	metrics *metrics.M
 }
 
 // CloneStatus represents the status of the cloning process.
@@ -73,14 +71,13 @@ func (cs *CloneStatus) IsFinished() bool {
 	return !cs.FinishTime.IsZero()
 }
 
-func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter, metrics *metrics.M) *Clone {
+func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Clone {
 	return &Clone{
 		source:   source,
 		target:   target,
 		catalog:  catalog,
 		nsFilter: nsFilter,
 		doneSig:  make(chan struct{}),
-		metrics:  metrics,
 	}
 }
 
@@ -257,7 +254,7 @@ func (c *Clone) run() error {
 
 	c.lock.Lock()
 	c.totalSize = totalSize
-	c.metrics.CollectEstimatedTotalSize(float64(totalSize))
+	metrics.SetEstimatedTotalSize(totalSize)
 	c.lock.Unlock()
 
 	grp, grpCtx := errgroup.WithContext(ctx)
@@ -432,7 +429,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 			}
 
 			c.clonedSize.Add(int64(batchSize))
-			c.metrics.CollectCopiedSize(float64(batchSize))
+			metrics.AddCopiedSize(batchSize)
 
 			lg.Unwrap().Trace().
 				Int("count", len(docs)).
@@ -460,7 +457,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 		}
 
 		c.clonedSize.Add(int64(batchSize))
-		c.metrics.CollectCopiedSize(float64(batchSize))
+		metrics.AddCopiedSize(batchSize)
 
 		lg.Unwrap().Trace().
 			Int("count", len(docs)).

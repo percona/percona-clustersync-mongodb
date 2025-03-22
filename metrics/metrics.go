@@ -7,83 +7,81 @@ import (
 
 const metricNamespace = "percona_mongolink"
 
-// M represents PML specific metrics.
-type M struct {
-	lagTime            prometheus.Gauge
-	initialSyncLagTime prometheus.Gauge
-
-	eventsProcessed prometheus.Counter
-
-	estimatedTotalSize prometheus.Gauge
-	copiedSize         prometheus.Counter
-}
-
-// New creates new Metrics.
-func New(reg prometheus.Registerer) *M {
-	reg.MustRegister(collectors.NewGoCollector())
-	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-
-	m := &M{}
-
-	m.lagTime = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:      "lag_time",
-		Help:      "Current lag time in logical seconds between source and target clusters.",
-		Namespace: metricNamespace,
-	})
-	reg.MustRegister(m.lagTime)
-
-	m.initialSyncLagTime = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:      "initial_sync_lag_time",
-		Help:      "Lag time during the initial sync.",
-		Namespace: metricNamespace,
-	})
-	reg.MustRegister(m.initialSyncLagTime)
-
-	m.eventsProcessed = prometheus.NewCounter(prometheus.CounterOpts{
+// Counters.
+var (
+	//nolint:gochecknoglobals
+	eventsProcessedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name:      "events_processed_total",
 		Help:      "Total number of events processed.",
 		Namespace: metricNamespace,
 	})
-	reg.MustRegister(m.eventsProcessed)
 
-	m.estimatedTotalSize = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:      "estimated_total_size",
-		Help:      "Estimated total size of the data to be replicated in bytes.",
-		Namespace: metricNamespace,
-	})
-	reg.MustRegister(m.estimatedTotalSize)
-
-	m.copiedSize = prometheus.NewCounter(prometheus.CounterOpts{
-		Name:      "copied_size_total",
+	//nolint:gochecknoglobals
+	copiedTotalSizeBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copied_total_size_bytes_total",
 		Help:      "Total size of the data copied in bytes.",
 		Namespace: metricNamespace,
 	})
-	reg.MustRegister(m.copiedSize)
+)
 
-	return m
+// Gauges.
+var (
+	//nolint:gochecknoglobals
+	lagTimeSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "lag_time_seconds",
+		Help:      "Lag time in logical seconds between source and target clusters.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	intialSyncLagTimeSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "initial_sync_lag_time_seconds",
+		Help:      "Lag time during the initial sync in seconds.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	estimatedTotalSizeBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "estimated_total_size_bytes",
+		Help:      "Estimated total size of the data to be replicated in bytes.",
+		Namespace: metricNamespace,
+	})
+)
+
+// Init initializes and registers the metrics.
+func Init(reg prometheus.Registerer) {
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	reg.MustRegister(
+		eventsProcessedTotal,
+		copiedTotalSizeBytesTotal,
+		lagTimeSeconds,
+		intialSyncLagTimeSeconds,
+		estimatedTotalSizeBytes)
 }
 
-// CollectLagTime sets the current lag time in logical seconds between source and target clusters.
-func (m *M) CollectLagTime(v float64) {
-	m.lagTime.Set(v)
+// AddEventsProcessed increments the total number of events processed counter.
+func AddEventsProcessed(v int) {
+	eventsProcessedTotal.Add(float64(v))
 }
 
-// CollectInitialSyncLagTime sets the lag time during the initial sync.
-func (m *M) CollectInitialSyncLagTime(v float64) {
-	m.initialSyncLagTime.Set(v)
+// AddCopiedSize increments the total size of the data copied counter.
+func AddCopiedSize(v int) {
+	copiedTotalSizeBytesTotal.Add(float64(v))
 }
 
-// CollectEventsProcessed increments the total number of events processed.
-func (m *M) CollectEventsProcessed(v float64) {
-	m.eventsProcessed.Add(v)
+// SetLagTimeSeconds sets the lag time in seconds gauge.
+func SetLagTimeSeconds(v uint32) {
+	lagTimeSeconds.Set(float64(v))
 }
 
-// CollectEstimatedTotalSize sets the estimated total size of the data to be replicated in bytes.
-func (m *M) CollectEstimatedTotalSize(v float64) {
-	m.estimatedTotalSize.Set(v)
+// SetInitialSyncLagTimeSeconds sets the initial sync lag time in seconds gauge.
+func SetInitialSyncLagTimeSeconds(v int64) {
+	intialSyncLagTimeSeconds.Set(float64(v))
 }
 
-// CollectCopiedSize increments the total size of the data copied in bytes.
-func (m *M) CollectCopiedSize(v float64) {
-	m.copiedSize.Add(v)
+// SetEstimatedTotalSize sets the estimated total size of the data to be replicated in bytes gauge.
+func SetEstimatedTotalSize(v int64) {
+	estimatedTotalSizeBytes.Set(float64(v))
 }
