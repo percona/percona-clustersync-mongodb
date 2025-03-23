@@ -36,6 +36,7 @@ def test_update_one(t: Testing, phase: Runner.Phase):
                     "$set": {f"field_{i}": f"value_{i}"},
                 },
             )
+        t.source["db_1"]["coll_1"].update_one({}, {"$set": {"i": { "$multiply": ["i", 2]}}})
 
     t.compare_all()
 
@@ -47,6 +48,7 @@ def test_update_many(t: Testing, phase: Runner.Phase):
 
     with t.run(phase):
         t.source["db_1"]["coll_1"].update_many({}, {"$inc": {"i": 100}})
+        t.source["db_1"]["coll_1"].update_many({}, {"$set": {"i": { "$multiply": ["i", 2]}}})
 
     t.compare_all()
 
