@@ -58,7 +58,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 		logLevelFlag, _ := cmd.PersistentFlags().GetString("log-level")
 		logJSON, _ := cmd.PersistentFlags().GetBool("log-json")
-		logNoColor, _ := cmd.PersistentFlags().GetBool("log-no-color")
+		logNoColor, _ := cmd.PersistentFlags().GetBool("no-color")
 
 		logLevel, err := zerolog.ParseLevel(logLevelFlag)
 		if err != nil {
