@@ -1,0 +1,74 @@
+# pylint: disable=missing-docstring,redefined-outer-name
+import random
+from datetime import datetime, timedelta
+
+import bson
+import pymongo
+import pytest
+from mlink import Runner
+from testing import Testing
+
+
+def vary_id_gen():
+    for i in range(1_000_000):
+        for j in range(1000):
+            yield bson.ObjectId()
+            yield f"{i}:{j+1}"
+            yield i * 1000 + (j + 2)
+            yield bson.Timestamp(i, j + 3)
+            yield {"i": i, "j": j + 4}
+            yield datetime.now() + timedelta(seconds=i * 1000 + (j + 5))
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(120)
+def test_clone_2gb(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
+        for _ in range(5):
+            t.source["db_0"]["coll_0"].insert_many(
+                ({"s": random.randbytes(1024)} for _ in range(420000)),
+            )
+
+    t.compare_all(sort=[("_id", 1)])
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(120)
+def test_clone_2gb_vary_id(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
+        id_gen = vary_id_gen()
+        for _ in range(5):
+            t.source["db_0"]["coll_0"].insert_many(
+                ({"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(420000)),
+            )
+
+    t.compare_all(sort=[("_id", 1)])
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(180)
+def test_clone_2gb_capped(t: Testing):
+    t.source["db_0"].create_collection("coll_0", capped=True, size=2_147_483_647)
+
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
+        for _ in range(5):
+            t.source["db_0"]["coll_0"].insert_many(
+                ({"s": random.randbytes(1024)} for _ in range(420000))
+            )
+
+    t.compare_all(sort=[("$natural", pymongo.ASCENDING)])  # must keep source order
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(180)
+def test_clone_2gb_capped_vary_id(t: Testing):
+    t.source["db_0"].create_collection("coll_0", capped=True, size=2_147_483_647)
+
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
+        id_gen = vary_id_gen()
+        for _ in range(5):
+            t.source["db_0"]["coll_0"].insert_many(
+                ({"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(420000)),
+            )
+
+    t.compare_all(sort=[("$natural", pymongo.ASCENDING)])  # must keep source order

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -21,7 +22,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
-	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/metrics"
@@ -34,7 +34,7 @@ const (
 	DefaultServerPort       = 2242
 	ServerReadTimeout       = 30 * time.Second
 	ServerReadHeaderTimeout = 3 * time.Second
-	MaxRequestSize          = config.MiB
+	MaxRequestSize          = humanize.MiByte
 	ServerResponseTimeout   = 5 * time.Second
 )
 
@@ -106,7 +106,8 @@ var rootCmd = &cobra.Command{
 			log.New("cli").Info("State has been reset")
 		}
 
-		startMongoLink, _ := cmd.Flags().GetBool("start")
+		start, _ := cmd.Flags().GetBool("start")
+		pause, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 
 		log.Ctx(cmd.Context()).Info("Percona MongoLink " + buildVersion())
 
@@ -114,7 +115,8 @@ var rootCmd = &cobra.Command{
 			port:      port,
 			sourceURI: sourceURI,
 			targetURI: targetURI,
-			start:     startMongoLink,
+			start:     start,
+			pause:     pause,
 		})
 	},
 }
@@ -340,8 +342,10 @@ func main() {
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
 	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
-	rootCmd.Flags().MarkHidden("start")       //nolint:errcheck
-	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
+	rootCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+	rootCmd.Flags().MarkHidden("start")                 //nolint:errcheck
+	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
+	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
 
@@ -406,6 +410,7 @@ type serverOptions struct {
 	sourceURI string
 	targetURI string
 	start     bool
+	pause     bool
 }
 
 func (s serverOptions) validate() error {
@@ -443,7 +448,9 @@ func runServer(ctx context.Context, options serverOptions) error {
 	}
 
 	if options.start && srv.mlink.Status(ctx).State == mongolink.StateIdle {
-		err = srv.mlink.Start(ctx, nil)
+		err = srv.mlink.Start(ctx, &mongolink.StartOptions{
+			PauseOnInitialSync: options.pause,
+		})
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")
 		}
@@ -469,7 +476,7 @@ func runServer(ctx context.Context, options serverOptions) error {
 		ReadHeaderTimeout: ServerReadHeaderTimeout,
 	}
 
-	log.Ctx(ctx).Info("Starting server at http://" + addr)
+	log.Ctx(ctx).Info("Starting HTTP server at http://" + addr)
 
 	return httpServer.ListenAndServe() //nolint:wrapcheck
 }
@@ -593,7 +600,7 @@ func (s *server) Handler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
-			log.New("http").Debug(r.Method + " " + r.URL.String())
+			log.New("http").Trace(r.Method + " " + r.URL.String())
 		} else {
 			log.New("http").Info(r.Method + " " + r.URL.String())
 		}
@@ -933,9 +940,9 @@ type statusInitialSyncResponse struct {
 	LagTime *int64 `json:"lagTime,omitempty"`
 
 	// EstimatedCloneSize is the estimated total size of the clone.
-	EstimatedCloneSize *int64 `json:"estimatedCloneSize,omitempty"`
+	EstimatedCloneSize *uint64 `json:"estimatedCloneSize,omitempty"`
 	// ClonedSize is the size of the data that has been cloned.
-	ClonedSize int64 `json:"clonedSize"`
+	ClonedSize uint64 `json:"clonedSize"`
 
 	// Completed indicates if the initial sync is completed.
 	Completed bool `json:"completed"`

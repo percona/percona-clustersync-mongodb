@@ -113,11 +113,19 @@ class Runner:
         APPLY = "phase:apply"
         MANUAL = "manual"  # manual mode
 
-    def __init__(self, source: MongoClient, mlink: MongoLink, phase: Phase, options: dict):
+    def __init__(
+        self,
+        source: MongoClient,
+        mlink: MongoLink,
+        phase: Phase,
+        options: dict,
+        wait_timeout=None,
+    ):
         self.source: MongoClient = source
         self.mlink = mlink
         self.phase = phase
         self.options = options
+        self.wait_timeout = wait_timeout or 10
 
     def __enter__(self):
         if self.phase == self.Phase.APPLY:
@@ -145,7 +153,7 @@ class Runner:
         state = self.mlink.status()
 
         if state["state"] == MongoLink.State.PAUSED:
-            if not state["initialSync"]["completed"]:
+            if state["initialSync"]["completed"]:
                 self.mlink.resume()
                 state = self.mlink.status()
 
@@ -160,25 +168,25 @@ class Runner:
             if not fast:
                 self.wait_for_state(MongoLink.State.FINALIZED)
 
-    def wait_for_state(self, state: MongoLink.State, timeout=10):
+    def wait_for_state(self, state: MongoLink.State):
         """Wait for the MongoLink service to reach the specified state."""
         if self.mlink.status()["state"] == state:
             return
 
-        for _ in range(timeout * 2):
+        for _ in range(self.wait_timeout * 2):
             time.sleep(0.5)
             if self.mlink.status()["state"] == state:
                 return
 
         raise WaitTimeoutError()
 
-    def wait_for_current_optime(self, timeout=10):
+    def wait_for_current_optime(self):
         """Wait for the current operation time to be applied."""
         status = self.mlink.status()
         assert status["state"] == MongoLink.State.RUNNING, status
 
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
-        for _ in range(timeout * 2):
+        for _ in range(self.wait_timeout * 2):
             if curr_optime <= self.last_applied_op:
                 return
 
@@ -187,7 +195,7 @@ class Runner:
 
         raise WaitTimeoutError()
 
-    def wait_for_initial_sync(self, timeout=10):
+    def wait_for_initial_sync(self):
         """Wait for the MongoLink service to be finalizable."""
         status = self.mlink.status()
         assert status["state"] != MongoLink.State.IDLE, status
@@ -197,7 +205,7 @@ class Runner:
 
         assert status["state"] == MongoLink.State.RUNNING, status
 
-        for _ in range(timeout * 2):
+        for _ in range(self.wait_timeout * 2):
             if status["initialSync"]["completed"]:
                 return
 

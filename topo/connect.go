@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -26,7 +27,8 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 				SetStrict(false).
 				SetDeprecationErrors(true)).
 		SetReadPreference(readpref.Primary()).
-		SetReadConcern(readconcern.Majority())
+		SetReadConcern(readconcern.Majority()).
+		SetWriteConcern(writeconcern.Majority())
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().

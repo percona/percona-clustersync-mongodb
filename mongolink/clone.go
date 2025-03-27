@@ -1,13 +1,15 @@
 package mongolink
 
 import (
+	"cmp"
 	"context"
 	"runtime"
-	"strings"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
@@ -32,8 +34,9 @@ type Clone struct {
 
 	doneSig chan struct{}
 
-	totalSize  int64        // Estimated total bytes to be cloned
-	clonedSize atomic.Int64 // Bytes cloned so far
+	sizeMap    sizeMap
+	totalSize  uint64        // Estimated total bytes to be cloned
+	copiedSize atomic.Uint64 // Bytes copied so far
 
 	startTS  bson.Timestamp // source cluster timestamp when cloning started
 	finishTS bson.Timestamp // source cluster timestamp when cloning completed
@@ -44,8 +47,8 @@ type Clone struct {
 
 // CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	EstimatedTotalSize int64 // Estimated total bytes to be copied
-	CopiedSize         int64 // Bytes copied so far
+	EstimatedTotalSize uint64 // Estimated total bytes to be copied
+	CopiedSize         uint64 // Bytes copied so far
 
 	StartTS  bson.Timestamp
 	FinishTS bson.Timestamp
@@ -82,8 +85,8 @@ func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFil
 }
 
 type cloneCheckpoint struct {
-	TotalSize  int64 `bson:"totalSize,omitempty"`
-	CopiedSize int64 `bson:"copiedSize,omitempty"`
+	TotalSize  uint64 `bson:"totalSize,omitempty"`
+	CopiedSize uint64 `bson:"copiedSize,omitempty"`
 
 	StartTS  bson.Timestamp `bson:"startTS,omitempty"`
 	FinishTS bson.Timestamp `bson:"finishTS,omitempty"`
@@ -98,9 +101,13 @@ func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	if c.startTime.IsZero() && c.err == nil {
+		return nil
+	}
+
 	cp := &cloneCheckpoint{
 		TotalSize:  c.totalSize,
-		CopiedSize: c.clonedSize.Load(),
+		CopiedSize: c.copiedSize.Load(),
 		StartTS:    c.startTS,
 		FinishTS:   bson.Timestamp{},
 		StartTime:  c.startTime,
@@ -122,7 +129,7 @@ func (c *Clone) Recover(cp *cloneCheckpoint) error {
 	}
 
 	c.totalSize = cp.TotalSize // XXX: re-calculate
-	c.clonedSize.Store(cp.CopiedSize)
+	c.copiedSize.Store(cp.CopiedSize)
 	c.startTS = cp.StartTS
 	c.finishTS = cp.FinishTS
 	c.startTime = cp.StartTime
@@ -142,7 +149,7 @@ func (c *Clone) Status() CloneStatus {
 
 	return CloneStatus{
 		EstimatedTotalSize: c.totalSize,
-		CopiedSize:         c.clonedSize.Load(),
+		CopiedSize:         c.copiedSize.Load(),
 		StartTS:            c.startTS,
 		FinishTS:           c.finishTS,
 		StartTime:          c.startTime,
@@ -163,7 +170,7 @@ func (c *Clone) Start(context.Context) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	lg := log.New("clone:start")
+	lg := log.New("clone")
 
 	if c.err != nil {
 		return errors.Wrap(c.err, "cannot start due an existing error")
@@ -177,7 +184,7 @@ func (c *Clone) Start(context.Context) error {
 		return errors.New("already started")
 	}
 
-	lg.Info("Starting data cloning")
+	lg.Info("Starting Data Clone")
 
 	c.startTime = time.Now()
 
@@ -187,7 +194,7 @@ func (c *Clone) Start(context.Context) error {
 		c.lock.Lock()
 		defer c.lock.Unlock()
 
-		if err != nil && !errors.Is(err, ErrStopSignal) {
+		if err != nil {
 			c.err = err
 		}
 
@@ -198,137 +205,246 @@ func (c *Clone) Start(context.Context) error {
 		}
 
 		c.finishTime = time.Now()
+		elapsed := c.finishTime.Sub(c.startTime)
 
 		if err != nil {
-			lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
-				Error(err, "Data cloning has failed")
+			lg.With(log.Elapsed(elapsed)).
+				Errorf(err, "Data Clone has failed: %s in %s",
+					humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
 
 			return
 		}
 
-		lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
-			Info("Data cloning completed")
+		lg.With(log.Elapsed(elapsed), log.Size(c.copiedSize.Load())).
+			Infof("Data Clone completed: %s in %s",
+				humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
 	}()
 
 	return nil
 }
 
-var ErrStopSignal = errors.New("stop")
-
 func (c *Clone) run() error {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
+	lg := log.New("clone")
 
-		case <-c.doneSig:
-			cancel(ErrStopSignal)
-		}
-	}()
-
-	lg := log.New("clone:run")
-
-	startedTS, err := topo.ClusterTime(ctx, c.source)
+	startTS, err := topo.ClusterTime(ctx, c.source)
 	if err != nil {
-		return errors.Wrap(err, "startetTS: get source cluster time")
+		return errors.Wrap(err, "startTS: get source cluster time")
 	}
 
 	c.lock.Lock()
-	c.startTS = startedTS
+	c.startTS = startTS
 	c.lock.Unlock()
 
-	databases, err := topo.ListDatabaseNames(ctx, c.source)
+	// XXX: rename during clone.
+	err = c.collectSizeMap(ctx)
 	if err != nil {
-		return errors.Wrap(err, "list databases")
+		return errors.Wrap(err, "get size map")
 	}
 
-	// XXX: Should the total size be adjusted on collection/database drop?
-	// XXX: calculate differently for selective
-	totalSize, err := c.getTotalSize(ctx, databases)
-	if err != nil {
-		return errors.Wrap(err, "get database stats")
-	}
+	// init metrics
+	metrics.AddCopyReadSize(0)
+	metrics.AddCopyInsertSize(0)
+	metrics.AddCopyReadDocumentCount(0)
+	metrics.AddCopyInsertDocumentCount(0)
+	metrics.SetCopyReadBatchDurationSeconds(0)
+	metrics.SetCopyInsertBatchDurationSeconds(0)
+	metrics.SetEstimatedTotalSizeBytes(c.totalSize)
 
-	c.lock.Lock()
-	c.totalSize = totalSize
-	metrics.SetEstimatedTotalSize(totalSize)
-	c.lock.Unlock()
+	lg.With(log.Size(c.totalSize)).
+		Infof("Estimated Total Size %s", humanize.Bytes(c.totalSize))
 
-	grp, grpCtx := errgroup.WithContext(ctx)
-	grp.SetLimit(runtime.GOMAXPROCS(0))
-
-	for _, db := range databases {
-		if db == config.MongoLinkDatabase {
-			continue
-		}
-
-		collections, err := topo.ListCollectionNames(grpCtx, c.source, db)
+	namespaces := c.listPrioritizedNamespaces()
+	if len(namespaces) != 0 {
+		err = c.doClone(ctx, namespaces)
 		if err != nil {
-			return errors.Wrap(err, "list collection names")
+			return errors.Wrap(err, "copy")
 		}
+	} else {
+		lg.Warn("No collection to clone")
+	}
 
-		for _, collName := range collections {
-			if strings.HasPrefix(collName, SystemPrefix) {
-				continue
-			}
+	finishTS, err := topo.ClusterTime(ctx, c.source)
+	if err != nil {
+		return errors.Wrap(err, "finishTS: get source cluster time")
+	}
 
-			if !c.nsFilter(db, collName) {
-				lg.With(log.NS(db, collName)).Debug("Not selected")
+	c.lock.Lock()
+	c.finishTS = finishTS
+	c.lock.Unlock()
 
-				continue
-			}
+	return nil
+}
 
-			grp.Go(func() error {
-				err := c.cloneCollection(grpCtx, db, collName)
-				if err != nil {
-					if e := (CollectionNotFoundError{}); errors.As(err, &e) {
-						log.New("clone").With(log.NS(db, collName)).Error(err, "")
+func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
+	copyLogger := log.Ctx(ctx)
+
+	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
+		NumParallelCollection: config.CloneNumParallelCollection(),
+		NumReadWorker:         config.CloneNumReadWorker(),
+		NumInsertWorker:       config.CloneNumInsertWorker(),
+		SegmentSizeBytes:      config.CloneSegmentSizeBytes(),
+		ReadBatchSizeBytes:    config.CloneReadBatchSizeBytes(),
+	})
+	defer copyManager.Close()
+
+	eg, grpCtx := errgroup.WithContext(ctx)
+
+	sem := make(chan struct{}, 1) // ensure ns is put to queue in order
+	for _, ns := range namespaces {
+		sem <- struct{}{}
+
+		eg.Go(func() error {
+			nsCtx, cancel := context.WithCancel(grpCtx)
+			defer cancel()
+
+			lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
+
+			var startedAt time.Time
+			var totalCopiedCount int64
+			var totalCopiedSizeBytes uint64
+
+			var lastLogAt time.Time
+			var copiedCountSinceLastLog int64
+			var copiedSizeBytesSinceLastLog uint64
+
+			nsSize := c.sizeMap[ns]
+			lg.With(log.Count(nsSize.Count), log.Size(nsSize.Size)).
+				Debugf("Schedule %q collection clone: %d documents (%s)",
+					ns, nsSize.Count, humanize.Bytes(nsSize.Size))
+
+			updateC := copyManager.Do(nsCtx, ns,
+				func(ctx context.Context) (*topo.CollectionSpecification, error) {
+					<-sem
+
+					startedAt = time.Now()
+
+					capturedAt, err := topo.ClusterTime(ctx, c.source)
+					if err != nil {
+						return nil, errors.Wrap(err, "get source cluster time")
+					}
+
+					spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
+					if err != nil {
+						if errors.Is(err, topo.ErrNotFound) {
+							return nil, errors.Wrap(NamespaceNotFoundError(ns), "get spec")
+						}
+
+						return nil, errors.Wrap(err, "$collStats")
+					}
+
+					if spec.Type == topo.TypeTimeseries {
+						return spec, nil
+					}
+
+					err = c.createCollection(ctx, ns, spec)
+					if err != nil {
+						if !errors.Is(err, context.Canceled) {
+							lg.Errorf(err, "Failed to create %q collection", ns.String())
+						}
+
+						return nil, err
+					}
+
+					lg.Debugf("Collection %q created", ns.String())
+
+					c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
+					lastLogAt = time.Now() // init
+
+					return spec, nil
+				},
+			)
+
+			for update := range updateC {
+				if err := update.Err; err != nil {
+					if errors.As(err, &NamespaceNotFoundError{}) || topo.IsQueryPlanKilled(err) {
+						// update estimated size
+						c.lock.Lock()
+						c.totalSize -= c.sizeMap[ns].Size
+						totalSize := c.totalSize
+						delete(c.sizeMap, ns)
+						c.lock.Unlock()
+
+						lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
+
+						metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+						copyLogger.With(log.Size(totalSize)).
+							Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+
+						err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
+						if err != nil {
+							lg.Errorf(err, "Drop collection %q", ns)
+						}
 
 						return nil
 					}
 
-					return errors.Wrap(err, db+"."+collName)
+					if errors.Is(err, ErrTimeseriesUnsupported) {
+						lg.Warnf("Timeseries is not supported (%q)", ns)
+
+						break
+					}
+
+					updateLog := lg.With(
+						log.Size(update.SizeBytes),
+						log.Count(int64(update.Count)),
+						log.Elapsed(time.Since(lastLogAt)))
+
+					if errors.Is(err, context.Canceled) {
+						updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)
+					} else {
+						updateLog.Errorf(err, "Failed to copy documents for collection %q", ns)
+					}
+
+					return errors.Wrap(err, ns.Collection)
 				}
 
-				return nil
-			})
-		}
-	}
+				totalCopiedCount += int64(update.Count)
+				totalCopiedSizeBytes += update.SizeBytes
+				c.copiedSize.Add(update.SizeBytes)
 
-	err = grp.Wait()
-	if err != nil {
-		return errors.Wrap(err, "cloning")
-	}
+				copiedCountSinceLastLog += int64(update.Count)
+				copiedSizeBytesSinceLastLog += update.SizeBytes
 
-	completedTS, err := topo.ClusterTime(ctx, c.source)
-	if err != nil {
-		return errors.Wrap(err, "completedAt: get source cluster timestamp")
-	}
+				if copiedSizeBytesSinceLastLog >= humanize.GByte {
+					now := time.Now()
+					lg.With(
+						log.Size(copiedSizeBytesSinceLastLog),
+						log.Count(copiedCountSinceLastLog),
+						log.Elapsed(now.Sub(lastLogAt)),
+					).Debugf("copied %s (%d documents) for %q",
+						humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
 
-	c.lock.Lock()
-	c.finishTS = completedTS
-	c.lock.Unlock()
-
-	return nil
-}
-
-// getTotalSize calculates the total size of the databases to be cloned.
-func (c *Clone) getTotalSize(ctx context.Context, databases []string) (int64, error) {
-	var total atomic.Int64
-
-	eg, grpCtx := errgroup.WithContext(ctx)
-
-	for _, db := range databases {
-		eg.Go(func() error {
-			dbStats, err := topo.GetDBStats(grpCtx, c.source, db)
-			if err != nil {
-				return errors.Wrap(err, db)
+					copiedSizeBytesSinceLastLog = 0
+					lastLogAt = now
+				}
 			}
 
-			total.Add(dbStats.DataSize)
+			c.lock.Lock()
+			diff := c.sizeMap[ns].Size - totalCopiedSizeBytes
+			c.totalSize -= diff // adjust
+			totalSize := c.totalSize
+			delete(c.sizeMap, ns)
+			c.lock.Unlock()
+
+			metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+			elapsed := time.Since(startedAt)
+			lg.With(
+				log.Size(totalCopiedSizeBytes),
+				log.Count(totalCopiedCount),
+				log.Elapsed(elapsed),
+			).Infof("Collection %q cloned: %s in %s (%d documents)",
+				ns, humanize.Bytes(totalCopiedSizeBytes),
+				elapsed.Round(time.Second), totalCopiedCount)
+
+			if diff != 0 {
+				copyLogger.With(log.Size(totalSize)).
+					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+			}
 
 			return nil
 		})
@@ -336,144 +452,154 @@ func (c *Clone) getTotalSize(ctx context.Context, databases []string) (int64, er
 
 	err := eg.Wait()
 
-	return total.Load(), err //nolint:wrapcheck
+	return err //nolint:wrapcheck
 }
 
-type CollectionNotFoundError struct {
+type sizeMap map[Namespace]sizeMapElem
+
+type sizeMapElem struct {
+	Size  uint64
+	Count int64
+}
+
+func (c *Clone) collectSizeMap(ctx context.Context) error {
+	lg := log.Ctx(ctx)
+
+	databases, err := topo.ListDatabaseNames(ctx, c.source)
+	if err != nil {
+		return errors.Wrap(err, "list database names")
+	}
+
+	eg, grpCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(runtime.NumCPU() * 2)
+
+	mu := &sync.Mutex{}
+	sm := make(sizeMap)
+	total := uint64(0)
+
+	for _, db := range databases {
+		if db == config.MongoLinkDatabase {
+			continue
+		}
+
+		eg.Go(func() error {
+			collSpecs, err := topo.ListCollectionSpecs(ctx, c.source, db)
+			if err != nil {
+				return errors.Wrap(err, "listCollections")
+			}
+
+			for _, spec := range collSpecs {
+				if !c.nsFilter(db, spec.Name) {
+					lg.With(log.NS(db, spec.Name)).Infof("Namespace %q excluded", db+"."+spec.Name)
+
+					continue
+				}
+
+				eg.Go(func() error {
+					if spec.Type == topo.TypeView {
+						mu.Lock()
+						sm[Namespace{db, spec.Name}] = sizeMapElem{}
+						mu.Unlock()
+
+						return nil
+					}
+
+					stats, err := topo.GetCollStats(grpCtx, c.source, db, spec.Name)
+					if err != nil {
+						return errors.Wrapf(err, "get collection stats for %q", db+"."+spec.Name)
+					}
+
+					mu.Lock()
+					sm[Namespace{db, spec.Name}] = sizeMapElem{
+						Size:  uint64(stats.Size), //nolint:gosec
+						Count: stats.Count,
+					}
+					total += uint64(stats.Size) //nolint:gosec
+					mu.Unlock()
+
+					return nil
+				})
+			}
+
+			return nil
+		})
+	}
+
+	err = eg.Wait()
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
+	c.lock.Lock()
+	c.sizeMap = sm
+	c.totalSize = total
+	c.lock.Unlock()
+
+	return nil
+}
+
+func (c *Clone) listPrioritizedNamespaces() []Namespace {
+	namespaces := []Namespace{}
+	for ns := range c.sizeMap {
+		namespaces = append(namespaces, ns)
+	}
+
+	// sort from larger to smaller
+	slices.SortFunc(namespaces, func(a, b Namespace) int {
+		return cmp.Compare(c.sizeMap[b].Size, c.sizeMap[a].Size)
+	})
+
+	return namespaces
+}
+
+type NamespaceNotFoundError struct {
 	Database   string
 	Collection string
 }
 
-func (e CollectionNotFoundError) Error() string {
+func (e NamespaceNotFoundError) Error() string {
 	return "collection not found: " + e.Database + "." + e.Collection
 }
 
-// cloneCollection clones a collection (or view) from the source to the target.
-func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
-	lg := log.Ctx(ctx).With(log.NS(db, coll))
-	lg.Infof("Starting Cloning %s.%s", db, coll)
-
-	capturedAt, err := topo.ClusterTime(ctx, c.source)
-	if err != nil {
-		return errors.Wrap(err, "get source cluster time")
+func (c *Clone) createCollection(
+	ctx context.Context,
+	ns Namespace,
+	spec *topo.CollectionSpecification,
+) error {
+	if spec.Type == topo.TypeTimeseries {
+		return ErrTimeseriesUnsupported
 	}
 
-	spec, err := topo.GetCollectionSpec(ctx, c.source, db, coll)
-	if err != nil {
-		return CollectionNotFoundError{Database: db, Collection: coll}
-	}
+	var createOptions CreateCollectionOptions
 
-	startedAt := time.Now()
-
-	if spec.Type == "timeseries" {
-		lg.Warn("Timeseries is not supported. skipping")
-
-		return nil
-	}
-
-	err = c.catalog.DropCollection(ctx, db, spec.Name)
-	if err != nil {
-		return errors.Wrap(err, "ensure no collection before create")
-	}
-
-	var options CreateCollectionOptions
-
-	err = bson.Unmarshal(spec.Options, &options)
+	err := bson.Unmarshal(spec.Options, &createOptions)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = c.catalog.CreateCollection(ctx, db, spec.Name, &options)
+	err = c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
+	if err != nil {
+		return errors.Wrap(err, "ensure no collection before create")
+	}
+
+	err = c.catalog.CreateCollection(ctx, ns.Database, ns.Collection, &createOptions)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
 
-	c.catalog.SetCollectionTimestamp(ctx, db, spec.Name, capturedAt)
-
-	if spec.Type == "view" {
-		lg.With(log.Elapsed(time.Since(startedAt))).
-			Infof("Cloned %s.%s", db, spec.Name)
-
+	if spec.Type == topo.TypeView {
 		return nil
 	}
 
-	indexes, err := topo.ListIndexes(ctx, c.source, db, spec.Name)
+	indexes, err := topo.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")
 	}
 
-	err = c.catalog.CreateIndexes(ctx, db, spec.Name, indexes)
+	err = c.catalog.CreateIndexes(ctx, ns.Database, ns.Collection, indexes)
 	if err != nil {
 		return errors.Wrap(err, "build collection indexes")
 	}
-
-	cur, err := c.source.Database(db).Collection(spec.Name).Find(ctx, bson.D{})
-	if err != nil {
-		return errors.Wrap(err, "find")
-	}
-
-	defer func() {
-		err := cur.Close(ctx)
-		if err != nil {
-			lg.Error(err, "Close find cursor")
-		}
-	}()
-
-	const initialBufferSize = 1000
-	const maxBufferSize = 10000
-	docs := make([]any, 0, initialBufferSize)
-	batch := 1
-	batchSize := 0
-
-	targetColl := c.target.Database(db).Collection(spec.Name)
-
-	for cur.Next(ctx) {
-		if batchSize+len(cur.Current) > config.MaxCollectionCloneBatchSize ||
-			len(docs) == maxBufferSize {
-			_, err = targetColl.InsertMany(ctx, docs)
-			if err != nil {
-				return errors.Wrap(err, "insert documents")
-			}
-
-			c.clonedSize.Add(int64(batchSize))
-			metrics.AddCopiedSize(batchSize)
-
-			lg.Unwrap().Trace().
-				Int("count", len(docs)).
-				Int("size", batchSize).
-				Msgf("insert batch #%d", batch)
-
-			docs = docs[:0]
-			batch++
-			batchSize = 0
-		}
-
-		docs = append(docs, cur.Current)
-		batchSize += len(cur.Current)
-	}
-
-	err = cur.Err()
-	if err != nil {
-		return errors.Wrapf(err, "cloning failed %s.%s", db, spec.Name)
-	}
-
-	if len(docs) > 0 {
-		_, err = targetColl.InsertMany(ctx, docs)
-		if err != nil {
-			return errors.Wrap(err, "insert documents")
-		}
-
-		c.clonedSize.Add(int64(batchSize))
-		metrics.AddCopiedSize(batchSize)
-
-		lg.Unwrap().Trace().
-			Int("count", len(docs)).
-			Int("size", batchSize).
-			Msgf("insert batch #%d", batch)
-	}
-
-	lg.With(log.Elapsed(time.Since(startedAt))).
-		Infof("Cloned %s.%s", db, spec.Name)
 
 	return nil
 }

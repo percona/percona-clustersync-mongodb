@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -35,7 +36,7 @@ func BenchmarkInsertOne(b *testing.B) {
 	collection := client.Database("db_0").Collection("coll_0")
 	collection.Drop(b.Context()) //nolint:errcheck
 
-	payload := make([]byte, config.KiB)
+	payload := make([]byte, humanize.KiByte)
 	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
 	rnd.Read(payload)
 
@@ -71,7 +72,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 	collection := client.Database("db_0").Collection("coll_0")
 	collection.Drop(b.Context()) //nolint:errcheck
 
-	payload := make([]byte, config.KiB)
+	payload := make([]byte, humanize.KiByte)
 	rnd := rand.New(rand.NewSource(seed)) //nolint:gosec
 	rnd.Read(payload)
 
@@ -232,7 +233,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	}
 
 	averageDocumentSize := int(collStats.AvgObjSize)
-	maxWriteSize := config.CloneMaxWriteSizePerCollection
+	maxWriteSize := config.MaxWriteBatchSizeBytes
 	maxWriteCount := maxWriteSize / averageDocumentSize
 	maxReadCount := maxWriteCount
 

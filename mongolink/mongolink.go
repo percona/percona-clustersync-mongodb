@@ -1,3 +1,16 @@
+/*
+Package mongolink provides functionality for cloning and replicating data between MongoDB clusters.
+
+This package includes the following main components:
+
+  - MongoLink: Manages the overall replication process, including cloning and change replication.
+
+  - Clone: Handles the cloning of data from a source MongoDB cluster to a target MongoDB cluster.
+
+  - Repl: Handles the replication of changes from a source MongoDB cluster to a target MongoDB cluster.
+
+  - Catalog: Manages collections and indexes in the target MongoDB cluster.
+*/
 package mongolink
 
 import (
@@ -299,7 +312,7 @@ func (ml *MongoLink) setFailed(err error) {
 	ml.err = err
 	ml.lock.Unlock()
 
-	log.New("mongolink").Error(err, "Cluster replication has failed")
+	log.New("mongolink").Error(err, "Cluster Replication has failed")
 }
 
 // run executes the cluster replication.
@@ -309,7 +322,7 @@ func (ml *MongoLink) run() {
 
 	lg := log.New("mongolink")
 
-	lg.Info("Starting Cluster replication")
+	lg.Info("Starting Cluster Replication")
 
 	cloneStatus := ml.clone.Status()
 	if !cloneStatus.IsFinished() {
@@ -348,13 +361,9 @@ func (ml *MongoLink) run() {
 	}
 
 	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
-		go func() {
-			ml.monitorInitialSync(ctx)
-			ml.monitorLagTime(ctx)
-		}()
-	} else {
-		go ml.monitorLagTime(ctx)
+		go ml.monitorInitialSync(ctx)
 	}
+	go ml.monitorLagTime(ctx)
 
 	<-ml.repl.Done()
 
@@ -365,7 +374,7 @@ func (ml *MongoLink) run() {
 }
 
 func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
-	lg := log.Ctx(ctx)
+	lg := log.New("monitor:initial-sync-lag-time")
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -396,10 +405,12 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 
 		replStatus = ml.repl.Status()
 		if replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
-			lg.With(log.Elapsed(time.Since(replStatus.StartTime))).
-				Info("Clone event backlog processed")
-			lg.With(log.Elapsed(time.Since(cloneStatus.StartTime))).
-				Info("Initial Sync has been completed")
+			elapsed := time.Since(replStatus.StartTime)
+			lg.With(log.Elapsed(elapsed)).
+				Infof("Clone event backlog processed in %s", elapsed.Round(time.Second))
+			elapsed = time.Since(cloneStatus.StartTime)
+			lg.With(log.Elapsed(elapsed)).
+				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
 
 			ml.lock.Lock()
 			pauseOnInitialSync := ml.pauseOnInitialSync
@@ -418,7 +429,7 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 		}
 
 		lagTime := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
-		metrics.SetInitialSyncLagTimeSeconds(min(lagTime, math.MaxUint32)) //nolint:gosec
+		metrics.SetInitialSyncLagTimeSeconds(uint32(min(lagTime, math.MaxUint32))) //nolint:gosec
 
 		now := time.Now()
 		if now.Sub(lastPrintAt) >= config.InitialSyncCheckInterval {
@@ -429,7 +440,7 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 }
 
 func (ml *MongoLink) monitorLagTime(ctx context.Context) {
-	lg := log.Ctx(ctx)
+	lg := log.New("monitor:lag-time")
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -446,7 +457,11 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 
 		sourceTS, err := topo.ClusterTime(ctx, ml.source)
 		if err != nil {
-			lg.Error(err, "")
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			lg.Error(err, "source cluster time")
 
 			continue
 		}
@@ -575,7 +590,7 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 	}
 
 	lg := log.Ctx(ctx)
-	lg.Info("Starting finalization")
+	lg.Info("Starting Finalization")
 
 	if status.Repl.IsRunning() {
 		lg.Info("Pausing Change Replication")
