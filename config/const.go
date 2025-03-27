@@ -1,8 +1,10 @@
 package config
 
 import (
+	"math"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
@@ -57,9 +59,34 @@ const (
 	PrintLagTimeInterval = InitialSyncCheckInterval
 )
 
-// CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning
-// process.
-const CloneMaxWriteSizePerCollection = 100 * MB
+// https://www.mongodb.com/docs/manual/reference/mongodb-wire-protocol/#standard-message-header
+const (
+	wireProtoMsgReserveSizeBytes = 512
+	// MaxWriteBatchSizeBytes defines the max size in bytes for a write batch,
+	// accounting for an estimated 512-byte wire protocol message header overhead.
+	MaxWriteBatchSizeBytes = MaxMessageSizeBytes - wireProtoMsgReserveSizeBytes
+)
+
+const (
+	// DefaultCloneNumParallelCollection defines the default number of collections
+	// to clone in parallel during initial sync or cloning operations.
+	DefaultCloneNumParallelCollection = 2
+
+	// AutoCloneSegmentSize enables auto segment size per collection during cloning.
+	AutoCloneSegmentSize = 0
+	// MinCloneSegmentSizeBytes is the minimum allowed segment size for collection cloning,
+	// set to ensure each segment can hold at least one write batch.
+	MinCloneSegmentSizeBytes = 4 * MaxWriteBatchSizeBytes
+	// MaxCloneSegmentSizeBytes is the maximum allowed segment size for collection cloning.
+	MaxCloneSegmentSizeBytes = 64 * humanize.GiByte
+
+	// DefaultCloneReadBatchSizeBytes defines the default read cursor batch size.
+	DefaultCloneReadBatchSizeBytes = 2 * MaxWriteBatchSizeBytes
+	// MinCloneReadBatchSizeBytes is the minimum allowed read cursor batch size.
+	MinCloneReadBatchSizeBytes = MaxBSONSize
+	// MaxCloneReadBatchSizeBytes is the maximum allowed read cursor batch size.
+	MaxCloneReadBatchSizeBytes = math.MaxInt32
+)
 
 // MaxBSONSize is hardcoded maximum BSON document size. 16 mebibytes.
 //
@@ -67,7 +94,7 @@ const CloneMaxWriteSizePerCollection = 100 * MB
 //	https://www.mongodb.com/docs/manual/reference/command/hello/#mongodb-data-hello.maxBsonObjectSize
 //
 // db.hello().maxBsonObjectSize => 16777216.
-const MaxBSONSize = 16 * MiB
+const MaxBSONSize = 16 * humanize.MiByte
 
 // MaxMessageSizeBytes is the maximum permitted size of a BSON wire protocol message.
 // The default value is 48000000 bytes.
@@ -75,7 +102,7 @@ const MaxBSONSize = 16 * MiB
 //	https://www.mongodb.com/docs/v8.0/reference/command/hello/#mongodb-data-hello.maxMessageSizeBytes
 //
 // db.hello().maxMessageSizeBytes => 48000000.
-const MaxMessageSizeBytes = 48 * MB
+const MaxMessageSizeBytes = 48 * humanize.MByte
 
 // MaxWriteBatchSize is the maximum number of write operations permitted in a write batch.
 // If a batch exceeds this limit, the client driver divides the batch into smaller groups each with
@@ -87,19 +114,3 @@ const MaxMessageSizeBytes = 48 * MB
 //
 // db.hello().maxWriteBatchSize => 100000.
 const MaxWriteBatchSize = 100_000
-
-// MaxCollectionCloneBatchSize is the maximum size of a collection clone batch.
-const MaxCollectionCloneBatchSize = 10 * MaxBSONSize
-
-// Size constants for data storage.
-const (
-	KB = 1000
-	MB = 1000 * KB
-	GB = 1000 * MB
-	TB = 1000 * GB
-
-	KiB = 1024
-	MiB = 1024 * KiB
-	GiB = 1024 * MiB
-	TiB = 1024 * GiB
-)

@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -17,9 +19,16 @@ var (
 	})
 
 	//nolint:gochecknoglobals
-	copiedTotalSizeBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name:      "copied_total_size_bytes_total",
-		Help:      "Total size of the data copied in bytes.",
+	copyReadSizeBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copy_read_size_bytes_total",
+		Help:      "Total size of the read data in bytes.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	copyInsertSizeBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copy_insert_size_bytes_total",
+		Help:      "Total size of the inserted data in bytes.",
 		Namespace: metricNamespace,
 	})
 )
@@ -46,29 +55,98 @@ var (
 		Help:      "Estimated total size of the data to be replicated in bytes.",
 		Namespace: metricNamespace,
 	})
+
+	//nolint:gochecknoglobals
+	copyReadDocumentTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copy_read_document_total",
+		Help:      "Total count of the read documents.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	copyInsertDocumentTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "copy_insert_document_total",
+		Help:      "Total count of the inserted documents.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	copyReadBatchDurationSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "copy_read_batch_duration_seconds",
+		Help:      "Read batch duration time in seconds.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	copyInsertBatchDurationSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "copy_insert_batch_duration_seconds",
+		Help:      "Insert batch duration time in seconds.",
+		Namespace: metricNamespace,
+	})
 )
 
 // Init initializes and registers the metrics.
 func Init(reg prometheus.Registerer) {
 	reg.MustRegister(collectors.NewGoCollector())
-	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{
+		Namespace: "mongolink",
+	}))
 
 	reg.MustRegister(
+		estimatedTotalSizeBytes,
+		copyReadDocumentTotal,
+		copyInsertDocumentTotal,
+		copyReadSizeBytesTotal,
+		copyInsertSizeBytesTotal,
+		copyReadBatchDurationSeconds,
+		copyInsertBatchDurationSeconds,
+
 		eventsProcessedTotal,
-		copiedTotalSizeBytesTotal,
 		lagTimeSeconds,
 		intialSyncLagTimeSeconds,
-		estimatedTotalSizeBytes)
+	)
+}
+
+// SetEstimatedTotalSizeBytes sets the estimated total size of the data to be replicated in bytes
+// gauge.
+func SetEstimatedTotalSizeBytes(v uint64) {
+	estimatedTotalSizeBytes.Set(float64(v))
+}
+
+// AddCopyReadDocumentCount increments the total count of the read documents.
+func AddCopyReadDocumentCount(v int) {
+	copyReadDocumentTotal.Add(float64(v))
+}
+
+// AddCopyReadDocumentCount increments the total count of the inserted documents.
+func AddCopyInsertDocumentCount(v int) {
+	copyInsertDocumentTotal.Add(float64(v))
+}
+
+// AddCopyReadSize increments the total size of the read data counter.
+func AddCopyReadSize(v uint64) {
+	copyReadSizeBytesTotal.Add(float64(v))
+}
+
+// AddCopyInsertSize increments the total size of the inserter data counter.
+func AddCopyInsertSize(v uint64) {
+	copyInsertSizeBytesTotal.Add(float64(v))
+}
+
+// SetCopyReadBatchDurationSeconds sets the duration in seconds for the copy read batch operation.
+func SetCopyReadBatchDurationSeconds(dur time.Duration) {
+	copyReadBatchDurationSeconds.Set(float64(dur.Seconds()))
+}
+
+// SetCopyInsertBatchDurationSeconds sets the duration in seconds for the copy insert batch
+// operation.
+func SetCopyInsertBatchDurationSeconds(dur time.Duration) {
+	copyInsertBatchDurationSeconds.Set(float64(dur.Seconds()))
 }
 
 // AddEventsProcessed increments the total number of events processed counter.
 func AddEventsProcessed(v int) {
 	eventsProcessedTotal.Add(float64(v))
-}
-
-// AddCopiedSize increments the total size of the data copied counter.
-func AddCopiedSize(v int) {
-	copiedTotalSizeBytesTotal.Add(float64(v))
 }
 
 // SetLagTimeSeconds sets the lag time in seconds gauge.
@@ -77,11 +155,6 @@ func SetLagTimeSeconds(v uint32) {
 }
 
 // SetInitialSyncLagTimeSeconds sets the initial sync lag time in seconds gauge.
-func SetInitialSyncLagTimeSeconds(v int64) {
+func SetInitialSyncLagTimeSeconds(v uint32) {
 	intialSyncLagTimeSeconds.Set(float64(v))
-}
-
-// SetEstimatedTotalSize sets the estimated total size of the data to be replicated in bytes gauge.
-func SetEstimatedTotalSize(v int64) {
-	estimatedTotalSizeBytes.Set(float64(v))
 }

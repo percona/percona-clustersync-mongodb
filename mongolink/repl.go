@@ -103,6 +103,10 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
+	if r.startTime.IsZero() && r.err == nil {
+		return nil
+	}
+
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
@@ -316,7 +320,7 @@ func (r *Repl) watchChangeEvents(
 	}
 
 	defer func() {
-		if err := cur.Close(ctx); err != nil {
+		if err := cur.Close(context.Background()); err != nil {
 			log.New("repl:watch").Error(err, "Close change stream cursor")
 		}
 	}()
@@ -329,6 +333,10 @@ func (r *Repl) watchChangeEvents(
 		lastEventTS := bson.Timestamp{}
 		sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+
 			log.New("watch").Error(err, "Unable to advance the source cluster time")
 		}
 
@@ -363,10 +371,10 @@ func (r *Repl) watchChangeEvents(
 
 					// send the entire transaction for replication
 					changeC <- txn0
-					for i, txn := range txnOps {
+					for _, txn := range txnOps {
 						changeC <- txn
-						txnOps[i] = nil // release to GC
 					}
+					clear(txnOps)
 					txnOps = txnOps[:0]
 
 					if !change.IsTransaction() {
@@ -389,10 +397,10 @@ func (r *Repl) watchChangeEvents(
 
 				// no event available. the entire transaction is received
 				changeC <- txn0
-				for i, txn := range txnOps {
+				for _, txn := range txnOps {
 					changeC <- txn
-					txnOps[i] = nil
 				}
+				clear(txnOps)
 				txnOps = txnOps[:0]
 				txn0 = nil // return to non-transactional processing
 			}
@@ -467,8 +475,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
-				metrics.AddEventsProcessed(1)
 				r.lock.Unlock()
+
+				metrics.AddEventsProcessed(1)
 			}
 
 			continue
@@ -479,8 +488,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
-				metrics.AddEventsProcessed(1)
 				r.lock.Unlock()
+
+				metrics.AddEventsProcessed(1)
 			}
 
 			continue
@@ -528,8 +538,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime
 			r.eventsProcessed++
-			metrics.AddEventsProcessed(1)
 			r.lock.Unlock()
+
+			metrics.AddEventsProcessed(1)
 		}
 
 		if r.bulkWrite.Full() {
@@ -559,8 +570,9 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	r.lock.Lock()
 	r.lastReplicatedOpTime = r.bulkTS
 	r.eventsProcessed += int64(size)
-	metrics.AddEventsProcessed(size)
 	r.lock.Unlock()
+
+	metrics.AddEventsProcessed(size)
 
 	log.New("bulk:write").
 		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDoneAt))).
@@ -724,6 +736,5 @@ func loggerForEvent(change *ChangeEvent) log.Logger {
 	return log.New("repl").With(
 		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 		log.Op(string(change.OperationType)),
-		log.NS(change.Namespace.Database, change.Namespace.Collection),
-		log.Tx(change.TxnNumber, change.LSID))
+		log.NS(change.Namespace.Database, change.Namespace.Collection))
 }

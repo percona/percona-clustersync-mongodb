@@ -3,8 +3,6 @@ package log
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"io"
 	"os"
 	"time"
@@ -21,7 +19,7 @@ const TimeFieldFormat = "2006-01-02 15:04:05.000"
 func InitGlobals(level zerolog.Level, json, noColor bool) *zerolog.Logger {
 	zerolog.TimeFieldFormat = TimeFieldFormat
 	zerolog.DurationFieldUnit = time.Second
-	zerolog.DurationFieldInteger = true
+	zerolog.DurationFieldInteger = false
 
 	var logWriter io.Writer = os.Stdout
 	if !json {
@@ -42,7 +40,7 @@ type AttrFn func(l zerolog.Context) zerolog.Context
 
 func Elapsed(dur time.Duration) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		return l.Dur("elapsed_secs", dur)
+		return l.Dur("elapsed_secs", dur.Round(time.Millisecond))
 	}
 }
 
@@ -71,17 +69,15 @@ func OpTime(t, i uint32) AttrFn {
 	}
 }
 
-// Tx sets the transaction and session ID attributes.
-func Tx(txn *int64, lsid []byte) AttrFn {
-	if txn == nil {
-		return func(l zerolog.Context) zerolog.Context { return l }
-	}
-
-	hash := sha256.Sum224(lsid)
-	encoded := base64.RawStdEncoding.EncodeToString(hash[:8])
-
+func Size(bytes uint64) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		return l.Int64("txn", *txn).Str("sid", encoded)
+		return l.Uint64("size_bytes", bytes)
+	}
+}
+
+func Count(count int64) AttrFn {
+	return func(l zerolog.Context) zerolog.Context {
+		return l.Int64("count", count)
 	}
 }
 

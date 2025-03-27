@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+from datetime import datetime
+
 import pymongo
 import pytest
 from mlink import Runner
@@ -232,4 +234,28 @@ def test_bulk_write(t: Testing, phase: Runner.Phase):
 
     assert coll_1 == [{"i": "1"}, {"i": 3}, {"k": "4"}]
 
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_id_type(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].insert_many(
+            [
+                {},  # bson object id
+                {"_id": "1"},
+                {"_id": 2},
+                {"_id": datetime.now()},
+                {"_id": 3.4},
+                {"_id": {"a": 1, "b": "c"}},
+                {"_id": True},
+                {"_id": None},
+            ]
+        )
+
+    t.compare_all()
+
+
+@pytest.mark.timeout(180)
+def test_compare_all(t: Testing):
     t.compare_all()

@@ -6,6 +6,20 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
+// IsRetryableWrite checks if the error has the "RetryableWriteError" label.
+func IsRetryableWrite(err error) bool {
+	for err != nil {
+		le, ok := err.(mongo.LabeledError) //nolint:errorlint
+		if ok {
+			return le.HasErrorLabel("RetryableWriteError")
+		}
+
+		err = errors.Unwrap(err)
+	}
+
+	return false
+}
+
 // IsIndexNotFound checks if an error is an index not found error.
 func IsIndexNotFound(err error) bool {
 	return isMongoCommandError(err, "IndexNotFound")
@@ -18,6 +32,10 @@ func IsIndexOptionsConflict(err error) bool {
 
 func IsNamespaceNotFound(err error) bool {
 	return isMongoCommandError(err, "NamespaceNotFound")
+}
+
+func IsQueryPlanKilled(err error) bool {
+	return isMongoCommandError(err, "QueryPlanKilled")
 }
 
 func IsChangeStreamHistoryLost(err error) bool {

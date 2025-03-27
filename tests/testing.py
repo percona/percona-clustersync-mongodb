@@ -15,11 +15,11 @@ class Testing:
         self.target: MongoClient = target
         self.mlink: MongoLink = mlink
 
-    def run(self, phase: Runner.Phase):
+    def run(self, phase: Runner.Phase, wait_timeout=None):
         """Perform the MongoLink operation for the given phase."""
-        return Runner(self.source, self.mlink, phase, {})
+        return Runner(self.source, self.mlink, phase, {}, wait_timeout=wait_timeout)
 
-    def compare_all(self):
+    def compare_all(self, sort=None):
         """Compare all databases and collections between source and target MongoDB."""
         source_dbs = set(list_databases(self.source))
         target_dbs = set(list_databases(self.target))
@@ -31,7 +31,7 @@ class Testing:
             assert source_colls == target_colls, f"{db} :: {source_colls} != {target_colls}"
 
             for coll in source_colls:
-                compare_namespace(self.source, self.target, db, coll)
+                compare_namespace(self.source, self.target, db, coll, sort)
 
 
 def list_databases(client: MongoClient):
@@ -55,9 +55,10 @@ def list_all_namespaces(client: MongoClient):
             yield f"{db}.{coll}"
 
 
-def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: str):
+def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: str, sort=None):
     """Compare the given namespace between source and target MongoDB."""
     ns = f"{db}.{coll}"
+
     source_options = source[db][coll].options()
     target_options = target[db][coll].options()
     assert source_options == target_options, f"{ns}: {source_options=} != {target_options=}"
@@ -67,17 +68,19 @@ def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: s
         target_indexes = target[db][coll].index_information()
         assert source_indexes == target_indexes, f"{ns}: {source_indexes=} != {target_indexes=}"
 
-    source_docs, source_hash = _coll_content(source[db][coll])
-    target_docs, target_hash = _coll_content(target[db][coll])
-    assert len(source_docs) == len(target_docs), f"{ns}: {source_docs=} != {target_docs=}"
-    assert source_docs == target_docs, f"{ns}: {source_docs=} != {target_docs=}"
+    source_count, source_hash = _coll_content(source[db][coll], sort)
+    target_count, target_hash = _coll_content(target[db][coll], sort)
+    assert source_count == target_count, f"{ns}: {source_count=} != {target_count=}"
     assert source_hash == target_hash, f"{ns}: {source_hash=} != {target_hash=}"
 
 
-def _coll_content(coll: Collection):
+def _coll_content(coll: Collection, sort=None):
     """Get the content and hash of the given collection."""
-    docs, md5 = [], hashlib.md5()
-    for data in coll.find_raw_batches(sort=[("_id", ASCENDING)]):
+    if not sort:
+        sort = [("_id", ASCENDING)]
+
+    count, md5 = 0, hashlib.md5()
+    for data in coll.find_raw_batches(sort=sort):
         md5.update(data)
-        docs.extend(bson.decode_all(data))
-    return docs, md5.hexdigest()
+        count += len(bson.decode_all(data))
+    return count, md5.hexdigest()

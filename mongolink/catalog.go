@@ -16,6 +16,8 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
+var ErrTimeseriesUnsupported = errors.New("timeseries is not supported")
+
 // IDIndex is the name of the "_id" index.
 const IDIndex = "_id_"
 
