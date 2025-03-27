@@ -1,22 +1,42 @@
+version: "2"
 linters:
-  enable-all: true
+  default: all
   disable:
-    - nolintlint
-    - gci
     - contextcheck
-    - exhaustruct
-    - depguard
-    - varnamelen
     - cyclop
-    - gocognit
+    - depguard
     - dupl
+    - exhaustruct
     - funlen
-    - tenv
+    - gocognit
+    - nolintlint
+    - varnamelen
     - wsl
-
-linters-settings:
-  govet:
-    disable:
-      - composites
-  misspell:
-    locale: "US"
+  settings:
+    govet:
+      disable:
+        - composites
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
