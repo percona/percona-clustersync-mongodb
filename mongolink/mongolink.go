@@ -533,7 +533,7 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 	defer ml.lock.Unlock()
 
 	if status.State == StateFailed {
-		if !(options.IgnoreHistoryLost && errors.Is(status.Repl.Err, ErrOplogHistoryLost)) {
+		if !options.IgnoreHistoryLost || !errors.Is(status.Repl.Err, ErrOplogHistoryLost) {
 			return errors.Wrap(status.Error, "failed state")
 		}
 	}
