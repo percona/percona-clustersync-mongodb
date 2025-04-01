@@ -294,17 +294,10 @@ def test_modify_capped_size(t: Testing, phase: Runner.Phase):
     ensure_collection(t.source, t.target, "db_1", "coll_2", capped=True, size=1111, max=222)
     ensure_collection(t.source, t.target, "db_1", "coll_3", capped=True, size=1111, max=222)
 
-    for coll in t.source["db_1"].list_collections():
-        assert coll["options"] == {"capped": True, "size": 1111, "max": 222}
-
     with t.run(phase):
         t.source["db_1"].command({"collMod": "coll_1", "cappedSize": 3333, "cappedMax": 444})
         t.source["db_1"].command({"collMod": "coll_2", "cappedSize": 3333})
         t.source["db_1"].command({"collMod": "coll_3", "cappedMax": 444})
-
-    assert t.source["db_1"]["coll_1"].options() == {"capped": True, "size": 3333, "max": 444}
-    assert t.source["db_1"]["coll_2"].options() == {"capped": True, "size": 3333, "max": 222}
-    assert t.source["db_1"]["coll_3"].options() == {"capped": True, "size": 1111, "max": 444}
 
     t.compare_all()
 

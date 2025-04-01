@@ -47,7 +47,7 @@ type Repl struct {
 	pauseC  chan struct{}
 	doneSig chan struct{}
 
-	bulkOps        bulkOps
+	bulkWrite      BulkWrite
 	bulkToken      bson.Raw
 	bulkTS         bson.Timestamp
 	lastBulkDoneAt time.Time
@@ -85,7 +85,6 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 		target:   target,
 		nsFilter: nsFilter,
 		catalog:  catalog,
-		bulkOps:  newBulkOps(config.BulkOpsSize),
 		pauseC:   make(chan struct{}),
 		doneSig:  make(chan struct{}),
 	}
@@ -170,7 +169,7 @@ func (r *Repl) Done() <-chan struct{} {
 }
 
 // Start begins the replication process from the specified start timestamp.
-func (r *Repl) Start(_ context.Context, startAt bson.Timestamp) error {
+func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -180,6 +179,19 @@ func (r *Repl) Start(_ context.Context, startAt bson.Timestamp) error {
 
 	if !r.startTime.IsZero() {
 		return errors.New("already started")
+	}
+
+	serverVersion, err := topo.Version(ctx, r.target)
+	if err != nil {
+		return errors.Wrap(err, "major version")
+	}
+
+	if topo.Support(serverVersion).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+	} else {
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+
+		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
 	go r.run(options.ChangeStream().SetStartAtOperationTime(&startAt))
@@ -424,7 +436,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	lg := log.New("repl")
 
 	for change := range changeC {
-		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkOps.Empty() {
+		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkWrite.Empty() {
 			if !r.doBulkOps(ctx) {
 				return
 			}
@@ -441,7 +453,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if change.Namespace.Database == config.MongoLinkDatabase {
-			if r.bulkOps.Empty() {
+			if r.bulkWrite.Empty() {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
@@ -453,7 +465,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
-			if r.bulkOps.Empty() {
+			if r.bulkWrite.Empty() {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
@@ -467,30 +479,30 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		switch change.OperationType { //nolint:exhaustive
 		case Insert:
 			event := change.Event.(InsertEvent) //nolint:forcetypeassert
-			r.bulkOps.Insert(change.Namespace, &event)
+			r.bulkWrite.Insert(change.Namespace, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Update:
 			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
-			r.bulkOps.Update(change.Namespace, &event)
+			r.bulkWrite.Update(change.Namespace, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Delete:
 			event := change.Event.(DeleteEvent) //nolint:forcetypeassert
-			r.bulkOps.Delete(change.Namespace, &event)
+			r.bulkWrite.Delete(change.Namespace, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Replace:
 			event := change.Event.(ReplaceEvent) //nolint:forcetypeassert
-			r.bulkOps.Replace(change.Namespace, &event)
+			r.bulkWrite.Replace(change.Namespace, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		default:
-			if !r.bulkOps.Empty() {
+			if !r.bulkWrite.Empty() {
 				if !r.doBulkOps(ctx) {
 					return
 				}
@@ -510,20 +522,20 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Unlock()
 		}
 
-		if r.bulkOps.Full() {
+		if r.bulkWrite.Full() {
 			if !r.doBulkOps(ctx) {
 				return
 			}
 		}
 	}
 
-	if !r.bulkOps.Empty() {
+	if !r.bulkWrite.Empty() {
 		r.doBulkOps(ctx) //nolint:errcheck
 	}
 }
 
 func (r *Repl) doBulkOps(ctx context.Context) bool {
-	size, err := r.bulkOps.Do(ctx, r.target)
+	size, err := r.bulkWrite.Do(ctx, r.target)
 	if err != nil {
 		r.setFailed(err, "Flush bulk ops")
 
@@ -704,113 +716,4 @@ func loggerForEvent(change *ChangeEvent) log.Logger {
 		log.Op(string(change.OperationType)),
 		log.NS(change.Namespace.Database, change.Namespace.Collection),
 		log.Tx(change.TxnNumber, change.LSID))
-}
-
-type bulkOps struct {
-	writes []mongo.ClientBulkWrite
-}
-
-//nolint:gochecknoglobals
-var bulkWriteOptions = options.ClientBulkWrite().SetOrdered(true).SetBypassDocumentValidation(true)
-
-//nolint:gochecknoglobals
-var trueVal = true
-
-func newBulkOps(size int) bulkOps {
-	return bulkOps{make([]mongo.ClientBulkWrite, 0, size)}
-}
-
-//go:inline
-func (o *bulkOps) Full() bool {
-	return len(o.writes) == cap(o.writes)
-}
-
-//go:inline
-func (o *bulkOps) Empty() bool {
-	return len(o.writes) == 0
-}
-
-func (o *bulkOps) Do(ctx context.Context, m *mongo.Client) (int, error) {
-	_, err := m.BulkWrite(ctx, o.writes, bulkWriteOptions)
-	if err != nil {
-		return 0, errors.Wrap(err, "bulk write")
-	}
-
-	size := len(o.writes)
-	o.writes = o.writes[:0]
-
-	return size, nil
-}
-
-//go:inline
-func (o *bulkOps) Insert(ns Namespace, event *InsertEvent) {
-	bw := mongo.ClientBulkWrite{
-		Database:   ns.Database,
-		Collection: ns.Collection,
-		Model: &mongo.ClientReplaceOneModel{
-			Filter:      event.DocumentKey,
-			Replacement: event.FullDocument,
-			Upsert:      &trueVal,
-		},
-	}
-
-	o.writes = append(o.writes, bw)
-}
-
-//go:inline
-func (o *bulkOps) Update(ns Namespace, event *UpdateEvent) {
-	ops := bson.D{}
-
-	if len(event.UpdateDescription.UpdatedFields) != 0 {
-		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
-	}
-
-	if len(event.UpdateDescription.RemovedFields) != 0 {
-		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
-		for i, field := range event.UpdateDescription.RemovedFields {
-			fields[i].Key = field
-			fields[i].Value = 1
-		}
-
-		ops = append(ops, bson.E{"$unset", fields})
-	}
-
-	bw := mongo.ClientBulkWrite{
-		Database:   ns.Database,
-		Collection: ns.Collection,
-		Model: &mongo.ClientUpdateOneModel{
-			Filter: event.DocumentKey,
-			Update: ops,
-		},
-	}
-
-	o.writes = append(o.writes, bw)
-}
-
-//go:inline
-func (o *bulkOps) Replace(ns Namespace, event *ReplaceEvent) {
-	bw := mongo.ClientBulkWrite{
-		Database:   ns.Database,
-		Collection: ns.Collection,
-		Model: &mongo.ClientReplaceOneModel{
-			Filter:      event.DocumentKey,
-			Replacement: event.FullDocument,
-			Upsert:      &trueVal,
-		},
-	}
-
-	o.writes = append(o.writes, bw)
-}
-
-//go:inline
-func (o *bulkOps) Delete(ns Namespace, event *DeleteEvent) {
-	bw := mongo.ClientBulkWrite{
-		Database:   ns.Database,
-		Collection: ns.Collection,
-		Model: &mongo.ClientDeleteOneModel{
-			Filter: event.DocumentKey,
-		},
-	}
-
-	o.writes = append(o.writes, bw)
 }
