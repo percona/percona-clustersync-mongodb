@@ -3,6 +3,7 @@ package mongolink
 import (
 	"context"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 
@@ -15,15 +16,8 @@ import (
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-// IDIndex is the name of the default index.
-const IDIndex IndexName = "_id_"
-
-type (
-	NSName    = string // namespace name
-	DBName    = string // database name
-	CollName  = string // collection name
-	IndexName = string // index name
-)
+// IDIndex is the name of the "_id" index.
+const IDIndex = "_id_"
 
 const (
 	// SystemPrefix is the prefix for system collections.
@@ -74,21 +68,30 @@ type ModifyIndexOption struct {
 
 // Catalog manages the MongoDB catalog.
 type Catalog struct {
-	lock   sync.RWMutex
-	target *mongo.Client
-	cat    map[DBName]map[CollName]map[string]*topo.IndexSpecification
+	lock      sync.RWMutex
+	target    *mongo.Client
+	Databases map[string]databaseCatalog
+}
+
+type databaseCatalog struct {
+	Collections map[string]collectionCatalog
+}
+
+type collectionCatalog struct {
+	AddedAt bson.Timestamp
+	Indexes []*topo.IndexSpecification
 }
 
 // NewCatalog creates a new Catalog.
 func NewCatalog(target *mongo.Client) *Catalog {
 	return &Catalog{
-		target: target,
-		cat:    make(map[DBName]map[CollName]map[string]*topo.IndexSpecification),
+		target:    target,
+		Databases: make(map[string]databaseCatalog),
 	}
 }
 
 type catalogCheckpoint struct {
-	Catalog map[DBName]map[CollName]map[string]*topo.IndexSpecification `bson:"catalog"`
+	Catalog map[string]databaseCatalog `bson:"catalog"`
 }
 
 func (c *Catalog) LockWrite() {
@@ -103,30 +106,30 @@ func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	if len(c.cat) == 0 {
+	if len(c.Databases) == 0 {
 		return nil
 	}
 
-	return &catalogCheckpoint{Catalog: c.cat}
+	return &catalogCheckpoint{Catalog: c.Databases}
 }
 
 func (c *Catalog) Recover(cp *catalogCheckpoint) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	if len(c.cat) != 0 {
+	if len(c.Databases) != 0 {
 		return errors.New("cannot restore")
 	}
 
-	c.cat = cp.Catalog
+	c.Databases = cp.Catalog
 
 	return nil
 }
 
 func (c *Catalog) CreateCollection(
 	ctx context.Context,
-	db DBName,
-	coll CollName,
+	db string,
+	coll string,
 	opts *CreateCollectionOptions,
 ) error {
 	c.lock.Lock()
@@ -146,8 +149,8 @@ func (c *Catalog) CreateCollection(
 // doCreateCollection creates a new collection in the target MongoDB.
 func (c *Catalog) doCreateCollection(
 	ctx context.Context,
-	db DBName,
-	coll CollName,
+	db string,
+	coll string,
 	opts *CreateCollectionOptions,
 ) error {
 	cmd := bson.D{{"create", coll}}
@@ -183,14 +186,16 @@ func (c *Catalog) doCreateCollection(
 		return errors.Wrap(err, "create collection")
 	}
 
+	c.addCollectionToCatalog(ctx, db, coll)
+
 	return nil
 }
 
 // doCreateView creates a new view in the target MongoDB.
 func (c *Catalog) doCreateView(
 	ctx context.Context,
-	db DBName,
-	view CollName,
+	db string,
+	view string,
 	opts *CreateCollectionOptions,
 ) error {
 	cmd := bson.D{
@@ -212,7 +217,7 @@ func (c *Catalog) doCreateView(
 }
 
 // DropCollection drops a collection in the target MongoDB.
-func (c *Catalog) DropCollection(ctx context.Context, db DBName, coll CollName) error {
+func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -221,26 +226,26 @@ func (c *Catalog) DropCollection(ctx context.Context, db DBName, coll CollName) 
 		return err //nolint:wrapcheck
 	}
 
-	c.deleteCollectionEntry(db, coll)
+	c.deleteCollectionFromCatalog(db, coll)
 
 	return nil
 }
 
 // DropDatabase drops a database in the target MongoDB.
-func (c *Catalog) DropDatabase(ctx context.Context, db DBName) error {
+func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	lg := log.Ctx(ctx)
 
-	collNames, err := topo.ListCollectionNames(ctx, c.target, db)
+	colls, err := topo.ListCollectionNames(ctx, c.target, db)
 	if err != nil {
 		return errors.Wrap(err, "list collection names")
 	}
 
 	eg, grpCtx := errgroup.WithContext(ctx)
 
-	for _, coll := range collNames {
+	for _, coll := range colls {
 		eg.Go(func() error {
 			err := c.target.Database(db).Collection(coll).Drop(grpCtx)
 			if err != nil {
@@ -253,7 +258,7 @@ func (c *Catalog) DropDatabase(ctx context.Context, db DBName) error {
 		})
 	}
 
-	c.deleteDatabaseEntry(db)
+	c.deleteDatabaseFromCatalog(db)
 
 	return eg.Wait() //nolint:wrapcheck
 }
@@ -261,8 +266,8 @@ func (c *Catalog) DropDatabase(ctx context.Context, db DBName) error {
 // CreateIndexes creates indexes in the target MongoDB.
 func (c *Catalog) CreateIndexes(
 	ctx context.Context,
-	db DBName,
-	coll CollName,
+	db string,
+	coll string,
 	indexes []*topo.IndexSpecification,
 ) error {
 	c.lock.Lock()
@@ -335,7 +340,7 @@ func (c *Catalog) CreateIndexes(
 		return err //nolint:wrapcheck
 	}
 
-	c.addIndexEntries(db, coll, indexes)
+	c.addIndexesToCatalog(ctx, db, coll, indexes)
 
 	return nil
 }
@@ -343,8 +348,8 @@ func (c *Catalog) CreateIndexes(
 // ModifyCappedCollection modifies a capped collection in the target MongoDB.
 func (c *Catalog) ModifyCappedCollection(
 	ctx context.Context,
-	db DBName,
-	coll CollName,
+	db string,
+	coll string,
 	sizeBytes *int64,
 	maxDocs *int64,
 ) error {
@@ -366,13 +371,7 @@ func (c *Catalog) ModifyCappedCollection(
 }
 
 // ModifyView modifies a view in the target MongoDB.
-func (c *Catalog) ModifyView(
-	ctx context.Context,
-	db DBName,
-	view CollName,
-	viewOn CollName,
-	pipeline any,
-) error {
+func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -387,12 +386,7 @@ func (c *Catalog) ModifyView(
 }
 
 // ModifyIndex modifies an index in the target MongoDB.
-func (c *Catalog) ModifyIndex(
-	ctx context.Context,
-	db DBName,
-	coll CollName,
-	mods *ModifyIndexOption,
-) error {
+func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *ModifyIndexOption) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -411,8 +405,10 @@ func (c *Catalog) ModifyIndex(
 		}
 	}
 
-	index := c.getIndexEntry(db, coll, mods.Name)
+	index := c.getIndexFromCatalog(db, coll, mods.Name)
 	if index == nil {
+		log.Ctx(ctx).Errorf(nil, "index %q not found", mods.Name)
+
 		return nil
 	}
 
@@ -437,13 +433,7 @@ func (c *Catalog) ModifyIndex(
 	return nil
 }
 
-func (c *Catalog) Rename(
-	ctx context.Context,
-	db DBName,
-	coll CollName,
-	targetDB DBName,
-	targetColl CollName,
-) error {
+func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -464,32 +454,51 @@ func (c *Catalog) Rename(
 		return errors.Wrap(err, "rename collection")
 	}
 
-	c.renameCollectionEntry(db, coll, targetColl)
+	c.renameCollectionInCatalog(ctx, db, coll, targetDB, targetColl)
 
 	return nil
 }
 
 // DropIndex drops an index in the target MongoDB.
-func (c *Catalog) DropIndex(ctx context.Context, db DBName, coll CollName, name IndexName) error {
+func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, name)
+	err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
 	if err != nil {
-		if topo.IsIndexNotFound(err) {
-			log.Ctx(ctx).Debug(err.Error())
-
-			c.deleteIndexEntry(db, coll, name) // make sure no index stored
-
-			return nil
+		if !topo.IsIndexNotFound(err) {
+			return err //nolint:wrapcheck
 		}
 
-		return err //nolint:wrapcheck
+		log.Ctx(ctx).Warn(err.Error())
 	}
 
-	c.deleteIndexEntry(db, coll, name)
+	c.removeIndexFromCatalog(ctx, db, coll, index)
 
 	return nil
+}
+
+func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Warnf("Catalog: set collection ts: database %q is not found", db)
+
+		return
+	}
+
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Warnf("Catalog: set collection ts: namespace %q is not found", db+"."+coll)
+
+		return
+	}
+
+	collectionEntry.AddedAt = ts
+	databaseEntry.Collections[coll] = collectionEntry
+	c.Databases[db] = databaseEntry
 }
 
 // Finalize finalizes the indexes in the target MongoDB.
@@ -499,9 +508,9 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	lg := log.Ctx(ctx)
 
-	for db, colls := range c.cat {
-		for coll, indexes := range colls {
-			for _, index := range indexes {
+	for db, colls := range c.Databases {
+		for coll, collEntry := range colls.Collections {
+			for _, index := range collEntry.Indexes {
 				if index.IsClustered() {
 					lg.Warn("Clustered index with TTL is not supported")
 
@@ -513,14 +522,14 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				case index.Unique != nil && *index.Unique:
 					lg.Info("Convert index to prepareUnique: " + index.Name)
 
-					err := c.modifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
 						return errors.Wrap(err, "convert to unique: prepareUnique: "+index.Name)
 					}
 
 					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
-					err = c.modifyIndexOption(ctx, db, coll, index.Name, "unique", true)
+					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
 						return errors.Wrap(err, "convert to unique: "+index.Name)
 					}
@@ -528,7 +537,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				case index.PrepareUnique != nil && *index.PrepareUnique:
 					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
-					err := c.modifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
 						return errors.Wrap(err, "convert to prepareUnique: "+index.Name)
 					}
@@ -537,7 +546,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				if index.ExpireAfterSeconds != nil {
 					lg.Info("Modify index expireAfterSeconds: " + index.Name)
 
-					err := c.modifyIndexOption(ctx,
+					err := c.doModifyIndexOption(ctx,
 						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
 					if err != nil {
 						return errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
@@ -547,7 +556,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				if index.Hidden != nil {
 					lg.Info("Modify index hidden: " + index.Name)
 
-					err := c.modifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
 						return errors.Wrap(err, "modify hidden: "+index.Name)
 					}
@@ -559,12 +568,12 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	return nil
 }
 
-// modifyIndexOption modifies an index property in the target MongoDB.
-func (c *Catalog) modifyIndexOption(
+// doModifyIndexOption modifies an index property in the target MongoDB.
+func (c *Catalog) doModifyIndexOption(
 	ctx context.Context,
-	db DBName,
-	coll CollName,
-	index IndexName,
+	db string,
+	coll string,
+	index string,
 	propName string,
 	value any,
 ) error {
@@ -579,88 +588,189 @@ func (c *Catalog) modifyIndexOption(
 	return res.Err() //nolint:wrapcheck
 }
 
-// getIndexEntry gets an index entry from the catalog.
-func (c *Catalog) getIndexEntry(db DBName, coll CollName, name IndexName) *topo.IndexSpecification {
-	databaseEntry := c.cat[db]
-	if len(databaseEntry) == 0 {
+// getIndexFromCatalog gets an index spec from the catalog.
+func (c *Catalog) getIndexFromCatalog(db, coll, index string) *topo.IndexSpecification {
+	dbCat, ok := c.Databases[db]
+	if !ok || len(dbCat.Collections) == 0 {
 		return nil
 	}
 
-	collectionEntry := databaseEntry[coll]
-	if len(collectionEntry) == 0 {
+	collCat, ok := dbCat.Collections[coll]
+	if !ok {
 		return nil
 	}
 
-	return collectionEntry[name]
+	for _, indexSpec := range collCat.Indexes {
+		if indexSpec.Name == index {
+			return indexSpec
+		}
+	}
+
+	return nil
 }
 
-// addIndexEntries adds index entries to the catalog.
-func (c *Catalog) addIndexEntries(db DBName, coll CollName, indexes []*topo.IndexSpecification) {
-	databaseEntry := c.cat[db]
-	if databaseEntry == nil {
-		databaseEntry = make(map[CollName]map[string]*topo.IndexSpecification)
-		c.cat[db] = databaseEntry
+// addIndexesToCatalog adds indexes to the catalog.
+func (c *Catalog) addIndexesToCatalog(
+	ctx context.Context,
+	db string,
+	coll string,
+	indexes []*topo.IndexSpecification,
+) {
+	dbCat, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Errorf(nil, "Catalog: add indexes: database %q not found", db)
+
+		c.Databases[db] = databaseCatalog{
+			Collections: map[string]collectionCatalog{
+				coll: {
+					Indexes: slices.Clone(indexes),
+				},
+			},
+		}
+
+		return
 	}
 
-	collectionEntry := databaseEntry[coll]
-	if collectionEntry == nil {
-		collectionEntry = make(map[string]*topo.IndexSpecification)
-		databaseEntry[coll] = collectionEntry
+	collCat, ok := dbCat.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Errorf(nil, "Catalog: add indexes: namespace %q not found", db+"."+coll)
+
+		dbCat.Collections[coll] = collectionCatalog{
+			Indexes: slices.Clone(indexes),
+		}
+		c.Databases[db] = dbCat
+
+		return
 	}
 
 	for _, index := range indexes {
-		collectionEntry[index.Name] = index
+		found := false
+
+		for i, catIndex := range collCat.Indexes {
+			if catIndex.Name == index.Name {
+				log.Ctx(ctx).
+					Warnf("Catalog: add indexes: index %q already exists in %q namespace",
+						index.Name, db+"."+coll)
+
+				collCat.Indexes[i] = index
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			collCat.Indexes = append(collCat.Indexes, index)
+		}
 	}
 
-	databaseEntry[coll] = collectionEntry
-	c.cat[db] = databaseEntry
+	dbCat.Collections[coll] = collCat
+	c.Databases[db] = dbCat
 }
 
-// deleteIndexEntry deletes an index entry from the catalog.
-func (c *Catalog) deleteIndexEntry(db DBName, coll CollName, name IndexName) {
-	databaseEntry := c.cat[db]
-	if databaseEntry == nil {
+// removeIndexFromCatalog removes an index from the catalog.
+func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index string) {
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Warnf("Catalog: remove index: database %q is not found", db)
+
 		return
 	}
 
-	collectionEntry := databaseEntry[coll]
-	if collectionEntry == nil {
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Warnf("Catalog: remove index: namespace %q is not found", db+"."+coll)
+
 		return
 	}
 
-	delete(collectionEntry, name)
+	if len(collectionEntry.Indexes) == 0 {
+		log.Ctx(ctx).Warnf("Catalog: remove index: no indexes for namespace %q", db+"."+coll)
+
+		return
+	}
+
+	indexes := collectionEntry.Indexes
+
+	if len(indexes) == 1 && indexes[0].Name == index {
+		collectionEntry.Indexes = nil
+
+		return
+	}
+
+	for i := range indexes {
+		if indexes[i].Name == index {
+			copy(indexes[i:], indexes[i+1:])
+			collectionEntry.Indexes = indexes[:len(indexes)-2]
+
+			return
+		}
+	}
+
+	log.Ctx(ctx).
+		Warnf("Catalog: remove index: index %q not found in namespace %q", index, db+"."+coll)
 }
 
-// deleteCollectionEntry deletes a collection entry from the catalog.
-func (c *Catalog) deleteCollectionEntry(db DBName, coll CollName) {
-	databaseEntry := c.cat[db]
+// addCollectionToCatalog adds a collection to the catalog.
+func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string) {
+	dbCat, ok := c.Databases[db]
+	if !ok {
+		dbCat = databaseCatalog{
+			Collections: make(map[string]collectionCatalog),
+		}
+	}
 
-	if len(databaseEntry) == 0 {
+	if _, ok = dbCat.Collections[coll]; ok {
+		log.Ctx(ctx).
+			Errorf(nil, "Catalog: add collection: namespace %q already exists", db+"."+coll)
+
 		return
 	}
 
-	delete(databaseEntry, coll)
+	dbCat.Collections[coll] = collectionCatalog{}
+	c.Databases[db] = dbCat
 }
 
-func (c *Catalog) deleteDatabaseEntry(dbName string) {
-	delete(c.cat, dbName)
+// deleteCollectionFromCatalog deletes a collection entry from the catalog.
+func (c *Catalog) deleteCollectionFromCatalog(db, coll string) {
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		return
+	}
+
+	delete(databaseEntry.Collections, coll)
+	if len(databaseEntry.Collections) == 0 {
+		delete(c.Databases, db)
+	}
 }
 
-func (c *Catalog) renameCollectionEntry(db DBName, coll, targetColl CollName) {
-	databaseEntry := c.cat[db]
-	if len(databaseEntry) == 0 {
-		log.New("catalog:rename").Errorf(nil, "database %q is empty", db)
+func (c *Catalog) deleteDatabaseFromCatalog(db string) {
+	delete(c.Databases, db)
+}
+
+func (c *Catalog) renameCollectionInCatalog(
+	ctx context.Context,
+	db string,
+	coll string,
+	targetDB string,
+	targetColl string,
+) {
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Errorf(nil, "Catalog: rename collection: database %q is not found", db)
 
 		return
 	}
 
-	collectionEntry := databaseEntry[coll]
-	if len(collectionEntry) == 0 {
-		log.New("catalog:rename").Errorf(nil, `collection "%s.%s" is empty`, db, coll)
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).
+			Errorf(nil, "Catalog: rename collection: namespace %q is not found", db+"."+coll)
 
 		return
 	}
 
-	databaseEntry[targetColl] = databaseEntry[coll]
-	delete(databaseEntry, coll)
+	c.addCollectionToCatalog(ctx, targetDB, targetColl)
+	c.Databases[targetDB].Collections[targetColl] = collectionEntry
+	c.deleteCollectionFromCatalog(db, coll)
 }

@@ -353,6 +353,11 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 	lg := log.Ctx(ctx).With(log.NS(db, coll))
 	lg.Infof("Starting Cloning %s.%s", db, coll)
 
+	capturedAt, err := topo.ClusterTime(ctx, c.source)
+	if err != nil {
+		return errors.Wrap(err, "get source cluster time")
+	}
+
 	spec, err := topo.GetCollectionSpec(ctx, c.source, db, coll)
 	if err != nil {
 		return CollectionNotFoundError{Database: db, Collection: coll}
@@ -382,6 +387,8 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
+
+	c.catalog.SetCollectionTimestamp(ctx, db, spec.Name, capturedAt)
 
 	if spec.Type == "view" {
 		lg.With(log.Elapsed(time.Since(startedAt))).
