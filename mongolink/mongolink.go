@@ -2,6 +2,7 @@ package mongolink
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -366,7 +367,7 @@ func (ml *MongoLink) run() {
 func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 	lg := log.Ctx(ctx)
 
-	t := time.NewTicker(config.InitialSyncCheckInterval)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
 	cloneStatus := ml.clone.Status()
@@ -383,6 +384,8 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 		return
 	}
 
+	lastPrintAt := time.Time{}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -398,7 +401,11 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 			lg.With(log.Elapsed(time.Since(cloneStatus.StartTime))).
 				Info("Initial Sync has been completed")
 
-			if ml.pauseOnInitialSync {
+			ml.lock.Lock()
+			pauseOnInitialSync := ml.pauseOnInitialSync
+			ml.lock.Unlock()
+
+			if pauseOnInitialSync {
 				lg.Info("Pausing [PauseOnInitialSync]")
 
 				err := ml.Pause(ctx)
@@ -411,16 +418,23 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 		}
 
 		lagTime := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
-		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", lagTime)
-		metrics.SetInitialSyncLagTimeSeconds(lagTime)
+		metrics.SetInitialSyncLagTimeSeconds(min(lagTime, math.MaxUint32)) //nolint:gosec
+
+		now := time.Now()
+		if now.Sub(lastPrintAt) >= config.InitialSyncCheckInterval {
+			lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", lagTime)
+			lastPrintAt = now
+		}
 	}
 }
 
 func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 	lg := log.Ctx(ctx)
 
-	t := time.NewTicker(config.PrintLagTimeInterval)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
+
+	lastPrintAt := time.Time{}
 
 	for {
 		select {
@@ -437,10 +451,20 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 			continue
 		}
 
-		lastTS := ml.repl.Status().LastReplicatedOpTime
-		l := max(sourceTS.T-lastTS.T, 0)
-		lg.Infof("Lag Time: %d", l)
-		metrics.SetLagTimeSeconds(l)
+		replStatus := ml.repl.Status()
+		timeDiff := max(int64(sourceTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
+		if timeDiff == 1 && replStatus.LastReplicatedOpTime.I == 1 {
+			timeDiff = 0 // likely the oplog note from [Repl]. can approximate the 1 increment.
+		}
+
+		lagTime := uint32(min(timeDiff, math.MaxUint32)) //nolint:gosec
+		metrics.SetLagTimeSeconds(lagTime)
+
+		now := time.Now()
+		if now.Sub(lastPrintAt) >= config.PrintLagTimeInterval {
+			lg.Infof("Lag Time: %d", lagTime)
+			lastPrintAt = now
+		}
 	}
 }
 
