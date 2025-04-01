@@ -509,9 +509,14 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
+	sourceVersion, err := topo.Version(ctx, source)
+	if err != nil {
+		return nil, errors.Wrap(err, "source version")
+	}
+
 	cs, _ := connstring.Parse(sourceURI)
-	lg.Infof("Connected to source cluster: %s://%s:***@%s",
-		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
+	lg.Infof("Connected to source cluster [%s]: %s://%s",
+		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
 	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
@@ -529,9 +534,14 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
+	targetVersion, err := topo.Version(ctx, target)
+	if err != nil {
+		return nil, errors.Wrap(err, "target version")
+	}
+
 	cs, _ = connstring.Parse(targetURI)
-	lg.Infof("Connected to target cluster: %s://%s:***@%s",
-		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
+	lg.Infof("Connected to target cluster [%s]: %s://%s",
+		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
