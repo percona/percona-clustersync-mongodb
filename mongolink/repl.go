@@ -47,7 +47,7 @@ type Repl struct {
 	pauseC  chan struct{}
 	doneSig chan struct{}
 
-	bulkWrite      BulkWrite
+	bulkWrite      bulkWrite
 	bulkToken      bson.Raw
 	bulkTS         bson.Timestamp
 	lastBulkDoneAt time.Time

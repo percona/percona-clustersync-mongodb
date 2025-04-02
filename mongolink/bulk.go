@@ -26,7 +26,7 @@ var collectionBulkOptions = options.BulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
 
-type BulkWrite interface {
+type bulkWrite interface {
 	Full() bool
 	Empty() bool
 	Do(ctx context.Context, m *mongo.Client) (int, error)
@@ -37,25 +37,25 @@ type BulkWrite interface {
 	Delete(ns Namespace, event *DeleteEvent)
 }
 
-type ClientBulkWrite struct {
+type clientBulkWrite struct {
 	writes []mongo.ClientBulkWrite
 }
 
-func newClientBulkWrite(size int) *ClientBulkWrite {
-	return &ClientBulkWrite{
+func newClientBulkWrite(size int) *clientBulkWrite {
+	return &clientBulkWrite{
 		make([]mongo.ClientBulkWrite, 0, size),
 	}
 }
 
-func (o *ClientBulkWrite) Full() bool {
+func (o *clientBulkWrite) Full() bool {
 	return len(o.writes) == cap(o.writes)
 }
 
-func (o *ClientBulkWrite) Empty() bool {
+func (o *clientBulkWrite) Empty() bool {
 	return len(o.writes) == 0
 }
 
-func (o *ClientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
+func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
 	_, err := m.BulkWrite(ctx, o.writes, clientBulkOptions)
 	if err != nil {
 		return 0, errors.Wrap(err, "bulk write")
@@ -68,7 +68,7 @@ func (o *ClientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) 
 	return size, nil
 }
 
-func (o *ClientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
@@ -82,7 +82,7 @@ func (o *ClientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-func (o *ClientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
@@ -95,7 +95,7 @@ func (o *ClientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-func (o *ClientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+func (o *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
@@ -108,7 +108,7 @@ func (o *ClientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-func (o *ClientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
@@ -120,28 +120,28 @@ func (o *ClientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-type CollectionBulkOps struct {
+type collectionBulkWrite struct {
 	max    int
 	count  int
 	writes map[Namespace][]mongo.WriteModel
 }
 
-func newCollectionBulkWrite(size int) *CollectionBulkOps {
-	return &CollectionBulkOps{
+func newCollectionBulkWrite(size int) *collectionBulkWrite {
+	return &collectionBulkWrite{
 		max:    size,
 		writes: make(map[Namespace][]mongo.WriteModel),
 	}
 }
 
-func (o *CollectionBulkOps) Full() bool {
+func (o *collectionBulkWrite) Full() bool {
 	return o.count == o.max
 }
 
-func (o *CollectionBulkOps) Empty() bool {
+func (o *collectionBulkWrite) Empty() bool {
 	return o.count == 0
 }
 
-func (o *CollectionBulkOps) Do(ctx context.Context, m *mongo.Client) (int, error) {
+func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
 	var total atomic.Int64
 
 	grp, grpCtx := errgroup.WithContext(ctx)
@@ -172,7 +172,7 @@ func (o *CollectionBulkOps) Do(ctx context.Context, m *mongo.Client) (int, error
 	return int(total.Load()), nil
 }
 
-func (o *CollectionBulkOps) Insert(ns Namespace, event *InsertEvent) {
+func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -182,7 +182,7 @@ func (o *CollectionBulkOps) Insert(ns Namespace, event *InsertEvent) {
 	o.count++
 }
 
-func (o *CollectionBulkOps) Update(ns Namespace, event *UpdateEvent) {
+func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
@@ -191,7 +191,7 @@ func (o *CollectionBulkOps) Update(ns Namespace, event *UpdateEvent) {
 	o.count++
 }
 
-func (o *CollectionBulkOps) Replace(ns Namespace, event *ReplaceEvent) {
+func (o *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -200,7 +200,7 @@ func (o *CollectionBulkOps) Replace(ns Namespace, event *ReplaceEvent) {
 	o.count++
 }
 
-func (o *CollectionBulkOps) Delete(ns Namespace, event *DeleteEvent) {
+func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.DeleteOneModel{
 		Filter: event.DocumentKey,
 	})
