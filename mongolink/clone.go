@@ -310,7 +310,10 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 			var copiedCountSinceLastLog int64
 			var copiedSizeBytesSinceLastLog uint64
 
+			c.lock.Lock()
 			nsSize := c.sizeMap[ns]
+			c.lock.Unlock()
+
 			lg.With(log.Count(nsSize.Count), log.Size(nsSize.Size)).
 				Debugf("Schedule %q collection clone: %d documents (%s)",
 					ns, nsSize.Count, humanize.Bytes(nsSize.Size))
@@ -470,8 +473,11 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 		return errors.Wrap(err, "list database names")
 	}
 
-	eg, grpCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
+	dbGrp, dbGrpCtx := errgroup.WithContext(ctx)
+	dbGrp.SetLimit(runtime.NumCPU())
+
+	collGrp, collGrpCtx := errgroup.WithContext(dbGrpCtx)
+	collGrp.SetLimit(runtime.NumCPU())
 
 	mu := &sync.Mutex{}
 	sm := make(sizeMap)
@@ -482,8 +488,8 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 			continue
 		}
 
-		eg.Go(func() error {
-			collSpecs, err := topo.ListCollectionSpecs(ctx, c.source, db)
+		dbGrp.Go(func() error {
+			collSpecs, err := topo.ListCollectionSpecs(dbGrpCtx, c.source, db)
 			if err != nil {
 				return errors.Wrap(err, "listCollections")
 			}
@@ -495,7 +501,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 					continue
 				}
 
-				eg.Go(func() error {
+				collGrp.Go(func() error {
 					if spec.Type == topo.TypeView {
 						mu.Lock()
 						sm[Namespace{db, spec.Name}] = sizeMapElem{}
@@ -504,7 +510,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 						return nil
 					}
 
-					stats, err := topo.GetCollStats(grpCtx, c.source, db, spec.Name)
+					stats, err := topo.GetCollStats(collGrpCtx, c.source, db, spec.Name)
 					if err != nil {
 						return errors.Wrapf(err, "get collection stats for %q", db+"."+spec.Name)
 					}
@@ -525,9 +531,14 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 		})
 	}
 
-	err = eg.Wait()
+	err = collGrp.Wait()
 	if err != nil {
-		return err //nolint:wrapcheck
+		return errors.Wrap(err, "collect collections")
+	}
+
+	err = dbGrp.Wait()
+	if err != nil {
+		return errors.Wrap(err, "collect databases")
 	}
 
 	c.lock.Lock()

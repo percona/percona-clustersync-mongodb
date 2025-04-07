@@ -438,3 +438,13 @@ def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
         t.source["db_1"]["coll_2"].rename("target_coll_2", dropTarget=True)
 
     t.compare_all()
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(30)
+def test_pml_119_clone_collect_size_map_deadlock(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE):
+        for i in range(50):
+            t.source[f"db_{i}"][f"coll"].insert_one({})
+
+    t.compare_all()
