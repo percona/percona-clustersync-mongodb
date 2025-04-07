@@ -100,7 +100,7 @@ func GetCollectionSpec(
 		return nil, ErrNotFound
 	}
 
-	coll := CollectionSpecification(colls[0]) // copy to release the slice memory
+	coll := colls[0] // copy to release the slice memory
 
 	return &coll, nil
 }

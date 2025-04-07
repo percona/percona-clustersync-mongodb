@@ -358,7 +358,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 			)
 
 			for update := range updateC {
-				if err := update.Err; err != nil {
+				if err := update.Err; err != nil { //nolint:nestif
 					if errors.As(err, &NamespaceNotFoundError{}) || topo.IsQueryPlanKilled(err) {
 						// update estimated size
 						c.lock.Lock()
@@ -471,7 +471,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	}
 
 	eg, grpCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(runtime.NumCPU() * 2)
+	eg.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
 
 	mu := &sync.Mutex{}
 	sm := make(sizeMap)

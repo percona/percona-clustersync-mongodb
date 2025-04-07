@@ -238,7 +238,7 @@ func (cm *CopyManager) copyCollection(
 	isCapped, _ := spec.Options.Lookup("capped").BooleanOK()
 
 	var nextCursor nextCursorFunc
-	if isCapped {
+	if isCapped { //nolint:nestif
 		segmenter, err := NewCappedSegmenter(ctx,
 			cm.source, namespace, cm.options.ReadBatchSizeBytes)
 		if err != nil {
@@ -648,7 +648,7 @@ func NewSegmenter(
 		segmentSize = max(stats.Size/int64(runtime.NumCPU()), config.MinCloneSegmentSizeBytes)
 
 		log.Ctx(ctx).Debugf("SegmentSizeBytes (auto): %d (%s)",
-			segmentSize, humanize.Bytes(uint64(segmentSize)))
+			segmentSize, humanize.Bytes(uint64(segmentSize))) //nolint:gosec
 	} else {
 		segmentSize = segmentSizeBytes / stats.AvgObjSize
 	}
