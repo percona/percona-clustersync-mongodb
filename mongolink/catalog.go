@@ -34,8 +34,8 @@ type CreateCollectionOptions struct {
 	// Capped  is if the collection is capped.
 	Capped *bool `bson:"capped,omitempty"`
 	// Size is the maximum size, in bytes, for a capped collection.
-	Size *int32 `bson:"size,omitempty"`
-	// int32 is the maximum number of documents allowed in a capped collection.
+	Size *int64 `bson:"size,omitempty"`
+	// Max is the maximum number of documents allowed in a capped collection.
 	Max *int32 `bson:"max,omitempty"`
 
 	// ViewOn is the source collection or view for a view.

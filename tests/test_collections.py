@@ -438,3 +438,11 @@ def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
         t.source["db_1"]["coll_2"].rename("target_coll_2", dropTarget=True)
 
     t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1", capped=True, size=2147483648, max=2147483647)
+
+    t.compare_all()
