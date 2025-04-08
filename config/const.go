@@ -76,7 +76,7 @@ const (
 	AutoCloneSegmentSize = 0
 	// MinCloneSegmentSizeBytes is the minimum allowed segment size for collection cloning,
 	// set to ensure each segment can hold at least one write batch.
-	MinCloneSegmentSizeBytes = 4 * MaxWriteBatchSizeBytes
+	MinCloneSegmentSizeBytes = 10 * MaxWriteBatchSizeBytes
 	// MaxCloneSegmentSizeBytes is the maximum allowed segment size for collection cloning.
 	MaxCloneSegmentSizeBytes = 64 * humanize.GiByte
 
