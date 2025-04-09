@@ -525,7 +525,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
 		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	target, err := topo.Connect(ctx, targetURI)
+	target, err := topo.ConnectWithOptions(ctx, targetURI, &topo.ConnectOptions{Compress: true})
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}

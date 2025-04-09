@@ -2,6 +2,7 @@ package topo
 
 import (
 	"context"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -14,9 +15,23 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
+type ConnectOptions struct {
+	Compress bool
+}
+
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 // If the URI is empty, it returns an error.
 func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
+	return ConnectWithOptions(ctx, uri, nil)
+}
+
+// Connect establishes a connection to a MongoDB instance using the provided URI and options.
+// If the URI is empty, it returns an error.
+func ConnectWithOptions(
+	ctx context.Context,
+	uri string,
+	connOpts *ConnectOptions,
+) (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("invalid MongoDB URI")
 	}
@@ -28,7 +43,12 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 				SetDeprecationErrors(true)).
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority()).
-		SetWriteConcern(writeconcern.Majority())
+		SetWriteConcern(writeconcern.Majority()).
+		SetRetryWrites(true).
+		SetTimeout(time.Minute)
+	if connOpts != nil && connOpts.Compress {
+		opts.SetCompressors([]string{"zstd", "snappy"})
+	}
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().

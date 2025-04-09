@@ -81,11 +81,17 @@ const (
 	MaxCloneSegmentSizeBytes = 64 * humanize.GiByte
 
 	// DefaultCloneReadBatchSizeBytes defines the default read cursor batch size.
-	DefaultCloneReadBatchSizeBytes = 2 * MaxWriteBatchSizeBytes
+	DefaultCloneReadBatchSizeBytes = MaxWriteBatchSizeBytes
 	// MinCloneReadBatchSizeBytes is the minimum allowed read cursor batch size.
 	MinCloneReadBatchSizeBytes = MaxBSONSize
 	// MaxCloneReadBatchSizeBytes is the maximum allowed read cursor batch size.
 	MaxCloneReadBatchSizeBytes = math.MaxInt32
+
+	// MaxInsertBatchSize defines the maximum number of documents that can be inserted in a single
+	// batch insert operation.
+	MaxInsertBatchSize = 10_000
+	// MaxInsertBatchSizeBytes defines the maximum size in bytes of a single insert batch payload.
+	MaxInsertBatchSizeBytes = MaxBSONSize
 )
 
 // MaxBSONSize is hardcoded maximum BSON document size. 16 mebibytes.

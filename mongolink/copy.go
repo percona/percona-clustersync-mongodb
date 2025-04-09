@@ -29,8 +29,6 @@ var (
 	ErrEOS = errors.New("end of segment")
 )
 
-const initialBatchSize = 4000
-
 // CopyManager orchestrates the cloning process by managing read and insert workers,
 // handling parallel collection cloning, batching, and segmentation.
 // It encapsulates the logic needed to coordinate concurrent operations and maintain progress.
@@ -69,10 +67,10 @@ type CopyManagerOptions struct {
 	// min: 1; default: 1 [config.DefaultCloneNumParallelCollection].
 	NumParallelCollection int
 	// NumReadWorker is the total number of concurrent read workers.
-	// min: 1; default: [runtime.NumCPU] / 2.
+	// min: 1; default: [runtime.NumCPU] / 4.
 	NumReadWorker int
 	// NumInsertWorker is the total number of concurrent insert workers.
-	// min: 1; default: [runtime.NumCPU] / 2.
+	// min: 1; default: [runtime.NumCPU] * 4.
 	NumInsertWorker int
 	// SegmentSizeBytes is the logical segment size in bytes for splitting collections.
 	// min: 192MB [config.MinCloneSegmentSizeBytes].
@@ -91,10 +89,10 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 		options.NumParallelCollection = config.DefaultCloneNumParallelCollection
 	}
 	if options.NumReadWorker < 1 {
-		options.NumReadWorker = max(runtime.NumCPU()/2, 1) //nolint:mnd
+		options.NumReadWorker = max(runtime.NumCPU()/4, 1)
 	}
 	if options.NumInsertWorker < 1 {
-		options.NumInsertWorker = max(runtime.NumCPU()/2, 1) //nolint:mnd
+		options.NumInsertWorker = runtime.NumCPU() * 2
 	}
 
 	if options.SegmentSizeBytes < 0 {
@@ -254,8 +252,11 @@ func (cm *CopyManager) copyCollection(
 		log.New("clone").With(log.NS(namespace.Database, namespace.Collection)).
 			Debugf("Capped collection %q: copy sequentially", namespace)
 	} else {
-		segmenter, err := NewSegmenter(ctx,
-			cm.source, namespace, cm.options.SegmentSizeBytes, cm.options.ReadBatchSizeBytes)
+		segmenter, err := NewSegmenter(ctx, cm.source, namespace, SegmentOptions{
+			SegmentSizeBytes: cm.options.SegmentSizeBytes,
+			BatchSizeBytes:   cm.options.ReadBatchSizeBytes,
+			AutoNumSegment:   cm.options.NumReadWorker,
+		})
 		if err != nil {
 			if errors.Is(err, ErrEOC) {
 				return nil
@@ -387,7 +388,7 @@ type readSegmentTask struct {
 
 type readBatchResult struct {
 	ID        string
-	Documents []bson.Raw
+	Documents []any
 	SizeBytes int
 	Err       error
 }
@@ -417,12 +418,13 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 		}
 	}()
 
-	documents := make([]bson.Raw, 0, initialBatchSize)
+	documents := make([]any, 0, config.MaxInsertBatchSize)
 	sizeBytes := 0
 	lastSentAt := time.Now()
 
 	for cur.Next(ctx) {
-		if sizeBytes+len(cur.Current) > config.MaxWriteBatchSizeBytes {
+		if sizeBytes+len(cur.Current) > config.MaxWriteBatchSizeBytes ||
+			len(documents) == config.MaxInsertBatchSize {
 			elapsed := time.Since(lastSentAt)
 
 			zl.Trace().
@@ -443,7 +445,7 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 			}
 
 			batchID = task.NextBatchID()
-			documents = make([]bson.Raw, 0, initialBatchSize)
+			documents = make([]any, 0, config.MaxInsertBatchSize)
 			sizeBytes = 0
 			lastSentAt = time.Now()
 		}
@@ -503,8 +505,8 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 type insertBatchTask struct {
 	Namespace Namespace
 	ID        string
+	Documents []any
 	SizeBytes int
-	Documents []bson.Raw
 
 	ResultC chan<- insertBatchResult
 }
@@ -620,6 +622,15 @@ type segmentKey = bson.RawValue
 
 var nilSegmentID segmentKey //nolint:gochecknoglobals
 
+// SegmentOptions configures how a MongoDB collection is segmented during cloning.
+// It defines the logical segment size in bytes, the read batch size, or the exact number of
+// segments to create.
+type SegmentOptions struct {
+	SegmentSizeBytes int64
+	BatchSizeBytes   int32
+	AutoNumSegment   int
+}
+
 // NewSegmenter initializes a Segmenter for a given MongoDB namespace.
 // It uses collection statistics to compute the segment size and read batch size.
 // Based on the _id value distribution, it creates one or more key ranges:
@@ -630,8 +641,7 @@ func NewSegmenter(
 	ctx context.Context,
 	m *mongo.Client,
 	ns Namespace,
-	segmentSizeBytes int64,
-	batchSizeBytes int32,
+	options SegmentOptions,
 ) (*Segmenter, error) {
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
@@ -644,18 +654,18 @@ func NewSegmenter(
 
 	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize]
 	var segmentSize int64
-	if segmentSizeBytes == config.AutoCloneSegmentSize {
-		segmentSize = max(stats.Size/int64(runtime.NumCPU()), config.MinCloneSegmentSizeBytes)
+	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
+		segmentSize = max(stats.Size/int64(options.AutoNumSegment), config.MinCloneSegmentSizeBytes)
 
 		log.Ctx(ctx).Debugf("SegmentSizeBytes (auto): %d (%s)",
 			segmentSize, humanize.Bytes(uint64(segmentSize))) //nolint:gosec
 	} else {
-		segmentSize = segmentSizeBytes / stats.AvgObjSize
+		segmentSize = options.SegmentSizeBytes / stats.AvgObjSize
 	}
 
 	//nolint:gosec
 	batchSize := int32(min(
-		int64(batchSizeBytes)/stats.AvgObjSize,
+		int64(options.BatchSizeBytes)/stats.AvgObjSize,
 		config.MaxCloneReadBatchSizeBytes,
 	))
 

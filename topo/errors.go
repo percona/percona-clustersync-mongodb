@@ -48,13 +48,9 @@ func IsCappedPositionLost(err error) bool {
 
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
-	for err != nil {
-		le, ok := err.(mongo.CommandError) //nolint:errorlint
-		if ok && le.Name == name {
-			return true
-		}
-
-		err = errors.Unwrap(err)
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		return cmdErr.Name == name
 	}
 
 	return false
