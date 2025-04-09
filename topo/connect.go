@@ -44,7 +44,6 @@ func ConnectWithOptions(
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority()).
 		SetWriteConcern(writeconcern.Majority()).
-		SetRetryWrites(true).
 		SetTimeout(time.Minute)
 	if connOpts != nil && connOpts.Compress {
 		opts.SetCompressors([]string{"zstd", "snappy"})
