@@ -89,7 +89,7 @@ var (
 func Init(reg prometheus.Registerer) {
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{
-		Namespace: "mongolink",
+		Namespace: metricNamespace,
 	}))
 
 	reg.MustRegister(
