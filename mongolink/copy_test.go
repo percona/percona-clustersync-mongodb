@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"io"
-	_ "net/http/pprof"
 	"os"
 	"runtime"
 	"strconv"
@@ -76,7 +75,7 @@ func getReadBatchSize() int {
 
 	size = max(size, 1)
 
-	return int(size)
+	return int(size) //nolint:gosec
 }
 
 func getInsertBatchSize() int {
@@ -87,7 +86,7 @@ func getInsertBatchSize() int {
 
 	size = max(size, 1)
 
-	return int(size)
+	return int(size) //nolint:gosec
 }
 
 func BenchmarkRead(b *testing.B) {
@@ -98,10 +97,10 @@ func BenchmarkRead(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer mc.Disconnect(ctx)
+	defer mc.Disconnect(ctx) //nolint:errcheck
 
 	stats, _ := topo.GetCollStats(ctx, mc, ns.Database, ns.Collection)
-	b.Logf("read size %s\n", humanize.Bytes(uint64(stats.Size)))
+	b.Logf("read size %s\n", humanize.Bytes(uint64(stats.Size))) //nolint:gosec
 
 	if stats.AvgObjSize == 0 {
 		b.Fatal("zero AvgObjSize")
@@ -114,6 +113,7 @@ func BenchmarkRead(b *testing.B) {
 	defer file.Close()
 
 	mcoll := mc.Database(ns.Database).Collection(ns.Collection)
+	//nolint:gosec
 	cur, err := mcoll.Find(ctx, bson.D{}, options.Find().SetBatchSize(int32(getReadBatchSize())))
 	if err != nil {
 		b.Fatal(err)
@@ -150,7 +150,7 @@ func BenchmarkInsert(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer mc.Disconnect(ctx)
+	defer mc.Disconnect(ctx) //nolint:errcheck
 
 	file, err := os.Open(ns.String() + ".bson")
 	if err != nil {
@@ -159,10 +159,10 @@ func BenchmarkInsert(b *testing.B) {
 	defer file.Close()
 
 	stats, _ := file.Stat()
-	b.Logf("insert size %s\n", humanize.Bytes(uint64(stats.Size())))
+	b.Logf("insert size %s\n", humanize.Bytes(uint64(stats.Size()))) //nolint:gosec
 
 	mcoll := mc.Database(ns.Database).Collection(ns.Collection)
-	mcoll.Drop(ctx)
+	mcoll.Drop(ctx) //nolint:errcheck
 
 	insertOptions := options.InsertMany().SetBypassDocumentValidation(true).SetOrdered(false)
 
@@ -216,7 +216,8 @@ func BenchmarkInsert(b *testing.B) {
 					if mongo.IsDuplicateKeyError(err) {
 						continue
 					}
-					return err
+
+					return err //nolint:wrapcheck
 				}
 			}
 
@@ -228,7 +229,7 @@ func BenchmarkInsert(b *testing.B) {
 
 	var next *list.Element
 	for el := all.Front(); el != nil; el = next {
-		docC <- el.Value.(task)
+		docC <- el.Value.(task) //nolint:forcetypeassert
 		next = el.Next()
 		all.Remove(el)
 	}

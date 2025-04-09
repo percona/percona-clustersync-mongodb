@@ -89,10 +89,10 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 		options.NumParallelCollection = config.DefaultCloneNumParallelCollection
 	}
 	if options.NumReadWorker < 1 {
-		options.NumReadWorker = max(runtime.NumCPU()/4, 1)
+		options.NumReadWorker = max(runtime.NumCPU()/4, 1) //nolint:mnd
 	}
 	if options.NumInsertWorker < 1 {
-		options.NumInsertWorker = runtime.NumCPU() * 2
+		options.NumInsertWorker = runtime.NumCPU() * 2 //nolint:mnd
 	}
 
 	if options.SegmentSizeBytes < 0 {
