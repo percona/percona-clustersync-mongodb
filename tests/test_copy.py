@@ -34,6 +34,21 @@ def test_clone_2gb(t: Testing):
 
 @pytest.mark.slow
 @pytest.mark.timeout(120)
+def test_clone_2gb_two_namespace(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
+        for _ in range(5):
+            t.source["db_0"]["coll_0"].insert_many(
+                ({"s": random.randbytes(1024)} for _ in range(210000)),
+            )
+            t.source["db_0"]["coll_1"].insert_many(
+                ({"s": random.randbytes(1024)} for _ in range(210000)),
+            )
+
+    t.compare_all(sort=[("_id", 1)])
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 def test_clone_2gb_vary_id(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=120):
         id_gen = vary_id_gen()
