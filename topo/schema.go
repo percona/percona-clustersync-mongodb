@@ -77,7 +77,9 @@ func ListCollectionSpecs(
 	m *mongo.Client,
 	dbName string,
 ) ([]CollectionSpecification, error) {
-	return m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{}) //nolint:wrapcheck
+	//nolint:wrapcheck
+	return m.Database(dbName).ListCollectionSpecifications(ctx,
+		bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
 }
 
 // GetCollectionSpec retrieves the specification of a collection.
