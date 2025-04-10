@@ -23,6 +23,11 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
+    """This allows users to control whether slow tests are included in the test run.
+
+    If the `--runslow` option is not provided, tests marked with the "slow" keyword
+    will be skipped with a message indicating the need for the `--runslow` option.
+    """
     if not config.getoption("--runslow"):
         skip_slow = pytest.mark.skip(reason="need --runslow option to run")
         for item in items:
