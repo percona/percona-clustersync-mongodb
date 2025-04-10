@@ -3,7 +3,9 @@ package config
 import (
 	"math"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/dustin/go-humanize"
 )
@@ -57,4 +59,26 @@ func CloneReadBatchSizeBytes() int32 {
 	batchSizeBytes, _ := humanize.ParseBytes(os.Getenv("PML_CLONE_READ_BATCH_SIZE"))
 
 	return int32(min(batchSizeBytes, math.MaxInt32)) //nolint:gosec
+}
+
+// UseTargetClientCompressors returns a list of enabled compressors (from "zstd", "zlib", "snappy")
+// for the target MongoDB client connection, as specified by the comma-separated environment
+// variable PML_DEV_TARGET_CLIENT_COMPRESSORS. If unset or empty, returns nil.
+func UseTargetClientCompressors() []string {
+	s := strings.TrimSpace(os.Getenv("PML_DEV_TARGET_CLIENT_COMPRESSORS"))
+	if s == "" {
+		return nil
+	}
+
+	allowCompressors := []string{"zstd", "zlib", "snappy"}
+
+	rv := make([]string, 0, min(len(s), len(allowCompressors)))
+	for _, a := range strings.Split(s, ",") {
+		a = strings.TrimSpace(a)
+		if slices.Contains(allowCompressors, a) && !slices.Contains(rv, a) {
+			rv = append(rv, a)
+		}
+	}
+
+	return rv
 }

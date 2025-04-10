@@ -827,10 +827,7 @@ func (seg *Segmenter) findSegmentMaxKey(
 // It uses two FindOne operations with sort directions of 1 (ascending) and -1 (descending)
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
-func getIDKeyRange(
-	ctx context.Context,
-	mcoll *mongo.Collection,
-) (keyRange, error) {
+func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, error) {
 	findOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
 	minRaw, err := mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
 	if err != nil {

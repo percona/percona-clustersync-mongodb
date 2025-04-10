@@ -22,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/metrics"
@@ -525,7 +526,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
 		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	target, err := topo.ConnectWithOptions(ctx, targetURI, &topo.ConnectOptions{Compress: true})
+	target, err := topo.ConnectWithOptions(ctx, targetURI, &topo.ConnectOptions{
+		Compressors: config.UseTargetClientCompressors(),
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}

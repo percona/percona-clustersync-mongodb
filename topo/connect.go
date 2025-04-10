@@ -16,13 +16,13 @@ import (
 )
 
 type ConnectOptions struct {
-	Compress bool
+	Compressors []string
 }
 
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 // If the URI is empty, it returns an error.
 func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
-	return ConnectWithOptions(ctx, uri, nil)
+	return ConnectWithOptions(ctx, uri, &ConnectOptions{})
 }
 
 // Connect establishes a connection to a MongoDB instance using the provided URI and options.
@@ -45,8 +45,9 @@ func ConnectWithOptions(
 		SetReadConcern(readconcern.Majority()).
 		SetWriteConcern(writeconcern.Majority()).
 		SetTimeout(time.Minute)
-	if connOpts != nil && connOpts.Compress {
-		opts.SetCompressors([]string{"zstd", "snappy"})
+
+	if connOpts != nil && connOpts.Compressors != nil {
+		opts.SetCompressors(connOpts.Compressors)
 	}
 
 	if config.MongoLogEnabled {
