@@ -446,3 +446,13 @@ def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
         t.source["db_1"].create_collection("coll_1", capped=True, size=2147483648, max=2147483647)
 
     t.compare_all()
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(30)
+def test_pml_119_clone_collect_size_map_deadlock(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE):
+        for i in range(50):
+            t.source[f"db_{i}"]["coll"].insert_one({})
+
+    t.compare_all()
