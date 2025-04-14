@@ -474,7 +474,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	}
 
 	dbGrp, dbGrpCtx := errgroup.WithContext(ctx)
-	dbGrp.SetLimit(runtime.NumCPU() * 2)
+	dbGrp.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
 
 	mu := &sync.Mutex{}
 	sm := make(sizeMap)
@@ -492,7 +492,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 			}
 
 			collGrp, collGrpCtx := errgroup.WithContext(dbGrpCtx)
-			collGrp.SetLimit(runtime.NumCPU() * 2)
+			collGrp.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
 
 			for _, spec := range collSpecs {
 				if !c.nsFilter(db, spec.Name) {
