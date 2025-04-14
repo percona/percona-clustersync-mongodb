@@ -96,6 +96,7 @@ type replCheckpoint struct {
 	EventsProcessed      int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
+	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
 
 func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
@@ -108,6 +109,9 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 		EventsProcessed:      r.eventsProcessed,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
+
+	_, ok := r.bulkWrite.(*clientBulkWrite)
+	cp.UseClientBulkWrite = ok
 
 	if r.err != nil {
 		cp.Error = r.err.Error()
@@ -137,6 +141,12 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 	r.pauseTime = pauseTime
 	r.eventsProcessed = cp.EventsProcessed
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
+
+	if cp.UseClientBulkWrite {
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+	} else {
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+	}
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
