@@ -474,10 +474,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	}
 
 	dbGrp, dbGrpCtx := errgroup.WithContext(ctx)
-	dbGrp.SetLimit(runtime.NumCPU())
-
-	collGrp, collGrpCtx := errgroup.WithContext(dbGrpCtx)
-	collGrp.SetLimit(runtime.NumCPU())
+	dbGrp.SetLimit(runtime.NumCPU() * 2)
 
 	mu := &sync.Mutex{}
 	sm := make(sizeMap)
@@ -493,6 +490,9 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 			if err != nil {
 				return errors.Wrap(err, "listCollections")
 			}
+
+			collGrp, collGrpCtx := errgroup.WithContext(dbGrpCtx)
+			collGrp.SetLimit(runtime.NumCPU() * 2)
 
 			for _, spec := range collSpecs {
 				if !c.nsFilter(db, spec.Name) {
@@ -527,13 +527,13 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 				})
 			}
 
+			err = collGrp.Wait()
+			if err != nil {
+				return errors.Wrapf(err, "collect collections for %q", db)
+			}
+
 			return nil
 		})
-	}
-
-	err = collGrp.Wait()
-	if err != nil {
-		return errors.Wrap(err, "collect collections")
 	}
 
 	err = dbGrp.Wait()
