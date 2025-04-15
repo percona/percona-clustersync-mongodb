@@ -282,11 +282,11 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	copyLogger := log.Ctx(ctx)
 
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumParallelCollection: config.CloneNumParallelCollection(),
-		NumReadWorker:         config.CloneNumReadWorker(),
-		NumInsertWorker:       config.CloneNumInsertWorker(),
-		SegmentSizeBytes:      config.CloneSegmentSizeBytes(),
-		ReadBatchSizeBytes:    config.CloneReadBatchSizeBytes(),
+		NumParallelCollections: config.CloneNumParallelCollections(),
+		NumReadWorkers:         config.CloneNumReadWorkers(),
+		NumInsertWorkers:       config.CloneNumInsertWorkers(),
+		SegmentSizeBytes:       config.CloneSegmentSizeBytes(),
+		ReadBatchSizeBytes:     config.CloneReadBatchSizeBytes(),
 	})
 	defer copyManager.Close()
 

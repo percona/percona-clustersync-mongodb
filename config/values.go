@@ -17,26 +17,26 @@ func UseCollectionBulkWrite() bool {
 	return os.Getenv("PML_USE_COLLECTION_BULK_WRITE") == "1"
 }
 
-// CloneNumParallelCollection returns the number of collections cloned in parallel
+// CloneNumParallelCollections returns the number of collections cloned in parallel
 // during the clone process. Default is 0.
-func CloneNumParallelCollection() int {
-	numColl, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_PARALLEL_COLL"), 10, 32)
+func CloneNumParallelCollections() int {
+	numColl, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_PARALLEL_COLLECTIONS"), 10, 32)
 
 	return int(numColl)
 }
 
-// CloneNumReadWorker returns the number of read workers used during the clone. Default is 0.
+// CloneNumReadWorkers returns the number of read workers used during the clone. Default is 0.
 // Note: Workers are shared across all collections.
-func CloneNumReadWorker() int {
-	numReadWorker, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_READ_WORKER"), 10, 32)
+func CloneNumReadWorkers() int {
+	numReadWorker, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_READ_WORKERS"), 10, 32)
 
 	return int(numReadWorker)
 }
 
-// CloneNumInsertWorker returns the number of insert workers used during the clone. Default is 0.
+// CloneNumInsertWorkers returns the number of insert workers used during the clone. Default is 0.
 // Note: Workers are shared across all collections.
-func CloneNumInsertWorker() int {
-	numInsertWorker, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_INSERT_WORKER"), 10, 32)
+func CloneNumInsertWorkers() int {
+	numInsertWorker, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_INSERT_WORKERS"), 10, 32)
 
 	return int(numInsertWorker)
 }

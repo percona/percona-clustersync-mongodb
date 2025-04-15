@@ -63,15 +63,15 @@ type CopyUpdate struct {
 // CopyManagerOptions configures the behavior of CopyManager.
 // It controls concurrency settings and memory limits for collection cloning operations.
 type CopyManagerOptions struct {
-	// NumParallelCollection is the number of collections cloned in parallel.
+	// NumParallelCollections is the number of collections cloned in parallel.
 	// min: 1; default: 1 [config.DefaultCloneNumParallelCollection].
-	NumParallelCollection int
-	// NumReadWorker is the total number of concurrent read workers.
+	NumParallelCollections int
+	// NumReadWorkers is the total number of concurrent read workers.
 	// min: 1; default: [runtime.NumCPU] / 4.
-	NumReadWorker int
-	// NumInsertWorker is the total number of concurrent insert workers.
+	NumReadWorkers int
+	// NumInsertWorkers is the total number of concurrent insert workers.
 	// min: 1; default: [runtime.NumCPU] * 4.
-	NumInsertWorker int
+	NumInsertWorkers int
 	// SegmentSizeBytes is the logical segment size in bytes for splitting collections.
 	// min: 192MB [config.MinCloneSegmentSizeBytes].
 	// min: 64GiB [config.MaxCloneSegmentSizeBytes].
@@ -85,14 +85,14 @@ type CopyManagerOptions struct {
 }
 
 func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
-	if options.NumParallelCollection < 1 {
-		options.NumParallelCollection = config.DefaultCloneNumParallelCollection
+	if options.NumParallelCollections < 1 {
+		options.NumParallelCollections = config.DefaultCloneNumParallelCollection
 	}
-	if options.NumReadWorker < 1 {
-		options.NumReadWorker = max(runtime.NumCPU()/4, 1) //nolint:mnd
+	if options.NumReadWorkers < 1 {
+		options.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
 	}
-	if options.NumInsertWorker < 1 {
-		options.NumInsertWorker = runtime.NumCPU() * 2 //nolint:mnd
+	if options.NumInsertWorkers < 1 {
+		options.NumInsertWorkers = runtime.NumCPU() * 2 //nolint:mnd
 	}
 
 	if options.SegmentSizeBytes < 0 {
@@ -117,13 +117,13 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 		readQueue:   make(chan readSegmentTask),
 		insertQueue: make(chan insertBatchTask),
 
-		sem: make(chan struct{}, options.NumParallelCollection),
+		sem: make(chan struct{}, options.NumParallelCollections),
 	}
 
 	lg := log.New("copy")
-	lg.Debugf("NumParallelCollection: %d", cm.options.NumParallelCollection)
-	lg.Debugf("NumReadWorker: %d", cm.options.NumReadWorker)
-	lg.Debugf("NumInsertWorker: %d", cm.options.NumInsertWorker)
+	lg.Debugf("NumParallelCollections: %d", cm.options.NumParallelCollections)
+	lg.Debugf("NumReadWorkers: %d", cm.options.NumReadWorkers)
+	lg.Debugf("NumInsertWorkers: %d", cm.options.NumInsertWorkers)
 	if cm.options.SegmentSizeBytes == config.AutoCloneSegmentSize {
 		lg.Debug("SegmentSizeBytes: auto") //nolint:gosec
 	} else {
@@ -137,7 +137,7 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 
 	// Start read worker goroutines that processes readSegmentTask from the queue.
 	// Each worker runs independently, handling segments from collections concurrently.
-	for id := range cm.options.NumReadWorker {
+	for id := range cm.options.NumReadWorkers {
 		go func() {
 			lg := log.New(fmt.Sprintf("copy:w:r:%d", id+1))
 			lg.Tracef("Read Worker %d has started", id+1)
@@ -151,7 +151,7 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 
 	// Start an insert worker goroutine that processes insertBatchTask from the queue.
 	// Each worker receives document batches and inserts them into the target collection.
-	for id := range cm.options.NumInsertWorker {
+	for id := range cm.options.NumInsertWorkers {
 		go func() {
 			lg := log.New(fmt.Sprintf("copy:w:i:%d", id+1))
 			lg.Tracef("Insert Worker %d has started", id+1)
@@ -194,7 +194,7 @@ func (cm *CopyManager) Do(
 	namespace Namespace,
 	getSpec CopyGetCollSpecFunc,
 ) <-chan CopyUpdate {
-	updateC := make(chan CopyUpdate, cm.options.NumInsertWorker)
+	updateC := make(chan CopyUpdate, cm.options.NumInsertWorkers)
 
 	cm.wg.Add(1)
 	cm.sem <- struct{}{}
@@ -255,7 +255,7 @@ func (cm *CopyManager) copyCollection(
 		segmenter, err := NewSegmenter(ctx, cm.source, namespace, SegmentOptions{
 			SegmentSizeBytes: cm.options.SegmentSizeBytes,
 			BatchSizeBytes:   cm.options.ReadBatchSizeBytes,
-			AutoNumSegment:   cm.options.NumReadWorker,
+			AutoNumSegment:   cm.options.NumReadWorkers,
 		})
 		if err != nil {
 			if errors.Is(err, ErrEOC) {
@@ -276,7 +276,7 @@ func (cm *CopyManager) copyCollection(
 
 	// pendingInserts tracks in-progress insert batches
 	pendingInserts := &sync.WaitGroup{}
-	insertResultC := make(chan insertBatchResult, cm.options.NumInsertWorker)
+	insertResultC := make(chan insertBatchResult, cm.options.NumInsertWorkers)
 
 	go func() { // cleanup
 		<-collectionReadCtx.Done() // EOC reached
