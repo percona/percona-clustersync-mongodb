@@ -1,0 +1,55 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+# Sample debian/rules that uses debhelper.
+# This file was originally written by Joey Hess and Craig Small.
+# As a special exception, when this file is copied by dh-make into a
+# dh-make output file, you may use that output file without restriction.
+# This special exception was added by Craig Small in version 0.37 of dh-make.
+PHONY: override_dh_auto_build override_dh_auto_install
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+export DH_VERBOSE=1
+
+TMP=$(CURDIR)/debian/tmp/
+
+export VERSION=$(shell egrep '^VERSION' VERSION | cut -f 2 -d '=')
+export GITBRANCH=$(shell egrep '^GITBRANCH' VERSION | cut -f 2 -d '=')
+export GITCOMMIT=$(shell egrep '^GITCOMMIT' VERSION | cut -f 2 -d '=')
+export COMPONENT_VERSION=$(shell egrep '^COMPONENT_VERSION' VERSION | cut -f 2 -d '=')
+
+%:
+	dh $@ --with-systemd
+
+override_dh_auto_clean:
+	# Skip upstream make clean completely
+
+override_dh_builddeb:
+	dh_builddeb -- -Zgzip
+
+override_dh_auto_test override_dh_compress override_dh_fixperms override_dh_strip:
+
+override_dh_auto_build:
+	@echo "RULES.$@"
+	export PATH=/usr/local/go/bin:${PATH}
+	export GOROOT="/usr/local/go/"
+	export GOPATH=${PWD}/build
+	export PATH="/usr/local/go/bin:${PATH}:${GOPATH}"
+	export GOBINPATH="/usr/local/go/bin"
+	mkdir -p build/src/github.com/percona/percona-mongolink
+	cp -r `ls | grep -v build` build/src/github.com/percona/percona-mongolink/
+	cd build/src/github.com/percona/percona-mongolink/ && make build
+	touch $@
+
+override_dh_auto_install:
+	@echo "RULES.$@"
+	mkdir -p $(TMP)
+	mkdir -p $(TMP)/default
+	cd build/src/github.com/percona/percona-mongolink/bin && cp percona-mongolink $(TMP)/percona-mongolink
+	cp -f packaging/conf/percona-mongolink.env  $(TMP)/default/percona-mongolink
+	cp -f packaging/conf/percona-mongolink.service $(TMP)/percona-mongolink.service
+	cp -f LICENSE $(TMP)/LICENSE
+	ls -la $(TMP)
+
+override_dh_systemd_start:
+	dh_systemd_enable --name=percona-mongolink percona-mongolink.service
+	dh_systemd_start --restart-after-upgrade
