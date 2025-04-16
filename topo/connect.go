@@ -62,7 +62,9 @@ func ConnectWithOptions(
 		return nil, err //nolint:wrapcheck
 	}
 
-	err = conn.Ping(ctx, nil)
+	err = util.WithTimeout(ctx, config.PingTimeout, func(ctx context.Context) error {
+		return conn.Ping(ctx, nil)
+	})
 	if err != nil {
 		if err1 := util.WithTimeout(ctx, config.DisconnectTimeout, conn.Disconnect); err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect: " + err1.Error())
