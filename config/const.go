@@ -42,6 +42,8 @@ const (
 	PingTimeout = 10 * time.Second
 	// DisconnectTimeout is the timeout duration for connection disconnection and close server.
 	DisconnectTimeout = 5 * time.Second
+	// CloseCursorTimeout is the timeout duration for closing cursor.
+	CloseCursorTimeout = 10 * time.Second
 )
 
 // Change stream and replication settings.

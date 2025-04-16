@@ -19,6 +19,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 var (
@@ -412,7 +413,7 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 	}
 
 	defer func() {
-		err := cur.Close(context.Background())
+		err := util.WithTimeout(nil, config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Error(err, "Close cursor")
 		}
