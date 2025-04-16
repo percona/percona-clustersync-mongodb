@@ -38,6 +38,8 @@ const (
 	HeartbeatTimeout = 5 * time.Second
 	// StaleHeartbeatDuration is the duration after which a heartbeat is considered stale.
 	StaleHeartbeatDuration = HeartbeatInternal + HeartbeatTimeout
+	// DisconnectTimeout is the timeout duration for connection disconnection and close server.
+	DisconnectTimeout = 5 * time.Second
 )
 
 // Change stream and replication settings.

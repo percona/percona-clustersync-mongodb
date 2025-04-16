@@ -28,6 +28,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 // Constants for server configuration.
@@ -259,7 +260,7 @@ var resetRecoveryCmd = &cobra.Command{
 		}
 
 		defer func() {
-			err := target.Disconnect(ctx)
+			err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 			if err != nil {
 				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
@@ -297,7 +298,7 @@ var resetHeartbeatCmd = &cobra.Command{
 		}
 
 		defer func() {
-			err := target.Disconnect(ctx)
+			err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 			if err != nil {
 				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
@@ -387,7 +388,7 @@ func resetState(ctx context.Context, targetURI string) error {
 	}
 
 	defer func() {
-		err := target.Disconnect(ctx)
+		err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 		if err != nil {
 			log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 		}
@@ -460,7 +461,7 @@ func runServer(ctx context.Context, options serverOptions) error {
 	go func() {
 		<-ctx.Done()
 
-		err := srv.Close(context.Background())
+		err := util.WithTimeout(ctx, config.DisconnectTimeout, srv.Close)
 		if err != nil {
 			log.New("server").Error(err, "Close server")
 		}
@@ -511,7 +512,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 			return
 		}
 
-		err1 := source.Disconnect(ctx)
+		err1 := util.WithTimeout(ctx, config.DisconnectTimeout, source.Disconnect)
 		if err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect Source Cluster: " + err1.Error())
 		}
@@ -538,7 +539,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 			return
 		}
 
-		err1 := target.Disconnect(ctx)
+		err1 := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 		if err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect Target Cluster: " + err1.Error())
 		}
