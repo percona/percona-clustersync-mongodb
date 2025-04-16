@@ -110,3 +110,7 @@ type Support ServerVersion
 func (s Support) ClientBulkWrite() bool {
 	return ServerVersion(s).Major() >= 8 //nolint:mnd
 }
+
+func (s Support) ListCatalog() bool {
+	return ServerVersion(s).Major() >= 7 //nolint:mnd
+}

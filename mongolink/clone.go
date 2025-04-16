@@ -465,6 +465,31 @@ type sizeMapElem struct {
 	Count int64
 }
 
+func (c *Clone) listNSSpecs(ctx context.Context) ([]topo.NSSpec, error) {
+	if config.UseListCatalogPipeline() {
+		serverVersion, err := topo.Version(ctx, c.source)
+		if err != nil {
+			return nil, errors.Wrap(err, "get source server version")
+		}
+
+		if topo.Support(serverVersion).ListCatalog() {
+			specMap, err := topo.ListCatalog(ctx, c.source)
+			if err != nil {
+				return nil, errors.Wrap(err, "list catalog")
+			}
+
+			return specMap, nil
+		}
+	}
+
+	specMap, err := topo.ListCatalogSlow(ctx, c.source)
+	if err != nil {
+		return nil, errors.Wrap(err, "list catalog (slow)")
+	}
+
+	return specMap, nil
+}
+
 func (c *Clone) collectSizeMap(ctx context.Context) error {
 	lg := log.Ctx(ctx)
 

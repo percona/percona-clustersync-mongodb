@@ -18,6 +18,11 @@ func UseCollectionBulkWrite() bool {
 }
 
 // CloneNumParallelCollections returns the number of collections cloned in parallel
+func UseListCatalogPipeline() bool {
+	return os.Getenv("PML_DEV_DO_NOT_USE_LIST_CATALOG_PIPELINE") != "1"
+}
+
+// CloneNumParallelCollections returns the number of collections cloned in parallel
 // during the clone process. Default is 0.
 func CloneNumParallelCollections() int {
 	numColl, _ := strconv.ParseInt(os.Getenv("PML_CLONE_NUM_PARALLEL_COLLECTIONS"), 10, 32)
