@@ -117,6 +117,7 @@ func sanitizeMongoURI(uri string) (string, error) {
 	return ret, nil
 }
 
+//nolint:gochecknoglobals
 var allowedConnStringOptions = []string{
 	"appname",
 	"replicaset",
