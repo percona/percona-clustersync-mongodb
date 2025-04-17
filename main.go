@@ -260,7 +260,7 @@ var resetRecoveryCmd = &cobra.Command{
 		}
 
 		defer func() {
-			err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+			err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 			if err != nil {
 				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
@@ -298,7 +298,7 @@ var resetHeartbeatCmd = &cobra.Command{
 		}
 
 		defer func() {
-			err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+			err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 			if err != nil {
 				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
@@ -388,7 +388,7 @@ func resetState(ctx context.Context, targetURI string) error {
 	}
 
 	defer func() {
-		err := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+		err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 		if err != nil {
 			log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 		}
@@ -461,7 +461,7 @@ func runServer(ctx context.Context, options serverOptions) error {
 	go func() {
 		<-ctx.Done()
 
-		err := util.WithTimeout(ctx, config.DisconnectTimeout, srv.Close)
+		err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, srv.Close)
 		if err != nil {
 			log.New("server").Error(err, "Close server")
 		}
@@ -512,7 +512,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 			return
 		}
 
-		err1 := util.WithTimeout(ctx, config.DisconnectTimeout, source.Disconnect)
+		err1 := util.CtxWithTimeout(ctx, config.DisconnectTimeout, source.Disconnect)
 		if err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect Source Cluster: " + err1.Error())
 		}
@@ -539,7 +539,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 			return
 		}
 
-		err1 := util.WithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+		err1 := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
 		if err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect Target Cluster: " + err1.Error())
 		}

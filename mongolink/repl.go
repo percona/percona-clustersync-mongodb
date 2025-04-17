@@ -321,7 +321,7 @@ func (r *Repl) watchChangeEvents(
 	}
 
 	defer func() {
-		err := util.WithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.New("repl:watch").Error(err, "Close change stream cursor")
 		}

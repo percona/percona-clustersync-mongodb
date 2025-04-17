@@ -413,7 +413,7 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 	}
 
 	defer func() {
-		err := util.WithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Error(err, "Close cursor")
 		}
