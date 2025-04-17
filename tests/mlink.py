@@ -130,6 +130,7 @@ class Runner:
     def __enter__(self):
         if self.phase == self.Phase.APPLY:
             self.start()
+            self.wait_for_clone_completed()
 
         return self
 
@@ -214,13 +215,19 @@ class Runner:
 
         raise WaitTimeoutError()
 
-    @property
-    def is_paused(self):
-        return self.mlink.status()["state"] == MongoLink.State.PAUSED
+    def wait_for_clone_completed(self):
+        """Wait for the MongoLink service completed clone."""
+        status = self.mlink.status()
+        assert status["state"] != MongoLink.State.IDLE, status
 
-    @property
-    def current_optime(self):
-        return self.source.server_info()["$clusterTime"]["clusterTime"]
+        for _ in range(self.wait_timeout * 2):
+            if status["initialSync"]["cloneCompleted"]:
+                return
+
+            time.sleep(0.5)
+            status = self.mlink.status()
+
+        raise WaitTimeoutError()
 
     @property
     def last_applied_op(self):

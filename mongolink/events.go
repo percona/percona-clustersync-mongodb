@@ -325,9 +325,9 @@ type modifyOpDesc struct {
 		Enabled bool `bson:"enabled"`
 	} `bson:"changeStreamPreAndPostImages,omitempty"`
 
-	Validator       *bson.Raw `bson:"validator,omitempty"`
-	ValidatorLevel  *string   `bson:"validatorLevel,omitempty"`
-	ValidatorAction *string   `bson:"validatorAction,omitempty"`
+	Validator        *bson.Raw `bson:"validator,omitempty"`
+	ValidationLevel  *string   `bson:"validationLevel,omitempty"`
+	ValidationAction *string   `bson:"validationAction,omitempty"`
 
 	Unknown map[string]any `bson:",inline"`
 }

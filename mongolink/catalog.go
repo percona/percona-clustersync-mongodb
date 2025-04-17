@@ -48,6 +48,10 @@ type CreateCollectionOptions struct {
 	// Collation is the collation options for the collection.
 	Collation bson.Raw `bson:"collation,omitempty"`
 
+	Validator        *bson.Raw `bson:"validator,omitempty"`
+	ValidationLevel  *string   `bson:"validationLevel,omitempty"`
+	ValidationAction *string   `bson:"validationAction,omitempty"`
+
 	// StorageEngine is the storage engine options for the collection.
 	StorageEngine bson.Raw `bson:"storageEngine,omitempty"`
 	// IndexOptionDefaults is the default options for indexes on the collection.
@@ -173,6 +177,16 @@ func (c *Catalog) doCreateCollection(
 
 	if opts.Collation != nil {
 		cmd = append(cmd, bson.E{"collation", opts.Collation})
+	}
+
+	if opts.Validator != nil {
+		cmd = append(cmd, bson.E{"validator", opts.Validator})
+	}
+	if opts.ValidationLevel != nil {
+		cmd = append(cmd, bson.E{"validationLevel", opts.ValidationLevel})
+	}
+	if opts.ValidationAction != nil {
+		cmd = append(cmd, bson.E{"validationAction", opts.ValidationAction})
 	}
 
 	if opts.StorageEngine != nil {
@@ -382,6 +396,34 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 		{"viewOn", viewOn},
 		{"pipeline", pipeline},
 	}
+	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+	return err //nolint:wrapcheck
+}
+
+// ModifyCappedCollection modifies a capped collection in the target MongoDB.
+func (c *Catalog) ModifyValidation(
+	ctx context.Context,
+	db string,
+	coll string,
+	validator *bson.Raw,
+	validationLevel *string,
+	validationAction *string,
+) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	cmd := bson.D{{"collMod", coll}}
+	if validator != nil {
+		cmd = append(cmd, bson.E{"validator", validator})
+	}
+	if validationLevel != nil {
+		cmd = append(cmd, bson.E{"validationLevel", validationLevel})
+	}
+	if validationAction != nil {
+		cmd = append(cmd, bson.E{"validationAction", validationAction})
+	}
+
 	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
 	return err //nolint:wrapcheck

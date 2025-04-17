@@ -165,25 +165,24 @@ def test_create_with_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_create_with_validator_ignored(t: Testing, phase: Runner.Phase):
-    validator = {
-        "$jsonSchema": {
-            "bsonType": "object",
-            "required": ["name"],
-            "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
-        }
-    }
+def test_create_with_validation(t: Testing, phase: Runner.Phase):
     create_options = {
-        "validator": validator,
-        "validationLevel": "strict",
-        "validationAction": "error",
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name"],
+                "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+            }
+        },
+        "validationLevel": "moderate",
+        "validationAction": "warn",
     }
 
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1", **create_options)
         assert t.source["db_1"]["coll_1"].options() == create_options
 
-    assert t.target["db_1"]["coll_1"].options() == {}
+    t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -357,7 +356,7 @@ def test_modify_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_modify_validator_ignored(t: Testing, phase: Runner.Phase):
+def test_modify_validation_set(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection("coll_1")
 
     validator = {
@@ -367,30 +366,28 @@ def test_modify_validator_ignored(t: Testing, phase: Runner.Phase):
             "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
         }
     }
-    modify_options = {
-        "validator": validator,
-        "validationLevel": "strict",
-        "validationAction": "error",
-    }
 
     with t.run(phase):
-        t.source["db_1"].command({"collMod": "coll_1", **modify_options})
-        assert t.source["db_1"]["coll_1"].options() == modify_options
+        t.source["db_1"].command({"collMod": "coll_1", "validator": validator})
+        assert t.source["db_1"]["coll_1"].options() == {
+            "validator": validator,
+            "validationLevel": "strict",  # default
+            "validationAction": "error",  # default
+        }
 
-    assert t.target["db_1"]["coll_1"].options() == {}
+    t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_modify_validator_unset_ignored(t: Testing, phase: Runner.Phase):
-    validator = {
-        "$jsonSchema": {
-            "bsonType": "object",
-            "required": ["name"],
-            "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
-        }
-    }
+def test_modify_validation_unset(t: Testing, phase: Runner.Phase):
     create_options = {
-        "validator": validator,
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["name"],
+                "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+            }
+        },
         "validationLevel": "strict",
         "validationAction": "error",
     }
@@ -401,11 +398,115 @@ def test_modify_validator_unset_ignored(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].command({"collMod": "coll_1", "validator": {}})
 
-        modified_options = create_options
+        modified_options = create_options.copy()
         del modified_options["validator"]
         assert t.source["db_1"]["coll_1"].options() == modified_options
 
-    assert t.target["db_1"]["coll_1"].options() == {}
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_modify_capped_size_with_validation(t: Testing, phase: Runner.Phase):
+    ensure_collection(t.source, t.target, "db_1", "coll_1", capped=True, size=1111)
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "cappedSize": 3333,
+                "validator": {
+                    "$jsonSchema": {
+                        "bsonType": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": {"bsonType": "string", "description": "must be a string"}
+                        },
+                    }
+                },
+            }
+        )
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_modify_clustered_ttl_with_validation(t: Testing, phase: Runner.Phase):
+    validator = {
+        "$jsonSchema": {
+            "bsonType": "object",
+            "required": ["name"],
+            "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+        }
+    }
+
+    expected_index_options = {"name": "_id_", "key": {"_id": 1}, "unique": True, "v": 2}
+
+    with t.run(phase):
+        t.source["db_1"].create_collection(
+            "coll_1",
+            clusteredIndex={"key": {"_id": 1}, "unique": True},
+            expireAfterSeconds=123,
+        )
+        assert t.source["db_1"]["coll_1"].options() == {
+            "clusteredIndex": expected_index_options,
+            "expireAfterSeconds": 123,
+        }
+
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "expireAfterSeconds": 444,
+                "validator": validator,
+            }
+        )
+
+    assert t.source["db_1"]["coll_1"].options() == {
+        "clusteredIndex": expected_index_options,
+        "expireAfterSeconds": 444,
+        "validator": validator,
+        "validationLevel": "strict",
+        "validationAction": "error",
+    }
+    assert t.target["db_1"]["coll_1"].options() == {
+        "clusteredIndex": expected_index_options,
+        "validator": validator,
+        "validationLevel": "strict",
+        "validationAction": "error",
+    }
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_modify_pre_post_images_with_validation(t: Testing, phase: Runner.Phase):
+    validator = {
+        "$jsonSchema": {
+            "bsonType": "object",
+            "required": ["name"],
+            "properties": {"name": {"bsonType": "string", "description": "must be a string"}},
+        }
+    }
+
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1")
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "changeStreamPreAndPostImages": {"enabled": True},
+                "validator": validator,
+            }
+        )
+
+        assert t.source["db_1"]["coll_1"].options() == {
+            "changeStreamPreAndPostImages": {"enabled": True},
+            "validator": validator,
+            "validationLevel": "strict",
+            "validationAction": "error",
+        }
+
+    assert t.target["db_1"]["coll_1"].options() == {
+        "validator": validator,
+        "validationLevel": "strict",
+        "validationAction": "error",
+    }
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])

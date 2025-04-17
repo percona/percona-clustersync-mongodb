@@ -683,6 +683,18 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 	opts := event.OperationDescription
 
+	if len(opts.Unknown) != 0 {
+		log.Ctx(ctx).Warn("Unknown modify options")
+	}
+
+	if opts.Validator != nil || opts.ValidationLevel != nil || opts.ValidationAction != nil {
+		err := r.catalog.ModifyValidation(ctx,
+			ns.Database, ns.Collection, opts.Validator, opts.ValidationLevel, opts.ValidationAction)
+		if err != nil {
+			log.Ctx(ctx).Error(err, "Modify validation")
+		}
+	}
+
 	switch {
 	case opts.Index != nil:
 		err := r.catalog.ModifyIndex(ctx, ns.Database, ns.Collection, opts.Index)
@@ -720,15 +732,6 @@ func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 
 	case opts.ChangeStreamPreAndPostImages != nil:
 		log.Ctx(ctx).Warn("changeStreamPreAndPostImages is not supported")
-
-	case opts.Validator != nil || opts.ValidatorLevel != nil || opts.ValidatorAction != nil:
-		log.Ctx(ctx).Warn("validator, validatorLevel, and validatorAction are not supported")
-
-	case opts.Unknown == nil:
-		log.Ctx(ctx).Debug("Empty modify event")
-
-	default:
-		log.Ctx(ctx).Warn("Unknown modify options")
 	}
 }
 
