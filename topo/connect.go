@@ -2,6 +2,9 @@ package topo
 
 import (
 	"context"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -9,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -36,7 +40,17 @@ func ConnectWithOptions(
 		return nil, errors.New("invalid MongoDB URI")
 	}
 
-	opts := options.Client().ApplyURI(uri).
+	_, err := connstring.ParseAndValidate(uri)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse and validate MongoDB URI")
+	}
+
+	sanitizedURI, err := sanitizeMongoURI(uri)
+	if err != nil {
+		return nil, errors.Wrap(err, "sanitize MongoDB URI")
+	}
+
+	opts := options.Client().ApplyURI(sanitizedURI).
 		SetServerAPIOptions(
 			options.ServerAPI(options.ServerAPIVersion1).
 				SetStrict(false).
@@ -71,4 +85,53 @@ func ConnectWithOptions(
 	}
 
 	return conn, nil
+}
+
+func sanitizeMongoURI(uri string) (string, error) {
+	idx := strings.IndexRune(uri, '?')
+	if idx == -1 {
+		return uri, nil
+	}
+
+	pairs := strings.FieldsFunc(uri[idx+1:], func(r rune) bool { return r == '&' || r == ';' })
+	allowed := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		key, _, _ := strings.Cut(p, "=")
+
+		k, err := url.QueryUnescape(key)
+		if err != nil {
+			return "", errors.Wrapf(err, "invalid option key %q", key)
+		}
+
+		if !slices.Contains(allowedConnStringOptions, strings.ToLower(k)) {
+			log.New("connect").Warnf("Connection string option %q is not allowed", key)
+
+			continue
+		}
+
+		allowed = append(allowed, p)
+	}
+
+	ret := uri[:idx] + "?" + strings.Join(allowed, "&")
+
+	return ret, nil
+}
+
+var allowedConnStringOptions = []string{
+	"appname",
+	"replicaset",
+
+	"authsource",
+	"authmechanism",
+	"authmechanismproperties",
+	"gssapiservicename",
+
+	"tls",
+	"ssl",
+	"tlscertificatekeyfile",
+	"tlscertificatekeyfilepassword",
+	"tlscafile",
+	"tlsallowinvalidcertificates",
+	"tlsallowinvalidhostnames",
+	"tlsinsecure",
 }
