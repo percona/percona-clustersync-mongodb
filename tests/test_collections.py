@@ -153,7 +153,7 @@ def test_create_with_storage_options(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_create_with_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
+def test_create_with_pre_post_images(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         options = {
             "changeStreamPreAndPostImages": {"enabled": True},
@@ -161,7 +161,7 @@ def test_create_with_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
         t.source["db_1"].create_collection("coll_1", **options)
         assert t.source["db_1"]["coll_1"].options() == options
 
-    assert "changeStreamPreAndPostImages" not in t.target["db_1"]["coll_1"].options()
+    t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -338,7 +338,7 @@ def test_modify_timeseries_options_ignored(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_modify_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
+def test_modify_pre_post_images_set(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection("coll_1")
 
     with t.run(phase):
@@ -352,7 +352,25 @@ def test_modify_pre_post_images_ignored(t: Testing, phase: Runner.Phase):
         options = t.source["db_1"]["coll_1"].options()
         assert options["changeStreamPreAndPostImages"] == {"enabled": True}
 
-    assert "changeStreamPreAndPostImages" not in t.target["db_1"]["coll_1"].options()
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_modify_pre_post_images_unset(t: Testing, phase: Runner.Phase):
+    t.source["db_1"].create_collection("coll_1", changeStreamPreAndPostImages={"enabled": True})
+
+    with t.run(phase):
+        t.source["db_1"].command(
+            {
+                "collMod": "coll_1",
+                "changeStreamPreAndPostImages": {"enabled": False},
+            }
+        )
+
+        options = t.source["db_1"]["coll_1"].options()
+        assert "changeStreamPreAndPostImages" not in options
+
+    t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -502,11 +520,7 @@ def test_modify_pre_post_images_with_validation(t: Testing, phase: Runner.Phase)
             "validationAction": "error",
         }
 
-    assert t.target["db_1"]["coll_1"].options() == {
-        "validator": validator,
-        "validationLevel": "strict",
-        "validationAction": "error",
-    }
+    t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])

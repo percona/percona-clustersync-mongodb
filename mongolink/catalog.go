@@ -48,6 +48,10 @@ type CreateCollectionOptions struct {
 	// Collation is the collation options for the collection.
 	Collation bson.Raw `bson:"collation,omitempty"`
 
+	ChangeStreamPreAndPostImages *struct {
+		Enabled bool `bson:"enabled"`
+	} `bson:"changeStreamPreAndPostImages,omitempty"`
+
 	Validator        *bson.Raw `bson:"validator,omitempty"`
 	ValidationLevel  *string   `bson:"validationLevel,omitempty"`
 	ValidationAction *string   `bson:"validationAction,omitempty"`
@@ -177,6 +181,10 @@ func (c *Catalog) doCreateCollection(
 
 	if opts.Collation != nil {
 		cmd = append(cmd, bson.E{"collation", opts.Collation})
+	}
+
+	if opts.ChangeStreamPreAndPostImages != nil {
+		cmd = append(cmd, bson.E{"changeStreamPreAndPostImages", opts.ChangeStreamPreAndPostImages})
 	}
 
 	if opts.Validator != nil {
@@ -395,6 +403,24 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 		{"collMod", view},
 		{"viewOn", viewOn},
 		{"pipeline", pipeline},
+	}
+	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+	return err //nolint:wrapcheck
+}
+
+func (c *Catalog) ModifyChangeStreamPreAndPostImages(
+	ctx context.Context,
+	db string,
+	coll string,
+	enabled bool,
+) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	cmd := bson.D{
+		{"collMod", coll},
+		{"changeStreamPreAndPostImages", bson.D{{"enabled", enabled}}},
 	}
 	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 

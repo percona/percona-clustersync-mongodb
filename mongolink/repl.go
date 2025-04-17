@@ -689,6 +689,14 @@ func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 		log.Ctx(ctx).Warn("Unknown modify options")
 	}
 
+	if opts.ChangeStreamPreAndPostImages != nil {
+		err := r.catalog.ModifyChangeStreamPreAndPostImages(ctx,
+			ns.Database, ns.Collection, opts.ChangeStreamPreAndPostImages.Enabled)
+		if err != nil {
+			log.Ctx(ctx).Error(err, "Modify changeStreamPreAndPostImages")
+		}
+	}
+
 	if opts.Validator != nil || opts.ValidationLevel != nil || opts.ValidationAction != nil {
 		err := r.catalog.ModifyValidation(ctx,
 			ns.Database, ns.Collection, opts.Validator, opts.ValidationLevel, opts.ValidationAction)
