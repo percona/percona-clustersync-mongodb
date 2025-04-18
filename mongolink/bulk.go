@@ -3,6 +3,7 @@ package mongolink
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -11,6 +12,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/log"
 )
 
 //nolint:gochecknoglobals
@@ -92,6 +94,7 @@ func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 		},
 	}
 
+	log.New("update event").With(log.Field("bulkWrite", bw)).Trace("Update command bulk write")
 	o.writes = append(o.writes, bw)
 }
 
@@ -208,22 +211,95 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.count++
 }
 
-func collectUpdateOps(event *UpdateEvent) bson.D {
-	ops := make(bson.D, 0, 2) //nolint:mnd
+func collectUpdateOps(event *UpdateEvent) bson.A {
+	lg := log.New("update event")
 
-	if len(event.UpdateDescription.UpdatedFields) != 0 {
-		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
-	}
+	ops := make(bson.A, 0)
 
-	if len(event.UpdateDescription.RemovedFields) != 0 {
-		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
-		for i, field := range event.UpdateDescription.RemovedFields {
-			fields[i].Key = field
-			fields[i].Value = 1
+	// Handle truncated arrays
+	var truncatedFields map[string]struct{}
+
+	if len(event.UpdateDescription.TruncatedArrays) != 0 {
+		truncatedFields = make(map[string]struct{}, len(event.UpdateDescription.TruncatedArrays))
+		for _, truncation := range event.UpdateDescription.TruncatedArrays {
+
+			truncatedFields[truncation.Field] = struct{}{}
+
+			d := bson.D{{Key: "$set", Value: bson.D{
+				{Key: truncation.Field, Value: bson.D{
+					{Key: "$slice", Value: bson.A{"$" + truncation.Field, truncation.NewSize}},
+				}},
+			}}}
+
+			ops = append(ops, d)
 		}
-
-		ops = append(ops, bson.E{"$unset", fields})
+		lg.With(log.Field("fields", truncatedFields)).Trace("Truncated fields")
 	}
 
+	// Handle updated fields
+	if len(event.UpdateDescription.UpdatedFields) != 0 {
+		for _, field := range event.UpdateDescription.UpdatedFields {
+			fieldName := strings.Split(field.Key, ".")[0]
+			lg.With(log.Field("field", fieldName)).Trace("Update field")
+
+			if _, ok := truncatedFields[fieldName]; ok {
+				lg.With(log.Field("field", fieldName)).Trace("Truncated field detected")
+
+				d := bson.D{{
+					Key: "$set", Value: bson.D{
+						{
+							fieldName, bson.D{
+								{
+									Key: "$let", Value: bson.D{
+										{
+											Key:   "vars",
+											Value: bson.D{{"p", "$" + fieldName}},
+										},
+										{
+											Key: "in", Value: bson.D{
+												{
+													Key: "$concatArrays", Value: bson.A{
+														bson.A{field.Value}, // New first element
+														bson.D{{Key: "$slice", Value: bson.A{
+															"$$p", 1,
+															bson.D{{Key: "$size", Value: "$$p"}},
+														}}},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				}}
+				ops = append(ops, d)
+			} else {
+				d := bson.D{{Key: "$set", Value: bson.D{
+					{Key: field.Key, Value: field.Value},
+				}}}
+				ops = append(ops, d)
+			}
+		}
+	}
+
+	// Handle removed fields
+	if len(event.UpdateDescription.RemovedFields) != 0 {
+		unsetFields := make(bson.A, len(event.UpdateDescription.RemovedFields))
+		for i, field := range event.UpdateDescription.RemovedFields {
+			unsetFields[i] = field
+		}
+		ops = append(ops, bson.D{{Key: "$unset", Value: unsetFields}})
+	}
+
+	// Handle disambiguated paths
+	if len(event.UpdateDescription.DisambiguatedPaths) != 0 {
+		dpu := bson.D{}
+		dpu = append(dpu, event.UpdateDescription.DisambiguatedPaths...)
+		ops = append(ops, bson.E{Key: "$set", Value: dpu})
+	}
+
+	lg.With(log.Field("opts", ops)).Trace("Update command options")
 	return ops
 }
