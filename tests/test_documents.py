@@ -45,17 +45,21 @@ def test_update_one(t: Testing, phase: Runner.Phase):
 def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
 
     t.source["db_1"]["coll_1"].insert_one({"i": "f1", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
-    t.source["db_1"]["coll_1"].insert_one({"i": "f2", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
-    t.target["db_1"]["coll_1"].insert_one({"i": "f1", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
     t.target["db_1"]["coll_1"].insert_one({"i": "f2", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
 
     with t.run(phase):
         # Keep the first 3 elements of arr_1 and remove the rest
         t.source["db_1"]["coll_1"].update_one(
             {"i": "f1"},
-            [{"$set": {"arr_1": {"$slice": ["$arr_1", 3]}}}],
-        )
-
+            # [{"$set": {"arr_1": {"$slice": ["$arr_1", 3]}}}],
+            [{ "$set": {
+                "arr_1": {
+                "$filter": {
+                    "input": "$arr_1",
+                    "as": "arr",
+                    "cond": {
+                    "$ne": ["$$arr", "C"]} # Remove "C"
+                }}}}])
 
     t.compare_all()
 
