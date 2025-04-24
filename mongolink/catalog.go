@@ -354,8 +354,7 @@ func (c *Catalog) CreateIndexes(
 		return nil
 	}
 
-	var idxErrors []error
-	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(idxs))
+	processedIdxs := make(map[string]error, len(idxs))
 
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
@@ -366,28 +365,34 @@ func (c *Catalog) CreateIndexes(
 		})
 
 		if err := res.Err(); err != nil {
-			if topo.IsIndexOptionsConflict(err) {
-				lg.Error(err, "Index options conflict")
-			} else {
-				idxErrors = append(idxErrors, errors.Wrapf(err, "create index: %s", index.Name))
-			}
+			processedIdxs[index.Name] = err
 
 			continue
 		}
 
-		succesfulIdxs = append(succesfulIdxs, index)
+		processedIdxs[index.Name] = nil
 	}
 
-	successfulIdxNames := make([]string, len(succesfulIdxs))
-	for i, index := range succesfulIdxs {
-		successfulIdxNames[i] = index.Name
+	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+	successfulIdxNames := make([]string, 0, len(processedIdxs))
+	var idxErrors []error
+
+	for _, idx := range indexes {
+		if err := processedIdxs[idx.Name]; err != nil {
+			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
+
+			continue
+		}
+
+		succesfulIdxs = append(succesfulIdxs, idx)
+		successfulIdxNames = append(successfulIdxNames, idx.Name)
 	}
 
 	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
 	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
 
 	if len(idxErrors) > 0 {
-		lg.Errorf(errors.Join(idxErrors...), "create indexes")
+		lg.Errorf(errors.Join(idxErrors...), "One or more indexes failed to create on %s.%s", db, coll)
 	}
 
 	return nil
@@ -792,7 +797,7 @@ func (c *Catalog) addIndexesToCatalog(
 
 	dbCat.Collections[coll] = collCat
 	c.Databases[db] = dbCat
-	lg.Debugf("Indexes added to catalog for %s.%s, %s", db, coll, strings.Join(idxNames, ", "))
+	lg.Debugf("Indexes added to catalog on %s.%s: , %s", db, coll, strings.Join(idxNames, ", "))
 }
 
 // removeIndexFromCatalog removes an index from the catalog.
