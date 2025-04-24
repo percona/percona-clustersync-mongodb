@@ -629,6 +629,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
 						continue
 					}
 
@@ -638,6 +639,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to unique: "+index.Name))
+
 						continue
 					}
 
@@ -648,6 +650,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
 						continue
 					}
 				}
@@ -660,6 +663,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
+
 						continue
 					}
 				}
@@ -671,6 +675,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify hidden: "+index.Name))
+
 						continue
 					}
 				}
