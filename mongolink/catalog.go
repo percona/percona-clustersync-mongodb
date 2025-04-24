@@ -371,9 +371,11 @@ func (c *Catalog) CreateIndexes(
 			} else {
 				idxErrors = append(idxErrors, errors.Wrapf(err, "create index: %s", index.Name))
 			}
-		} else {
-			succesfulIdxs = append(succesfulIdxs, index)
+
+			continue
 		}
+
+		succesfulIdxs = append(succesfulIdxs, index)
 	}
 
 	successfulIdxNames := make([]string, len(succesfulIdxs))
@@ -385,7 +387,7 @@ func (c *Catalog) CreateIndexes(
 	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
 
 	if len(idxErrors) > 0 {
-		return errors.Wrap(errors.Join(idxErrors...), "create indexes")
+		lg.Errorf(errors.Join(idxErrors...), "create indexes")
 	}
 
 	return nil
