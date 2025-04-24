@@ -476,3 +476,16 @@ def test_pml_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
     assert target_indexes["short_ttl_index"]["expireAfterSeconds"] == 1260
 
     t.compare_all()
+
+@pytest.mark.xfail(reason="Waiting for https://perconadev.atlassian.net/browse/PML-107")
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, name="idx_1")
+        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, unique=True, name="idx_2")
+        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, collation={"locale": "en_US"}, name="idx_3")
+
+    target_idx_count = len(t.target["db_1"]["coll_1"].index_information())
+    source_idx_count = len(t.source["db_1"]["coll_1"].index_information())
+
+    assert target_idx_count - 1 == source_idx_count
