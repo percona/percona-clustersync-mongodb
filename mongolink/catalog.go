@@ -355,7 +355,7 @@ func (c *Catalog) CreateIndexes(
 	}
 
 	var idxErrors []error
-	succesfullIdxs := make([]*topo.IndexSpecification, 0, len(idxs))
+	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(idxs))
 
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
@@ -372,17 +372,17 @@ func (c *Catalog) CreateIndexes(
 				idxErrors = append(idxErrors, errors.Wrapf(err, "create index: %s", index.Name))
 			}
 		} else {
-			succesfullIdxs = append(succesfullIdxs, index)
+			succesfulIdxs = append(succesfulIdxs, index)
 		}
 	}
 
-	successfulIdxNames := make([]string, len(succesfullIdxs))
-	for i, index := range succesfullIdxs {
+	successfulIdxNames := make([]string, len(succesfulIdxs))
+	for i, index := range succesfulIdxs {
 		successfulIdxNames[i] = index.Name
 	}
 
 	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
-	c.addIndexesToCatalog(ctx, db, coll, succesfullIdxs)
+	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
 
 	if len(idxErrors) > 0 {
 		return errors.Wrap(errors.Join(idxErrors...), "create indexes")
