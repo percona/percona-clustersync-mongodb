@@ -477,7 +477,6 @@ def test_pml_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
-@pytest.mark.xfail(reason="Waiting for https://perconadev.atlassian.net/browse/PML-107")
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -488,4 +487,4 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
     target_idx_count = len(t.target["db_1"]["coll_1"].index_information())
     source_idx_count = len(t.source["db_1"]["coll_1"].index_information())
 
-    assert target_idx_count - 1 == source_idx_count
+    assert source_idx_count - 1 == target_idx_count
