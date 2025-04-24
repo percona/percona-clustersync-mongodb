@@ -609,6 +609,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	lg := log.Ctx(ctx)
 
+	var idxErrors []error
+
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
@@ -625,14 +627,18 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to unique: prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+						continue
 					}
 
 					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to unique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to unique: "+index.Name))
+						continue
 					}
 
 				case index.PrepareUnique != nil && *index.PrepareUnique:
@@ -640,7 +646,9 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+						continue
 					}
 				}
 
@@ -650,7 +658,9 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					err := c.doModifyIndexOption(ctx,
 						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
 					if err != nil {
-						return errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
+						continue
 					}
 				}
 
@@ -659,11 +669,17 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
-						return errors.Wrap(err, "modify hidden: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "modify hidden: "+index.Name))
+						continue
 					}
 				}
 			}
 		}
+	}
+
+	if len(idxErrors) > 0 {
+		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
 	return nil
