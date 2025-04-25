@@ -392,7 +392,8 @@ func (c *Catalog) CreateIndexes(
 	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
 
 	if len(idxErrors) > 0 {
-		lg.Errorf(errors.Join(idxErrors...), "One or more indexes failed to create on %s.%s", db, coll)
+		lg.Errorf(errors.Join(idxErrors...),
+			"One or more indexes failed to create on %s.%s", db, coll)
 	}
 
 	return nil
@@ -780,7 +781,8 @@ func (c *Catalog) addIndexesToCatalog(
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
-				lg.Warnf("add indexes: index %q already exists in %q namespace", index.Name, db+"."+coll)
+				lg.Warnf("add indexes: index %q already exists in %q namespace",
+					index.Name, db+"."+coll)
 
 				collCat.Indexes[i] = index
 				found = true

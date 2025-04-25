@@ -493,7 +493,11 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, name="idx_1")
         t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, unique=True, name="idx_2")
-        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, collation={"locale": "en_US"}, name="idx_3")
+        t.source["db_1"]["coll_1"].create_index(
+            {"i": 1, "j": 1},
+            collation={"locale": "en_US"},
+            name="idx_3",
+        )
 
     target_idx_count = len(t.target["db_1"]["coll_1"].index_information())
     source_idx_count = len(t.source["db_1"]["coll_1"].index_information())
