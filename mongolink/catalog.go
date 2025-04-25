@@ -570,7 +570,7 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 
 	err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
 	if err != nil {
-		if !topo.IsIndexNotFound(err) {
+		if !topo.IsNamespaceNotFound(err) && !topo.IsIndexNotFound(err) {
 			return err //nolint:wrapcheck
 		}
 
