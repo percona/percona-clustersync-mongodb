@@ -281,8 +281,13 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	copyLogger := log.Ctx(ctx)
 
+	numParallelCollections := config.CloneNumParallelCollections()
+	if numParallelCollections < 1 {
+		numParallelCollections = config.DefaultCloneNumParallelCollection
+	}
+
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumParallelCollections: config.CloneNumParallelCollections(),
+		NumParallelCollections: numParallelCollections,
 		NumReadWorkers:         config.CloneNumReadWorkers(),
 		NumInsertWorkers:       config.CloneNumInsertWorkers(),
 		SegmentSizeBytes:       config.CloneSegmentSizeBytes(),
@@ -291,11 +296,9 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	defer copyManager.Close()
 
 	eg, grpCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(numParallelCollections)
 
-	sem := make(chan struct{}, 1) // ensure ns is put to queue in order
 	for _, ns := range namespaces {
-		sem <- struct{}{}
-
 		eg.Go(func() error {
 			nsCtx, cancel := context.WithCancel(grpCtx)
 			defer cancel()
@@ -320,8 +323,6 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 
 			updateC := copyManager.Do(nsCtx, ns,
 				func(ctx context.Context) (*topo.CollectionSpecification, error) {
-					<-sem
-
 					startedAt = time.Now()
 
 					capturedAt, err := topo.ClusterTime(ctx, c.source)
