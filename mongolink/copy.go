@@ -428,12 +428,14 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 			len(documents) == config.MaxInsertBatchSize {
 			elapsed := time.Since(lastSentAt)
 
-			zl.Trace().
-				Str("id", batchID).
-				Int("count", len(documents)).
-				Int("size_bytes", sizeBytes).
-				Dur("elapsed", elapsed.Round(time.Millisecond)).
-				Msgf("read batch %s", batchID)
+			if log.TraceEnabled() {
+				zl.Trace().
+					Str("id", batchID).
+					Int("count", len(documents)).
+					Int("size_bytes", sizeBytes).
+					Dur("elapsed", elapsed.Round(time.Millisecond)).
+					Msgf("read batch %s", batchID)
+			}
 
 			metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
 			metrics.AddCopyReadDocumentCount(len(documents))
@@ -457,13 +459,15 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 
 	err = cur.Err()
 	if err != nil {
-		zl.Trace().
-			Err(err).
-			Str("id", batchID).
-			Int("count", len(documents)).
-			Int("size_bytes", sizeBytes).
-			Dur("elapsed", time.Since(lastSentAt).Round(time.Millisecond)).
-			Msgf("read batch %s", batchID)
+		if log.TraceEnabled() {
+			zl.Trace().
+				Err(err).
+				Str("id", batchID).
+				Int("count", len(documents)).
+				Int("size_bytes", sizeBytes).
+				Dur("elapsed", time.Since(lastSentAt).Round(time.Millisecond)).
+				Msgf("read batch %s", batchID)
+		}
 
 		task.ResultC <- readBatchResult{
 			ID:        batchID,
@@ -483,12 +487,14 @@ func (cm *CopyManager) readSegment(ctx context.Context, task readSegmentTask) {
 
 	elapsed := time.Since(lastSentAt)
 
-	zl.Trace().
-		Str("id", batchID).
-		Int("count", len(documents)).
-		Int("size_bytes", sizeBytes).
-		Dur("elapsed", elapsed.Round(time.Millisecond)).
-		Msgf("read batch %s", batchID)
+	if log.TraceEnabled() {
+		zl.Trace().
+			Str("id", batchID).
+			Int("count", len(documents)).
+			Int("size_bytes", sizeBytes).
+			Dur("elapsed", elapsed.Round(time.Millisecond)).
+			Msgf("read batch %s", batchID)
+	}
 
 	metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
 	metrics.AddCopyReadDocumentCount(len(documents))
@@ -568,23 +574,27 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertBatchTask) {
 			count-- // doc already inserted
 		}
 
-		zl.Trace().
-			Str("err", err.Error()).
-			Str("id", task.ID).
-			Int("size_bytes", task.SizeBytes).
-			Int("count", count).
-			Dur("elapsed", time.Since(startedAt).Round(time.Millisecond)).
-			Msgf("insert batch %s", task.ID)
+		if log.TraceEnabled() {
+			zl.Trace().
+				Str("err", err.Error()).
+				Str("id", task.ID).
+				Int("size_bytes", task.SizeBytes).
+				Int("count", count).
+				Dur("elapsed", time.Since(startedAt).Round(time.Millisecond)).
+				Msgf("insert batch %s", task.ID)
+		}
 	}
 
 	elapsed := time.Since(startedAt)
 
-	zl.Trace().
-		Str("id", task.ID).
-		Int("size_bytes", task.SizeBytes).
-		Int("count", count).
-		Dur("elapsed", elapsed.Round(time.Millisecond)).
-		Msgf("inserted batch %s", task.ID)
+	if log.TraceEnabled() {
+		zl.Trace().
+			Str("id", task.ID).
+			Int("size_bytes", task.SizeBytes).
+			Int("count", count).
+			Dur("elapsed", elapsed.Round(time.Millisecond)).
+			Msgf("inserted batch %s", task.ID)
+	}
 
 	metrics.AddCopyInsertSize(uint64(task.SizeBytes)) //nolint:gosec
 	metrics.AddCopyInsertDocumentCount(len(task.Documents))
@@ -778,8 +788,10 @@ func (seg *Segmenter) doNext(ctx context.Context) (*mongo.Cursor, error) {
 		return nil, errors.Wrap(err, "find segment max _id")
 	}
 
-	log.New("seg").With(log.NS(seg.mcoll.Database().Name(), seg.mcoll.Name())).
-		Tracef("[%v <=> %v]", seg.currIDRange.Min, maxKey)
+	if log.TraceEnabled() {
+		log.New("seg").With(log.NS(seg.mcoll.Database().Name(), seg.mcoll.Name())).
+			Tracef("[%v <=> %v]", seg.currIDRange.Min, maxKey)
+	}
 
 	cur, err := seg.mcoll.Find(ctx,
 		bson.D{{"_id", bson.D{{"$gte", seg.currIDRange.Min}, {"$lte", maxKey}}}},

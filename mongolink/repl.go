@@ -463,7 +463,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if change.OperationType == advanceTimePseudoEvent {
-			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
+			if log.TraceEnabled() {
+				lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
+			}
 
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime

@@ -603,11 +603,12 @@ func (s *server) Handler() http.Handler {
 	mux.Handle("/metrics", s.handleMetrics())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/metrics" {
+		if log.TraceEnabled() && r.URL.Path == "/metrics" {
 			log.New("http").Trace(r.Method + " " + r.URL.String())
 		} else {
 			log.New("http").Info(r.Method + " " + r.URL.String())
 		}
+
 		mux.ServeHTTP(w, r)
 	})
 }

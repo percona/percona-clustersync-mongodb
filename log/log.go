@@ -10,6 +10,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var globalLevel zerolog.Level //nolint:gochecknoglobals
+
 const TimeFieldFormat = "2006-01-02 15:04:05.000"
 
 // InitGlobals initializes the logger with the specified level and settings.
@@ -17,6 +19,7 @@ const TimeFieldFormat = "2006-01-02 15:04:05.000"
 //   - json: if true, output logs in JSON format with disabled color.
 //   - noColor: if true, disable color in the console output.
 func InitGlobals(level zerolog.Level, json, noColor bool) *zerolog.Logger {
+	globalLevel = level
 	zerolog.TimeFieldFormat = TimeFieldFormat
 	zerolog.DurationFieldUnit = time.Second
 	zerolog.DurationFieldInteger = false
@@ -33,6 +36,11 @@ func InitGlobals(level zerolog.Level, json, noColor bool) *zerolog.Logger {
 	zerolog.DefaultContextLogger = &l
 
 	return &l
+}
+
+//go:inline
+func TraceEnabled() bool {
+	return globalLevel <= zerolog.TraceLevel
 }
 
 // AttrFn defines a function type for setting log attributes.
