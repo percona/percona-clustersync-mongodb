@@ -340,7 +340,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 					}
 
 					if spec.Type == topo.TypeTimeseries {
-						return spec, nil
+						return spec, ErrTimeseriesUnsupported
 					}
 
 					err = c.createCollection(ctx, ns, spec)

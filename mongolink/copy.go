@@ -3,8 +3,8 @@ package mongolink
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,11 +23,10 @@ import (
 )
 
 var (
-	ErrAlreadyInitialized = errors.New("already initialized")
-	// ErrEOC indicates the end of a collection is reached.
-	ErrEOC = errors.New("end of collection")
-	// ErrEOS indicates the end of a segment is reached.
-	ErrEOS = errors.New("end of segment")
+	// errEOC indicates the end of a collection is reached.
+	errEOC = errors.New("end of collection")
+	// errEOS indicates the end of a segment is reached.
+	errEOS = errors.New("end of segment")
 )
 
 // CopyManager orchestrates the cloning process by managing read and insert workers,
@@ -230,7 +229,7 @@ func (cm *CopyManager) copyCollection(
 		segmenter, err := NewCappedSegmenter(ctx,
 			cm.source, namespace, cm.options.ReadBatchSizeBytes)
 		if err != nil {
-			if errors.Is(err, ErrEOC) {
+			if errors.Is(err, errEOC) {
 				return nil
 			}
 
@@ -248,7 +247,7 @@ func (cm *CopyManager) copyCollection(
 			AutoNumSegment:   cm.options.NumReadWorkers,
 		})
 		if err != nil {
-			if errors.Is(err, ErrEOC) {
+			if errors.Is(err, errEOC) {
 				return nil
 			}
 
@@ -304,7 +303,7 @@ func (cm *CopyManager) copyCollection(
 			if err != nil {
 				<-cm.readLimit
 
-				if errors.Is(err, ErrEOC) {
+				if errors.Is(err, errEOC) {
 					pendingSegments.Wait() // wait all readers finish
 				} else {
 					updateC <- CopyUpdate{Err: errors.Wrap(err, "next segment")}
@@ -317,7 +316,16 @@ func (cm *CopyManager) copyCollection(
 
 			pendingSegments.Add(1)
 			go func() {
-				defer func() { <-cm.readLimit; pendingSegments.Add(-1) }()
+				defer func() {
+					<-cm.readLimit
+					pendingSegments.Add(-1)
+
+					err := util.CtxWithTimeout(context.Background(),
+						config.CloseCursorTimeout, cursor.Close)
+					if err != nil {
+						log.Ctx(ctx).Error(err, "Close cursor")
+					}
+				}()
 
 				err = cm.readSegment(ctx, readResultC, cursor, nextID)
 				if err != nil {
@@ -326,6 +334,10 @@ func (cm *CopyManager) copyCollection(
 					stopCollectionRead()
 				}
 			}()
+
+			if isCapped {
+				pendingSegments.Wait()
+			}
 		}
 	}()
 
@@ -384,13 +396,6 @@ func (cm *CopyManager) readSegment(
 	cur *mongo.Cursor,
 	nextID nextBatchIDFunc,
 ) error {
-	defer func() {
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
-		if err != nil {
-			log.Ctx(ctx).Error(err, "Close cursor")
-		}
-	}()
-
 	zl := log.Ctx(ctx).Unwrap()
 	batchID := nextID()
 	documents := make([]any, 0, config.MaxInsertBatchSize)
@@ -615,7 +620,7 @@ func NewSegmenter(
 	}
 
 	if stats.AvgObjSize == 0 {
-		return nil, ErrEOC
+		return nil, errEOC
 	}
 
 	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize]
@@ -630,17 +635,14 @@ func NewSegmenter(
 	}
 
 	//nolint:gosec
-	batchSize := int32(min(
-		int64(options.BatchSizeBytes)/stats.AvgObjSize,
-		config.MaxCloneReadBatchSizeBytes,
-	))
+	batchSize := int32(min(int64(options.BatchSizeBytes)/stats.AvgObjSize, math.MaxInt32))
 
 	mcoll := m.Database(ns.Database).Collection(ns.Collection)
 
 	idKeyRange, err := getIDKeyRange(ctx, mcoll)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, ErrEOC // empty collection
+			return nil, errEOC // empty collection
 		}
 
 		return nil, errors.Wrap(err, "get ID key range")
@@ -663,14 +665,11 @@ func NewSegmenter(
 	}
 
 	if len(keyRangeByType) == 0 {
-		return nil, ErrEOC // empty collection
+		return nil, errEOC // empty collection
 	}
 
 	currIDRange := keyRangeByType[0]
-	keyRanges := make([]keyRange, 0, len(keyRangeByType)-1)
-	for _, r := range slices.Backward(keyRangeByType[1:]) {
-		keyRanges = append(keyRanges, r)
-	}
+	keyRanges := keyRangeByType[1:]
 
 	s := &Segmenter{
 		mcoll:       mcoll,
@@ -692,7 +691,7 @@ func (seg *Segmenter) Next(ctx context.Context) (*mongo.Cursor, error) {
 	defer seg.lock.Unlock()
 
 	if seg.currIDRange.IsZero() {
-		return nil, ErrEOC
+		return nil, errEOC
 	}
 
 	for {
@@ -701,22 +700,22 @@ func (seg *Segmenter) Next(ctx context.Context) (*mongo.Cursor, error) {
 			return cur, nil // OK
 		}
 
-		if !errors.Is(err, ErrEOS) {
+		if !errors.Is(err, errEOS) {
 			return nil, errors.Wrap(err, "next cursor")
 		}
 
 		if len(seg.keyRanges) == 0 {
 			seg.currIDRange = keyRange{}
 
-			return nil, ErrEOC
+			return nil, errEOC
 		}
 
-		seg.currIDRange = seg.keyRanges[len(seg.keyRanges)-1]
+		seg.currIDRange = seg.keyRanges[0]
 
 		if len(seg.keyRanges) == 1 {
 			seg.keyRanges = nil
 		} else {
-			seg.keyRanges = seg.keyRanges[:len(seg.keyRanges)-1]
+			seg.keyRanges = seg.keyRanges[1:len(seg.keyRanges)]
 		}
 	}
 }
@@ -731,15 +730,11 @@ func (seg *Segmenter) Next(ctx context.Context) (*mongo.Cursor, error) {
 // - A cursor over the current segment if documents are found.
 func (seg *Segmenter) doNext(ctx context.Context) (*mongo.Cursor, error) {
 	if seg.currIDRange.Max.IsZero() {
-		return nil, ErrEOS // previous segment was the last one
+		return nil, errEOS // previous segment was the last one
 	}
 
 	maxKey, err := seg.findSegmentMaxKey(ctx, seg.currIDRange.Min, seg.currIDRange.Max)
 	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, ErrEOS
-		}
-
 		return nil, errors.Wrap(err, "find segment max _id")
 	}
 
@@ -865,15 +860,10 @@ func NewCappedSegmenter(
 	}
 
 	if stats.AvgObjSize == 0 {
-		return nil, ErrEOC
+		return nil, errEOC
 	}
 
-	//nolint:gosec
-	batchSize := int32(min(
-		int64(batchSizeBytes)/stats.AvgObjSize,
-		config.MaxCloneReadBatchSizeBytes,
-	))
-
+	batchSize := int32(min(int64(batchSizeBytes)/stats.AvgObjSize, math.MaxInt32)) //nolint:gosec
 	mcoll := m.Database(ns.Database).Collection(ns.Collection)
 
 	cs := &CappedSegmenter{
@@ -889,7 +879,7 @@ func (cs *CappedSegmenter) Next(ctx context.Context) (*mongo.Cursor, error) {
 	defer cs.lock.Unlock()
 
 	if cs.endOfColl {
-		return nil, ErrEOC
+		return nil, errEOC
 	}
 
 	cur, err := cs.mcoll.Find(ctx, bson.D{},
