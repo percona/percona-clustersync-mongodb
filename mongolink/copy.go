@@ -40,7 +40,6 @@ type CopyManager struct {
 	insertQueue chan insertBatchTask // channel for insert batch tasks
 	close       func()               // function to stop workers and clean up resources
 	collGroup   sync.WaitGroup       // tracks active collections being processed
-	collLimit   chan struct{}        // semaphore to limit concurrent collection clones
 	readLimit   chan struct{}        // semaphore to limit concurrent read workers
 }
 
@@ -62,9 +61,6 @@ type CopyUpdate struct {
 // CopyManagerOptions configures the behavior of CopyManager.
 // It controls concurrency settings and memory limits for collection cloning operations.
 type CopyManagerOptions struct {
-	// NumParallelCollections is the number of collections cloned in parallel.
-	// min: 1; default: 1 [config.DefaultCloneNumParallelCollection].
-	NumParallelCollections int
 	// NumReadWorkers is the total number of concurrent read workers.
 	// min: 1; default: [runtime.NumCPU] / 4.
 	NumReadWorkers int
@@ -84,9 +80,6 @@ type CopyManagerOptions struct {
 }
 
 func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
-	if options.NumParallelCollections < 1 {
-		options.NumParallelCollections = config.DefaultCloneNumParallelCollection
-	}
 	if options.NumReadWorkers < 1 {
 		options.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
 	}
@@ -109,7 +102,6 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 	}
 
 	lg := log.New("copy")
-	lg.Debugf("NumParallelCollections: %d", options.NumParallelCollections)
 	lg.Debugf("NumReadWorkers: %d", options.NumReadWorkers)
 	lg.Debugf("NumInsertWorkers: %d", options.NumInsertWorkers)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
@@ -129,7 +121,6 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 		options: options,
 
 		insertQueue: make(chan insertBatchTask),
-		collLimit:   make(chan struct{}, options.NumParallelCollections),
 		readLimit:   make(chan struct{}, options.NumReadWorkers),
 	}
 
@@ -152,7 +143,6 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 		once.Do(func() {
 			cancelInsert()
 			cm.collGroup.Wait()
-			close(cm.collLimit)
 			close(cm.readLimit)
 			close(cm.insertQueue)
 		})
@@ -179,15 +169,9 @@ func (cm *CopyManager) Do(
 ) <-chan CopyUpdate {
 	updateC := make(chan CopyUpdate, cm.options.NumInsertWorkers)
 
-	cm.collLimit <- struct{}{}
 	cm.collGroup.Add(1)
-
 	go func() {
-		defer func() {
-			close(updateC)
-			<-cm.collLimit
-			cm.collGroup.Done()
-		}()
+		defer func() { close(updateC); cm.collGroup.Done() }()
 
 		lg := log.New("copy").With(log.NS(namespace.Database, namespace.Collection))
 		err := cm.copyCollection(lg.WithContext(ctx), namespace, getSpec, updateC)

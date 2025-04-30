@@ -281,19 +281,18 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	copyLogger := log.Ctx(ctx)
 
+	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
+		NumReadWorkers:     config.CloneNumReadWorkers(),
+		NumInsertWorkers:   config.CloneNumInsertWorkers(),
+		SegmentSizeBytes:   config.CloneSegmentSizeBytes(),
+		ReadBatchSizeBytes: config.CloneReadBatchSizeBytes(),
+	})
+	defer copyManager.Close()
+
 	numParallelCollections := config.CloneNumParallelCollections()
 	if numParallelCollections < 1 {
 		numParallelCollections = config.DefaultCloneNumParallelCollection
 	}
-
-	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumParallelCollections: numParallelCollections,
-		NumReadWorkers:         config.CloneNumReadWorkers(),
-		NumInsertWorkers:       config.CloneNumInsertWorkers(),
-		SegmentSizeBytes:       config.CloneSegmentSizeBytes(),
-		ReadBatchSizeBytes:     config.CloneReadBatchSizeBytes(),
-	})
-	defer copyManager.Close()
 
 	eg, grpCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(numParallelCollections)
