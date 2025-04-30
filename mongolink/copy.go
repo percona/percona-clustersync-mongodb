@@ -302,7 +302,7 @@ func (cm *CopyManager) copyCollection(
 			go func() {
 				defer func() {
 					<-cm.readLimit
-					pendingSegments.Add(-1)
+					pendingSegments.Done()
 
 					err := util.CtxWithTimeout(context.Background(),
 						config.CloseCursorTimeout, cursor.Close)
@@ -351,7 +351,7 @@ func (cm *CopyManager) copyCollection(
 
 	// collect results from insert workers. notify caller
 	for insertResult := range insertResultC {
-		pendingInserts.Add(-1)
+		pendingInserts.Done()
 
 		updateC <- CopyUpdate{
 			Err:       insertResult.Err,
