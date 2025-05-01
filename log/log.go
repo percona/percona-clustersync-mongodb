@@ -44,10 +44,10 @@ func Elapsed(dur time.Duration) AttrFn {
 	}
 }
 
-// Field sets random field to the log.
-func Field(key string, val any) AttrFn {
+// Fields sets random fields to the log.
+func Fields(fieldsAndValues ...any) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
-		return l.Interface(key, val)
+		return l.Fields(fieldsAndValues)
 	}
 }
 

@@ -41,24 +41,34 @@ def test_update_one(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
-@pytest.mark.parametrize("phase", [Runner.Phase.CLONE])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
 
-    t.source["db_1"]["coll_1"].insert_one({"i": "f1", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
-    t.target["db_1"]["coll_1"].insert_one({"i": "f2", "arr_1": [j for j in range(5)], "arr_2": [k for k in range(5)]})
+    t.source["db_1"]["coll_1"].insert_one({"i": "f1", "a1": [j for j in range(5)], "f2":{"a1":[k for k in range(5)]}})
 
     with t.run(phase):
-        # Keep the first 3 elements of arr_1 and remove the rest
+        # Remove the second element of a1
         t.source["db_1"]["coll_1"].update_one(
             {"i": "f1"},
-            # [{"$set": {"arr_1": {"$slice": ["$arr_1", 3]}}}],
             [{ "$set": {
-                "arr_1": {
+                "a1": {
                 "$filter": {
-                    "input": "$arr_1",
+                    "input": "$a1",
                     "as": "arr",
                     "cond": {
-                    "$ne": ["$$arr", "C"]} # Remove "C"
+                    "$ne": ["$$arr", 2]}
+                }}}}])
+
+        # Remove the second element of nested f2.a1
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"},
+            [{ "$set": {
+                "f2.a1": {
+                "$filter": {
+                    "input": "$f2.a1",
+                    "as": "arr",
+                    "cond": {
+                    "$ne": ["$$arr", 2]}
                 }}}}])
 
     t.compare_all()

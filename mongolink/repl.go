@@ -507,7 +507,9 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 		case Update:
 			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
-			r.bulkWrite.Update(change.Namespace, &event)
+			c := r.target.Database(change.Namespace.Database).
+				Collection(change.Namespace.Collection)
+			r.bulkWrite.Update(change.Namespace, c, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 

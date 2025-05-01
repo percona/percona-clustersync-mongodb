@@ -3,6 +3,7 @@ package mongolink
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -34,7 +35,7 @@ type bulkWrite interface {
 	Do(ctx context.Context, m *mongo.Client) (int, error)
 
 	Insert(ns Namespace, event *InsertEvent)
-	Update(ns Namespace, event *UpdateEvent)
+	Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent)
 	Replace(ns Namespace, event *ReplaceEvent)
 	Delete(ns Namespace, event *DeleteEvent)
 }
@@ -84,17 +85,17 @@ func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (o *clientBulkWrite) Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
 		Model: &mongo.ClientUpdateOneModel{
 			Filter: event.DocumentKey,
-			Update: collectUpdateOps(event),
+			Update: collectUpdateOps(coll, event),
 		},
 	}
 
-	log.New("update event").With(log.Field("bulkWrite", bw)).Trace("Update command bulk write")
+	log.New("update event").With(log.Fields("bulkWrite", bw)).Trace("AAAAA Update command bulk write")
 	o.writes = append(o.writes, bw)
 }
 
@@ -185,10 +186,10 @@ func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.count++
 }
 
-func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (o *collectionBulkWrite) Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
-		Update: collectUpdateOps(event),
+		Update: collectUpdateOps(coll, event),
 	})
 
 	o.count++
@@ -211,95 +212,101 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.count++
 }
 
-func collectUpdateOps(event *UpdateEvent) bson.A {
+func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 	lg := log.New("update event")
 
-	ops := make(bson.A, 0)
+	updateDoc := bson.D{}
+	setFields := bson.D{}
+	unsetFields := bson.D{}
 
-	// Handle truncated arrays
-	var truncatedFields map[string]struct{}
-
-	if len(event.UpdateDescription.TruncatedArrays) != 0 {
-		truncatedFields = make(map[string]struct{}, len(event.UpdateDescription.TruncatedArrays))
-		for _, truncation := range event.UpdateDescription.TruncatedArrays {
-
-			truncatedFields[truncation.Field] = struct{}{}
-
-			d := bson.D{{Key: "$set", Value: bson.D{
-				{Key: truncation.Field, Value: bson.D{
-					{Key: "$slice", Value: bson.A{"$" + truncation.Field, truncation.NewSize}},
-				}},
-			}}}
-
-			ops = append(ops, d)
+	// $set for updated fields (non-array paths)
+	for _, field := range event.UpdateDescription.UpdatedFields {
+		if len(event.UpdateDescription.TruncatedArrays) == 0 || !isArrayPath(field.Key) {
+			setFields = append(setFields, bson.E{Key: field.Key, Value: field.Value})
 		}
-		lg.With(log.Field("fields", truncatedFields)).Trace("Truncated fields")
 	}
 
-	// Handle updated fields
-	if len(event.UpdateDescription.UpdatedFields) != 0 {
+	// $unset for removed fields
+	for _, field := range event.UpdateDescription.RemovedFields {
+		unsetFields = append(unsetFields, bson.E{Key: field, Value: ""})
+	}
+
+	var origDoc bson.Raw
+	var err error
+
+	if len(event.UpdateDescription.TruncatedArrays) > 0 {
+		origDoc, err = coll.
+			FindOne(context.Background(), bson.M{"_id": event.DocumentKey[0].Value}).Raw()
+		if err != nil {
+			lg.Error(err, "find original document")
+			return nil
+		}
+	}
+
+	for _, ta := range event.UpdateDescription.TruncatedArrays {
+		origArr, ok := getArray(origDoc, ta.Field)
+		if !ok {
+			lg.Error(nil, "missing array field")
+			return nil
+		}
+
+		newArr := origArr[:ta.NewSize]
+
 		for _, field := range event.UpdateDescription.UpdatedFields {
-			fieldName := strings.Split(field.Key, ".")[0]
-			lg.With(log.Field("field", fieldName)).Trace("Update field")
-
-			if _, ok := truncatedFields[fieldName]; ok {
-				lg.With(log.Field("field", fieldName)).Trace("Truncated field detected")
-
-				d := bson.D{{
-					Key: "$set", Value: bson.D{
-						{
-							fieldName, bson.D{
-								{
-									Key: "$let", Value: bson.D{
-										{
-											Key:   "vars",
-											Value: bson.D{{"p", "$" + fieldName}},
-										},
-										{
-											Key: "in", Value: bson.D{
-												{
-													Key: "$concatArrays", Value: bson.A{
-														bson.A{field.Value}, // New first element
-														bson.D{{Key: "$slice", Value: bson.A{
-															"$$p", 1,
-															bson.D{{Key: "$size", Value: "$$p"}},
-														}}},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				}}
-				ops = append(ops, d)
-			} else {
-				d := bson.D{{Key: "$set", Value: bson.D{
-					{Key: field.Key, Value: field.Value},
-				}}}
-				ops = append(ops, d)
+			if strings.HasPrefix(field.Key, ta.Field+".") {
+				indexStr := strings.TrimPrefix(field.Key, ta.Field+".") // extract the index
+				if index, err := strconv.Atoi(indexStr); err == nil && index < int(ta.NewSize) {
+					newArr[index] = field.Value
+				}
 			}
 		}
+		setFields = append(setFields, bson.E{Key: ta.Field, Value: newArr})
 	}
 
-	// Handle removed fields
-	if len(event.UpdateDescription.RemovedFields) != 0 {
-		unsetFields := make(bson.A, len(event.UpdateDescription.RemovedFields))
-		for i, field := range event.UpdateDescription.RemovedFields {
-			unsetFields[i] = field
+	if len(setFields) > 0 {
+		updateDoc = append(updateDoc, bson.E{Key: "$set", Value: setFields})
+	}
+	if len(unsetFields) > 0 {
+		updateDoc = append(updateDoc, bson.E{Key: "$unset", Value: unsetFields})
+	}
+
+	return updateDoc
+}
+
+// isArrayPath checks if the the path is an path to an array index (e.g. "a.b.1").
+func isArrayPath(field string) bool {
+	parts := strings.Split(field, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	_, err := strconv.Atoi(parts[len(parts)-1])
+	return err == nil
+}
+
+// getArray retrieves an array from a BSON document at the specified path.
+func getArray(doc bson.Raw, path string) ([]any, bool) {
+	log.New("").With(log.Fields("doc", doc)).Debug("getArray")
+
+	parts := strings.Split(path, ".")
+	current := doc
+
+	for _, part := range parts {
+		val := current.Lookup(part)
+		if val.Type == 0 {
+			return nil, false
 		}
-		ops = append(ops, bson.D{{Key: "$unset", Value: unsetFields}})
+		if val.Type == bson.TypeEmbeddedDocument {
+			current = val.Document()
+		} else if val.Type == bson.TypeArray && part == parts[len(parts)-1] {
+			var arr []any
+			if err := val.Unmarshal(&arr); err != nil {
+				return nil, false
+			}
+			return arr, true
+		} else {
+			return nil, false
+		}
 	}
 
-	// Handle disambiguated paths
-	if len(event.UpdateDescription.DisambiguatedPaths) != 0 {
-		dpu := bson.D{}
-		dpu = append(dpu, event.UpdateDescription.DisambiguatedPaths...)
-		ops = append(ops, bson.E{Key: "$set", Value: dpu})
-	}
-
-	lg.With(log.Field("opts", ops)).Trace("Update command options")
-	return ops
+	return nil, false
 }
