@@ -1,4 +1,4 @@
-package mongolink
+package mongolink //nolint
 
 import (
 	"testing"
@@ -37,12 +37,18 @@ func TestGetArray(t *testing.T) {
 		t.Fatalf("failed to marshal BSON: %v", err)
 	}
 
-	got, _ := getArray(doc, "arr")
-	if len(got) != 5 {
-		t.Errorf("got = %v, want %v", got, 5)
+	tests := []struct {
+		path   string
+		length int
+	}{
+		{"arr", 5},
+		{"f2.arr", 6},
 	}
-	got, _ = getArray(doc, "f2.arr")
-	if len(got) != 6 {
-		t.Errorf("got = %v, want %v", got, 6)
+
+	for _, test := range tests {
+		got, _ := getArray(doc, test.path)
+		if len(got) != test.length {
+			t.Errorf("got = %v, want %v", got, test.length)
+		}
 	}
 }

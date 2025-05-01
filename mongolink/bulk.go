@@ -239,6 +239,7 @@ func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 			FindOne(context.Background(), bson.M{"_id": event.DocumentKey[0].Value}).Raw()
 		if err != nil {
 			lg.Error(err, "find original document")
+
 			return nil
 		}
 	}
@@ -247,6 +248,7 @@ func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 		origArr, ok := getArray(origDoc, ta.Field)
 		if !ok {
 			lg.Error(nil, "missing array field")
+
 			return nil
 		}
 
@@ -276,10 +278,12 @@ func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 // isArrayPath checks if the the path is an path to an array index (e.g. "a.b.1").
 func isArrayPath(field string) bool {
 	parts := strings.Split(field, ".")
-	if len(parts) < 2 {
+	if len(parts) < 2 { //nolint:mnd
 		return false
 	}
+
 	_, err := strconv.Atoi(parts[len(parts)-1])
+
 	return err == nil
 }
 
@@ -295,17 +299,23 @@ func getArray(doc bson.Raw, path string) ([]any, bool) {
 		if val.Type == 0 {
 			return nil, false
 		}
+
 		if val.Type == bson.TypeEmbeddedDocument {
 			current = val.Document()
-		} else if val.Type == bson.TypeArray && part == parts[len(parts)-1] {
+
+			continue
+		}
+
+		if val.Type == bson.TypeArray && part == parts[len(parts)-1] {
 			var arr []any
 			if err := val.Unmarshal(&arr); err != nil {
 				return nil, false
 			}
+
 			return arr, true
-		} else {
-			return nil, false
 		}
+
+		return nil, false
 	}
 
 	return nil, false
