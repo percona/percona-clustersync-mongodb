@@ -289,8 +289,6 @@ func isArrayPath(field string) bool {
 
 // getArray retrieves an array from a BSON document at the specified path.
 func getArray(doc bson.Raw, path string) ([]any, bool) {
-	log.New("").With(log.Fields("doc", doc)).Debug("getArray")
-
 	parts := strings.Split(path, ".")
 	current := doc
 

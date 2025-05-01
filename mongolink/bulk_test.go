@@ -6,7 +6,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestIsArrayPath(t *testing.T) {
+func TestIsArrayPath(t *testing.T) { //nolint:paralleltest
 	tests := []struct {
 		path string
 		want bool
@@ -25,7 +25,7 @@ func TestIsArrayPath(t *testing.T) {
 	}
 }
 
-func TestGetArray(t *testing.T) {
+func TestGetArray(t *testing.T) { //nolint:paralleltest
 	doc, err := bson.Marshal(bson.D{
 		{"f1", "v1"},
 		{"arr", bson.A{"A", "B", "C", "D", "E"}},
