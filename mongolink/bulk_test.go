@@ -13,7 +13,7 @@ func TestIsArrayPath(t *testing.T) { //nolint:paralleltest
 	}{
 		{"a.1", true},
 		{"a.b.1", true},
-		{"a.b.c.1", true},
+		{"a.b.2.1", true},
 		{"a.b.c.d", false},
 	}
 
@@ -31,6 +31,7 @@ func TestGetArray(t *testing.T) { //nolint:paralleltest
 		{"arr", bson.A{"A", "B", "C", "D", "E"}},
 		{"f2", bson.D{
 			{"arr", bson.A{"A", "B", "C", "D", "E", "F"}},
+			{"2", bson.A{"A", "B", "C"}},
 		}},
 	})
 	if err != nil {
@@ -43,6 +44,7 @@ func TestGetArray(t *testing.T) { //nolint:paralleltest
 	}{
 		{"arr", 5},
 		{"f2.arr", 6},
+		{"f2.2", 3},
 	}
 
 	for _, test := range tests {
