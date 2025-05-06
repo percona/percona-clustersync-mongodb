@@ -511,3 +511,14 @@ def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
     with t.run(phase=Runner.Phase.APPLY):
         t.target["db_0"]["coll_0"].drop()
         t.source["db_0"]["coll_0"].drop_index([("i", 1)])
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(300)
+def test_pml_135_clone_numerous_indexes_deadlock(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+        for i in range(200):
+            for j in range(50):
+                t.source["db_1"][f"coll_{i:03d}"].create_index([(f"prop_{j:02d}", 1)])
+
+    t.compare_all()
