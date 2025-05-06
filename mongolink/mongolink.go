@@ -119,7 +119,7 @@ func (ml *MongoLink) Checkpoint(context.Context) ([]byte, error) {
 		return nil, nil
 	}
 
-	// lock writes during checkpoint
+	// prevent catalog changes during checkpoint
 	ml.catalog.LockWrite()
 	defer ml.catalog.UnlockWrite()
 

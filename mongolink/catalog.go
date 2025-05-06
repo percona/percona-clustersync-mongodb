@@ -112,9 +112,13 @@ func (c *Catalog) UnlockWrite() {
 	c.lock.RUnlock()
 }
 
+// Checkpoint returns [catalogCheckpoint] as a part of recovery mechanism.
+//
+// The [Catalog.LockWrite] must be called before the function is called and
+// the [Catalog.UnlockWrite] must be called after the return value is no used anymore.
 func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	// do not call [sync.RWMutex.RLock] to avoid deadlock through recursive read-locking
+	// that may happen during clone or change replication
 
 	if len(c.Databases) == 0 {
 		return nil
