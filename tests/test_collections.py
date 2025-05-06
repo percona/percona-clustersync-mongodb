@@ -564,10 +564,11 @@ def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(30)
-def test_pml_119_clone_collect_size_map_deadlock(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE):
-        for i in range(50):
-            t.source[f"db_{i}"]["coll"].insert_one({})
+@pytest.mark.timeout(300)
+def test_pml_119_clone_numerous_collections_deadlock(t: Testing):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+        for i in range(1000):
+            for j in range(10):
+                t.source[f"db_{i:03d}"][f"coll_{j:02d}"].insert_one({})
 
     t.compare_all()
