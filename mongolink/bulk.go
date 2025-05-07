@@ -256,8 +256,8 @@ func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 
 		for _, field := range event.UpdateDescription.UpdatedFields {
 			if strings.HasPrefix(field.Key, ta.Field+".") {
-				indexStr := strings.TrimPrefix(field.Key, ta.Field+".") // extract the index
-				if index, err := strconv.Atoi(indexStr); err == nil && index < int(ta.NewSize) {
+				idx := strings.TrimPrefix(field.Key, ta.Field+".") // extract the index
+				if index, err := strconv.Atoi(idx); err == nil && index < int(ta.NewSize) {
 					newArr[index] = field.Value
 				}
 			}
