@@ -275,7 +275,7 @@ func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
 	return updateDoc
 }
 
-// isArrayPath checks if the the path is an path to an array index (e.g. "a.b.1").
+// isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
 func isArrayPath(field string) bool {
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 { //nolint:mnd
