@@ -95,7 +95,6 @@ func (o *clientBulkWrite) Update(ns Namespace, coll *mongo.Collection, event *Up
 		},
 	}
 
-	log.New("update event").With(log.Fields("bulkWrite", bw)).Trace("AAAAA Update command bulk write")
 	o.writes = append(o.writes, bw)
 }
 
