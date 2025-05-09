@@ -35,7 +35,7 @@ type bulkWrite interface {
 	Do(ctx context.Context, m *mongo.Client) (int, error)
 
 	Insert(ns Namespace, event *InsertEvent)
-	Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent)
+	Update(ns Namespace, event *UpdateEvent)
 	Replace(ns Namespace, event *ReplaceEvent)
 	Delete(ns Namespace, event *DeleteEvent)
 }
@@ -85,13 +85,13 @@ func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.writes = append(o.writes, bw)
 }
 
-func (o *clientBulkWrite) Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent) {
+func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
 		Model: &mongo.ClientUpdateOneModel{
 			Filter: event.DocumentKey,
-			Update: collectUpdateOps(coll, event),
+			Update: collectUpdateOps(event),
 		},
 	}
 
@@ -185,10 +185,10 @@ func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	o.count++
 }
 
-func (o *collectionBulkWrite) Update(ns Namespace, coll *mongo.Collection, event *UpdateEvent) {
+func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	o.writes[ns] = append(o.writes[ns], &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
-		Update: collectUpdateOps(coll, event),
+		Update: collectUpdateOps(event),
 	})
 
 	o.count++
@@ -211,67 +211,59 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.count++
 }
 
-func collectUpdateOps(coll *mongo.Collection, event *UpdateEvent) bson.D {
+func collectUpdateOps(event *UpdateEvent) bson.A {
 	lg := log.New("update event")
 
-	updateDoc := bson.D{}
-	setFields := bson.D{}
-	unsetFields := bson.D{}
+	pipeline := make(bson.A, 0)
 
-	// $set for updated fields (non-array paths)
+	// Handle truncated arrays
+	for _, truncation := range event.UpdateDescription.TruncatedArrays {
+		stage := bson.D{{Key: "$set", Value: bson.D{
+			{Key: truncation.Field, Value: bson.D{
+				{Key: "$slice", Value: bson.A{"$" + truncation.Field, truncation.NewSize}},
+			}},
+		}}}
+
+		pipeline = append(pipeline, stage)
+	}
+
+	// Handle updated fields
 	for _, field := range event.UpdateDescription.UpdatedFields {
-		if len(event.UpdateDescription.TruncatedArrays) == 0 || !isArrayPath(field.Key) {
-			setFields = append(setFields, bson.E{Key: field.Key, Value: field.Value})
+		if isArrayPath(field.Key) {
+			parts := strings.Split(field.Key, ".")
+			fieldName := strings.Join(parts[:len(parts)-1], ".")
+			fieldIdx, _ := strconv.Atoi(parts[len(parts)-1])
+
+			stage := bson.D{{
+				"$set", bson.D{
+					{fieldName, bson.D{
+						{"$concatArrays", bson.A{
+							bson.D{{"$slice", bson.A{"$" + fieldName, fieldIdx}}},
+							bson.A{field.Value},
+							bson.D{{"$slice", bson.A{"$" + fieldName, fieldIdx + 2, bson.D{{"$size", "$" + fieldName}}}}},
+						}},
+					}},
+				},
+			}}
+
+			pipeline = append(pipeline, stage)
+		} else {
+			stage := bson.D{{Key: "$set", Value: bson.D{
+				{Key: field.Key, Value: field.Value},
+			}}}
+
+			pipeline = append(pipeline, stage)
 		}
 	}
 
-	// $unset for removed fields
-	for _, field := range event.UpdateDescription.RemovedFields {
-		unsetFields = append(unsetFields, bson.E{Key: field, Value: ""})
+	// Handle removed fields
+	if len(event.UpdateDescription.RemovedFields) != 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$unset", Value: event.UpdateDescription.RemovedFields}})
 	}
 
-	var origDoc bson.Raw
-	var err error
+	lg.With(log.Fields("opts", pipeline)).Trace("Update command pipeline")
 
-	if len(event.UpdateDescription.TruncatedArrays) > 0 {
-		origDoc, err = coll.
-			FindOne(context.Background(), bson.M{"_id": event.DocumentKey[0].Value}).Raw()
-		if err != nil {
-			lg.Error(err, "find original document")
-
-			return nil
-		}
-	}
-
-	for _, ta := range event.UpdateDescription.TruncatedArrays {
-		origArr, ok := getArray(origDoc, ta.Field)
-		if !ok {
-			lg.Error(nil, "missing array field")
-
-			return nil
-		}
-
-		newArr := origArr[:ta.NewSize]
-
-		for _, field := range event.UpdateDescription.UpdatedFields {
-			if strings.HasPrefix(field.Key, ta.Field+".") {
-				idx := strings.TrimPrefix(field.Key, ta.Field+".") // extract the index
-				if index, err := strconv.Atoi(idx); err == nil && index < int(ta.NewSize) {
-					newArr[index] = field.Value
-				}
-			}
-		}
-		setFields = append(setFields, bson.E{Key: ta.Field, Value: newArr})
-	}
-
-	if len(setFields) > 0 {
-		updateDoc = append(updateDoc, bson.E{Key: "$set", Value: setFields})
-	}
-	if len(unsetFields) > 0 {
-		updateDoc = append(updateDoc, bson.E{Key: "$unset", Value: unsetFields})
-	}
-
-	return updateDoc
+	return pipeline
 }
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
@@ -284,36 +276,4 @@ func isArrayPath(field string) bool {
 	_, err := strconv.Atoi(parts[len(parts)-1])
 
 	return err == nil
-}
-
-// getArray retrieves an array from a BSON document at the specified path.
-func getArray(doc bson.Raw, path string) ([]any, bool) {
-	parts := strings.Split(path, ".")
-	current := doc
-
-	for _, part := range parts {
-		val := current.Lookup(part)
-		if val.Type == 0 {
-			return nil, false
-		}
-
-		if val.Type == bson.TypeEmbeddedDocument {
-			current = val.Document()
-
-			continue
-		}
-
-		if val.Type == bson.TypeArray && part == parts[len(parts)-1] {
-			var arr []any
-			if err := val.Unmarshal(&arr); err != nil {
-				return nil, false
-			}
-
-			return arr, true
-		}
-
-		return nil, false
-	}
-
-	return nil, false
 }
