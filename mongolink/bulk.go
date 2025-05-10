@@ -252,7 +252,7 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 							bson.A{field.Value},
 							bson.D{{
 								"$slice",
-								bson.A{fieldExpr, fieldIdx + 2, bson.D{{"$size", fieldExpr}}},
+								bson.A{fieldExpr, fieldIdx + 1, bson.D{{"$size", fieldExpr}}},
 							}},
 						}},
 					}},

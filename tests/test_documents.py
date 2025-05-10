@@ -90,6 +90,11 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             ],
         )
 
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"},
+            {"$set": {"a1.1": "X"}},
+        )
+
     t.compare_all()
 
 
