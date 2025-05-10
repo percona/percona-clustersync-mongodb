@@ -41,44 +41,57 @@ def test_update_one(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
+
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
-    t.source["db_1"]["coll_1"].insert_one({"i": "f1", "a1": ["A", "B", "C", "D","E"], "f2":{"0":["A", "B", "C", "D","E"], "1":"val"}})
-    t.target["db_1"]["coll_1"].insert_one({"i": "f1", "a1": ["A", "B", "C", "D","E"], "f2":{"0":["A", "B", "C", "D","E"], "1":"val"}})
+    t.source["db_1"]["coll_1"].insert_one(
+        {
+            "i": "f1",
+            "a1": ["A", "B", "C", "D", "E"],
+            "f2": {"0": ["A", "B", "C", "D", "E"], "1": "val"},
+        }
+    )
+    t.target["db_1"]["coll_1"].insert_one(
+        {
+            "i": "f1",
+            "a1": ["A", "B", "C", "D", "E"],
+            "f2": {"0": ["A", "B", "C", "D", "E"], "1": "val"},
+        }
+    )
 
     with t.run(phase):
-        # Remove the second element of a1
         t.source["db_1"]["coll_1"].update_one(
             {"i": "f1"},
-            [{ "$set": {
-                "a1": {
-                "$filter": {
-                    "input": "$a1",
-                    "as": "arr",
-                    "cond": {
-                    "$ne": ["$$arr", "C"]}
-                }}}}])
-
-        # Remove the second element of nested f2.a1
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"},
-            [{ "$set": {
-                "f2.0": {
-                "$filter": {
-                    "input": "$f2.0",
-                    "as": "arr",
-                    "cond": {
-                    "$ne": ["$$arr", "C"]}
-                }}}}])
-
-        # Update the val of nested f2.1 field
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"},
-            [{ "$set": {
-                "f2.1": "new-val"
-                }}])
+            [
+                {  # Remove the second element of a1
+                    "$set": {
+                        "a1": {
+                            "$filter": {
+                                "input": "$a1",
+                                "as": "arr",
+                                "cond": {"$ne": ["$$arr", "C"]},
+                            }
+                        }
+                    }
+                },
+                {  # Remove the second element of nested f2.a1
+                    "$set": {
+                        "f2.0": {
+                            "$filter": {
+                                "input": "$f2.0",
+                                "as": "arr",
+                                "cond": {"$ne": ["$$arr", "C"]},
+                            }
+                        }
+                    }
+                },
+                # Update the val of nested f2.1 field
+                {"$set": {"f2.1": "new-val"}},
+            ],
+        )
 
     t.compare_all()
+
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_update_many(t: Testing, phase: Runner.Phase):
