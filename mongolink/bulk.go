@@ -216,6 +216,15 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 
 	pipeline := make(bson.A, 0)
 
+	var dp map[string][]any
+
+	if event.UpdateDescription.DisambiguatedPaths != nil {
+		dp = make(map[string][]any, len(event.UpdateDescription.DisambiguatedPaths))
+		for _, path := range event.UpdateDescription.DisambiguatedPaths {
+			dp[path.Key] = path.Value.(bson.A) //nolint:forcetypeassert
+		}
+	}
+
 	// Handle truncated arrays
 	for _, truncation := range event.UpdateDescription.TruncatedArrays {
 		stage := bson.D{{Key: "$set", Value: bson.D{
@@ -229,18 +238,22 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 
 	// Handle updated fields
 	for _, field := range event.UpdateDescription.UpdatedFields {
-		if isArrayPath(field.Key) {
+		if isArrayPath(field.Key, dp) {
 			parts := strings.Split(field.Key, ".")
 			fieldName := strings.Join(parts[:len(parts)-1], ".")
 			fieldIdx, _ := strconv.Atoi(parts[len(parts)-1])
+			fieldExpr := "$" + fieldName
 
 			stage := bson.D{{
 				"$set", bson.D{
 					{fieldName, bson.D{
 						{"$concatArrays", bson.A{
-							bson.D{{"$slice", bson.A{"$" + fieldName, fieldIdx}}},
+							bson.D{{"$slice", bson.A{fieldExpr, fieldIdx}}},
 							bson.A{field.Value},
-							bson.D{{"$slice", bson.A{"$" + fieldName, fieldIdx + 2, bson.D{{"$size", "$" + fieldName}}}}},
+							bson.D{{
+								"$slice",
+								bson.A{fieldExpr, fieldIdx + 2, bson.D{{"$size", fieldExpr}}},
+							}},
 						}},
 					}},
 				},
@@ -267,7 +280,18 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 }
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
-func isArrayPath(field string) bool {
+func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
+	if path, ok := disambiguatedPaths[field]; ok {
+		for _, p := range path {
+			switch p.(type) {
+			case int, int8, int16, int32, int64:
+				return true
+			}
+
+			return false
+		}
+	}
+
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 { //nolint:mnd
 		return false
