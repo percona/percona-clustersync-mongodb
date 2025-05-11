@@ -274,7 +274,7 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 		pipeline = append(pipeline, bson.D{{Key: "$unset", Value: event.UpdateDescription.RemovedFields}})
 	}
 
-	lg.With(log.Fields("opts", pipeline)).Trace("Update command pipeline")
+	lg.With(log.Fields("pipeline", pipeline)).Trace("Update command pipeline")
 
 	return pipeline
 }
