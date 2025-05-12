@@ -26,8 +26,8 @@ def test_insert_many(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_update_one(t: Testing, phase: Runner.Phase):
-    t.source["db_1"]["coll_1"].insert_many([{"i": i} for i in range(5)])
-    t.target["db_1"]["coll_1"].insert_many([{"i": i} for i in range(5)])
+    t.source["db_1"]["coll_1"].insert_many([{"i": i, "j": i + 1} for i in range(5)])
+    t.target["db_1"]["coll_1"].insert_many([{"i": i, "j": i + 1} for i in range(5)])
 
     with t.run(phase):
         for i in range(5):
@@ -36,6 +36,7 @@ def test_update_one(t: Testing, phase: Runner.Phase):
                 {
                     "$inc": {"i": (i * 100) - i},
                     "$set": {f"field_{i}": f"value_{i}"},
+                    "$unset": {f"j": 1},
                 },
             )
 
@@ -47,15 +48,17 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
     t.source["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
-            "a1": ["A", "B", "C", "D", "E"],
-            "f2": {"0": ["A", "B", "C", "D", "E"], "1": "val"},
+            "a1": ["A", "B", "C", "D", "B", "B", "E"],
+            "a2": [1, 2, 3, 4, 5],
+            "f2": {"0": [{"i": i, "j": i} for i in range(5)], "1": "val"},
         }
     )
     t.target["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
-            "a1": ["A", "B", "C", "D", "E"],
-            "f2": {"0": ["A", "B", "C", "D", "E"], "1": "val"},
+            "a1": ["A", "B", "C", "D", "B", "B", "E"],
+            "a2": [1, 2, 3, 4, 5],
+            "f2": {"0": [{"i": i, "j": i} for i in range(5)], "1": "val"},
         }
     )
 
@@ -74,13 +77,13 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
                         }
                     }
                 },
-                {  # Remove the second element of nested f2.a1
+                {  # Remove the third element of nested f2.0 array
                     "$set": {
                         "f2.0": {
                             "$filter": {
                                 "input": "$f2.0",
                                 "as": "arr",
-                                "cond": {"$ne": ["$$arr", "C"]},
+                                "cond": {"$ne": ["$$arr", {"i": 2}]},
                             }
                         }
                     }
@@ -90,9 +93,39 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             ],
         )
 
+        # Update the second element of the a1 array
         t.source["db_1"]["coll_1"].update_one(
             {"i": "f1"},
             {"$set": {"a1.1": "X"}},
+        )
+
+        # Add new element to the f2.0 array
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"}, [{"$set": {"f2.0": {"$concatArrays": ["$f2.0", [{"i": 5, "j": 5}]]}}}]
+        )
+
+        # Remove all occurrences of "B" from the a1 array
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"},
+            [
+                {
+                    "$set": {
+                        "a1": {
+                            "$filter": {"input": "$a1", "as": "a", "cond": {"$ne": ["$$a", "B"]}}
+                        }
+                    }
+                }
+            ],
+        )
+
+        # Reverse the a2 array
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"}, [{"$set": {"a2": {"$reverseArray": "$a2"}}}]
+        )
+
+        # Remove first 3 elements from the f2.0 array
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"}, [{"$set": {"f2.0": {"$slice": ["$f2.0", -3]}}}]
         )
 
     t.compare_all()

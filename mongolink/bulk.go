@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
 )
 
 //nolint:gochecknoglobals
@@ -212,8 +211,6 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 }
 
 func collectUpdateOps(event *UpdateEvent) bson.A {
-	lg := log.New("update event")
-
 	pipeline := make(bson.A, 0)
 
 	var dp map[string][]any
@@ -273,8 +270,6 @@ func collectUpdateOps(event *UpdateEvent) bson.A {
 	if len(event.UpdateDescription.RemovedFields) != 0 {
 		pipeline = append(pipeline, bson.D{{Key: "$unset", Value: event.UpdateDescription.RemovedFields}})
 	}
-
-	lg.With(log.Fields("pipeline", pipeline)).Trace("Update command pipeline")
 
 	return pipeline
 }
