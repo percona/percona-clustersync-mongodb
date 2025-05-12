@@ -50,7 +50,7 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             "i": "f1",
             "a1": ["A", "B", "C", "D", "B", "B", "E"],
             "a2": [1, 2, 3, 4, 5],
-            "f2": {"0": [{"i": i, "j": i} for i in range(5)], "1": "val"},
+            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
         }
     )
     t.target["db_1"]["coll_1"].insert_one(
@@ -58,7 +58,7 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             "i": "f1",
             "a1": ["A", "B", "C", "D", "B", "B", "E"],
             "a2": [1, 2, 3, 4, 5],
-            "f2": {"0": [{"i": i, "j": i} for i in range(5)], "1": "val"},
+            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
         }
     )
 
@@ -99,9 +99,15 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             {"$set": {"a1.1": "X"}},
         )
 
+        # Update `0` field of the first element of the f2.0 array
+        t.source["db_1"]["coll_1"].update_one(
+            {"i": "f1"},
+            {"$set": {"f2.0.3.0": 99}},
+        )
+
         # Add new element to the f2.0 array
         t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"}, [{"$set": {"f2.0": {"$concatArrays": ["$f2.0", [{"i": 5, "j": 5}]]}}}]
+            {"i": "f1"}, [{"$set": {"f2.0": {"$concatArrays": ["$f2.0", [{"i": 5, "0": 5}]]}}}]
         )
 
         # Remove all occurrences of "B" from the a1 array
