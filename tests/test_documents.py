@@ -48,6 +48,7 @@ def test_update_one_complex(t: Testing, phase: Runner.Phase):
         [
             {
                 "i": i,
+                "j": i,
                 "a1": ["A", "B", "C", "D", "E"],
                 "a2": [1, 2, 3, 4, 5],
                 "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
@@ -58,7 +59,7 @@ def test_update_one_complex(t: Testing, phase: Runner.Phase):
     t.target["db_1"]["coll_1"].insert_many(
         [
             {
-                "i": i,
+                "j": i,
                 "a1": ["A", "B", "C", "D", "E"],
                 "a2": [1, 2, 3, 4, 5],
                 "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
@@ -178,7 +179,6 @@ def test_update_one_with_nested_path(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.xfail
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_update_one_multiple_arrays(t: Testing, phase: Runner.Phase):
     doc = {

@@ -327,8 +327,10 @@ func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
 				return true
 			}
 
-			return false
+			continue
 		}
+
+		return false
 	}
 
 	parts := strings.Split(field, ".")
