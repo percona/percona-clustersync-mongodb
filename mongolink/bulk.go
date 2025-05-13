@@ -211,7 +211,10 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 }
 
 func collectUpdateOps(event *UpdateEvent) bson.A {
-	pipeline := make(bson.A, 0)
+	s := len(event.UpdateDescription.UpdatedFields) +
+		len(event.UpdateDescription.RemovedFields) +
+		len(event.UpdateDescription.TruncatedArrays)
+	pipeline := make(bson.A, 0, s)
 
 	var dp map[string][]any
 
