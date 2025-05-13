@@ -44,13 +44,6 @@ func Elapsed(dur time.Duration) AttrFn {
 	}
 }
 
-// Fields sets random fields to the log.
-func Fields(fieldsAndValues ...any) AttrFn {
-	return func(l zerolog.Context) zerolog.Context {
-		return l.Fields(fieldsAndValues)
-	}
-}
-
 // Op sets the operation attribute.
 func Op(op string) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
