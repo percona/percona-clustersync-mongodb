@@ -96,14 +96,16 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
         {
             "i": "f1",
             "a1": ["A", "B", "C", "D", "B", "B", "E", "F", "G"],
-            "f2": {"0": [{"i": i, "0": i} for i in range(8)]},
+            "j": "val",
+            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
         }
     )
     t.target["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
             "a1": ["A", "B", "C", "D", "B", "B", "E", "F", "G"],
-            "f2": {"0": [{"i": i, "0": i} for i in range(8)]},
+            "j": "val",
+            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
         }
     )
 
@@ -133,6 +135,10 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
                         }
                     }
                 },
+                # Remove first elements from the f2.0 array
+                {"$set": {"f2.0": {"$slice": ["$f2.0", -7]}}},
+                {"$set": {"f2.1": "new-val"}},
+                {"$unset": ["j"]},
             ],
         )
 
@@ -148,11 +154,6 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
                     }
                 }
             ],
-        )
-
-        # Remove first 3 elements from the f2.0 array
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"}, [{"$set": {"f2.0": {"$slice": ["$f2.0", -7]}}}]
         )
 
     t.compare_all()
