@@ -210,7 +210,31 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.count++
 }
 
-func collectUpdateOps(event *UpdateEvent) bson.A {
+func collectUpdateOps(event *UpdateEvent) any {
+	if len(event.UpdateDescription.TruncatedArrays) != 0 {
+		return collectUpdateOpsWithPipeline(event)
+	}
+
+	ops := make(bson.D, 0, 2) //nolint:mnd
+
+	if len(event.UpdateDescription.UpdatedFields) != 0 {
+		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
+	}
+
+	if len(event.UpdateDescription.RemovedFields) != 0 {
+		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
+		for i, field := range event.UpdateDescription.RemovedFields {
+			fields[i].Key = field
+			fields[i].Value = 1
+		}
+
+		ops = append(ops, bson.E{"$unset", fields})
+	}
+
+	return ops
+}
+
+func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 	s := len(event.UpdateDescription.UpdatedFields) +
 		len(event.UpdateDescription.RemovedFields) +
 		len(event.UpdateDescription.TruncatedArrays)

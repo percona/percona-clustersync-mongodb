@@ -26,8 +26,28 @@ def test_insert_many(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_update_one(t: Testing, phase: Runner.Phase):
-    t.source["db_1"]["coll_1"].insert_many([{"i": i, "j": i + 1} for i in range(5)])
-    t.target["db_1"]["coll_1"].insert_many([{"i": i, "j": i + 1} for i in range(5)])
+    t.source["db_1"]["coll_1"].insert_many(
+        [
+            {
+                "i": i,
+                "a1": ["A", "B", "C", "D", "E"],
+                "a2": [1, 2, 3, 4, 5],
+                "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
+            }
+            for i in range(5)
+        ]
+    )
+    t.target["db_1"]["coll_1"].insert_many(
+        [
+            {
+                "i": i,
+                "a1": ["A", "B", "C", "D", "E"],
+                "a2": [1, 2, 3, 4, 5],
+                "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
+            }
+            for i in range(5)
+        ]
+    )
 
     with t.run(phase):
         for i in range(5):
@@ -40,6 +60,33 @@ def test_update_one(t: Testing, phase: Runner.Phase):
                 },
             )
 
+            t.source["db_1"]["coll_1"].update_one(
+                {"i": i},
+                {"$set": {"f2.1": "new-val"}},
+            )
+
+            # Update the second element of the a1 array
+            t.source["db_1"]["coll_1"].update_one(
+                {"i": i},
+                {"$set": {"a1.1": "X"}},
+            )
+
+            # Update `0` field of the first element of the f2.0 array
+            t.source["db_1"]["coll_1"].update_one(
+                {"i": i},
+                {"$set": {"f2.0.3.0": 99}},
+            )
+
+            # Add new element to the f2.0 array
+            t.source["db_1"]["coll_1"].update_one(
+                {"i": i}, [{"$set": {"f2.0": {"$concatArrays": ["$f2.0", [{"i": 5, "0": 5}]]}}}]
+            )
+
+            # Reverse the a2 array
+            t.source["db_1"]["coll_1"].update_one(
+                {"i": i}, [{"$set": {"a2": {"$reverseArray": "$a2"}}}]
+            )
+
     t.compare_all()
 
 
@@ -48,17 +95,15 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
     t.source["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
-            "a1": ["A", "B", "C", "D", "B", "B", "E"],
-            "a2": [1, 2, 3, 4, 5],
-            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
+            "a1": ["A", "B", "C", "D", "B", "B", "E", "F", "G"],
+            "f2": {"0": [{"i": i, "0": i} for i in range(8)]},
         }
     )
     t.target["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
-            "a1": ["A", "B", "C", "D", "B", "B", "E"],
-            "a2": [1, 2, 3, 4, 5],
-            "f2": {"0": [{"i": i, "0": i} for i in range(5)], "1": "val"},
+            "a1": ["A", "B", "C", "D", "B", "B", "E", "F", "G"],
+            "f2": {"0": [{"i": i, "0": i} for i in range(8)]},
         }
     )
 
@@ -88,26 +133,7 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
                         }
                     }
                 },
-                # Update the val of nested f2.1 field
-                {"$set": {"f2.1": "new-val"}},
             ],
-        )
-
-        # Update the second element of the a1 array
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"},
-            {"$set": {"a1.1": "X"}},
-        )
-
-        # Update `0` field of the first element of the f2.0 array
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"},
-            {"$set": {"f2.0.3.0": 99}},
-        )
-
-        # Add new element to the f2.0 array
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"}, [{"$set": {"f2.0": {"$concatArrays": ["$f2.0", [{"i": 5, "0": 5}]]}}}]
         )
 
         # Remove all occurrences of "B" from the a1 array
@@ -124,14 +150,9 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
             ],
         )
 
-        # Reverse the a2 array
-        t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"}, [{"$set": {"a2": {"$reverseArray": "$a2"}}}]
-        )
-
         # Remove first 3 elements from the f2.0 array
         t.source["db_1"]["coll_1"].update_one(
-            {"i": "f1"}, [{"$set": {"f2.0": {"$slice": ["$f2.0", -3]}}}]
+            {"i": "f1"}, [{"$set": {"f2.0": {"$slice": ["$f2.0", -7]}}}]
         )
 
     t.compare_all()
