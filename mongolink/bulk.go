@@ -211,11 +211,15 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 }
 
 func collectUpdateOps(event *UpdateEvent) any {
-	if len(event.UpdateDescription.TruncatedArrays) != 0 {
-		return collectUpdateOpsWithPipeline(event)
+	for _, trunc := range event.UpdateDescription.TruncatedArrays {
+		for _, update := range event.UpdateDescription.UpdatedFields {
+			if strings.HasPrefix(update.Key, trunc.Field) {
+				return collectUpdateOpsWithPipeline(event) // there is conflict field update
+			}
+		}
 	}
 
-	ops := make(bson.D, 0, 2) //nolint:mnd
+	ops := make(bson.D, 0, 1) //nolint:mnd
 
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
 		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
@@ -229,6 +233,16 @@ func collectUpdateOps(event *UpdateEvent) any {
 		}
 
 		ops = append(ops, bson.E{"$unset", fields})
+	}
+
+	if len(event.UpdateDescription.TruncatedArrays) != 0 {
+		fields := make(bson.D, len(event.UpdateDescription.TruncatedArrays))
+		for i, field := range event.UpdateDescription.TruncatedArrays {
+			fields[i].Key = field.Field
+			fields[i].Value = bson.D{{"$each", bson.A{}}, {"$slice", field.NewSize}}
+		}
+
+		ops = append(ops, bson.E{"$push", fields})
 	}
 
 	return ops
@@ -295,7 +309,10 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 
 	// Handle removed fields
 	if len(event.UpdateDescription.RemovedFields) != 0 {
-		pipeline = append(pipeline, bson.D{{Key: "$unset", Value: event.UpdateDescription.RemovedFields}})
+		pipeline = append(
+			pipeline,
+			bson.D{{Key: "$unset", Value: event.UpdateDescription.RemovedFields}},
+		)
 	}
 
 	return pipeline
