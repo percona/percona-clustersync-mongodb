@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/log"
 )
 
 type CollectionSpecification = mongo.CollectionSpecification
@@ -49,6 +50,28 @@ type IndexSpecification struct {
 	Min       *float64 `bson:"min,omitempty"`                  // Min
 	Max       *float64 `bson:"max,omitempty"`                  // Max
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
+}
+
+type InprogIndex struct {
+	Name string `bson:"name"`
+}
+
+type InprogCommand struct {
+	ID            int32          `bson:"id"`
+	CreateIndexes string         `bson:"createIndexes"`
+	Indexes       []*InprogIndex `bson:"indexes"`
+	Msq           string         `bson:"msq"`
+}
+
+type Inprog struct {
+	Active    bool          `bson:"active"`
+	Namespace string        `bson:"ns"`
+	Msg       string        `bson:"msg"`
+	Command   InprogCommand `bson:"command"`
+}
+
+type CurrentOp struct {
+	Inprog []*Inprog `bson:"inprog"`
 }
 
 // IsClustered returns true if the index is clustered.
@@ -107,6 +130,8 @@ func GetCollectionSpec(
 	return &coll, nil
 }
 
+// ListIndexes retrieves the specifications of indexes for a collection.
+// It excludes indexes that are currently being built.
 func ListIndexes(
 	ctx context.Context,
 	m *mongo.Client,
@@ -117,9 +142,55 @@ func ListIndexes(
 	if err != nil {
 		return nil, errors.Wrap(err, "list indexes")
 	}
+	defer func() {
+		err := cur.Close(ctx)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "close cursor")
+		}
+	}()
 
 	var indexes []*IndexSpecification
 	err = cur.All(ctx, &indexes)
+	if err != nil {
+		return nil, errors.Wrap(err, "list indexes")
+	}
 
-	return indexes, errors.Wrap(err, "decode indexes")
+	res := m.Database("admin").RunCommand(ctx, bson.D{
+		{"currentOp", 1},
+		{"command.createIndexes", bson.D{{"$exists", true}}},
+	})
+	if res.Err() != nil {
+		return nil, errors.Wrap(res.Err(), "get currentOp:command.createIndexes")
+	}
+
+	currOp := CurrentOp{}
+
+	err = res.Decode(&currOp)
+	if err != nil {
+		return nil, errors.Wrap(err, "decode currentOp")
+	}
+
+	if len(currOp.Inprog) == 0 {
+		return indexes, nil
+	}
+
+	inprogIndexes := make(map[string]struct{}, 0)
+
+	for _, inprog := range currOp.Inprog {
+		for _, index := range inprog.Command.Indexes {
+			inprogIndexes[index.Name] = struct{}{}
+		}
+	}
+
+	readyIndexes := make([]*IndexSpecification, 0, len(indexes)-len(inprogIndexes))
+	for _, index := range indexes {
+		if _, ok := inprogIndexes[index.Name]; ok {
+			log.Ctx(ctx).Warnf("Index %s build in progress", index.Name)
+
+			continue
+		}
+		readyIndexes = append(readyIndexes, index)
+	}
+
+	return readyIndexes, nil
 }
