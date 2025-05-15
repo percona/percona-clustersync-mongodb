@@ -363,15 +363,17 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
-		res := c.target.Database(db).RunCommand(ctx, bson.D{
-			{"createIndexes", coll},
-			{"indexes", bson.A{index}},
-		})
+		if index.IsReady() {
+			res := c.target.Database(db).RunCommand(ctx, bson.D{
+				{"createIndexes", coll},
+				{"indexes", bson.A{index}},
+			})
 
-		if err := res.Err(); err != nil {
-			processedIdxs[index.Name] = err
+			if err := res.Err(); err != nil {
+				processedIdxs[index.Name] = err
 
-			continue
+				continue
+			}
 		}
 
 		processedIdxs[index.Name] = nil
@@ -626,6 +628,24 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
+				if !index.IsReady() {
+					lg.Infof("Create index %s.%s.%s that previously not ready", db, coll, index.Name)
+
+					res := c.target.Database(db).RunCommand(ctx, bson.D{
+						{"createIndexes", coll},
+						{"indexes", bson.A{index}},
+					})
+
+					if err := res.Err(); err != nil {
+						lg.Warnf("Failed to create previously non-ready index %s.%s.%s", db, coll, index.Name)
+
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "create previously non ready index: "+index.Name))
+					}
+
+					continue
+				}
+
 				if index.IsClustered() {
 					lg.Warn("Clustered index with TTL is not supported")
 

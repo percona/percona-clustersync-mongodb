@@ -51,7 +51,7 @@ type IndexSpecification struct {
 	Max       *float64 `bson:"max,omitempty"`                  // Max
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
 
-	IsReady bool // Is the index ready
+	Ready *bool // Is the index ready
 }
 
 // InprogIndex represents an index being built.
@@ -82,6 +82,14 @@ type CurrentOp struct {
 // IsClustered returns true if the index is clustered.
 func (s *IndexSpecification) IsClustered() bool {
 	return s.Clustered != nil && *s.Clustered
+}
+
+func (s *IndexSpecification) IsReady() bool {
+	if s.Ready == nil {
+		return true
+	}
+
+	return s.Ready != nil && *s.Ready
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
@@ -155,6 +163,7 @@ func ListIndexes(
 	}()
 
 	var indexes []*IndexSpecification
+
 	err = cur.All(ctx, &indexes)
 	if err != nil {
 		return nil, errors.Wrap(err, "list indexes")
@@ -187,15 +196,15 @@ func ListIndexes(
 		}
 	}
 
-	readyIndexes := make([]*IndexSpecification, 0, len(indexes)-len(inprogIndexes))
 	for _, index := range indexes {
 		if _, ok := inprogIndexes[index.Name]; ok {
-			log.Ctx(ctx).Warnf("Index %s build in progress", index.Name)
+			t := false
+			index.Ready = &t
+			log.Ctx(ctx).Warnf("Index %s build in progress, marking it as non-ready", index.Name)
 
 			continue
 		}
-		readyIndexes = append(readyIndexes, index)
 	}
 
-	return readyIndexes, nil
+	return indexes, nil
 }
