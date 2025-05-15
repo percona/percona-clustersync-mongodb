@@ -50,26 +50,31 @@ type IndexSpecification struct {
 	Min       *float64 `bson:"min,omitempty"`                  // Min
 	Max       *float64 `bson:"max,omitempty"`                  // Max
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
+
+	IsReady bool // Is the index ready
 }
 
+// InprogIndex represents an index being built.
 type InprogIndex struct {
-	Name string `bson:"name"`
+	Name string `bson:"name"` // Index name
 }
 
+// InprogCommand represents the command being executed.
 type InprogCommand struct {
-	ID            int32          `bson:"id"`
-	CreateIndexes string         `bson:"createIndexes"`
-	Indexes       []*InprogIndex `bson:"indexes"`
-	Msq           string         `bson:"msq"`
+	ID            int32          `bson:"id"`            // Operation ID
+	CreateIndexes string         `bson:"createIndexes"` // Collection name
+	Indexes       []*InprogIndex `bson:"indexes"`       // Indexes being built
 }
 
+// Inprog represents an operation in progress.
 type Inprog struct {
-	Active    bool          `bson:"active"`
-	Namespace string        `bson:"ns"`
-	Msg       string        `bson:"msg"`
-	Command   InprogCommand `bson:"command"`
+	Active    bool          `bson:"active"`  // Is the operation active
+	Namespace string        `bson:"ns"`      // Namespace
+	Msg       string        `bson:"msg"`     // Message
+	Command   InprogCommand `bson:"command"` // Command
 }
 
+// CurrentOp represents the current operations in progress.
 type CurrentOp struct {
 	Inprog []*Inprog `bson:"inprog"`
 }
