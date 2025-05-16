@@ -629,19 +629,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
 				if !index.IsReady() {
-					lg.Infof("Create index %s.%s.%s that previously not ready", db, coll, index.Name)
-
-					res := c.target.Database(db).RunCommand(ctx, bson.D{
-						{"createIndexes", coll},
-						{"indexes", bson.A{index}},
-					})
-
-					if err := res.Err(); err != nil {
-						lg.Warnf("Failed to create previously non-ready index %s.%s.%s", db, coll, index.Name)
-
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "create previously non ready index: "+index.Name))
-					}
+					lg.Warnf("Index %s on %s.%s marked as non-ready during replication, skipping it",
+						index.Name, db, coll)
 
 					continue
 				}
