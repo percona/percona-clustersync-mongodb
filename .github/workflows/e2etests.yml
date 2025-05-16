@@ -11,10 +11,6 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
 
-    services:
-      # Optional: If you want GitHub to manage a default service container, you can define it here.
-      # You can skip this if using docker-compose directly in your repo.
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
