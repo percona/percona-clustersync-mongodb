@@ -33,6 +33,10 @@ jobs:
         run: |
           poetry install --no-interaction --no-root
 
+      - name: Map db.internal to localhost
+        run: |
+          echo "127.0.0.1 rs00 rs01 rs02 rs10 rs11 rs12" | sudo tee -a /etc/hosts
+
       - name: Start source and target ReplicaSets
         run: |
           echo "Starting source and target ReplicaSets..."
@@ -40,9 +44,6 @@ jobs:
           sleep 10
           docker ps
 
-      - name: Map db.internal to localhost
-        run: |
-          echo "127.0.0.1 rs00 rs01 rs02 rs10 rs11 rs12" | sudo tee -a /etc/hosts
 
       - name: Build the project
         run: |
