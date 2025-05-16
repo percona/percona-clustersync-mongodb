@@ -37,6 +37,11 @@ jobs:
         run: |
           docker compose -f .github/workflows/rs/compose.yml up -d
           sleep 10  # Wait for services to be ready
+          docker ps
+          sleep 10  # Wait for services to be ready
+          docker ps
+          sleep 10  # Wait for services to be ready
+          docker ps
 
       - name: Map db.internal to localhost
         run: |
@@ -49,7 +54,6 @@ jobs:
 
       - name: Start project in background
         run: |
-          docker ps
           echo "Starting project..."
           go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start
           sleep 5  # Allow the app to start
