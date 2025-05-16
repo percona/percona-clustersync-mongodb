@@ -1,0 +1,32 @@
+[90m2025-05-16 22:52:13.359[0m [32mINF[0m [1mState has been reset[0m [36ms=[0mcli
+[90m2025-05-16 22:52:13.360[0m [32mINF[0m [1mPercona MongoLink v0.1  [0m
+[90m2025-05-16 22:52:13.367[0m [32mINF[0m [1mConnected to source cluster [MongoDB 8.0.4]: mongodb://rs00:30000[0m
+[90m2025-05-16 22:52:13.376[0m [32mINF[0m [1mConnected to target cluster [MongoDB 8.0.4]: mongodb://rs10:30100[0m
+[90m2025-05-16 22:52:13.387[0m [32mINF[0m [1mChecking Recovery Data for "mongolink"[0m [36ms=[0mrecovery
+[90m2025-05-16 22:52:13.387[0m [32mINF[0m [1mRecovery Data not found[0m [36ms=[0mrecovery
+[90m2025-05-16 22:52:13.387[0m [32mINF[0m [1mStarting HTTP server at http://localhost:2242[0m
+[90m2025-05-16 22:52:13.387[0m [32mINF[0m [1mStarting Cluster Replication[0m [36ms=[0mmongolink
+[90m2025-05-16 22:52:13.387[0m [32mINF[0m [1mStarting Data Clone[0m [36ms=[0mclone
+[90m2025-05-16 22:52:13.388[0m [32mINF[0m [1mEstimated Total Size 0 B[0m [36ms=[0mclone [36msize_bytes=[0m0
+[90m2025-05-16 22:52:13.388[0m [33mWRN[0m [1mNo collection to clone[0m [36ms=[0mclone
+[90m2025-05-16 22:52:13.388[0m [32mINF[0m [1mData Clone completed: 0 B in 0s[0m [36melapsed_secs=[0m0.001 [36ms=[0mclone [36msize_bytes=[0m0
+[90m2025-05-16 22:52:13.392[0m [32mINF[0m [1mChange Replication started[0m [36mop_ts=[0m[1747428725,1] [36ms=[0mrepl
+[90m2025-05-16 22:52:14.393[0m [32mINF[0m [1mClone event backlog processed in 1s[0m [36melapsed_secs=[0m1.001 [36ms=[0mmonitor:initial-sync-lag-time
+[90m2025-05-16 22:52:14.393[0m [32mINF[0m [1mInitial Sync completed in 1s[0m [36melapsed_secs=[0m1.006 [36ms=[0mmonitor:initial-sync-lag-time
+[90m2025-05-16 22:52:14.401[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:52:25.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:52:28.326[0m [32mINF[0m [1mGET /status[0m [36ms=[0mhttp
+[90m2025-05-16 22:52:35.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:52:46.394[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:52:57.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:53:08.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:53:09.128[0m [32mINF[0m [1mGET /status[0m [36ms=[0mhttp
+[90m2025-05-16 22:53:19.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:53:29.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:53:40.394[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:53:50.394[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:54:00.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:54:10.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:54:21.395[0m [32mINF[0m [1mLag Time: 0[0m [36ms=[0mmonitor:lag-time
+[90m2025-05-16 22:54:23.996[0m [32mINF[0m [1mGET /status[0m [36ms=[0mhttp
+[90m2025-05-16 22:54:32.394[0m [32mINF[0m [1mLag Time: 1[0m [36ms=[0mmonitor:lag-time

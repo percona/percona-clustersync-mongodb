@@ -47,58 +47,26 @@ jobs:
           echo "Building project..."
           # Add your build steps here if necessary
 
-      # - name: Start project in background
-      #   run: |
-      #     echo "Starting project..."
-      #     go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start
-      #     sleep 5  # Allow the app to start
-
-      # - name: Start project in background
-      #   run: |
-      #     echo "Starting project..."
-      #     nohup go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start > server.log 2>&1 &
-      #     sleep 5  # Allow the app to start
-
-      # - name: Run E2E tests with pytest
-      #   run: |
-      #     curl -X GET localhost:2242/status
-      #     curl -X GET 127.0.0.1:2242/status
-      #     export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
-      #     export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
-      #     export TEST_MONGOLINK_URL=http://127.0.0.1:2242
-      #     # poetry run pytest
-      #     poetry run pytest -v -s tests/test_documents.py::test_update_one_complex
-
-      - name: Start server and run tests
+      - name: Start project in background
         run: |
-          echo "Starting Go server in background..."
+          echo "Starting project..."
+          go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start  &> server.log &
+          echo $! > server.pid
+          sleep 5  # Allow the app to start
 
-          # Start the Go HTTP server
-          nohup go run main.go heartbeat.go recovery.go \
-            --source="mongodb://adm:pass@rs00:30000" \
-            --target="mongodb://adm:pass@rs10:30100" \
-            --reset-state --start > server.log 2>&1 &
-
-          # Wait for the server to be ready (optional but safer)
-          for i in {1..10}; do
-            if curl -s http://127.0.0.1:2242/status; then
-              echo "✅ Server is up!"
-              break
-            fi
-            echo "⏳ Waiting for server..."
-            sleep 1
-          done
-
-          echo "🔍 Server log (last 20 lines):"
-          tail -n 20 server.log
-
-          # Run the tests
+      - name: Run E2E tests with pytest
+        run: |
+          curl -X GET localhost:2242/status
+          curl -X GET 127.0.0.1:2242/status
           export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
           export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
           export TEST_MONGOLINK_URL=http://127.0.0.1:2242
-
+          # poetry run pytest
           poetry run pytest -v -s tests/test_documents.py::test_update_one_complex
 
+      - name: Show server logs (on failure)
+        if: failure()
+        run: cat server.log
 
       - name: Teardown Docker Compose
         if: always()
