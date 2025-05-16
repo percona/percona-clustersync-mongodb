@@ -84,8 +84,8 @@ func (s *IndexSpecification) IsClustered() bool {
 	return s.Clustered != nil && *s.Clustered
 }
 
-func (s *IndexSpecification) IsIncomplete() bool {
-	return s.Incomplete
+func (s *IndexSpecification) Ready() bool {
+	return !s.Incomplete
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
@@ -151,12 +151,6 @@ func ListIndexes(
 	if err != nil {
 		return nil, errors.Wrap(err, "list indexes")
 	}
-	defer func() {
-		err := cur.Close(ctx)
-		if err != nil {
-			log.Ctx(ctx).Errorf(err, "close cursor")
-		}
-	}()
 
 	var indexes []*IndexSpecification
 
@@ -184,7 +178,7 @@ func ListIndexes(
 		return indexes, nil
 	}
 
-	inprogIndexes := make(map[string]struct{}, 0)
+	inprogIndexes := make(map[string]struct{})
 
 	for _, inprog := range currOp.Inprog {
 		for _, index := range inprog.Command.Indexes {

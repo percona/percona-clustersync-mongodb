@@ -363,7 +363,7 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
-		if !index.IsIncomplete() {
+		if index.Ready() {
 			res := c.target.Database(db).RunCommand(ctx, bson.D{
 				{"createIndexes", coll},
 				{"indexes", bson.A{index}},
@@ -628,7 +628,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
-				if index.IsIncomplete() {
+				if !index.Ready() {
 					lg.Warnf("Index %s on %s.%s was incomplete during replication, skipping it",
 						index.Name, db, coll)
 
