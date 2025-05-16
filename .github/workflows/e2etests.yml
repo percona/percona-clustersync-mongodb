@@ -33,14 +33,11 @@ jobs:
         run: |
           poetry install --no-interaction --no-root
 
-      - name: Start Docker Compose services
+      - name: Start source and target ReplicaSets
         run: |
-          docker compose -f .github/workflows/rs/compose.yml up -d
-          sleep 10  # Wait for services to be ready
-          docker ps
-          sleep 10  # Wait for services to be ready
-          docker ps
-          sleep 10  # Wait for services to be ready
+          echo "Starting source and target ReplicaSets..."
+          .github/workflows/rs/rr
+          sleep 10
           docker ps
 
       - name: Map db.internal to localhost
