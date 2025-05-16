@@ -30,9 +30,31 @@ msh() {
 
 mwait() {
     echo "waiting for $1"
-    while ! dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()" >/dev/null 2>&1; do sleep 0.2; done
+
+    for i in {1..10}; do
+        if dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()"; then
+            break
+        fi
+        echo "retrying... ($i)"
+        sleep 2
+        if [ "$i" -eq 10 ]; then
+            echo "MongoDB did not become ready after 10 attempts"
+            break
+        fi
+    done
+
+    dcf ps
+
+    dcf logs rs00
+
     dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "disableTelemetry()" >/dev/null
 }
+
+# mwait() {
+#     echo "waiting for $1"
+#     while ! dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()" >/dev/null 2>&1; do sleep 0.2; done
+#     dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "disableTelemetry()" >/dev/null
+# }
 
 mwait_prim() {
     for _ in {1..20}; do
