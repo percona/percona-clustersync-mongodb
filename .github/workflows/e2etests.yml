@@ -62,7 +62,7 @@ jobs:
           export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
           export TEST_MONGOLINK_URL=http://127.0.0.1:2242
           # poetry run pytest
-          poetry run pytest -v -s tests/test_documents.py::test_update_one_complex
+          poetry run pytest
 
       - name: Show server logs (on failure)
         if: failure()
