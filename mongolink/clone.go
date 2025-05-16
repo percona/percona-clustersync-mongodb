@@ -420,6 +420,9 @@ func (c *Clone) doCollectionClone(
 	lg.Infof("Collection %q has been created", ns.String())
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
+	if spec.UUID != nil {
+		c.catalog.SetCollectionUUID(ctx, ns.Database, ns.Collection, spec.UUID)
+	}
 
 	lastLogAt = time.Now() // init
 

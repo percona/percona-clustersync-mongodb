@@ -2,6 +2,7 @@ package mongolink
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	"slices"
 	"strings"
@@ -27,6 +28,9 @@ const (
 	// TimeseriesPrefix is the prefix for timeseries buckets.
 	TimeseriesPrefix = "system.buckets."
 )
+
+// UUIDMap is mapping of hex string of a collection UUID to its namespace.
+type UUIDMap map[string]Namespace
 
 // CreateCollectionOptions represents the options that can be used to create a collection.
 type CreateCollectionOptions struct {
@@ -89,6 +93,7 @@ type databaseCatalog struct {
 
 type collectionCatalog struct {
 	AddedAt bson.Timestamp
+	UUID    *bson.Binary
 	Indexes []*topo.IndexSpecification
 }
 
@@ -614,6 +619,46 @@ func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, t
 	collectionEntry.AddedAt = ts
 	databaseEntry.Collections[coll] = collectionEntry
 	c.Databases[db] = databaseEntry
+}
+
+func (c *Catalog) SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection UUID: database %q is not found", db)
+
+		return
+	}
+
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection UUID: namespace %q is not found", db+"."+coll)
+
+		return
+	}
+
+	collectionEntry.UUID = uuid
+	databaseEntry.Collections[coll] = collectionEntry
+	c.Databases[db] = databaseEntry
+}
+
+func (c *Catalog) UUIDMap() UUIDMap {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	uuidMap := make(UUIDMap)
+
+	for db, dbCat := range c.Databases {
+		for coll, collCat := range dbCat.Collections {
+			if collCat.UUID != nil {
+				uuidMap[hex.EncodeToString(collCat.UUID.Data)] = Namespace{db, coll}
+			}
+		}
+	}
+
+	return uuidMap
 }
 
 // Finalize finalizes the indexes in the target MongoDB.
