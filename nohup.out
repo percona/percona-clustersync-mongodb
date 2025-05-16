@@ -1,0 +1,8 @@
+[90m2025-05-16 22:13:29.278[0m [32mINF[0m [1mPercona MongoLink v0.1  [0m
+Error: new server: connect to source cluster: ping: server selection error: context canceled, current topology: { Type: Unknown, Servers: [{ Addr: rs00:30000, Type: RSGhost, Average RTT: 2052625 }, ] }
+[90m2025-05-16 22:13:33.065[0m [31mFTL[0m [36merror=[0m[31m[1m"new server: connect to source cluster: ping: server selection error: context canceled, current topology: { Type: Unknown, Servers: [{ Addr: rs00:30000, Type: RSGhost, Average RTT: 2052625 }, ] }"[0m[0m
+exit status 1
+[90m2025-05-16 22:13:37.326[0m [32mINF[0m [1mPercona MongoLink v0.1  [0m
+Error: new server: connect to source cluster: ping: server selection error: context deadline exceeded, current topology: { Type: Unknown, Servers: [{ Addr: rs00:30000, Type: RSGhost, Average RTT: 2411083 }, ] }
+[90m2025-05-16 22:13:47.327[0m [31mFTL[0m [36merror=[0m[31m[1m"new server: connect to source cluster: ping: server selection error: context deadline exceeded, current topology: { Type: Unknown, Servers: [{ Addr: rs00:30000, Type: RSGhost, Average RTT: 2411083 }, ] }"[0m[0m
+exit status 1

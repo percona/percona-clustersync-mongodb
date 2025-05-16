@@ -40,23 +40,26 @@ jobs:
       - name: Start source and target ReplicaSets
         run: |
           echo "Starting source and target ReplicaSets..."
-          ls .mongo
-          echo "ls github"
-          ls .github/workflows/rs
           .github/workflows/rs/rr
-          sleep 10
-          docker ps
-
 
       - name: Build the project
         run: |
           echo "Building project..."
           # Add your build steps here if necessary
 
+      # - name: Start Go service in background
+      #   run: |
+      #     echo "Starting Go service..."
+      #     nohup go run main.go heartbeat.go recovery.go \
+      #       --source="mongodb://adm:pass@rs00:30000" \
+      #       --target="mongodb://adm:pass@rs10:30100" \
+      #       --reset-state --start > go_service.log 2>&1 &
+      #     sleep 5  # Give it time to start
+
       - name: Start project in background
         run: |
           echo "Starting project..."
-          go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start
+          go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start &
           sleep 5  # Allow the app to start
 
       - name: Run E2E tests with pytest
