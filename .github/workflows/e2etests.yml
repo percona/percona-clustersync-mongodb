@@ -38,6 +38,10 @@ jobs:
           docker compose -f .github/workflows/rs/compose.yml up -d
           sleep 10  # Wait for services to be ready
 
+      - name: Map db.internal to localhost
+        run: |
+          echo "127.0.0.1 rs00 rs01 rs02 rs10 rs11 rs12" | sudo tee -a /etc/hosts
+
       - name: Build the project
         run: |
           echo "Building project..."
