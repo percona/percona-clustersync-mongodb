@@ -5,7 +5,7 @@ SBASE=$(dirname "$0")
 # shellcheck source=/dev/null
 source "$SBASE/util"
 
-export compose="$SBASE/rr.yml"
+export compose="$SBASE/compose.yml"
 
 # https://www.mongodb.com/docs/v7.0/tutorial/deploy-sharded-cluster-with-keyfile-access-control/
 if [ ! -s "$SBASE/mongo/keyFile" ]; then
