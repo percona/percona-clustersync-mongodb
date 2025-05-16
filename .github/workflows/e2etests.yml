@@ -49,6 +49,8 @@ jobs:
 
       - name: Start project in background
         run: |
+          docker ps
+          echo "Starting project..."
           go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start
           sleep 5  # Allow the app to start
 
