@@ -228,6 +228,7 @@ func (c *Clone) run() error {
 	defer cancel()
 
 	lg := log.New("clone")
+	ctx = lg.WithContext(ctx)
 
 	startTS, err := topo.ClusterTime(ctx, c.source)
 	if err != nil {
@@ -238,7 +239,6 @@ func (c *Clone) run() error {
 	c.startTS = startTS
 	c.lock.Unlock()
 
-	// XXX: rename during clone.
 	err = c.collectSizeMap(ctx)
 	if err != nil {
 		return errors.Wrap(err, "get size map")
@@ -278,8 +278,8 @@ func (c *Clone) run() error {
 	return nil
 }
 
-func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
-	copyLogger := log.Ctx(ctx)
+func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
+	cloneLogger := log.Ctx(ctx)
 
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     config.CloneNumReadWorkers(),
@@ -299,157 +299,59 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 
 	for _, ns := range namespaces {
 		eg.Go(func() error {
-			nsCtx, cancel := context.WithCancel(grpCtx)
-			defer cancel()
+			ns := ns
+			lg := cloneLogger.With(log.NS(ns.Database, ns.Collection))
+			ctx := lg.WithContext(grpCtx)
 
-			lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
+			for {
+				err := c.doCollectionClone(ctx, copyManager, ns.Namespace)
+				if err != nil && !errors.As(err, &NamespaceNotFoundError{}) {
+					return errors.Wrap(err, ns.String())
+				}
 
-			var startedAt time.Time
-			var totalCopiedCount int64
-			var totalCopiedSizeBytes uint64
+				// check if the collection was renamed during clone.
 
-			var lastLogAt time.Time
-			var copiedCountSinceLastLog int64
-			var copiedSizeBytesSinceLastLog uint64
+				if ns.UUID == nil { // view cannot be renamed
+					return nil
+				}
 
-			c.lock.Lock()
-			nsSize := c.sizeMap[ns]
-			c.lock.Unlock()
-
-			lg.With(log.Count(nsSize.Count), log.Size(nsSize.Size)).
-				Debugf("Schedule %q collection clone: %d documents (%s)",
-					ns, nsSize.Count, humanize.Bytes(nsSize.Size))
-
-			updateC := copyManager.Do(nsCtx, ns,
-				func(ctx context.Context) (*topo.CollectionSpecification, error) {
-					startedAt = time.Now()
-
-					capturedAt, err := topo.ClusterTime(ctx, c.source)
-					if err != nil {
-						return nil, errors.Wrap(err, "get source cluster time")
-					}
-
-					spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
-					if err != nil {
-						if errors.Is(err, topo.ErrNotFound) {
-							return nil, errors.Wrap(NamespaceNotFoundError(ns), "get spec")
-						}
-
-						return nil, errors.Wrap(err, "$collStats")
-					}
-
-					if spec.Type == topo.TypeTimeseries {
-						return spec, ErrTimeseriesUnsupported
-					}
-
-					err = c.createCollection(ctx, ns, spec)
-					if err != nil {
-						if !errors.Is(err, context.Canceled) {
-							lg.Errorf(err, "Failed to create %q collection", ns.String())
-						}
-
-						return nil, err
-					}
-
-					lg.Debugf("Collection %q created", ns.String())
-
-					c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
-					lastLogAt = time.Now() // init
-
-					return spec, nil
-				},
-			)
-
-			for update := range updateC {
-				if err := update.Err; err != nil { //nolint:nestif
-					if errors.As(err, &NamespaceNotFoundError{}) || topo.IsQueryPlanKilled(err) {
-						// update estimated size
-						c.lock.Lock()
-						c.totalSize -= c.sizeMap[ns].Size
-						totalSize := c.totalSize
-						delete(c.sizeMap, ns)
-						c.lock.Unlock()
-
-						lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
-
-						metrics.SetEstimatedTotalSizeBytes(totalSize)
-
-						copyLogger.With(log.Size(totalSize)).
-							Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
-
-						err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
-						if err != nil {
-							lg.Errorf(err, "Drop collection %q", ns)
-						}
+				name, err := topo.GetCollectionNameByUUID(ctx, c.source, ns.Database, *ns.UUID)
+				if err != nil {
+					if errors.Is(err, topo.ErrNotFound) { // dropped
+						lg.Warnf("Collection %s not found", ns.Namespace)
 
 						return nil
 					}
 
-					if errors.Is(err, ErrTimeseriesUnsupported) {
-						lg.Warnf("Timeseries is not supported (%q)", ns)
-
-						break
-					}
-
-					updateLog := lg.With(
-						log.Size(update.SizeBytes),
-						log.Count(int64(update.Count)),
-						log.Elapsed(time.Since(lastLogAt)))
-
-					if errors.Is(err, context.Canceled) {
-						updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)
-					} else {
-						updateLog.Errorf(err, "Failed to copy documents for collection %q", ns)
-					}
-
-					return errors.Wrap(err, ns.Collection)
+					return errors.Wrapf(err, "get collection name by uuid: %s", ns)
 				}
 
-				totalCopiedCount += int64(update.Count)
-				totalCopiedSizeBytes += update.SizeBytes
-				c.copiedSize.Add(update.SizeBytes)
-
-				copiedCountSinceLastLog += int64(update.Count)
-				copiedSizeBytesSinceLastLog += update.SizeBytes
-
-				if copiedSizeBytesSinceLastLog >= humanize.GByte {
-					now := time.Now()
-					lg.With(
-						log.Size(copiedSizeBytesSinceLastLog),
-						log.Count(copiedCountSinceLastLog),
-						log.Elapsed(now.Sub(lastLogAt)),
-					).Debugf("copied %s (%d documents) for %q",
-						humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
-
-					copiedSizeBytesSinceLastLog = 0
-					lastLogAt = now
+				if name == ns.Collection {
+					return nil // OK: collection has not been renamed
 				}
+
+				prevNS := ns
+				ns = namespaceInfo{
+					Namespace: Namespace{prevNS.Database, name},
+					UUID:      prevNS.UUID,
+				}
+
+				c.lock.Lock()
+				elem := c.sizeMap[prevNS.Namespace]
+				delete(c.sizeMap, prevNS.Namespace)
+				c.sizeMap[prevNS.Namespace] = elem
+				c.lock.Unlock()
+
+				lg.Infof("Collection %s was renamed to %s. Retrying to clone the collection",
+					prevNS.Namespace, ns.Namespace)
+
+				err = c.catalog.DropCollection(ctx, prevNS.Database, prevNS.Collection)
+				if err != nil {
+					return errors.Wrapf(err, "drop collection %q", prevNS.Namespace)
+				}
+
+				lg.Infof("Previous collection %s was dropped", prevNS.Namespace)
 			}
-
-			c.lock.Lock()
-			diff := c.sizeMap[ns].Size - totalCopiedSizeBytes
-			c.totalSize -= diff // adjust
-			totalSize := c.totalSize
-			delete(c.sizeMap, ns)
-			c.lock.Unlock()
-
-			metrics.SetEstimatedTotalSizeBytes(totalSize)
-
-			elapsed := time.Since(startedAt)
-			lg.With(
-				log.Size(totalCopiedSizeBytes),
-				log.Count(totalCopiedCount),
-				log.Elapsed(elapsed),
-			).Infof("Collection %q cloned: %s in %s (%d documents)",
-				ns, humanize.Bytes(totalCopiedSizeBytes),
-				elapsed.Round(time.Second), totalCopiedCount)
-
-			if diff != 0 {
-				copyLogger.With(log.Size(totalSize)).
-					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
-			}
-
-			return nil
 		})
 	}
 
@@ -458,9 +360,178 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	return err //nolint:wrapcheck
 }
 
+func (c *Clone) doCollectionClone(
+	ctx context.Context,
+	copyManager *CopyManager,
+	ns Namespace,
+) error {
+	copyLogger := log.Ctx(ctx)
+
+	nsCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
+
+	var startedAt time.Time
+	var totalCopiedCount int64
+	var totalCopiedSizeBytes uint64
+
+	var lastLogAt time.Time
+	var copiedCountSinceLastLog int64
+	var copiedSizeBytesSinceLastLog uint64
+
+	c.lock.Lock()
+	nsSize := c.sizeMap[ns]
+	c.lock.Unlock()
+
+	lg.With(log.Count(nsSize.Count), log.Size(nsSize.Size)).
+		Debugf("Starting %q collection clone: %d documents (%s)",
+			ns, nsSize.Count, humanize.Bytes(nsSize.Size))
+
+	startedAt = time.Now()
+
+	capturedAt, err := topo.ClusterTime(ctx, c.source)
+	if err != nil {
+		return errors.Wrap(err, "get source cluster time")
+	}
+
+	spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
+	if err != nil {
+		if errors.Is(err, topo.ErrNotFound) {
+			return NamespaceNotFoundError(ns)
+		}
+
+		return errors.Wrap(err, "$collStats")
+	}
+
+	if spec.Type == topo.TypeTimeseries {
+		return ErrTimeseriesUnsupported
+	}
+
+	err = c.createCollection(ctx, ns, spec)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			lg.Errorf(err, "Failed to create %q collection", ns.String())
+		}
+
+		return errors.Wrap(err, "createCollection")
+	}
+
+	lg.Infof("Collection %q has been created", ns.String())
+
+	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
+
+	lastLogAt = time.Now() // init
+
+	updateC := copyManager.Do(nsCtx, ns, spec)
+
+	for update := range updateC {
+		if err := update.Err; err != nil {
+			switch {
+			case topo.IsCollectionDropped(err):
+				lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
+
+				err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
+				if err != nil {
+					lg.Errorf(err, "Drop collection %q", ns)
+				} else {
+					lg.Infof("Collection %q has been dropped on target", ns)
+				}
+
+				// update estimated size
+				c.lock.Lock()
+				c.totalSize -= c.sizeMap[ns].Size
+				totalSize := c.totalSize
+				delete(c.sizeMap, ns)
+				c.lock.Unlock()
+
+				metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+				copyLogger.With(log.Size(totalSize)).
+					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+
+			case topo.IsCollectionRenamed(err):
+				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
+
+			case errors.Is(err, ErrTimeseriesUnsupported):
+				lg.Warnf("Timeseries is not supported (%q)", ns)
+
+			default:
+				updateLog := lg.With(
+					log.Size(update.SizeBytes),
+					log.Count(int64(update.Count)),
+					log.Elapsed(time.Since(lastLogAt)))
+
+				if errors.Is(err, context.Canceled) {
+					updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)
+				} else {
+					updateLog.Errorf(err, "Failed to copy documents for collection %q", ns)
+				}
+
+				return errors.Wrap(err, ns.Collection)
+			}
+		}
+
+		totalCopiedCount += int64(update.Count)
+		totalCopiedSizeBytes += update.SizeBytes
+		c.copiedSize.Add(update.SizeBytes)
+
+		copiedCountSinceLastLog += int64(update.Count)
+		copiedSizeBytesSinceLastLog += update.SizeBytes
+
+		if copiedSizeBytesSinceLastLog >= humanize.GByte {
+			now := time.Now()
+			lg.With(
+				log.Size(copiedSizeBytesSinceLastLog),
+				log.Count(copiedCountSinceLastLog),
+				log.Elapsed(now.Sub(lastLogAt)),
+			).Debugf("copied %s (%d documents) for %q",
+				humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
+
+			copiedSizeBytesSinceLastLog = 0
+			lastLogAt = now
+		}
+	}
+
+	if copiedSizeBytesSinceLastLog > 0 {
+		lg.With(
+			log.Size(copiedSizeBytesSinceLastLog),
+			log.Count(copiedCountSinceLastLog),
+			log.Elapsed(time.Since(lastLogAt)),
+		).Debugf("copied %s (%d documents) for %q",
+			humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
+	}
+
+	c.lock.Lock()
+	diff := c.sizeMap[ns].Size - totalCopiedSizeBytes
+	c.totalSize -= diff // adjust
+	totalSize := c.totalSize
+	delete(c.sizeMap, ns)
+	c.lock.Unlock()
+
+	metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+	elapsed := time.Since(startedAt)
+	lg.With(
+		log.Size(totalCopiedSizeBytes),
+		log.Count(totalCopiedCount),
+		log.Elapsed(elapsed),
+	).Infof("Collection %q cloned: %s in %s (%d documents)",
+		ns, humanize.Bytes(totalCopiedSizeBytes),
+		elapsed.Round(time.Second), totalCopiedCount)
+
+	if diff != 0 {
+		copyLogger.With(log.Size(totalSize)).
+			Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+	}
+
+	return nil
+}
+
 type sizeMap map[Namespace]sizeMapElem
 
 type sizeMapElem struct {
+	UUID  *bson.Binary
 	Size  uint64
 	Count int64
 }
@@ -495,6 +566,13 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 			collGrp.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
 
 			for _, spec := range collSpecs {
+				if spec.Type == topo.TypeTimeseries {
+					lg.With(log.NS(db, spec.Name)).
+						Warnf("Timeseries is not supported: %q. skipping", db+"."+spec.Name)
+
+					continue
+				}
+
 				if !c.nsFilter(db, spec.Name) {
 					lg.With(log.NS(db, spec.Name)).Infof("Namespace %q excluded", db+"."+spec.Name)
 
@@ -517,6 +595,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 
 					mu.Lock()
 					sm[Namespace{db, spec.Name}] = sizeMapElem{
+						UUID:  spec.UUID,
 						Size:  uint64(stats.Size), //nolint:gosec
 						Count: stats.Count,
 					}
@@ -549,15 +628,23 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	return nil
 }
 
-func (c *Clone) listPrioritizedNamespaces() []Namespace {
-	namespaces := []Namespace{}
-	for ns := range c.sizeMap {
-		namespaces = append(namespaces, ns)
+type namespaceInfo struct {
+	Namespace
+	UUID *bson.Binary
+}
+
+func (c *Clone) listPrioritizedNamespaces() []namespaceInfo {
+	namespaces := []namespaceInfo{}
+	for ns, elem := range c.sizeMap {
+		namespaces = append(namespaces, namespaceInfo{
+			Namespace: ns,
+			UUID:      elem.UUID,
+		})
 	}
 
 	// sort from larger to smaller
-	slices.SortFunc(namespaces, func(a, b Namespace) int {
-		return cmp.Compare(c.sizeMap[b].Size, c.sizeMap[a].Size)
+	slices.SortFunc(namespaces, func(a, b namespaceInfo) int {
+		return cmp.Compare(c.sizeMap[b.Namespace].Size, c.sizeMap[a.Namespace].Size)
 	})
 
 	return namespaces

@@ -139,6 +139,27 @@ func GetCollectionSpec(
 	return &coll, nil
 }
 
+// GetCollectionNameByUUID retrieves the collection name by its UUID.
+func GetCollectionNameByUUID(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName string,
+	uuid bson.Binary,
+) (string, error) {
+	specs, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{})
+	if err != nil {
+		return "", errors.Wrap(err, "listCollections")
+	}
+
+	for i := range specs {
+		if specs[i].UUID.Equal(uuid) {
+			return specs[i].Name, nil
+		}
+	}
+
+	return "", ErrNotFound
+}
+
 // ListIndexes retrieves the specifications of indexes for a collection.
 // It excludes indexes that are currently being built.
 func ListIndexes(
