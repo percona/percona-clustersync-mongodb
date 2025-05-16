@@ -64,6 +64,9 @@ jobs:
 
       - name: Run E2E tests with pytest
         run: |
+          export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
+          export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
+          export TEST_MONGOLINK_URL=http://localhost:2242
           poetry run pytest
 
       - name: Teardown Docker Compose
