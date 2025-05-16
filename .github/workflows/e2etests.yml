@@ -35,7 +35,7 @@ jobs:
 
       - name: Start Docker Compose services
         run: |
-          docker-compose -f .github/workflows/rs/compose.yml up -d
+          docker compose -f .github/workflows/rs/compose.yml up -d
           sleep 10  # Wait for services to be ready
 
       - name: Build the project
@@ -54,4 +54,4 @@ jobs:
 
       - name: Teardown Docker Compose
         if: always()
-        run: docker-compose -f .github/workflows/rs/compose.yml down
+        run: docker compose -f .github/workflows/rs/compose.yml down
