@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+docker run -d \
+    --name rs10 \
+    --hostname rs10 \
+    -p 30100:30100 \
+    mongo:8 --port=30100 --replSet=rs1 --bind_ip_all
+
+while ! mongosh "mongodb://rs10:30100" --quiet --eval "db.version()" >/dev/null 2>&1; do sleep 0.5; done
+mongosh "mongodb://rs10:30100" --quiet --eval 'disableTelemetry()'
+mongosh "mongodb://rs10:30100" --quiet --eval 'rs.initiate()'

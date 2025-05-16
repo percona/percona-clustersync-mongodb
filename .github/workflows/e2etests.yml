@@ -1,0 +1,61 @@
+# .github/workflows/e2e-tests.yml
+name: E2E ReplicaSet Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      # Optional: If you want GitHub to manage a default service container, you can define it here.
+      # You can skip this if using docker-compose directly in your repo.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.create false
+
+      - name: Install Python dependencies
+        run: |
+          poetry install --no-interaction --no-root
+
+      - name: Start Docker Compose services
+        run: |
+          docker-compose -f .github/workflows/rs/compose.yml up -d
+          sleep 10  # Wait for services to be ready
+
+      - name: Build the project
+        run: |
+          echo "Building project..."
+          # Add your build steps here if necessary
+
+      - name: Start project in background
+        run: |
+          go run main.go heartbeat.go recovery.go --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start
+          sleep 5  # Allow the app to start
+
+      - name: Run E2E tests with pytest
+        run: |
+          poetry run pytest
+
+      - name: Teardown Docker Compose
+        if: always()
+        run: docker-compose -f .github/workflows/rs/compose.yml down

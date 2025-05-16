@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+dcf() {
+    echo docker compose -f $compose "$@"
+    docker compose -f "$compose" "$@"
+}
+
+cont() {
+    local s=$1
+    if [[ $1 =~ "@" ]]; then
+        local s="${1#*@}"
+    fi
+
+    echo "${s%:*}"
+}
+
+msh() {
+    if [[ $1 =~ "@" ]]; then
+        local ff="mongodb://$1"
+    else
+        local ff="--port=${1##*:}"
+    fi
+
+    if [[ $2 == "--eval" ]]; then
+        dcf exec "$(cont "$1")" mongosh --quiet "$ff" --eval "${*:3}"
+    else
+        dcf exec "$(cont "$1")" mongosh --quiet "$ff" "${@:2}"
+    fi
+}
+
+mwait() {
+    echo "waiting for $1"
+    while ! dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()" >/dev/null 2>&1; do sleep 0.2; done
+    dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "disableTelemetry()" >/dev/null
+}
+
+mwait_prim() {
+    for _ in {1..20}; do
+        if msh "$1" --eval "exit(Number(db.hello().primary != '$1'))"; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    return 1
+}
+
+rsinit() {
+    msh "$2" "/cfg/scripts/${1}.js"
+    if ! mwait_prim "$2"; then
+        echo "uninitialized primary: $1"
+        exit 1
+    fi
+    msh "$2" "/cfg/users.adm.js"
+    msh "adm:pass@$2" "/cfg/scripts/deprioritize.js"
+}
