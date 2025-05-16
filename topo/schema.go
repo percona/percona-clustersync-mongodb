@@ -51,7 +51,7 @@ type IndexSpecification struct {
 	Max       *float64 `bson:"max,omitempty"`                  // Max
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
 
-	Ready *bool // Is the index ready
+	Incomplete bool // Is the index building in progress
 }
 
 // InprogIndex represents an index being built.
@@ -84,12 +84,8 @@ func (s *IndexSpecification) IsClustered() bool {
 	return s.Clustered != nil && *s.Clustered
 }
 
-func (s *IndexSpecification) IsReady() bool {
-	if s.Ready == nil {
-		return true
-	}
-
-	return s.Ready != nil && *s.Ready
+func (s *IndexSpecification) IsIncomplete() bool {
+	return s.Incomplete
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
@@ -198,9 +194,8 @@ func ListIndexes(
 
 	for _, index := range indexes {
 		if _, ok := inprogIndexes[index.Name]; ok {
-			t := false
-			index.Ready = &t
-			log.Ctx(ctx).Warnf("Index %s build in progress, marking it as non-ready", index.Name)
+			index.Incomplete = true
+			log.Ctx(ctx).Warnf("Index %s build in progress, marking it as incomplete", index.Name)
 
 			continue
 		}
