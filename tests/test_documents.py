@@ -75,7 +75,7 @@ def test_update_one_complex(t: Testing, phase: Runner.Phase):
                 {
                     "$inc": {"i": (i * 100) - i},
                     "$set": {f"field_{i}": f"value_{i}"},
-                    "$unset": {f"j": 1},
+                    "$unset": {"j": 1},
                 },
             )
 
