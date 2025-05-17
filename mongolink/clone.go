@@ -417,6 +417,13 @@ func (c *Clone) doCollectionClone(
 		return errors.Wrap(err, "createCollection")
 	}
 
+	if spec.Type == topo.TypeCollection {
+		err = c.createIndexes(ctx, ns)
+		if err != nil {
+			return errors.Wrap(err, "create indexes")
+		}
+	}
+
 	lg.Infof("Collection %q has been created", ns.String())
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
@@ -688,19 +695,49 @@ func (c *Clone) createCollection(
 		return errors.Wrap(err, "create collection")
 	}
 
-	if spec.Type == topo.TypeView {
-		return nil
-	}
+	return nil
+}
 
+func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 	indexes, err := topo.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")
 	}
 
-	err = c.catalog.CreateIndexes(ctx, ns.Database, ns.Collection, indexes)
+	unfinishedBuilds, err := topo.ListInProgressIndexBuilds(ctx,
+		c.source, ns.Database, ns.Collection)
 	if err != nil {
-		return errors.Wrap(err, "build collection indexes")
+		return errors.Wrap(err, "list in-progress index builds")
 	}
+
+	if len(unfinishedBuilds) == 0 {
+		err = c.catalog.CreateIndexes(ctx, ns.Database, ns.Collection, indexes)
+		if err != nil {
+			return errors.Wrap(err, "create indexes")
+		}
+
+		return nil
+	}
+
+	builtIndexes := make([]*topo.IndexSpecification, 0, len(indexes)-len(unfinishedBuilds))
+	incompleteIndexes := make([]*topo.IndexSpecification, 0, len(unfinishedBuilds))
+
+	for _, index := range indexes {
+		if slices.Contains(unfinishedBuilds, index.Name) {
+			incompleteIndexes = append(incompleteIndexes, index)
+		} else {
+			builtIndexes = append(builtIndexes, index)
+		}
+	}
+
+	if len(builtIndexes) != 0 {
+		err = c.catalog.CreateIndexes(ctx, ns.Database, ns.Collection, builtIndexes)
+		if err != nil {
+			return errors.Wrap(err, "create indexes")
+		}
+	}
+
+	c.catalog.AddIncompleteIndexes(ctx, ns.Database, ns.Collection, incompleteIndexes)
 
 	return nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
-	"slices"
 	"strings"
 	"sync"
 
@@ -94,7 +93,16 @@ type databaseCatalog struct {
 type collectionCatalog struct {
 	AddedAt bson.Timestamp
 	UUID    *bson.Binary
-	Indexes []*topo.IndexSpecification
+	Indexes []indexCatalogEntry
+}
+
+type indexCatalogEntry struct {
+	*topo.IndexSpecification
+	Incomplete bool `bson:"incomplete"`
+}
+
+func (i indexCatalogEntry) Ready() bool {
+	return !i.Incomplete
 }
 
 // NewCatalog creates a new Catalog.
@@ -368,23 +376,21 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
-		if index.Ready() {
-			res := c.target.Database(db).RunCommand(ctx, bson.D{
-				{"createIndexes", coll},
-				{"indexes", bson.A{index}},
-			})
+		res := c.target.Database(db).RunCommand(ctx, bson.D{
+			{"createIndexes", coll},
+			{"indexes", bson.A{index}},
+		})
 
-			if err := res.Err(); err != nil {
-				processedIdxs[index.Name] = err
+		if err := res.Err(); err != nil {
+			processedIdxs[index.Name] = err
 
-				continue
-			}
+			continue
 		}
 
 		processedIdxs[index.Name] = nil
 	}
 
-	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+	successfulIdxs := make([]indexCatalogEntry, 0, len(processedIdxs))
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 	var idxErrors []error
 
@@ -395,12 +401,12 @@ func (c *Catalog) CreateIndexes(
 			continue
 		}
 
-		succesfulIdxs = append(succesfulIdxs, idx)
+		successfulIdxs = append(successfulIdxs, indexCatalogEntry{IndexSpecification: idx})
 		successfulIdxNames = append(successfulIdxNames, idx.Name)
 	}
 
 	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
-	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
+	c.addIndexesToCatalog(ctx, db, coll, successfulIdxs)
 
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...),
@@ -408,6 +414,38 @@ func (c *Catalog) CreateIndexes(
 	}
 
 	return nil
+}
+
+// AddIncompleteIndexes adds indexes in the catalog but do not create them on the target cluster.
+// The indexes have set [indexCatalogEntry.Incomplete] flag.
+func (c *Catalog) AddIncompleteIndexes(
+	ctx context.Context,
+	db string,
+	coll string,
+	indexes []*topo.IndexSpecification,
+) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	lg := log.Ctx(ctx)
+
+	if len(indexes) == 0 {
+		lg.Error(nil, "No incomplete indexes to add")
+
+		return
+	}
+
+	indexEntries := make([]indexCatalogEntry, len(indexes))
+	for i, index := range indexes {
+		indexEntries[i] = indexCatalogEntry{
+			IndexSpecification: index,
+			Incomplete:         true,
+		}
+
+		lg.Tracef("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
+	}
+
+	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
 }
 
 // ModifyCappedCollection modifies a capped collection in the target MongoDB.
@@ -790,7 +828,7 @@ func (c *Catalog) getIndexFromCatalog(db, coll, index string) *topo.IndexSpecifi
 
 	for _, indexSpec := range collCat.Indexes {
 		if indexSpec.Name == index {
-			return indexSpec
+			return indexSpec.IndexSpecification
 		}
 	}
 
@@ -802,7 +840,7 @@ func (c *Catalog) addIndexesToCatalog(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []indexCatalogEntry,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -811,11 +849,7 @@ func (c *Catalog) addIndexesToCatalog(
 		lg.Errorf(nil, "add indexes: database %q not found", db)
 
 		c.Databases[db] = databaseCatalog{
-			Collections: map[string]collectionCatalog{
-				coll: {
-					Indexes: slices.Clone(indexes),
-				},
-			},
+			Collections: map[string]collectionCatalog{coll: {Indexes: indexes}},
 		}
 
 		return
@@ -825,9 +859,7 @@ func (c *Catalog) addIndexesToCatalog(
 	if !ok {
 		lg.Errorf(nil, "add indexes: namespace %q not found", db+"."+coll)
 
-		dbCat.Collections[coll] = collectionCatalog{
-			Indexes: slices.Clone(indexes),
-		}
+		dbCat.Collections[coll] = collectionCatalog{Indexes: indexes}
 		c.Databases[db] = dbCat
 
 		return

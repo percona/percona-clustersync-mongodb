@@ -5,9 +5,11 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
 )
 
 type CollectionSpecification = mongo.CollectionSpecification
@@ -50,42 +52,11 @@ type IndexSpecification struct {
 	Min       *float64 `bson:"min,omitempty"`                  // Min
 	Max       *float64 `bson:"max,omitempty"`                  // Max
 	GeoIdxVer *int32   `bson:"2dsphereIndexVersion,omitempty"` // Geo index version
-
-	Incomplete bool // Is the index building in progress
-}
-
-// InprogIndex represents an index being built.
-type InprogIndex struct {
-	Name string `bson:"name"` // Index name
-}
-
-// InprogCommand represents the command being executed.
-type InprogCommand struct {
-	ID            int32          `bson:"id"`            // Operation ID
-	CreateIndexes string         `bson:"createIndexes"` // Collection name
-	Indexes       []*InprogIndex `bson:"indexes"`       // Indexes being built
-}
-
-// Inprog represents an operation in progress.
-type Inprog struct {
-	Active    bool          `bson:"active"`  // Is the operation active
-	Namespace string        `bson:"ns"`      // Namespace
-	Msg       string        `bson:"msg"`     // Message
-	Command   InprogCommand `bson:"command"` // Command
-}
-
-// CurrentOp represents the current operations in progress.
-type CurrentOp struct {
-	Inprog []*Inprog `bson:"inprog"`
 }
 
 // IsClustered returns true if the index is clustered.
 func (s *IndexSpecification) IsClustered() bool {
 	return s.Clustered != nil && *s.Clustered
-}
-
-func (s *IndexSpecification) Ready() bool {
-	return !s.Incomplete
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
@@ -161,7 +132,6 @@ func GetCollectionNameByUUID(
 }
 
 // ListIndexes retrieves the specifications of indexes for a collection.
-// It excludes indexes that are currently being built.
 func ListIndexes(
 	ctx context.Context,
 	m *mongo.Client,
@@ -180,41 +150,50 @@ func ListIndexes(
 		return nil, errors.Wrap(err, "list indexes")
 	}
 
-	res := m.Database("admin").RunCommand(ctx, bson.D{
-		{"currentOp", 1},
-		{"command.createIndexes", bson.D{{"$exists", true}}},
-	})
-	if res.Err() != nil {
-		return nil, errors.Wrap(res.Err(), "get currentOp:command.createIndexes")
-	}
-
-	currOp := CurrentOp{}
-
-	err = res.Decode(&currOp)
-	if err != nil {
-		return nil, errors.Wrap(err, "decode currentOp")
-	}
-
-	if len(currOp.Inprog) == 0 {
-		return indexes, nil
-	}
-
-	inprogIndexes := make(map[string]struct{})
-
-	for _, inprog := range currOp.Inprog {
-		for _, index := range inprog.Command.Indexes {
-			inprogIndexes[index.Name] = struct{}{}
-		}
-	}
-
-	for _, index := range indexes {
-		if _, ok := inprogIndexes[index.Name]; ok {
-			index.Incomplete = true
-			log.Ctx(ctx).Warnf("Index %s build in progress, marking it as incomplete", index.Name)
-
-			continue
-		}
-	}
-
 	return indexes, nil
+}
+
+func ListInProgressIndexBuilds(
+	ctx context.Context,
+	m *mongo.Client,
+	db string,
+	coll string,
+) ([]string, error) {
+	opts := options.Database().
+		SetReadPreference(readpref.Primary()).
+		SetReadConcern(readconcern.Local())
+	cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
+		{{"$currentOp", bson.D{{"allUsers", true}}}},
+		{{"$match", bson.D{
+			{"op", "command"},
+			{"command.createIndexes", coll},
+			{"command.$db", db},
+		}}},
+		{{"$unwind", "$command.indexes"}},
+		{{"$replaceRoot", bson.D{{"newRoot", "$command.indexes"}}}},
+		{{"$project", bson.D{{"name", 1}}}},
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "$currentOp")
+	}
+
+	var indexBuilds []struct {
+		Name string `bson:"name"`
+	}
+
+	err = cur.All(ctx, &indexBuilds)
+	if err != nil {
+		return nil, errors.Wrap(err, "cursor: all")
+	}
+
+	if len(indexBuilds) == 0 {
+		return []string(nil), nil
+	}
+
+	names := make([]string, len(indexBuilds))
+	for i, index := range indexBuilds {
+		names[i] = index.Name
+	}
+
+	return names, nil
 }

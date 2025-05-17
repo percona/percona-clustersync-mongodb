@@ -671,6 +671,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Database %q has been dropped", change.Namespace)
 
 	case CreateIndexes:
+		// TODO: check the indexes status
 		event := change.Event.(CreateIndexesEvent) //nolint:forcetypeassert
 		err = r.catalog.CreateIndexes(ctx,
 			change.Namespace.Database,
