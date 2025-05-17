@@ -525,7 +525,7 @@ def test_pml_135_clone_numerous_indexes_deadlock(t: Testing):
     t.compare_all()
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(30)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
 def test_pml_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():
