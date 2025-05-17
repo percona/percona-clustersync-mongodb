@@ -59,7 +59,7 @@ jobs:
           export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
           export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
           export TEST_MONGOLINK_URL=http://127.0.0.1:2242
-          poetry run pytest -x --runslow
+          poetry run pytest --runslow
 
       - name: Show server logs (on failure)
         if: failure()
