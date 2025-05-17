@@ -117,18 +117,16 @@ func GetCollectionNameByUUID(
 	dbName string,
 	uuid bson.Binary,
 ) (string, error) {
-	specs, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{})
+	specs, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}})
 	if err != nil {
 		return "", errors.Wrap(err, "listCollections")
 	}
 
-	for i := range specs {
-		if specs[i].UUID.Equal(uuid) {
-			return specs[i].Name, nil
-		}
+	if len(specs) == 0 {
+		return "", ErrNotFound
 	}
 
-	return "", ErrNotFound
+	return specs[0].Name, nil
 }
 
 // ListIndexes retrieves the specifications of indexes for a collection.
