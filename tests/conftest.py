@@ -72,10 +72,8 @@ def t(source_conn: MongoClient, target_conn: MongoClient, mlink: MongoLink):
 @pytest.fixture(autouse=True)
 def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
     """Drop all databases in the source and target MongoDB before each test."""
-    for db in testing.list_databases(source_conn):
-        source_conn.drop_database(db)
-    for db in testing.list_databases(target_conn):
-        target_conn.drop_database(db)
+    testing.drop_all_database(source_conn)
+    testing.drop_all_database(target_conn)
 
 
 MLINK_PROC: subprocess.Popen = None

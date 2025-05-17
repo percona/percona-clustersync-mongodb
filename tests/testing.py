@@ -34,6 +34,12 @@ class Testing:
                 compare_namespace(self.source, self.target, db, coll, sort)
 
 
+def drop_all_database(source: MongoClient):
+    """Drop all databases in the MongoDB."""
+    for db in list_databases(source):
+        source.drop_database(db)
+
+
 def list_databases(client: MongoClient):
     """List all databases in the given MongoClient."""
     for name in client.list_database_names():
