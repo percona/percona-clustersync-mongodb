@@ -7,16 +7,17 @@ source "$SBASE/util"
 
 export compose="$SBASE/compose.yml"
 
-dcf up -d rs00 rs01 rs02 rs10 rs11 rs12
+dcf up -d rs00 rs10
+# dcf up -d rs00 rs01 rs02 rs10 rs11 rs12
 
 mwait "rs00:30000"
-mwait "rs01:30001"
-mwait "rs02:30002"
+# mwait "rs01:30001"
+# mwait "rs02:30002"
 
 rsinit "rs0" "rs00:30000"
 
 mwait "rs10:30100"
-mwait "rs11:30101"
-mwait "rs12:30102"
+# mwait "rs11:30101"
+# mwait "rs12:30102"
 
 rsinit "rs1" "rs10:30100"

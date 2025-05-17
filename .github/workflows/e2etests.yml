@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install Poetry
         run: |
@@ -48,7 +48,10 @@ jobs:
       - name: Run Percona-MongoLink
         run: |
           echo "Starting project..."
-          bin/percona-mongolink_test --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --start  &> server.log &
+          bin/percona-mongolink_test \
+            --source="mongodb://source:pass@rs00:30000" \
+            --target="mongodb://target:pass@rs10:30100" \
+            --reset-state --start --log-level debug &> server.log &
           echo $! > server.pid
           sleep 5
           echo "Project started with PID $(cat server.pid)"
@@ -59,7 +62,7 @@ jobs:
           export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
           export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
           export TEST_MONGOLINK_URL=http://127.0.0.1:2242
-          poetry run pytest --runslow
+          poetry run pytest
 
       - name: Show server logs (on failure)
         if: failure()
