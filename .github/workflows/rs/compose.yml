@@ -13,7 +13,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs0",
         "--port=30000",
         "--bind_ip_all",
@@ -33,7 +32,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs0",
         "--port=30001",
         "--bind_ip_all",
@@ -53,7 +51,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs0",
         "--port=30002",
         "--bind_ip_all",
@@ -73,7 +70,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs1",
         "--port=30100",
         "--bind_ip_all",
@@ -93,7 +89,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs1",
         "--port=30101",
         "--bind_ip_all",
@@ -113,7 +108,6 @@ services:
           memory: 512m # Soft limit (container tries to stay within 512MB)
     command:
       [
-        # "--keyFile=/cfg/keyFile",
         "--replSet=rs1",
         "--port=30102",
         "--bind_ip_all",
