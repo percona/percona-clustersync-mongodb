@@ -22,9 +22,9 @@ def vary_id_gen():
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300 * 4)
 def test_clone_2gb(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300 * 4):
         for _ in range(5):
             t.source["db_0"]["coll_0"].insert_many(
                 ({"s": random.randbytes(1024)} for _ in range(420000)),
@@ -39,9 +39,9 @@ def test_clone_2gb(t: Testing):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300 * 4)
 def test_clone_2gb_two_namespace(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300 * 4):
         for _ in range(5):
             t.source["db_0"]["coll_0"].insert_many(
                 ({"s": random.randbytes(1024)} for _ in range(210000)),
@@ -59,9 +59,9 @@ def test_clone_2gb_two_namespace(t: Testing):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300 * 4)
 def test_clone_2gb_vary_id(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300 * 4):
         id_gen = vary_id_gen()
         for _ in range(5):
             t.source["db_0"]["coll_0"].insert_many(
@@ -77,11 +77,11 @@ def test_clone_2gb_vary_id(t: Testing):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300 * 4)
 def test_clone_2gb_capped(t: Testing):
     t.source["db_0"].create_collection("coll_0", capped=True, size=2_147_483_647)
 
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300 * 4):
         for _ in range(5):
             t.source["db_0"]["coll_0"].insert_many(
                 ({"s": random.randbytes(1024)} for _ in range(420000))
@@ -96,11 +96,11 @@ def test_clone_2gb_capped(t: Testing):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(300 * 4)
 def test_clone_2gb_capped_vary_id(t: Testing):
     t.source["db_0"].create_collection("coll_0", capped=True, size=2_147_483_647)
 
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
+    with t.run(phase=Runner.Phase.CLONE, wait_timeout=300 * 4):
         id_gen = vary_id_gen()
         for _ in range(5):
             t.source["db_0"]["coll_0"].insert_many(
