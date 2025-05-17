@@ -43,7 +43,7 @@ jobs:
 
       - name: Build the project
         run: |
-          make build
+          make test-build
 
       - name: Run Percona-MongoLink
         run: |
@@ -63,7 +63,7 @@ jobs:
 
       - name: Show server logs (on failure)
         if: failure()
-        run: cat server.log
+        run: tail -n 500 server.log
 
       - name: Teardown Docker Compose
         if: always()
