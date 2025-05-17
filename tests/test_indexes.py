@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import threading
 from datetime import datetime
 
 import pymongo
@@ -520,5 +521,32 @@ def test_pml_135_clone_numerous_indexes_deadlock(t: Testing):
         for i in range(200):
             for j in range(50):
                 t.source["db_1"][f"coll_{i:03d}"].create_index([(f"prop_{j:02d}", 1)])
+
+    t.compare_all()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("index_status", ["succeed", "fail"])
+def test_pml_118_ignore_incomplete_index(t: Testing, index_status: str):
+    def build_index():
+        try:
+            t.source["db_1"]["coll_1"].create_index([("a", 1), ("i", "text")])
+        except:  # pylint: disable=bare-except
+            pass
+
+    for i in range(1000):
+        t.source["db_1"]["coll_1"].insert_many({"a": str(i), "i": str(j)} for j in range(1000))
+
+    if index_status == "fail":
+        t.source["db_1"]["coll_1"].insert_one({"a": [], "i": []})
+
+    runner = t.run(Runner.Phase.MANUAL)
+    runner.start()
+
+    thread = threading.Thread(target=build_index)
+    thread.start()
+    thread.join()
+
+    runner.finalize()
 
     t.compare_all()
