@@ -18,7 +18,7 @@ var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Raw()
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw()
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
