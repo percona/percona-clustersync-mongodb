@@ -581,15 +581,13 @@ def test_pml_119_clone_numerous_collections_deadlock(t: Testing):
         testing.drop_all_database(t.target)
 
 
-def test_pml_109_rename_during_clone(t: Testing):
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_pml_109_rename_complex(t: Testing, phase: Runner.Phase):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(1000))
 
-    with t.run(phase=Runner.Phase.MANUAL) as r:
-        r.start()
-        r.wait_for_state(MongoLink.State.RUNNING)
-
+    with t.run(phase):
         for ns in testing.list_all_namespaces(t.source):
             t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
         for ns in testing.list_all_namespaces(t.source):
