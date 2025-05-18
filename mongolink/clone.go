@@ -600,6 +600,10 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 
 					stats, err := topo.GetCollStats(collGrpCtx, c.source, db, spec.Name)
 					if err != nil {
+						if errors.Is(err, topo.ErrNotFound) {
+							return nil
+						}
+
 						return errors.Wrapf(err, "get collection stats for %q", db+"."+spec.Name)
 					}
 
