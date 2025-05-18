@@ -570,7 +570,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	}
 
 	mlink.SetOnStateChanged(func(newState mongolink.State) {
-		err := DoCheckpoint(ctx, source, mlink)
+		err := DoCheckpoint(ctx, target, mlink)
 		if err != nil {
 			log.New("http:checkpointing").Error(err, "checkpoint")
 		} else {
