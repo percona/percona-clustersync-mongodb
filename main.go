@@ -41,9 +41,9 @@ const (
 )
 
 var (
-	Version   = "v0.1" //nolint:gochecknoglobals
-	GitCommit = ""     //nolint:gochecknoglobals
-	BuildID   = ""     //nolint:gochecknoglobals
+	Version   = "v0.5.0" //nolint:gochecknoglobals
+	GitCommit = ""       //nolint:gochecknoglobals
+	BuildID   = ""       //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
