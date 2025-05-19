@@ -582,6 +582,15 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "recover MongoLink")
 	}
 
+	mlink.SetOnStateChanged(func(newState mongolink.State) {
+		err := DoCheckpoint(ctx, target, mlink)
+		if err != nil {
+			log.New("http:checkpointing").Error(err, "checkpoint")
+		} else {
+			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
+		}
+	})
+
 	go RunCheckpointing(ctx, target, mlink)
 
 	s := &server{

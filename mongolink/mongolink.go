@@ -48,6 +48,8 @@ const (
 	StateFinalized = "finalized"
 )
 
+type OnStateChangedFunc func(newState State)
+
 // Status represents the status of the MongoLink.
 type Status struct {
 	// State is the current state of the MongoLink.
@@ -77,6 +79,8 @@ type MongoLink struct {
 	nsExclude []string
 	nsFilter  sel.NSFilter // Namespace filter
 
+	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
+
 	pauseOnInitialSync bool
 
 	state State // Current state of the MongoLink
@@ -93,9 +97,10 @@ type MongoLink struct {
 // New creates a new MongoLink.
 func New(source, target *mongo.Client) *MongoLink {
 	return &MongoLink{
-		source: source,
-		target: target,
-		state:  StateIdle,
+		source:         source,
+		target:         target,
+		state:          StateIdle,
+		onStateChanged: func(State) {},
 	}
 }
 
@@ -205,6 +210,17 @@ func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// SetOnStateChanged set the f function to be called on each state change.
+func (ml *MongoLink) SetOnStateChanged(f OnStateChangedFunc) {
+	if f == nil {
+		f = func(State) {}
+	}
+
+	ml.lock.Lock()
+	ml.onStateChanged = f
+	ml.lock.Unlock()
+}
+
 // Status returns the current status of the MongoLink.
 func (ml *MongoLink) Status(ctx context.Context) *Status {
 	ml.lock.Lock()
@@ -302,6 +318,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.state = StateRunning
 
 	go ml.run()
+	go ml.onStateChanged(StateRunning)
 
 	return nil
 }
@@ -313,6 +330,8 @@ func (ml *MongoLink) setFailed(err error) {
 	ml.lock.Unlock()
 
 	log.New("mongolink").Error(err, "Cluster Replication has failed")
+
+	go ml.onStateChanged(StateFailed)
 }
 
 // run executes the cluster replication.
@@ -517,6 +536,7 @@ func (ml *MongoLink) doPause(ctx context.Context) error {
 	}
 
 	ml.state = StatePaused
+	go ml.onStateChanged(StatePaused)
 
 	return nil
 }
@@ -556,6 +576,7 @@ func (ml *MongoLink) doResume(context.Context) error {
 	ml.state = StateRunning
 
 	go ml.run()
+	go ml.onStateChanged(StateRunning)
 
 	return nil
 }
@@ -628,9 +649,13 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 
 		lg.With(log.Elapsed(time.Since(startedTime))).
 			Info("Finalization is completed")
+
+		go ml.onStateChanged(StateFinalized)
 	}()
 
 	log.New("mongolink").Info("Finalizing")
+
+	go ml.onStateChanged(StateFinalizing)
 
 	return nil
 }

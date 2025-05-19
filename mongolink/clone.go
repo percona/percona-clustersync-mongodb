@@ -281,6 +281,13 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger := log.Ctx(ctx)
 
+	numParallelCollections := config.CloneNumParallelCollections()
+	if numParallelCollections < 1 {
+		numParallelCollections = config.DefaultCloneNumParallelCollection
+	}
+
+	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
+
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     config.CloneNumReadWorkers(),
 		NumInsertWorkers:   config.CloneNumInsertWorkers(),
@@ -288,11 +295,6 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 		ReadBatchSizeBytes: config.CloneReadBatchSizeBytes(),
 	})
 	defer copyManager.Close()
-
-	numParallelCollections := config.CloneNumParallelCollections()
-	if numParallelCollections < 1 {
-		numParallelCollections = config.DefaultCloneNumParallelCollection
-	}
 
 	eg, grpCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(numParallelCollections)
@@ -600,6 +602,10 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 
 					stats, err := topo.GetCollStats(collGrpCtx, c.source, db, spec.Name)
 					if err != nil {
+						if errors.Is(err, topo.ErrNotFound) {
+							return nil
+						}
+
 						return errors.Wrapf(err, "get collection stats for %q", db+"."+spec.Name)
 					}
 

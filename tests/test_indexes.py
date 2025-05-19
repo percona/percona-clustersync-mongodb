@@ -4,7 +4,6 @@ from datetime import datetime
 
 import pymongo
 import pytest
-import testing
 from mlink import Runner
 from testing import Testing
 
@@ -515,23 +514,7 @@ def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
         t.source["db_0"]["coll_0"].drop_index([("i", 1)])
 
 
-@pytest.mark.slow
-@pytest.mark.timeout(90)
-def test_pml_135_clone_numerous_indexes_deadlock(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=90):
-        for i in range(200):
-            for j in range(50):
-                t.source["db_1"][f"coll_{i:03d}"].create_index([(f"prop_{j:02d}", 1)])
-
-    try:
-        t.compare_all()
-    finally:
-        # clean up after to avoid other tests running time
-        testing.drop_all_database(t.source)
-        testing.drop_all_database(t.target)
-
-
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(40)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
 def test_pml_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():

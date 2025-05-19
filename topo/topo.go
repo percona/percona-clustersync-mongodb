@@ -7,7 +7,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 // errMissingClusterTime is returned when the cluster time is missing.
@@ -15,7 +18,7 @@ var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Raw()
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw()
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
@@ -46,7 +49,7 @@ func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, e
 	return bson.Timestamp{T: t, I: i}, nil
 }
 
-// Hello represents the result of the db.hello() command.
+// Hello represents the result of the db.hello() command. Returns by [SayHello].
 type Hello struct {
 	// IsWritablePrimary indicates if the node is writable primary.
 	IsWritablePrimary bool `bson:"isWritablePrimary"`
@@ -90,7 +93,7 @@ type Hello struct {
 	Me string `bson:"me"`
 }
 
-// DBStats represents the result of the dbStats command.
+// DBStats represents the result of the [GetDBStats].
 type DBStats struct {
 	// DB is the name of the database.
 	DB string `bson:"db"`
@@ -114,25 +117,17 @@ type DBStats struct {
 	TotalSize int64 `bson:"totalSize"`
 }
 
-// CollStats represents the result of the collStats command.
+// CollStats represents the result of the [GetCollStats].
 type CollStats struct {
-	// Namespace is the full namespace of the collection.
-	Namespace string `bson:"ns"`
 	// Count is the number of documents in the collection.
 	Count int64 `bson:"count"`
 	// Size is the total size of the collection.
 	Size int64 `bson:"size"`
 	// AvgObjSize is the average size of documents in the collection.
 	AvgObjSize int64 `bson:"avgObjSize"`
-	// StorageSize is the total storage size of the collection.
-	StorageSize int64 `bson:"storageSize"`
-	// TotalIndexSize is the total size of indexes in the collection.
-	TotalIndexSize int64 `bson:"totalIndexSize"`
-	// TotalSize is the total size of the collection including indexes.
-	TotalSize int64 `bson:"totalSize"`
 }
 
-// SayHello runs the db.hello() command and returns the result as a Hello struct.
+// SayHello runs the db.hello() command and returns the [Hello].
 func SayHello(ctx context.Context, m *mongo.Client) (*Hello, error) {
 	var result *Hello
 
@@ -141,7 +136,7 @@ func SayHello(ctx context.Context, m *mongo.Client) (*Hello, error) {
 	return result, err //nolint:wrapcheck
 }
 
-// GetDBStats runs the dbStats command and returns the result as a DBStats struct.
+// GetDBStats runs the dbStats command.
 func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, error) {
 	var result *DBStats
 
@@ -150,15 +145,45 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 	return result, err //nolint:wrapcheck
 }
 
-// GetCollStats runs the collStats command and returns the result as a CollStats struct.
-func GetCollStats(
-	ctx context.Context,
-	m *mongo.Client,
-	dbName, collName string,
-) (*CollStats, error) {
-	var result *CollStats
+// GetCollStats runs the collStats aggregate stage.
+func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
+		{{"$collStats", bson.D{{"storageStats", bson.D{}}}}},
+		{{"$project", bson.D{
+			{"size", "$storageStats.size"},
+			{"count", "$storageStats.count"},
+			{"avgObjSize", "$storageStats.avgObjSize"},
+		}}},
+	})
+	if err != nil {
+		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
 
-	err := m.Database(dbName).RunCommand(ctx, bson.D{{"collStats", collName}}).Decode(&result)
+		return nil, errors.Wrap(err, "$collStats")
+	}
 
-	return result, err //nolint:wrapcheck
+	defer func() {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
+		}
+	}()
+
+	stats := &CollStats{}
+	if !cur.Next(ctx) {
+		err = cur.Err()
+		if err == nil {
+			return nil, ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "$collStas: cursor")
+	}
+
+	err = cur.Decode(stats)
+	if err != nil {
+		return nil, errors.Wrap(err, "decode")
+	}
+
+	return stats, nil
 }

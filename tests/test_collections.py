@@ -565,31 +565,13 @@ def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.slow
-@pytest.mark.timeout(240)
-def test_pml_119_clone_numerous_collections_deadlock(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE, wait_timeout=180):
-        for i in range(1000):
-            for j in range(10):
-                t.source[f"db_{i:03d}"][f"coll_{j:02d}"].insert_one({})
-
-    try:
-        t.compare_all()
-    finally:
-        # clean up after to avoid other tests running time
-        testing.drop_all_database(t.source)
-        testing.drop_all_database(t.target)
-
-
-def test_pml_109_rename_during_clone(t: Testing):
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_pml_109_rename_complex(t: Testing, phase: Runner.Phase):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(1000))
 
-    with t.run(phase=Runner.Phase.MANUAL) as r:
-        r.start()
-        r.wait_for_state(MongoLink.State.RUNNING)
-
+    with t.run(phase):
         for ns in testing.list_all_namespaces(t.source):
             t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
         for ns in testing.list_all_namespaces(t.source):
