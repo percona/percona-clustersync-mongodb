@@ -281,6 +281,13 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger := log.Ctx(ctx)
 
+	numParallelCollections := config.CloneNumParallelCollections()
+	if numParallelCollections < 1 {
+		numParallelCollections = config.DefaultCloneNumParallelCollection
+	}
+
+	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
+
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     config.CloneNumReadWorkers(),
 		NumInsertWorkers:   config.CloneNumInsertWorkers(),
@@ -288,11 +295,6 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 		ReadBatchSizeBytes: config.CloneReadBatchSizeBytes(),
 	})
 	defer copyManager.Close()
-
-	numParallelCollections := config.CloneNumParallelCollections()
-	if numParallelCollections < 1 {
-		numParallelCollections = config.DefaultCloneNumParallelCollection
-	}
 
 	eg, grpCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(numParallelCollections)
