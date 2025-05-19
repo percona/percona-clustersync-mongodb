@@ -1,6 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import concurrent.futures
-import itertools
 import random
 from datetime import datetime, timedelta
 
@@ -25,13 +24,11 @@ def vary_id_gen():
 
 def cleanup_numerous_databases(source: pymongo.MongoClient, target: pymongo.MongoClient):
     with concurrent.futures.ThreadPoolExecutor() as pool:
-        databases = testing.list_databases(source)
-        for batch in itertools.batched(databases, 100):
-            pool.map(source.drop_database, batch)
+        for db in testing.list_databases(source):
+            pool.submit(source.drop_database, db)
 
-        databases = testing.list_databases(target)
-        for batch in itertools.batched(databases, 100):
-            pool.map(target.drop_database, batch)
+        for db in testing.list_databases(target):
+            pool.submit(target.drop_database, db)
 
 
 @pytest.mark.slow
