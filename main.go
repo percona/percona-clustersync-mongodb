@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -41,13 +42,15 @@ const (
 )
 
 var (
-	Version   = "v0.1" //nolint:gochecknoglobals
-	GitCommit = ""     //nolint:gochecknoglobals
-	BuildID   = ""     //nolint:gochecknoglobals
+	Version   = "v0.5.0" //nolint:gochecknoglobals
+	Platform  = ""       //nolint:gochecknoglobals
+	GitCommit = ""       //nolint:gochecknoglobals
+	GitBranch = ""       //nolint:gochecknoglobals
+	BuildTime = ""       //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
-	return Version + " " + GitCommit + " " + BuildID
+	return Version + " " + GitCommit + " " + BuildTime
 }
 
 //nolint:gochecknoglobals
@@ -128,7 +131,17 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version",
 	Run: func(cmd *cobra.Command, _ []string) {
-		cmd.Println(buildVersion())
+		info := fmt.Sprintf("Version:   %s\nPlatform:  %s\nGitCommit: "+
+			"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
+			Version,
+			Platform,
+			GitCommit,
+			GitBranch,
+			BuildTime,
+			runtime.Version(),
+		)
+
+		cmd.Println(info)
 	},
 }
 
@@ -568,6 +581,15 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	if err != nil {
 		return nil, errors.Wrap(err, "recover MongoLink")
 	}
+
+	mlink.SetOnStateChanged(func(newState mongolink.State) {
+		err := DoCheckpoint(ctx, target, mlink)
+		if err != nil {
+			log.New("http:checkpointing").Error(err, "checkpoint")
+		} else {
+			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
+		}
+	})
 
 	go RunCheckpointing(ctx, target, mlink)
 
