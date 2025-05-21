@@ -6,8 +6,8 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/topo"
 )
 
 type OperationType string

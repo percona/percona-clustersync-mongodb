@@ -14,12 +14,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/topo"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/util"
 )
 
 var (

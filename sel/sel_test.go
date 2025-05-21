@@ -3,7 +3,7 @@ package sel_test
 import (
 	"testing"
 
-	"github.com/percona-lab/percona-mongolink/sel"
+	"github.com/percona/percona-mongolink/sel"
 )
 
 func TestFilter(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/errors"
 )
 
 //nolint:gochecknoglobals
