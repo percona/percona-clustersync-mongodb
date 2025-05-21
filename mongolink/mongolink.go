@@ -204,7 +204,7 @@ func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.State == StateRunning {
-		return ml.doResume(ctx)
+		return ml.doResume(ctx, false)
 	}
 
 	return nil
@@ -541,8 +541,12 @@ func (ml *MongoLink) doPause(ctx context.Context) error {
 	return nil
 }
 
+type ResumeOptions struct {
+	ResumeFromFailure bool
+}
+
 // Resume resumes the replication process.
-func (ml *MongoLink) Resume(ctx context.Context) error {
+func (ml *MongoLink) Resume(ctx context.Context, options ResumeOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -550,7 +554,7 @@ func (ml *MongoLink) Resume(ctx context.Context) error {
 		return errors.New("cannot resume: not paused")
 	}
 
-	err := ml.doResume(ctx)
+	err := ml.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
 		log.New("mongolink").Error(err, "Resume Cluster Replication")
 
@@ -562,7 +566,7 @@ func (ml *MongoLink) Resume(ctx context.Context) error {
 	return nil
 }
 
-func (ml *MongoLink) doResume(context.Context) error {
+func (ml *MongoLink) doResume(_ context.Context, fromFailure bool) error {
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsStarted() {

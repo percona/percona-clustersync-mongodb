@@ -223,7 +223,13 @@ var resumeCmd = &cobra.Command{
 			return err
 		}
 
-		return NewClient(port).Resume(cmd.Context())
+		fromFailure, _ := cmd.Flags().GetBool("from-failure")
+
+		resumeOptions := resumeRequest{
+			FromFailure: fromFailure,
+		}
+
+		return NewClient(port).Resume(cmd.Context(), resumeOptions)
 	},
 }
 
@@ -369,7 +375,9 @@ func main() {
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
+
 	resumeCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
 	finalizeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
@@ -876,7 +884,33 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.mlink.Resume(ctx)
+	var params resumeRequest
+
+	if r.ContentLength != 0 {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError)
+
+			return
+		}
+
+		err = json.Unmarshal(data, &params)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusBadRequest),
+				http.StatusBadRequest)
+
+			return
+		}
+	}
+
+	options := &mongolink.ResumeOptions{
+		ResumeFromFailure: params.FromFailure,
+	}
+
+	err := s.mlink.Resume(ctx, *options)
 	if err != nil {
 		writeResponse(w, resumeResponse{Err: err.Error()})
 
@@ -984,6 +1018,12 @@ type pauseResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
+// resumeRequest represents the request body for the /resume endpoint.
+type resumeRequest struct {
+	// FromFailure indicates whether to resume from a failed state.
+	FromFailure bool `json:"fromFailure,omitempty"`
+}
+
 // resumeResponse represents the response body for the /resume
 // endpoint.
 type resumeResponse struct {
@@ -1022,8 +1062,8 @@ func (c MongoLinkClient) Pause(ctx context.Context) error {
 }
 
 // Resume sends a request to resume the cluster replication.
-func (c MongoLinkClient) Resume(ctx context.Context) error {
-	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", nil)
+func (c MongoLinkClient) Resume(ctx context.Context, req resumeRequest) error {
+	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 
 func doClientRequest[T any](ctx context.Context, port int, method, path string, body any) error {
