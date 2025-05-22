@@ -22,12 +22,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/sel"
-	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/sel"
+	"github.com/percona/percona-mongolink/topo"
 )
 
 // State represents the state of the MongoLink.

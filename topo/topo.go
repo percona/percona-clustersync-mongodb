@@ -7,10 +7,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/util"
 )
 
 // errMissingClusterTime is returned when the cluster time is missing.

@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/errors"
 )
 
 type ServerVersion [4]uint8

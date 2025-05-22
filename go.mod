@@ -1,4 +1,4 @@
-module github.com/percona-lab/percona-mongolink
+module github.com/percona/percona-mongolink
 
 go 1.24
 
