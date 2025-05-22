@@ -2,6 +2,7 @@ package mongolink
 
 import (
 	"context"
+	"encoding/hex"
 	"strings"
 	"sync"
 	"time"
@@ -10,13 +11,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/sel"
-	"github.com/percona-lab/percona-mongolink/topo"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/sel"
+	"github.com/percona/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/util"
 )
 
 var (
@@ -174,6 +175,13 @@ func (r *Repl) Status() ReplStatus {
 
 		Err: r.err,
 	}
+}
+
+func (r *Repl) resetError() {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.err = nil
 }
 
 func (r *Repl) Done() <-chan struct{} {
@@ -451,6 +459,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 	}()
 
+	uuidMap := r.catalog.UUIDMap()
 	r.lastBulkDoneAt = time.Now()
 
 	lg := log.New("repl")
@@ -501,25 +510,29 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		switch change.OperationType { //nolint:exhaustive
 		case Insert:
 			event := change.Event.(InsertEvent) //nolint:forcetypeassert
-			r.bulkWrite.Insert(change.Namespace, &event)
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.bulkWrite.Insert(ns, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Update:
 			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
-			r.bulkWrite.Update(change.Namespace, &event)
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.bulkWrite.Update(ns, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Delete:
 			event := change.Event.(DeleteEvent) //nolint:forcetypeassert
-			r.bulkWrite.Delete(change.Namespace, &event)
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.bulkWrite.Delete(ns, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
 		case Replace:
 			event := change.Event.(ReplaceEvent) //nolint:forcetypeassert
-			r.bulkWrite.Replace(change.Namespace, &event)
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.bulkWrite.Replace(ns, &event)
 			r.bulkToken = change.ID
 			r.bulkTS = change.ClusterTime
 
@@ -543,6 +556,11 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Unlock()
 
 			metrics.AddEventsProcessed(1)
+
+			switch change.OperationType { //nolint:exhaustive
+			case Create, Rename, Drop, DropDatabase:
+				uuidMap = r.catalog.UUIDMap()
+			}
 		}
 
 		if r.bulkWrite.Full() {
@@ -555,6 +573,20 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	if !r.bulkWrite.Empty() {
 		r.doBulkOps(ctx) //nolint:errcheck
 	}
+}
+
+//go:inline
+func findNamespaceByUUID(uuidMap UUIDMap, change *ChangeEvent) Namespace {
+	if change.CollectionUUID == nil {
+		return change.Namespace
+	}
+
+	ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]
+	if !ok {
+		return change.Namespace
+	}
+
+	return ns
 }
 
 func (r *Repl) doBulkOps(ctx context.Context) bool {
@@ -616,17 +648,37 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			&event.OperationDescription)
 		if err != nil {
 			err = errors.Wrap(err, "create")
+
+			break
 		}
+
+		r.catalog.SetCollectionUUID(ctx,
+			change.Namespace.Database,
+			change.Namespace.Collection,
+			change.CollectionUUID)
+
+		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
+		if err != nil {
+			break
+		}
+
+		lg.Infof("Collection %q has been dropped", change.Namespace)
 
 	case DropDatabase:
 		err = r.catalog.DropDatabase(ctx, change.Namespace.Database)
+		if err != nil {
+			break
+		}
+
+		lg.Infof("Database %q has been dropped", change.Namespace)
 
 	case CreateIndexes:
+		// TODO: check the indexes status
 		event := change.Event.(CreateIndexesEvent) //nolint:forcetypeassert
 		err = r.catalog.CreateIndexes(ctx,
 			change.Namespace.Database,
@@ -656,6 +708,12 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			change.Namespace.Collection,
 			event.OperationDescription.To.Database,
 			event.OperationDescription.To.Collection)
+		if err != nil {
+			break
+		}
+
+		lg.Infof("Collection %q has been renamed to %q",
+			change.Namespace, event.OperationDescription.To)
 
 	case Invalidate:
 		lg.Error(ErrInvalidateEvent, "")

@@ -5,8 +5,11 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
-	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/errors"
 )
 
 type CollectionSpecification = mongo.CollectionSpecification
@@ -107,6 +110,26 @@ func GetCollectionSpec(
 	return &coll, nil
 }
 
+// GetCollectionNameByUUID retrieves the collection name by its UUID.
+func GetCollectionNameByUUID(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName string,
+	uuid bson.Binary,
+) (string, error) {
+	specs, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}})
+	if err != nil {
+		return "", errors.Wrap(err, "listCollections")
+	}
+
+	if len(specs) == 0 {
+		return "", ErrNotFound
+	}
+
+	return specs[0].Name, nil
+}
+
+// ListIndexes retrieves the specifications of indexes for a collection.
 func ListIndexes(
 	ctx context.Context,
 	m *mongo.Client,
@@ -119,7 +142,56 @@ func ListIndexes(
 	}
 
 	var indexes []*IndexSpecification
-	err = cur.All(ctx, &indexes)
 
-	return indexes, errors.Wrap(err, "decode indexes")
+	err = cur.All(ctx, &indexes)
+	if err != nil {
+		return nil, errors.Wrap(err, "list indexes")
+	}
+
+	return indexes, nil
+}
+
+func ListInProgressIndexBuilds(
+	ctx context.Context,
+	m *mongo.Client,
+	db string,
+	coll string,
+) ([]string, error) {
+	opts := options.Database().
+		SetReadPreference(readpref.Primary()).
+		SetReadConcern(readconcern.Local())
+	cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
+		{{"$currentOp", bson.D{{"allUsers", true}}}},
+		{{"$match", bson.D{
+			{"op", "command"},
+			{"command.createIndexes", coll},
+			{"command.$db", db},
+		}}},
+		{{"$unwind", "$command.indexes"}},
+		{{"$replaceRoot", bson.D{{"newRoot", "$command.indexes"}}}},
+		{{"$project", bson.D{{"name", 1}}}},
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "$currentOp")
+	}
+
+	var indexBuilds []struct {
+		Name string `bson:"name"`
+	}
+
+	err = cur.All(ctx, &indexBuilds)
+	if err != nil {
+		return nil, errors.Wrap(err, "cursor: all")
+	}
+
+	if len(indexBuilds) == 0 {
+		return []string(nil), nil
+	}
+
+	names := make([]string, len(indexBuilds))
+	for i, index := range indexBuilds {
+		names[i] = index.Name
+	}
+
+	return names, nil
 }

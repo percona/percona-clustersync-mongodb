@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import threading
 from datetime import datetime
 
 import pymongo
@@ -511,3 +512,30 @@ def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
     with t.run(phase=Runner.Phase.APPLY):
         t.target["db_0"]["coll_0"].drop()
         t.source["db_0"]["coll_0"].drop_index([("i", 1)])
+
+
+@pytest.mark.timeout(40)
+@pytest.mark.parametrize("index_status", ["succeed", "fail"])
+def test_pml_118_ignore_incomplete_index(t: Testing, index_status: str):
+    def build_index():
+        try:
+            t.source["db_1"]["coll_1"].create_index([("a", 1), ("i", "text")])
+        except:  # pylint: disable=bare-except
+            pass
+
+    for i in range(1000):
+        t.source["db_1"]["coll_1"].insert_many({"a": str(i), "i": str(j)} for j in range(1000))
+
+    if index_status == "fail":
+        t.source["db_1"]["coll_1"].insert_one({"a": [], "i": []})
+
+    runner = t.run(Runner.Phase.MANUAL, wait_timeout=300)
+    runner.start()
+
+    thread = threading.Thread(target=build_index)
+    thread.start()
+    thread.join()
+
+    runner.finalize()
+
+    t.compare_all()

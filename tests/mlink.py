@@ -154,7 +154,7 @@ class Runner:
         state = self.mlink.status()
 
         if state["state"] == MongoLink.State.PAUSED:
-            if state["initialSync"]["completed"]:
+            if state["initialSync"]["cloneCompleted"]:
                 self.mlink.resume()
                 state = self.mlink.status()
 

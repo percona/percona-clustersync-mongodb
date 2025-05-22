@@ -8,9 +8,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
 )
 
 var errNoRecoveryData = errors.New("no recovery data")
@@ -65,7 +65,7 @@ func RunCheckpointing(ctx context.Context, m *mongo.Client, rec Recoverable) {
 	lg := log.New("checkpointing")
 
 	for {
-		err := doCheckpoint(ctx, m, rec)
+		err := DoCheckpoint(ctx, m, rec)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -81,7 +81,7 @@ func RunCheckpointing(ctx context.Context, m *mongo.Client, rec Recoverable) {
 	}
 }
 
-func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
+func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 	data, err := rec.Checkpoint(ctx)
 	if err != nil {
 		return errors.Wrap(err, "checkpoint")

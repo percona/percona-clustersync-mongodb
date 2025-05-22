@@ -2,8 +2,8 @@ package mongolink
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
-	"slices"
 	"strings"
 	"sync"
 
@@ -11,9 +11,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/topo"
 )
 
 var ErrTimeseriesUnsupported = errors.New("timeseries is not supported")
@@ -27,6 +27,9 @@ const (
 	// TimeseriesPrefix is the prefix for timeseries buckets.
 	TimeseriesPrefix = "system.buckets."
 )
+
+// UUIDMap is mapping of hex string of a collection UUID to its namespace.
+type UUIDMap map[string]Namespace
 
 // CreateCollectionOptions represents the options that can be used to create a collection.
 type CreateCollectionOptions struct {
@@ -89,7 +92,17 @@ type databaseCatalog struct {
 
 type collectionCatalog struct {
 	AddedAt bson.Timestamp
-	Indexes []*topo.IndexSpecification
+	UUID    *bson.Binary
+	Indexes []indexCatalogEntry
+}
+
+type indexCatalogEntry struct {
+	*topo.IndexSpecification
+	Incomplete bool `bson:"incomplete"`
+}
+
+func (i indexCatalogEntry) Ready() bool {
+	return !i.Incomplete
 }
 
 // NewCatalog creates a new Catalog.
@@ -112,9 +125,13 @@ func (c *Catalog) UnlockWrite() {
 	c.lock.RUnlock()
 }
 
+// Checkpoint returns [catalogCheckpoint] as a part of recovery mechanism.
+//
+// The [Catalog.LockWrite] must be called before the function is called and
+// the [Catalog.UnlockWrite] must be called after the return value is no used anymore.
 func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	// do not call [sync.RWMutex.RLock] to avoid deadlock through recursive read-locking
+	// that may happen during clone or change replication
 
 	if len(c.Databases) == 0 {
 		return nil
@@ -373,7 +390,7 @@ func (c *Catalog) CreateIndexes(
 		processedIdxs[index.Name] = nil
 	}
 
-	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+	successfulIdxs := make([]indexCatalogEntry, 0, len(processedIdxs))
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 	var idxErrors []error
 
@@ -384,12 +401,12 @@ func (c *Catalog) CreateIndexes(
 			continue
 		}
 
-		succesfulIdxs = append(succesfulIdxs, idx)
+		successfulIdxs = append(successfulIdxs, indexCatalogEntry{IndexSpecification: idx})
 		successfulIdxNames = append(successfulIdxNames, idx.Name)
 	}
 
 	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
-	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
+	c.addIndexesToCatalog(ctx, db, coll, successfulIdxs)
 
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...),
@@ -397,6 +414,38 @@ func (c *Catalog) CreateIndexes(
 	}
 
 	return nil
+}
+
+// AddIncompleteIndexes adds indexes in the catalog but do not create them on the target cluster.
+// The indexes have set [indexCatalogEntry.Incomplete] flag.
+func (c *Catalog) AddIncompleteIndexes(
+	ctx context.Context,
+	db string,
+	coll string,
+	indexes []*topo.IndexSpecification,
+) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	lg := log.Ctx(ctx)
+
+	if len(indexes) == 0 {
+		lg.Error(nil, "No incomplete indexes to add")
+
+		return
+	}
+
+	indexEntries := make([]indexCatalogEntry, len(indexes))
+	for i, index := range indexes {
+		indexEntries[i] = indexCatalogEntry{
+			IndexSpecification: index,
+			Incomplete:         true,
+		}
+
+		lg.Tracef("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
+	}
+
+	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
 }
 
 // ModifyCappedCollection modifies a capped collection in the target MongoDB.
@@ -610,6 +659,46 @@ func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, t
 	c.Databases[db] = databaseEntry
 }
 
+func (c *Catalog) SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection UUID: database %q is not found", db)
+
+		return
+	}
+
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection UUID: namespace %q is not found", db+"."+coll)
+
+		return
+	}
+
+	collectionEntry.UUID = uuid
+	databaseEntry.Collections[coll] = collectionEntry
+	c.Databases[db] = databaseEntry
+}
+
+func (c *Catalog) UUIDMap() UUIDMap {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	uuidMap := make(UUIDMap)
+
+	for db, dbCat := range c.Databases {
+		for coll, collCat := range dbCat.Collections {
+			if collCat.UUID != nil {
+				uuidMap[hex.EncodeToString(collCat.UUID.Data)] = Namespace{db, coll}
+			}
+		}
+	}
+
+	return uuidMap
+}
+
 // Finalize finalizes the indexes in the target MongoDB.
 func (c *Catalog) Finalize(ctx context.Context) error {
 	c.lock.RLock()
@@ -622,6 +711,13 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
+				if !index.Ready() {
+					lg.Warnf("Index %s on %s.%s was incomplete during replication, skipping it",
+						index.Name, db, coll)
+
+					continue
+				}
+
 				if index.IsClustered() {
 					lg.Warn("Clustered index with TTL is not supported")
 
@@ -732,7 +828,7 @@ func (c *Catalog) getIndexFromCatalog(db, coll, index string) *topo.IndexSpecifi
 
 	for _, indexSpec := range collCat.Indexes {
 		if indexSpec.Name == index {
-			return indexSpec
+			return indexSpec.IndexSpecification
 		}
 	}
 
@@ -744,7 +840,7 @@ func (c *Catalog) addIndexesToCatalog(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []indexCatalogEntry,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -753,11 +849,7 @@ func (c *Catalog) addIndexesToCatalog(
 		lg.Errorf(nil, "add indexes: database %q not found", db)
 
 		c.Databases[db] = databaseCatalog{
-			Collections: map[string]collectionCatalog{
-				coll: {
-					Indexes: slices.Clone(indexes),
-				},
-			},
+			Collections: map[string]collectionCatalog{coll: {Indexes: indexes}},
 		}
 
 		return
@@ -767,9 +859,7 @@ func (c *Catalog) addIndexesToCatalog(
 	if !ok {
 		lg.Errorf(nil, "add indexes: namespace %q not found", db+"."+coll)
 
-		dbCat.Collections[coll] = collectionCatalog{
-			Indexes: slices.Clone(indexes),
-		}
+		dbCat.Collections[coll] = collectionCatalog{Indexes: indexes}
 		c.Databases[db] = dbCat
 
 		return

@@ -2,6 +2,7 @@ package topo
 
 import (
 	"errors"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -34,8 +35,24 @@ func IsNamespaceNotFound(err error) bool {
 	return isMongoCommandError(err, "NamespaceNotFound")
 }
 
-func IsQueryPlanKilled(err error) bool {
-	return isMongoCommandError(err, "QueryPlanKilled")
+// IsCollectionDropped checks if the error is caused by a collection being dropped.
+func IsCollectionDropped(err error) bool {
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
+		return strings.Contains(cmdErr.Message, "collection dropped")
+	}
+
+	return false
+}
+
+// IsCollectionRenamed checks if the error is caused by a collection being renamed.
+func IsCollectionRenamed(err error) bool {
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
+		return strings.Contains(cmdErr.Message, "collection renamed")
+	}
+
+	return false
 }
 
 func IsChangeStreamHistoryLost(err error) bool {

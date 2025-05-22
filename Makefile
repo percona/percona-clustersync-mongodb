@@ -1,12 +1,19 @@
-GIT_HASH := $(shell git rev-parse --short HEAD)
-BUILD_ID := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-SET_VER := -X main.GitCommit=$(GIT_HASH) -X main.BuildID=$(BUILD_ID)
+GOOS?=$(shell go env GOOS)
+GIT_COMMIT?=$(shell git rev-parse --short HEAD)
+GIT_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+BUILD_TIME := $(shell TZ=UTC date "+%Y-%m-%d_%H:%M_UTC")
+BUILD_INFO := \
+  -X main.Platform=$(GOOS) \
+  -X main.GitCommit=$(GIT_COMMIT) \
+  -X main.GitBranch=$(GIT_BRANCH) \
+  -X main.BuildTime=$(BUILD_TIME)
+
 
 # Flags for production build
-BUILD_FLAGS := -ldflags="-s -w $(SET_VER)" -trimpath -buildvcs=false -tags=performance
+BUILD_FLAGS := -ldflags="-s -w $(BUILD_INFO)" -trimpath -buildvcs=false -tags=performance
 
 # Flags for test build (debugging, race detection, and more)
-TEST_BUILD_FLAGS := -ldflags="$(SET_VER)" -gcflags=all="-N -l" -trimpath -race -tags=debug
+TEST_BUILD_FLAGS := -ldflags="$(BUILD_INFO)" -gcflags=all="-N -l" -trimpath -race -tags=debug
 
 # Default target: build for production
 all: build

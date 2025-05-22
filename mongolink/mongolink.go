@@ -22,12 +22,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/sel"
-	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/sel"
+	"github.com/percona/percona-mongolink/topo"
 )
 
 // State represents the state of the MongoLink.
@@ -47,6 +47,8 @@ const (
 	// StateFinalized indicates that the mongolink has been finalized.
 	StateFinalized = "finalized"
 )
+
+type OnStateChangedFunc func(newState State)
 
 // Status represents the status of the MongoLink.
 type Status struct {
@@ -77,6 +79,8 @@ type MongoLink struct {
 	nsExclude []string
 	nsFilter  sel.NSFilter // Namespace filter
 
+	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
+
 	pauseOnInitialSync bool
 
 	state State // Current state of the MongoLink
@@ -93,9 +97,10 @@ type MongoLink struct {
 // New creates a new MongoLink.
 func New(source, target *mongo.Client) *MongoLink {
 	return &MongoLink{
-		source: source,
-		target: target,
-		state:  StateIdle,
+		source:         source,
+		target:         target,
+		state:          StateIdle,
+		onStateChanged: func(State) {},
 	}
 }
 
@@ -119,7 +124,7 @@ func (ml *MongoLink) Checkpoint(context.Context) ([]byte, error) {
 		return nil, nil
 	}
 
-	// lock writes during checkpoint
+	// prevent catalog changes during checkpoint
 	ml.catalog.LockWrite()
 	defer ml.catalog.UnlockWrite()
 
@@ -199,10 +204,21 @@ func (ml *MongoLink) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.State == StateRunning {
-		return ml.doResume(ctx)
+		return ml.doResume(ctx, false)
 	}
 
 	return nil
+}
+
+// SetOnStateChanged set the f function to be called on each state change.
+func (ml *MongoLink) SetOnStateChanged(f OnStateChangedFunc) {
+	if f == nil {
+		f = func(State) {}
+	}
+
+	ml.lock.Lock()
+	ml.onStateChanged = f
+	ml.lock.Unlock()
 }
 
 // Status returns the current status of the MongoLink.
@@ -259,6 +275,12 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 	return s
 }
 
+func (ml *MongoLink) resetError() {
+	ml.err = nil
+	ml.clone.resetError()
+	ml.repl.resetError()
+}
+
 // StartOptions represents the options for starting the MongoLink.
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to finalize after the initial sync.
@@ -313,6 +335,8 @@ func (ml *MongoLink) setFailed(err error) {
 	ml.lock.Unlock()
 
 	log.New("mongolink").Error(err, "Cluster Replication has failed")
+
+	go ml.onStateChanged(StateFailed)
 }
 
 // run executes the cluster replication.
@@ -517,20 +541,25 @@ func (ml *MongoLink) doPause(ctx context.Context) error {
 	}
 
 	ml.state = StatePaused
+	go ml.onStateChanged(StatePaused)
 
 	return nil
 }
 
+type ResumeOptions struct {
+	ResumeFromFailure bool
+}
+
 // Resume resumes the replication process.
-func (ml *MongoLink) Resume(ctx context.Context) error {
+func (ml *MongoLink) Resume(ctx context.Context, options ResumeOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	if ml.state != StatePaused {
-		return errors.New("cannot resume: not paused")
+	if ml.state != StatePaused && !(ml.state == StateFailed && options.ResumeFromFailure) {
+		return errors.New("cannot resume: not paused or not resuming from failure")
 	}
 
-	err := ml.doResume(ctx)
+	err := ml.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
 		log.New("mongolink").Error(err, "Resume Cluster Replication")
 
@@ -542,20 +571,22 @@ func (ml *MongoLink) Resume(ctx context.Context) error {
 	return nil
 }
 
-func (ml *MongoLink) doResume(context.Context) error {
+func (ml *MongoLink) doResume(_ context.Context, fromFailure bool) error {
 	replStatus := ml.repl.Status()
 
-	if !replStatus.IsStarted() {
-		return errors.New("cannot resume: replication is not started")
+	if !replStatus.IsStarted() && !fromFailure {
+		return errors.New("cannot resume: replication is not started or not resuming from failure")
 	}
 
-	if !replStatus.IsPaused() {
-		return errors.New("cannot resume: replication is not paused")
+	if !replStatus.IsPaused() && fromFailure {
+		return errors.New("cannot resume: replication is not paused or not resuming from failure")
 	}
 
 	ml.state = StateRunning
+	ml.resetError()
 
 	go ml.run()
+	go ml.onStateChanged(StateRunning)
 
 	return nil
 }
@@ -628,9 +659,13 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 
 		lg.With(log.Elapsed(time.Since(startedTime))).
 			Info("Finalization is completed")
+
+		go ml.onStateChanged(StateFinalized)
 	}()
 
 	log.New("mongolink").Info("Finalizing")
+
+	go ml.onStateChanged(StateFinalizing)
 
 	return nil
 }

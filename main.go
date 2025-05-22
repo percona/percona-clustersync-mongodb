@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,13 +23,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/mongolink"
-	"github.com/percona-lab/percona-mongolink/topo"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/mongolink"
+	"github.com/percona/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/util"
 )
 
 // Constants for server configuration.
@@ -41,13 +42,15 @@ const (
 )
 
 var (
-	Version   = "v0.1" //nolint:gochecknoglobals
-	GitCommit = ""     //nolint:gochecknoglobals
-	BuildID   = ""     //nolint:gochecknoglobals
+	Version   = "v0.5.0" //nolint:gochecknoglobals
+	Platform  = ""       //nolint:gochecknoglobals
+	GitCommit = ""       //nolint:gochecknoglobals
+	GitBranch = ""       //nolint:gochecknoglobals
+	BuildTime = ""       //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
-	return Version + " " + GitCommit + " " + BuildID
+	return Version + " " + GitCommit + " " + BuildTime
 }
 
 //nolint:gochecknoglobals
@@ -128,7 +131,17 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version",
 	Run: func(cmd *cobra.Command, _ []string) {
-		cmd.Println(buildVersion())
+		info := fmt.Sprintf("Version:   %s\nPlatform:  %s\nGitCommit: "+
+			"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
+			Version,
+			Platform,
+			GitCommit,
+			GitBranch,
+			BuildTime,
+			runtime.Version(),
+		)
+
+		cmd.Println(info)
 	},
 }
 
@@ -210,7 +223,13 @@ var resumeCmd = &cobra.Command{
 			return err
 		}
 
-		return NewClient(port).Resume(cmd.Context())
+		fromFailure, _ := cmd.Flags().GetBool("from-failure")
+
+		resumeOptions := resumeRequest{
+			FromFailure: fromFailure,
+		}
+
+		return NewClient(port).Resume(cmd.Context(), resumeOptions)
 	},
 }
 
@@ -356,7 +375,9 @@ func main() {
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
+
 	resumeCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
 	finalizeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
@@ -568,6 +589,15 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	if err != nil {
 		return nil, errors.Wrap(err, "recover MongoLink")
 	}
+
+	mlink.SetOnStateChanged(func(newState mongolink.State) {
+		err := DoCheckpoint(ctx, target, mlink)
+		if err != nil {
+			log.New("http:checkpointing").Error(err, "checkpoint")
+		} else {
+			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
+		}
+	})
 
 	go RunCheckpointing(ctx, target, mlink)
 
@@ -854,7 +884,33 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.mlink.Resume(ctx)
+	var params resumeRequest
+
+	if r.ContentLength != 0 {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError)
+
+			return
+		}
+
+		err = json.Unmarshal(data, &params)
+		if err != nil {
+			http.Error(w,
+				http.StatusText(http.StatusBadRequest),
+				http.StatusBadRequest)
+
+			return
+		}
+	}
+
+	options := &mongolink.ResumeOptions{
+		ResumeFromFailure: params.FromFailure,
+	}
+
+	err := s.mlink.Resume(ctx, *options)
 	if err != nil {
 		writeResponse(w, resumeResponse{Err: err.Error()})
 
@@ -962,6 +1018,12 @@ type pauseResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
+// resumeRequest represents the request body for the /resume endpoint.
+type resumeRequest struct {
+	// FromFailure indicates whether to resume from a failed state.
+	FromFailure bool `json:"fromFailure,omitempty"`
+}
+
 // resumeResponse represents the response body for the /resume
 // endpoint.
 type resumeResponse struct {
@@ -1000,8 +1062,8 @@ func (c MongoLinkClient) Pause(ctx context.Context) error {
 }
 
 // Resume sends a request to resume the cluster replication.
-func (c MongoLinkClient) Resume(ctx context.Context) error {
-	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", nil)
+func (c MongoLinkClient) Resume(ctx context.Context, req resumeRequest) error {
+	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 
 func doClientRequest[T any](ctx context.Context, port int, method, path string, body any) error {

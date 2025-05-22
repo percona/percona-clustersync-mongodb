@@ -1,8 +1,10 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import random
 from datetime import datetime
 
 import pytest
-from mlink import Runner
+import testing
+from mlink import MongoLink, Runner
 from pymongo import MongoClient
 from testing import Testing
 
@@ -563,11 +565,61 @@ def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.slow
-@pytest.mark.timeout(30)
-def test_pml_119_clone_collect_size_map_deadlock(t: Testing):
-    with t.run(phase=Runner.Phase.CLONE):
-        for i in range(50):
-            t.source[f"db_{i}"]["coll"].insert_one({})
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_pml_109_rename_complex(t: Testing, phase: Runner.Phase):
+    payload = random.randbytes(1000)
+    for i in range(10):
+        t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(1000))
+
+    with t.run(phase):
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns + "_again"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+    t.compare_all()
+
+
+def test_pml_110_rename_during_clone_and_repl(t: Testing):
+    payload = random.randbytes(1000)
+    for i in range(10):
+        t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(500))
+
+    with t.run(phase=Runner.Phase.MANUAL) as r:
+        r.start()
+        r.wait_for_state(MongoLink.State.RUNNING)
+
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns + "_again"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+        r.wait_for_clone_completed()
+
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns + "_+1"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+        for ns in testing.list_all_namespaces(t.source):
+            t.source.admin.command({"renameCollection": ns, "to": ns[:-1] + "2"})
+        for ns in testing.list_all_namespaces(t.source):
+            db, coll = ns.split(".", 1)
+            t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
 
     t.compare_all()

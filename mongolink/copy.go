@@ -14,12 +14,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona-lab/percona-mongolink/config"
-	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/metrics"
-	"github.com/percona-lab/percona-mongolink/topo"
-	"github.com/percona-lab/percona-mongolink/util"
+	"github.com/percona/percona-mongolink/config"
+	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-mongolink/log"
+	"github.com/percona/percona-mongolink/metrics"
+	"github.com/percona/percona-mongolink/topo"
+	"github.com/percona/percona-mongolink/util"
 )
 
 var (
@@ -165,7 +165,7 @@ func (cm *CopyManager) Close() {
 func (cm *CopyManager) Do(
 	ctx context.Context,
 	namespace Namespace,
-	getSpec CopyGetCollSpecFunc,
+	spec *topo.CollectionSpecification,
 ) <-chan CopyUpdate {
 	updateC := make(chan CopyUpdate, cm.options.NumInsertWorkers)
 
@@ -174,7 +174,7 @@ func (cm *CopyManager) Do(
 		defer func() { close(updateC); cm.collGroup.Done() }()
 
 		lg := log.New("copy").With(log.NS(namespace.Database, namespace.Collection))
-		err := cm.copyCollection(lg.WithContext(ctx), namespace, getSpec, updateC)
+		err := cm.copyCollection(lg.WithContext(ctx), namespace, spec, updateC)
 		if err != nil {
 			updateC <- CopyUpdate{Err: err}
 		}
@@ -191,14 +191,9 @@ type (
 func (cm *CopyManager) copyCollection(
 	ctx context.Context,
 	namespace Namespace,
-	getSpec CopyGetCollSpecFunc,
+	spec *topo.CollectionSpecification,
 	updateC chan<- CopyUpdate,
 ) error {
-	spec, err := getSpec(ctx)
-	if err != nil {
-		return errors.Wrap(err, "get namespace specification")
-	}
-
 	switch spec.Type {
 	case topo.TypeTimeseries:
 		return ErrTimeseriesUnsupported
@@ -287,9 +282,12 @@ func (cm *CopyManager) copyCollection(
 			if err != nil {
 				<-cm.readLimit
 
-				if errors.Is(err, errEOC) {
+				switch {
+				case errors.Is(err, errEOC):
 					pendingSegments.Wait() // wait all readers finish
-				} else {
+				case errors.Is(err, context.Canceled):
+					return // read stopped. updateC could be already closed
+				default:
 					updateC <- CopyUpdate{Err: errors.Wrap(err, "next segment")}
 				}
 
@@ -600,6 +598,10 @@ func NewSegmenter(
 ) (*Segmenter, error) {
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
+		if errors.Is(err, topo.ErrNotFound) {
+			return nil, NamespaceNotFoundError(ns)
+		}
+
 		return nil, errors.Wrap(err, "$collStats")
 	}
 
@@ -840,6 +842,10 @@ func NewCappedSegmenter(
 ) (*CappedSegmenter, error) {
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
+		if errors.Is(err, topo.ErrNotFound) {
+			return nil, NamespaceNotFoundError(ns)
+		}
+
 		return nil, errors.Wrap(err, "$collStats")
 	}
 
