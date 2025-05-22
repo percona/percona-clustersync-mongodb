@@ -297,7 +297,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	defer ml.lock.Unlock()
 
 	switch ml.state {
-	case StateRunning:
+	case StateRunning, StateFinalizing, StateFailed:
 		err := errors.New("already running")
 		log.New("mongolink:start").Error(err, "")
 
