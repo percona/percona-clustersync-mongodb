@@ -275,6 +275,12 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 	return s
 }
 
+func (ml *MongoLink) resetError() {
+	ml.err = nil
+	ml.clone.resetError()
+	ml.repl.resetError()
+}
+
 // StartOptions represents the options for starting the MongoLink.
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to finalize after the initial sync.
@@ -550,8 +556,8 @@ func (ml *MongoLink) Resume(ctx context.Context, options ResumeOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	if ml.state != StatePaused {
-		return errors.New("cannot resume: not paused")
+	if ml.state != StatePaused && !(ml.state == StateFailed && options.ResumeFromFailure) {
+		return errors.New("cannot resume: not paused or not resuming from failure")
 	}
 
 	err := ml.doResume(ctx, options.ResumeFromFailure)
@@ -569,15 +575,16 @@ func (ml *MongoLink) Resume(ctx context.Context, options ResumeOptions) error {
 func (ml *MongoLink) doResume(_ context.Context, fromFailure bool) error {
 	replStatus := ml.repl.Status()
 
-	if !replStatus.IsStarted() {
-		return errors.New("cannot resume: replication is not started")
+	if !replStatus.IsStarted() && !fromFailure {
+		return errors.New("cannot resume: replication is not started or not resuming from failure")
 	}
 
-	if !replStatus.IsPaused() {
-		return errors.New("cannot resume: replication is not paused")
+	if !replStatus.IsPaused() && fromFailure {
+		return errors.New("cannot resume: replication is not paused or not resuming from failure")
 	}
 
 	ml.state = StateRunning
+	ml.resetError()
 
 	go ml.run()
 	go ml.onStateChanged(StateRunning)

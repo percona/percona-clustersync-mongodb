@@ -158,6 +158,13 @@ func (c *Clone) Status() CloneStatus {
 	}
 }
 
+func (c *Clone) resetError() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	c.err = nil
+}
+
 func (c *Clone) Done() <-chan struct{} {
 	c.lock.Lock()
 	defer c.lock.Unlock()

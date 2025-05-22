@@ -177,6 +177,13 @@ func (r *Repl) Status() ReplStatus {
 	}
 }
 
+func (r *Repl) resetError() {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.err = nil
+}
+
 func (r *Repl) Done() <-chan struct{} {
 	r.lock.Lock()
 	defer r.lock.Unlock()
