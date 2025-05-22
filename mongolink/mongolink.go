@@ -324,7 +324,6 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 	ml.state = StateRunning
 
 	go ml.run()
-	go ml.onStateChanged(StateRunning)
 
 	return nil
 }
