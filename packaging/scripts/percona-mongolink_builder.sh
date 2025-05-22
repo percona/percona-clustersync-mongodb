@@ -86,14 +86,13 @@ get_sources() {
     echo "BUILD_ID=${BUILD_ID}" >>percona-mongolink.properties
     echo "VERSION=${VERSION}" >>percona-mongolink.properties
     echo "BRANCH=${BRANCH}" >>percona-mongolink.properties
-    #git clone "$REPO" ${PRODUCT}
+    git clone "$REPO" ${PRODUCT}
     
-   # retval=$?
-  #  if [ $retval != 0 ]; then
-  #      echo "There were some issues during repo cloning from github. Please retry one more time"
-  #      exit 1
-  #  fi
-    mv ${WORKDIR}/percona-mongolink/ percona-mongolink/
+    retval=$?
+    if [ $retval != 0 ]; then
+        echo "There were some issues during repo cloning from github. Please retry one more time"
+        exit 1
+    fi
     cd percona-mongolink
     if [ ! -z "$BRANCH" ]; then
         git reset --hard
