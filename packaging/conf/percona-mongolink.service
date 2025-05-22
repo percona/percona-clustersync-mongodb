@@ -1,0 +1,14 @@
+[Unit]
+Description=percona-mongolink
+After=time-sync.target network.target
+
+[Service]
+EnvironmentFile=/etc/sysconfig/percona-mongolink
+Type=simple
+User=mongod
+Group=mongod
+PermissionsStartOnly=true
+ExecStart=/usr/bin/percona-mongolink
+
+[Install]
+WantedBy=multi-user.target

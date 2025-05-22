@@ -1,0 +1,4 @@
+percona-mongolink /usr/bin/
+default/percona-mongolink /etc/default/
+percona-mongolink.service /lib/systemd/system/
+LICENSE /usr/share/doc/percona-mongolink/
