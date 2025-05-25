@@ -236,8 +236,7 @@ var resumeCmd = &cobra.Command{
 //nolint:gochecknoglobals
 var resetCmd = &cobra.Command{
 	Use:    "reset",
-	Short:  "Reset MongoLink state",
-	Hidden: true,
+	Short:  "Reset PML state (heartbeat and recovery data)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.Flags().GetString("target")
 		if targetURI == "" {
