@@ -45,7 +45,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 3. Run the server:
 
     ```sh
-    bin/percona-mongolink --source <source-mongodb-uri> --target <target-mongodb-uri>
+    bin/pml --source <source-mongodb-uri> --target <target-mongodb-uri>
     ```
 
     Alternatively, you can use environment variables:
@@ -53,7 +53,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
     ```sh
     export SOURCE_URI=<source-mongodb-uri>
     export TARGET_URI=<target-mongodb-uri>
-    bin/percona-mongolink --source $SOURCE_URI --target $TARGET_URI
+    bin/pml --source $SOURCE_URI --target $TARGET_URI
     ```
 
     > Connections to the source and target must have `readPreference=primary` and `writeConcern=majority` explicitly or unset.
@@ -67,7 +67,7 @@ To start the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/percona-mongolink start
+bin/pml start
 ```
 
 #### Using HTTP API
@@ -86,7 +86,7 @@ To finalize the replication process, you can either use the command-line interfa
 #### Using Command-Line Interface
 
 ```sh
-bin/percona-mongolink finalize
+bin/pml finalize
 ```
 
 #### Using HTTP API
@@ -102,7 +102,7 @@ To pause the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/percona-mongolink pause
+bin/pml pause
 ```
 
 #### Using HTTP API
@@ -118,7 +118,7 @@ To resume the replication process, you can either use the command-line interface
 #### Using Command-Line Interface
 
 ```sh
-bin/percona-mongolink resume
+bin/pml resume
 ```
 
 #### Using HTTP API
@@ -134,7 +134,7 @@ To check the current status of the replication process, you can either use the c
 #### Using Command-Line Interface
 
 ```sh
-bin/percona-mongolink status
+bin/pml status
 ```
 
 #### Using HTTP API
@@ -157,7 +157,7 @@ When starting the MongoLink server, you can use the following options:
 Example:
 
 ```sh
-bin/percona-mongolink \
+bin/pml \
     --source <source-mongodb-uri> \
     --target <target-mongodb-uri> \
     --port 2242 \
@@ -348,7 +348,7 @@ poetry run pytest \
     --source-uri <source-mongodb-uri> \
     --target-uri <target-mongodb-uri> \
     --mongolink-url http://localhost:2242 \
-    --mongolink-bin bin/percona-mongolink_test
+    --mongolink-bin bin/pml_test
 ```
 
 Alternatively, you can use environment variables:
@@ -357,7 +357,7 @@ Alternatively, you can use environment variables:
 export TEST_SOURCE_URI=<source-mongodb-uri>
 export TEST_TARGET_URI=<target-mongodb-uri>
 export TEST_MONGOLINK_URL=http://localhost:2242
-export TEST_MONGOLINK_BIN=bin/percona-mongolink_test
+export TEST_MONGOLINK_BIN=bin/pml_test
 poetry run pytest
 ```
 

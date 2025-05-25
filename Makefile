@@ -20,11 +20,11 @@ all: build
 
 # Build production binary (optimized for runtime speed and size)
 build:
-	go build $(BUILD_FLAGS) -o bin/percona-mongolink .
+	go build $(BUILD_FLAGS) -o bin/pml .
 
 # Build test binary with race detection and debugging enabled
 test-build:
-	go build $(TEST_BUILD_FLAGS) -o bin/percona-mongolink_test .
+	go build $(TEST_BUILD_FLAGS) -o bin/pml_test .
 
 # Run tests with race detection
 test:
