@@ -1,11 +1,11 @@
 GOOS?=$(shell go env GOOS)
-GIT_COMMIT?=$(shell git rev-parse --short HEAD)
-GIT_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+GITCOMMIT?=$(shell git rev-parse --short HEAD)
+GITBRANCH?=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 BUILD_TIME := $(shell TZ=UTC date "+%Y-%m-%d_%H:%M_UTC")
 BUILD_INFO := \
   -X main.Platform=$(GOOS) \
-  -X main.GitCommit=$(GIT_COMMIT) \
-  -X main.GitBranch=$(GIT_BRANCH) \
+  -X main.GitCommit=$(GITCOMMIT) \
+  -X main.GitBranch=$(GITBRANCH) \
   -X main.BuildTime=$(BUILD_TIME)
 
 
