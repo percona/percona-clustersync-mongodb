@@ -1,11 +1,7 @@
 # .github/workflows/e2e-tests.yml
 name: E2E Tests
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+on: [pull_request]
 
 jobs:
   rs:
