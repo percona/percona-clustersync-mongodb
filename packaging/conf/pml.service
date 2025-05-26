@@ -3,12 +3,12 @@ Description=percona-mongolink
 After=time-sync.target network.target
 
 [Service]
-EnvironmentFile=/etc/sysconfig/percona-mongolink
+EnvironmentFile=/etc/sysconfig/pml
 Type=simple
 User=mongod
 Group=mongod
 PermissionsStartOnly=true
-ExecStart=/usr/bin/percona-mongolink
+ExecStart=/usr/bin/pml
 
 [Install]
 WantedBy=multi-user.target

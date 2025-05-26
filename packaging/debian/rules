@@ -44,12 +44,12 @@ override_dh_auto_install:
 	@echo "RULES.$@"
 	mkdir -p $(TMP)
 	mkdir -p $(TMP)/default
-	cd build/src/github.com/percona/percona-mongolink/bin && cp percona-mongolink $(TMP)/percona-mongolink
-	cp -f packaging/conf/percona-mongolink.env  $(TMP)/default/percona-mongolink
-	cp -f packaging/conf/percona-mongolink.service $(TMP)/percona-mongolink.service
+	cd build/src/github.com/percona/percona-mongolink/bin && cp pml $(TMP)/pml
+	cp -f packaging/conf/pml.env  $(TMP)/default/pml
+	cp -f packaging/conf/pml.service $(TMP)/pml.service
 	cp -f LICENSE $(TMP)/LICENSE
 	ls -la $(TMP)
 
 override_dh_systemd_start:
-	dh_systemd_enable --name=percona-mongolink percona-mongolink.service
+	dh_systemd_enable --name=pml pml.service
 	dh_systemd_start --restart-after-upgrade

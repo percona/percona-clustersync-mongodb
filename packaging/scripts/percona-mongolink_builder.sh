@@ -349,7 +349,7 @@ build_source_deb() {
     cp -r packaging/debian ./
     sed -i "s:@@VERSION@@:${VERSION}:g" debian/rules
     sed -i "s:@@REVISION@@:${REVISION}:g" debian/rules
-    sed -i "s:sysconfig:default:" packaging/conf/percona-mongolink.service
+    sed -i "s:sysconfig:default:" packaging/conf/pml.service
     dch -D unstable --force-distribution -v "${VERSION}" "Update to new percona-mongolink version ${VERSION}"
     dpkg-buildpackage -S
     cd ../

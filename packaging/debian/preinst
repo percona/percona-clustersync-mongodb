@@ -4,8 +4,8 @@ if ! getent passwd mongod >/dev/null 2>&1; then
     adduser --system --no-create-home --group mongod
 fi
 
-if [ ! -f /var/log/percona-mongolink.log ]; then
-    install -m 0755 -omongod -gmongod /dev/null /var/log/percona-mongolink.log
+if [ ! -f /var/log/pml.log ]; then
+    install -m 0755 -omongod -gmongod /dev/null /var/log/pml.log
 fi
 
 #DEBHELPER#

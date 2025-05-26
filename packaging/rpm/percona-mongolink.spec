@@ -55,25 +55,25 @@ export GOPATH=$(pwd)/
 export PATH="/usr/local/go/bin:$PATH:$GOPATH"
 export GOBINPATH="/usr/local/go/bin"
 cd src/
-cp github.com/percona/percona-mongolink/bin/percona-mongolink $RPM_BUILD_ROOT/%{_bindir}/
+cp github.com/percona/percona-mongolink/bin/pml $RPM_BUILD_ROOT/%{_bindir}/pml
 install -m 0755 -d $RPM_BUILD_ROOT/%{_sysconfdir}
 install -m 0755 -d $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig
-install -D -m 0640 github.com/percona/percona-mongolink/packaging/conf/percona-mongolink.env $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/percona-mongolink
+install -D -m 0640 github.com/percona/percona-mongolink/packaging/conf/pml.env $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/pml
 install -m 0755 -d $RPM_BUILD_ROOT/%{_unitdir}
-install -m 0644 github.com/percona/percona-mongolink/packaging/conf/percona-mongolink.service $RPM_BUILD_ROOT/%{_unitdir}/percona-mongolink.service
+install -m 0644 github.com/percona/percona-mongolink/packaging/conf/pml.service $RPM_BUILD_ROOT/%{_unitdir}/pml.service
 
 %pre -n percona-mongolink
 /usr/bin/getent group mongod || /usr/sbin/groupadd -r mongod
 /usr/bin/getent passwd mongod || /usr/sbin/useradd -M -r -g mongod -d /var/lib/mongo -s /bin/false -c mongod mongod
-if [ ! -f /var/log/percona-mongolink.log ]; then
-    install -m 0640 -omongod -gmongod /dev/null /var/log/percona-mongolink.log
+if [ ! -f /var/log/pml.log ]; then
+    install -m 0640 -omongod -gmongod /dev/null /var/log/pml.log
 fi
 
 
 %post -n percona-mongolink
-%systemd_post percona-mongolink.service
+%systemd_post pml.service
 if [ $1 == 1 ]; then
-      /usr/bin/systemctl enable percona-mongolink >/dev/null 2>&1 || :
+      /usr/bin/systemctl enable pml >/dev/null 2>&1 || :
 fi
 
 cat << EOF
@@ -90,15 +90,15 @@ EOF
 %postun -n percona-mongolink
 case "$1" in
    0) # This is a yum remove.
-      %systemd_postun_with_restart percona-mongolink.service
+      %systemd_postun_with_restart pml.service
    ;;
 esac
 
 
 %files -n percona-mongolink
-%{_bindir}/percona-mongolink
-%config(noreplace) %attr(0640,root,root) /%{_sysconfdir}/sysconfig/percona-mongolink
-%{_unitdir}/percona-mongolink.service
+%{_bindir}/pml
+%config(noreplace) %attr(0640,root,root) /%{_sysconfdir}/sysconfig/pml
+%{_unitdir}/pml.service
 
 
 %changelog
