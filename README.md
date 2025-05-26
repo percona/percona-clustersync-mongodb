@@ -259,6 +259,18 @@ Example:
 
 Resumes the replication process.
 
+#### Request Body
+
+- `fromFailure` (optional): Allows PML to resume from failed state
+
+Example:
+
+```json
+{
+    "fromFailure": true
+}
+```
+
 #### Response
 
 - `ok`: Boolean indicating if the operation was successful.
