@@ -245,6 +245,12 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 		s.Error = errors.Wrap(s.Clone.Err, "Clone")
 	}
 
+	if s.Repl.IsStarted() {
+		intialSyncLag := max(int64(s.Clone.FinishTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
+		s.InitialSyncLagTime = &intialSyncLag
+		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
+	}
+
 	if ml.state == StateFailed {
 		return s
 	}
@@ -265,12 +271,6 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 	}
 
 	s.InitialSyncLagTime = s.TotalLagTime
-
-	if s.Repl.IsStarted() {
-		intialSyncLag := max(int64(s.Clone.FinishTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
-		s.InitialSyncLagTime = &intialSyncLag
-		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
-	}
 
 	return s
 }
