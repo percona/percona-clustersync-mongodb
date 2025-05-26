@@ -1,5 +1,7 @@
 name: reviewdog
+
 on: [pull_request]
+
 jobs:
   misspell:
     name: misspell
