@@ -259,9 +259,9 @@ var resetCmd = &cobra.Command{
 
 //nolint:gochecknoglobals
 var resetRecoveryCmd = &cobra.Command{
-	Use:   "recovery",
+	Use:    "recovery",
 	Hidden: true,
-	Short: "Reset recovery state",
+	Short:  "Reset recovery state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
@@ -298,9 +298,9 @@ var resetRecoveryCmd = &cobra.Command{
 
 //nolint:gochecknoglobals
 var resetHeartbeatCmd = &cobra.Command{
-	Use:   "heartbeat",
+	Use:    "heartbeat",
 	Hidden: true,
-	Short: "Reset heartbeat state",
+	Short:  "Reset heartbeat state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
