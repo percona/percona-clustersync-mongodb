@@ -113,16 +113,6 @@ get_sources() {
     echo "percona-mongolink (${VERSION}) unstable; urgency=low" >> packaging/debian/changelog
     echo "  * Initial Release." >> packaging/debian/changelog
     echo " -- SurabhiBhat <surabhi.bhat@percona.com> $(date -R)" >> packaging/debian/changelog
-    cd ${WORKDIR}/percona-mongolink
-    export GOROOT="/usr/local/go/"
-    export GOBINPATH="/usr/local/go/bin"
-    export GO111MODULE=on
-    export GOMODCACHE=${WORKDIR}/go-mod-cache
-    for i in {1..3}; do
-        go mod tidy && go mod download && break
-        echo "go mod commands failed, retrying in 10 seconds..."
-        sleep 10
-    done
     cd ${WORKDIR}
     mv percona-mongolink ${PRODUCT}-${VERSION}
     tar --owner=0 --group=0 -czf ${PRODUCT}-${VERSION}.tar.gz ${PRODUCT}-${VERSION}

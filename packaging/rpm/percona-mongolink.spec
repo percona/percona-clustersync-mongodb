@@ -35,13 +35,19 @@ export GITCOMMIT
 cd ../
 export PATH=/usr/local/go/bin:${PATH}
 export GOROOT="/usr/local/go/"
-export GOPATH=$(pwd)/
-export PATH="/usr/local/go/bin:$PATH:$GOPATH"
 export GOBINPATH="/usr/local/go/bin"
 mkdir -p src/github.com/percona/
 mv percona-mongolink-%{version} src/github.com/percona/percona-mongolink
 ln -s src/github.com/percona/percona-mongolink percona-mongolink-%{version}
-cd src/github.com/percona/percona-mongolink && make build
+cd src/github.com/percona/percona-mongolink
+export GO111MODULE=on
+export GOMODCACHE=$(pwd)/go-mod-cache
+for i in {1..3}; do
+    go mod tidy && go mod download && break
+    echo "go mod commands failed, retrying in 10 seconds..."
+    sleep 10
+done
+make build
 cd %{_builddir}
 
 
