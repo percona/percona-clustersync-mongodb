@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -59,7 +58,7 @@ func ConnectWithOptions(
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority()).
 		SetWriteConcern(writeconcern.Majority()).
-		SetTimeout(time.Minute)
+		SetTimeout(config.OperationTimeout)
 
 	if connOpts != nil && connOpts.Compressors != nil {
 		opts.SetCompressors(connOpts.Compressors)
