@@ -7,13 +7,13 @@ from pymongo import MongoClient
 
 def perform_with_options(source, mlink, phase: Runner.Phase, include_ns=None, exclude_ns=None):
     """Perform the PLM operation with the given options."""
-    mlink_options = {}
+    plm_options = {}
     if include_ns:
-        mlink_options["include_namespaces"] = include_ns
+        plm_options["include_namespaces"] = include_ns
     if exclude_ns:
-        mlink_options["exclude_namespaces"] = exclude_ns
+        plm_options["exclude_namespaces"] = exclude_ns
 
-    return Runner(source, mlink, phase, mlink_options)
+    return Runner(source, mlink, phase, plm_options)
 
 
 def check_if_target_is_subset(source: MongoClient, target: MongoClient):

@@ -59,7 +59,7 @@ def mlink(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(scope="session")
-def mlink_bin(request: pytest.FixtureRequest):
+def plm_bin(request: pytest.FixtureRequest):
     """Provide the path to the PLM binary."""
     return request.config.getoption("--plm-bin") or os.getenv("TEST_PLM_BIN")
 
@@ -79,8 +79,8 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
 PML_PROC: subprocess.Popen = None
 
 
-def start_plm(mlink_bin: str):
-    rv = subprocess.Popen([mlink_bin, "--reset-state", "--log-level=trace"])
+def start_plm(plm_bin: str):
+    rv = subprocess.Popen([plm_bin, "--reset-state", "--log-level=trace"])
     time.sleep(1)
     return rv
 
@@ -91,14 +91,14 @@ def stop_plm(proc: subprocess.Popen):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def manage_plm_process(request: pytest.FixtureRequest, mlink_bin: str):
+def manage_plm_process(request: pytest.FixtureRequest, plm_bin: str):
     """Start plm before tests and terminate it after all tests."""
-    if not mlink_bin:
+    if not plm_bin:
         yield
         return
 
     global PML_PROC  # pylint: disable=W0603
-    PML_PROC = start_plm(mlink_bin)
+    PML_PROC = start_plm(plm_bin)
 
     def teardown():
         if PML_PROC and PML_PROC.poll() is None:
@@ -117,12 +117,12 @@ def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
 
 
 @pytest.fixture(autouse=True)
-def restart_plm_on_failure(request: pytest.FixtureRequest, mlink_bin: str):
+def restart_plm_on_failure(request: pytest.FixtureRequest, plm_bin: str):
     yield
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
         # the test failed. restart plm process with a new state
         global PML_PROC  # pylint: disable=W0603
-        if PML_PROC and mlink_bin:
+        if PML_PROC and plm_bin:
             stop_plm(PML_PROC)
-            PML_PROC = start_plm(mlink_bin)
+            PML_PROC = start_plm(plm_bin)
