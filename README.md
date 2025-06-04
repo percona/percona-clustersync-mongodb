@@ -261,7 +261,7 @@ Resumes the replication process.
 
 #### Request Body
 
-- `fromFailure` (optional): Allows PML to resume from failed state
+- `fromFailure` (optional): Allows PLM to resume from failed state
 
 Example:
 
@@ -377,7 +377,7 @@ poetry run pytest
 
 ## Contributing
 
-Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PML/issues) issue describing the proposed change, then submit a pull request on GitHub.
+Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PLM/issues) issue describing the proposed change, then submit a pull request on GitHub.
 
 ## License
 
