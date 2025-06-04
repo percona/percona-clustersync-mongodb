@@ -44,7 +44,7 @@ jobs:
       - name: Run Percona-MongoLink
         run: |
           echo "Starting project..."
-          bin/pml_test \
+          bin/plm_test \
             --source="mongodb://source:pass@rs00:30000" \
             --target="mongodb://target:pass@rs10:30100" \
             --reset-state --start --log-level debug &> server.log &
