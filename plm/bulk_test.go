@@ -1,4 +1,4 @@
-package mongolink //nolint
+package plm //nolint
 
 import (
 	"testing"

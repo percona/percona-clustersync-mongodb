@@ -1,4 +1,4 @@
-package mongolink_test
+package plm_test
 
 import (
 	"container/list"
@@ -18,11 +18,11 @@ import (
 
 	"github.com/percona/percona-link-mongodb/config"
 	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/mongolink"
+	"github.com/percona/percona-link-mongodb/plm"
 	"github.com/percona/percona-link-mongodb/topo"
 )
 
-func getNamespace() mongolink.Namespace {
+func getNamespace() plm.Namespace {
 	s := os.Getenv("PLM_TEST_NAMESPACE")
 	if s == "" {
 		panic("PLM_TEST_NAMESPACE is empty")
@@ -33,7 +33,7 @@ func getNamespace() mongolink.Namespace {
 		panic("PLM_TEST_NAMESPACE contains invalid namespace")
 	}
 
-	return mongolink.Namespace{db, coll}
+	return plm.Namespace{db, coll}
 }
 
 func getSourceURI() string {

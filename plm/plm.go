@@ -1,5 +1,5 @@
 /*
-Package mongolink provides functionality for cloning and replicating data between MongoDB clusters.
+Package plm provides functionality for cloning and replicating data between MongoDB clusters.
 
 This package includes the following main components:
 
@@ -11,7 +11,7 @@ This package includes the following main components:
 
   - Catalog: Manages collections and indexes in the target MongoDB cluster.
 */
-package mongolink
+package plm
 
 import (
 	"context"
@@ -34,17 +34,17 @@ import (
 type State string
 
 const (
-	// StateFailed indicates that the mongolink has failed.
+	// StateFailed indicates that the plm has failed.
 	StateFailed = "failed"
-	// StateIdle indicates that the mongolink is idle.
+	// StateIdle indicates that the plm is idle.
 	StateIdle = "idle"
-	// StateRunning indicates that the mongolink is running.
+	// StateRunning indicates that the plm is running.
 	StateRunning = "running"
-	// StatePaused indicates that the mongolink is paused.
+	// StatePaused indicates that the plm is paused.
 	StatePaused = "paused"
-	// StateFinalizing indicates that the mongolink is finalizing.
+	// StateFinalizing indicates that the plm is finalizing.
 	StateFinalizing = "finalizing"
-	// StateFinalized indicates that the mongolink has been finalized.
+	// StateFinalized indicates that the plm has been finalized.
 	StateFinalized = "finalized"
 )
 
@@ -299,13 +299,13 @@ func (ml *PLM) Start(_ context.Context, options *StartOptions) error {
 	switch ml.state {
 	case StateRunning, StateFinalizing, StateFailed:
 		err := errors.New("already running")
-		log.New("mongolink:start").Error(err, "")
+		log.New("plm:start").Error(err, "")
 
 		return err
 
 	case StatePaused:
 		err := errors.New("paused")
-		log.New("mongolink:start").Error(err, "")
+		log.New("plm:start").Error(err, "")
 
 		return err
 	}

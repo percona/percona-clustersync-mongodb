@@ -27,7 +27,7 @@ import (
 	"github.com/percona/percona-link-mongodb/errors"
 	"github.com/percona/percona-link-mongodb/log"
 	"github.com/percona/percona-link-mongodb/metrics"
-	"github.com/percona/percona-link-mongodb/mongolink"
+	"github.com/percona/percona-link-mongodb/plm"
 	"github.com/percona/percona-link-mongodb/topo"
 	"github.com/percona/percona-link-mongodb/util"
 )
@@ -471,8 +471,8 @@ func runServer(ctx context.Context, options serverOptions) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start && srv.plm.Status(ctx).State == mongolink.StateIdle {
-		err = srv.plm.Start(ctx, &mongolink.StartOptions{
+	if options.start && srv.plm.Status(ctx).State == plm.StateIdle {
+		err = srv.plm.Start(ctx, &plm.StartOptions{
 			PauseOnInitialSync: options.pause,
 		})
 		if err != nil {
@@ -512,7 +512,7 @@ type server struct {
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
 	// plm is the PLM instance for cluster replication.
-	plm *mongolink.PLM
+	plm *plm.PLM
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
 
@@ -584,14 +584,14 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	mlink := mongolink.New(source, target)
+	mlink := plm.New(source, target)
 
 	err = Restore(ctx, target, mlink)
 	if err != nil {
 		return nil, errors.Wrap(err, "recover PLM")
 	}
 
-	mlink.SetOnStateChanged(func(newState mongolink.State) {
+	mlink.SetOnStateChanged(func(newState plm.State) {
 		err := DoCheckpoint(ctx, target, mlink)
 		if err != nil {
 			log.New("http:checkpointing").Error(err, "checkpoint")
@@ -675,7 +675,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		res.Err = err.Error()
 	}
 
-	if status.State == mongolink.StateIdle {
+	if status.State == plm.StateIdle {
 		writeResponse(w, res)
 
 		return
@@ -700,17 +700,17 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case status.State == mongolink.StateRunning && !status.Clone.IsFinished():
+	case status.State == plm.StateRunning && !status.Clone.IsFinished():
 		res.Info = "Initial Sync: Cloning Data"
-	case status.State == mongolink.StateRunning && !status.InitialSyncCompleted:
+	case status.State == plm.StateRunning && !status.InitialSyncCompleted:
 		res.Info = "Initial Sync: Replicating Changes"
-	case status.State == mongolink.StateRunning:
+	case status.State == plm.StateRunning:
 		res.Info = "Replicating Changes"
-	case status.State == mongolink.StateFinalizing:
+	case status.State == plm.StateFinalizing:
 		res.Info = "Finalizing"
-	case status.State == mongolink.StateFinalized:
+	case status.State == plm.StateFinalized:
 		res.Info = "Finalized"
-	case status.State == mongolink.StateFailed:
+	case status.State == plm.StateFailed:
 		res.Info = "Failed"
 	}
 
@@ -760,7 +760,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &mongolink.StartOptions{
+	options := &plm.StartOptions{
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
 		ExcludeNamespaces:  params.ExcludeNamespaces,
@@ -819,7 +819,7 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &mongolink.FinalizeOptions{
+	options := &plm.FinalizeOptions{
 		IgnoreHistoryLost: params.IgnoreHistoryLost,
 	}
 
@@ -907,7 +907,7 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &mongolink.ResumeOptions{
+	options := &plm.ResumeOptions{
 		ResumeFromFailure: params.FromFailure,
 	}
 
@@ -980,7 +980,7 @@ type statusResponse struct {
 	Err string `json:"error,omitempty"`
 
 	// State is the current state of the replication.
-	State mongolink.State `json:"state"`
+	State plm.State `json:"state"`
 	// Info provides additional information about the current state.
 	Info string `json:"info,omitempty"`
 

@@ -53,7 +53,7 @@ def test_create_diff_uuid(t: Testing, phase: Runner.Phase):
     assert source_info["name"] == "coll_1" == target_info["name"]
 
     if source_info["info"]["uuid"] == target_info["info"]["uuid"]:
-        # mongolink does not use applyOps. no possible to preserveUUID
+        # plm does not use applyOps. no possible to preserveUUID
         pytest.xfail("colllection UUID should not be equal")
 
 

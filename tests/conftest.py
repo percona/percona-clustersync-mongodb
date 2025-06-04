@@ -53,7 +53,7 @@ def target_conn(request: pytest.FixtureRequest):
 
 @pytest.fixture(scope="session")
 def mlink(request: pytest.FixtureRequest):
-    """Provide a mongolink instance."""
+    """Provide a plm instance."""
     url = request.config.getoption("--plm_url") or os.environ["TEST_PLM_URL"]
     return PLM(url)
 
@@ -79,30 +79,30 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
 MLINK_PROC: subprocess.Popen = None
 
 
-def start_mongolink(mlink_bin: str):
+def start_plm(mlink_bin: str):
     rv = subprocess.Popen([mlink_bin, "--reset-state", "--log-level=trace"])
     time.sleep(1)
     return rv
 
 
-def stop_mongolink(proc: subprocess.Popen):
+def stop_plm(proc: subprocess.Popen):
     proc.terminate()
     return proc.wait()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def manage_mongolink_process(request: pytest.FixtureRequest, mlink_bin: str):
-    """Start mongolink before tests and terminate it after all tests."""
+def manage_plm_process(request: pytest.FixtureRequest, mlink_bin: str):
+    """Start plm before tests and terminate it after all tests."""
     if not mlink_bin:
         yield
         return
 
     global MLINK_PROC  # pylint: disable=W0603
-    MLINK_PROC = start_mongolink(mlink_bin)
+    MLINK_PROC = start_plm(mlink_bin)
 
     def teardown():
         if MLINK_PROC and MLINK_PROC.poll() is None:
-            stop_mongolink(MLINK_PROC)
+            stop_plm(MLINK_PROC)
 
     request.addfinalizer(teardown)
     yield MLINK_PROC
@@ -117,12 +117,12 @@ def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
 
 
 @pytest.fixture(autouse=True)
-def restart_mongolink_on_failure(request: pytest.FixtureRequest, mlink_bin: str):
+def restart_plm_on_failure(request: pytest.FixtureRequest, mlink_bin: str):
     yield
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
-        # the test failed. restart mongolink process with a new state
+        # the test failed. restart plm process with a new state
         global MLINK_PROC  # pylint: disable=W0603
         if MLINK_PROC and mlink_bin:
-            stop_mongolink(MLINK_PROC)
-            MLINK_PROC = start_mongolink(mlink_bin)
+            stop_plm(MLINK_PROC)
+            MLINK_PROC = start_plm(mlink_bin)
