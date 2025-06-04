@@ -88,7 +88,7 @@ var rootCmd = &cobra.Command{
 
 		sourceURI, _ := cmd.Flags().GetString("source")
 		if sourceURI == "" {
-			sourceURI = os.Getenv("PML_SOURCE_URI")
+			sourceURI = os.Getenv("PLM_SOURCE_URI")
 		}
 		if sourceURI == "" {
 			return errors.New("required flag --source not set")
@@ -96,7 +96,7 @@ var rootCmd = &cobra.Command{
 
 		targetURI, _ := cmd.Flags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PML_TARGET_URI")
+			targetURI = os.Getenv("PLM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -240,7 +240,7 @@ var resetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.Flags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PML_TARGET_URI")
+			targetURI = os.Getenv("PLM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -265,7 +265,7 @@ var resetRecoveryCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PML_TARGET_URI")
+			targetURI = os.Getenv("PLM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -304,7 +304,7 @@ var resetHeartbeatCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PML_TARGET_URI")
+			targetURI = os.Getenv("PLM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -341,14 +341,14 @@ func getPort(flags *pflag.FlagSet) (int, error) {
 		return port, nil
 	}
 
-	portVar := os.Getenv("PML_PORT")
+	portVar := os.Getenv("PLM_PORT")
 	if portVar == "" {
 		return port, nil
 	}
 
 	parsedPort, err := strconv.ParseInt(portVar, 10, 32)
 	if err != nil {
-		return 0, errors.Errorf("invalid environment variable PML_PORT='%s'", portVar)
+		return 0, errors.Errorf("invalid environment variable PLM_PORT='%s'", portVar)
 	}
 
 	return int(parsedPort), nil

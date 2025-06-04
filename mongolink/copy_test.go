@@ -23,41 +23,41 @@ import (
 )
 
 func getNamespace() mongolink.Namespace {
-	s := os.Getenv("PML_TEST_NAMESPACE")
+	s := os.Getenv("PLM_TEST_NAMESPACE")
 	if s == "" {
-		panic("PML_TEST_NAMESPACE is empty")
+		panic("PLM_TEST_NAMESPACE is empty")
 	}
 
 	db, coll, _ := strings.Cut(s, ".")
 	if db == "" || coll == "" {
-		panic("PML_TEST_NAMESPACE contains invalid namespace")
+		panic("PLM_TEST_NAMESPACE contains invalid namespace")
 	}
 
 	return mongolink.Namespace{db, coll}
 }
 
 func getSourceURI() string {
-	s := os.Getenv("PML_SOURCE_URI")
+	s := os.Getenv("PLM_SOURCE_URI")
 	if s == "" {
-		panic("PML_SOURCE_URI is empty")
+		panic("PLM_SOURCE_URI is empty")
 	}
 
 	return s
 }
 
 func getTargetURI() string {
-	s := os.Getenv("PML_TARGET_URI")
+	s := os.Getenv("PLM_TARGET_URI")
 	if s == "" {
-		panic("PML_TARGET_URI is empty")
+		panic("PLM_TARGET_URI is empty")
 	}
 
 	return s
 }
 
 func getNumInsertWorker() int {
-	num, err := strconv.Atoi(os.Getenv("PML_TEST_NUM_INSERT_WORKER"))
+	num, err := strconv.Atoi(os.Getenv("PLM_TEST_NUM_INSERT_WORKER"))
 	if err != nil {
-		panic(fmt.Sprintf("PML_TEST_NUM_INSERT_WORKER: %v", err))
+		panic(fmt.Sprintf("PLM_TEST_NUM_INSERT_WORKER: %v", err))
 	}
 
 	if num < 1 {
@@ -68,9 +68,9 @@ func getNumInsertWorker() int {
 }
 
 func getReadBatchSize() int {
-	size, err := humanize.ParseBytes(os.Getenv("PML_TEST_READ_BACTH_SIZE"))
+	size, err := humanize.ParseBytes(os.Getenv("PLM_TEST_READ_BACTH_SIZE"))
 	if err != nil {
-		panic(fmt.Sprintf("PML_TEST_READ_BACTH_SIZE: %v", err))
+		panic(fmt.Sprintf("PLM_TEST_READ_BACTH_SIZE: %v", err))
 	}
 
 	size = max(size, 1)
@@ -79,9 +79,9 @@ func getReadBatchSize() int {
 }
 
 func getInsertBatchSize() int {
-	size, err := humanize.ParseBytes(os.Getenv("PML_TEST_INSERT_BACTH_SIZE"))
+	size, err := humanize.ParseBytes(os.Getenv("PLM_TEST_INSERT_BACTH_SIZE"))
 	if err != nil {
-		panic(fmt.Sprintf("PML_TEST_INSERT_BACTH_SIZE: %v", err))
+		panic(fmt.Sprintf("PLM_TEST_INSERT_BACTH_SIZE: %v", err))
 	}
 
 	size = max(size, 1)
