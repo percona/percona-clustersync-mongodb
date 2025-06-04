@@ -13,7 +13,7 @@ def pytest_addoption(parser):
     """Add custom command-line options to pytest."""
     parser.addoption("--source-uri", help="MongoDB URI for source")
     parser.addoption("--target-uri", help="MongoDB URI for target")
-    parser.addoption("--mongolink-url", help="PLM url")
+    parser.addoption("--plm_url", help="PLM url")
     parser.addoption("--plm-bin", help="Path to the PLM binary")
     parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
 
@@ -54,7 +54,7 @@ def target_conn(request: pytest.FixtureRequest):
 @pytest.fixture(scope="session")
 def mlink(request: pytest.FixtureRequest):
     """Provide a mongolink instance."""
-    url = request.config.getoption("--mongolink-url") or os.environ["TEST_PLM_URL"]
+    url = request.config.getoption("--plm_url") or os.environ["TEST_PLM_URL"]
     return PLM(url)
 
 

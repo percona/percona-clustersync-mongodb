@@ -359,7 +359,7 @@ To run the tests, use the following command:
 poetry run pytest \
     --source-uri <source-mongodb-uri> \
     --target-uri <target-mongodb-uri> \
-    --mongolink-url http://localhost:2242 \
+    --plm_url http://localhost:2242 \
     --plm-bin bin/plm_test
 ```
 
