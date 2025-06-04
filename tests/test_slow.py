@@ -127,7 +127,7 @@ def test_slow_clone_2gb_capped_vary_id(t: Testing):
 
 @pytest.mark.slow
 @pytest.mark.timeout(240)
-def test_slow_pml_119_clone_numerous_collections_deadlock(t: Testing):
+def test_slow_plm_119_clone_numerous_collections_deadlock(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=180):
         for i in range(1000):
             for j in range(10):
@@ -142,7 +142,7 @@ def test_slow_pml_119_clone_numerous_collections_deadlock(t: Testing):
 
 @pytest.mark.slow
 @pytest.mark.timeout(90)
-def test_slow_pml_135_clone_numerous_indexes_deadlock(t: Testing):
+def test_slow_plm_135_clone_numerous_indexes_deadlock(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=90):
         for i in range(200):
             for j in range(50):

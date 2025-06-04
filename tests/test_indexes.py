@@ -465,7 +465,7 @@ def test_manual_create_ttl(t: Testing):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_pml_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
+def test_plm_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].drop_collection("coll_1")
         t.source["db_1"]["coll_1"].insert_many(
@@ -506,7 +506,7 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
     assert source_idx_count - 1 == target_idx_count
 
 
-def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
+def test_plm_95_drop_index_for_non_existing_namespace(t: Testing):
     t.source["db_0"]["coll_0"].create_index([("i", 1)])
 
     with t.run(phase=Runner.Phase.APPLY):
@@ -516,7 +516,7 @@ def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
 
 @pytest.mark.timeout(40)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
-def test_pml_118_ignore_incomplete_index(t: Testing, index_status: str):
+def test_plm_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():
         try:
             t.source["db_1"]["coll_1"].create_index([("a", 1), ("i", "text")])

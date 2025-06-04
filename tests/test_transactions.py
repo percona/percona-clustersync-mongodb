@@ -251,7 +251,7 @@ def test_concurrent_trx_all_aborted(t: Testing):
     t.compare_all()
 
 
-def test_pml_103_panic_after_trx(t: Testing):
+def test_plm_103_panic_after_trx(t: Testing):
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess, sess.start_transaction():
             t.source["db_1"]["coll_1"].insert_one({"i": 1}, session=sess)

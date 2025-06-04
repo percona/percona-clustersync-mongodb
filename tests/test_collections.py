@@ -558,7 +558,7 @@ def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
+def test_plm_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1", capped=True, size=2147483648, max=2147483647)
 
@@ -566,7 +566,7 @@ def test_pml_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_pml_109_rename_complex(t: Testing, phase: Runner.Phase):
+def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(1000))
@@ -587,7 +587,7 @@ def test_pml_109_rename_complex(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-def test_pml_110_rename_during_clone_and_repl(t: Testing):
+def test_plm_110_rename_during_clone_and_repl(t: Testing):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(500))
