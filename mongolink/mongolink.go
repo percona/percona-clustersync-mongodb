@@ -258,7 +258,7 @@ func (ml *MongoLink) Status(ctx context.Context) *Status {
 	sourceTime, err := topo.ClusterTime(ctx, ml.source)
 	if err != nil {
 		// Do not block status if source cluster is lost
-		log.New("mongolink").Error(err, "Status: get source cluster time")
+		log.New("plm").Error(err, "Status: get source cluster time")
 	} else {
 		switch {
 		case !s.Repl.LastReplicatedOpTime.IsZero():
@@ -334,7 +334,7 @@ func (ml *MongoLink) setFailed(err error) {
 	ml.err = err
 	ml.lock.Unlock()
 
-	log.New("mongolink").Error(err, "Cluster Replication has failed")
+	log.New("plm").Error(err, "Cluster Replication has failed")
 
 	go ml.onStateChanged(StateFailed)
 }
@@ -344,7 +344,7 @@ func (ml *MongoLink) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lg := log.New("mongolink")
+	lg := log.New("plm")
 
 	lg.Info("Starting Cluster Replication")
 
@@ -514,12 +514,12 @@ func (ml *MongoLink) Pause(ctx context.Context) error {
 
 	err := ml.doPause(ctx)
 	if err != nil {
-		log.New("mongolink").Error(err, "Pause Cluster Replication")
+		log.New("plm").Error(err, "Pause Cluster Replication")
 
 		return err
 	}
 
-	log.New("mongolink").Info("Cluster Replication paused")
+	log.New("plm").Info("Cluster Replication paused")
 
 	return nil
 }
@@ -561,12 +561,12 @@ func (ml *MongoLink) Resume(ctx context.Context, options ResumeOptions) error {
 
 	err := ml.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
-		log.New("mongolink").Error(err, "Resume Cluster Replication")
+		log.New("plm").Error(err, "Resume Cluster Replication")
 
 		return err
 	}
 
-	log.New("mongolink").Info("Cluster Replication resumed")
+	log.New("plm").Info("Cluster Replication resumed")
 
 	return nil
 }
@@ -663,7 +663,7 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 		go ml.onStateChanged(StateFinalized)
 	}()
 
-	log.New("mongolink").Info("Finalizing")
+	log.New("plm").Info("Finalizing")
 
 	go ml.onStateChanged(StateFinalizing)
 

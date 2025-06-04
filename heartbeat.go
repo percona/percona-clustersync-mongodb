@@ -18,7 +18,7 @@ var (
 	errStaleHeartbeat    = errors.New("stale heartbeat")
 )
 
-const heartbeatID = "mongolink"
+const heartbeatID = "plm"
 
 type StopHeartbeat func(context.Context) error
 

@@ -188,7 +188,7 @@ Example:
   "message": "Cloned db_1.coll_1" }
 
 { "level": "info",
-  "s": "mongolink",
+  "s": "plm",
   "elapsed_secs": 0,
   "time": "2025-02-23 11:26:03.857",
   "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }

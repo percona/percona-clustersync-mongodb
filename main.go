@@ -55,7 +55,7 @@ func buildVersion() string {
 
 //nolint:gochecknoglobals
 var rootCmd = &cobra.Command{
-	Use:   "mongolink",
+	Use:   "plm",
 	Short: "Percona Link for MongoDB replication tool",
 
 	SilenceUsage: true,
@@ -77,7 +77,7 @@ var rootCmd = &cobra.Command{
 
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		// Check if this is the root command being executed without a subcommand
-		if cmd.CalledAs() != "mongolink" || cmd.ArgsLenAtDash() != -1 {
+		if cmd.CalledAs() != "plm" || cmd.ArgsLenAtDash() != -1 {
 			return nil
 		}
 
@@ -588,7 +588,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	err = Restore(ctx, target, mlink)
 	if err != nil {
-		return nil, errors.Wrap(err, "recover MongoLink")
+		return nil, errors.Wrap(err, "recover PLM")
 	}
 
 	mlink.SetOnStateChanged(func(newState mongolink.State) {

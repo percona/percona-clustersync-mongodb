@@ -15,7 +15,7 @@ import (
 
 var errNoRecoveryData = errors.New("no recovery data")
 
-const recoveryID = "mongolink"
+const recoveryID = "plm"
 
 type Recoverable interface {
 	Checkpoint(ctx context.Context) ([]byte, error)
