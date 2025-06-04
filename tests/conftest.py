@@ -14,7 +14,7 @@ def pytest_addoption(parser):
     parser.addoption("--source-uri", help="MongoDB URI for source")
     parser.addoption("--target-uri", help="MongoDB URI for target")
     parser.addoption("--mongolink-url", help="MongoLink url")
-    parser.addoption("--mongolink-bin", help="Path to the MongoLink binary")
+    parser.addoption("--plm-bin", help="Path to the MongoLink binary")
     parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
 
 
@@ -54,14 +54,14 @@ def target_conn(request: pytest.FixtureRequest):
 @pytest.fixture(scope="session")
 def mlink(request: pytest.FixtureRequest):
     """Provide a mongolink instance."""
-    url = request.config.getoption("--mongolink-url") or os.environ["TEST_MONGOLINK_URL"]
+    url = request.config.getoption("--mongolink-url") or os.environ["TEST_PLM_URL"]
     return MongoLink(url)
 
 
 @pytest.fixture(scope="session")
 def mlink_bin(request: pytest.FixtureRequest):
     """Provide the path to the MongoLink binary."""
-    return request.config.getoption("--mongolink-bin") or os.getenv("TEST_MONGOLINK_BIN")
+    return request.config.getoption("--plm-bin") or os.getenv("TEST_PLM_BIN")
 
 
 @pytest.fixture(scope="session")
