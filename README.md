@@ -25,7 +25,7 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
 
     ```sh
     git clone https://github.com/percona/percona-link-mongodb.git
-    cd percona-mongolink
+    cd percona-link-mongodb
     ```
 
 2. Build the project using the Makefile:
@@ -40,7 +40,7 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
     go install .
     ```
 
-    > This will install `percona-mongolink` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by typing `percona-mongolink` in your terminal.
+    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by typing `plm` in your terminal.
 
 3. Run the server:
 

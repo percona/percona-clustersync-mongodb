@@ -41,7 +41,7 @@ jobs:
         run: |
           make test-build
 
-      - name: Run Percona-MongoLink
+      - name: Run PLM
         run: |
           echo "Starting project..."
           bin/plm_test \
