@@ -24,7 +24,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 1. Clone the repository:
 
     ```sh
-    git clone https://github.com/percona/percona-mongolink.git
+    git clone https://github.com/percona/percona-link-mongodb.git
     cd percona-mongolink
     ```
 

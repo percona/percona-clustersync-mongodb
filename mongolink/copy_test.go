@@ -16,10 +16,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona/percona-mongolink/config"
-	"github.com/percona/percona-mongolink/errors"
-	"github.com/percona/percona-mongolink/mongolink"
-	"github.com/percona/percona-mongolink/topo"
+	"github.com/percona/percona-link-mongodb/config"
+	"github.com/percona/percona-link-mongodb/errors"
+	"github.com/percona/percona-link-mongodb/mongolink"
+	"github.com/percona/percona-link-mongodb/topo"
 )
 
 func getNamespace() mongolink.Namespace {

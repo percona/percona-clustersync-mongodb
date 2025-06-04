@@ -13,10 +13,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
-	"github.com/percona/percona-mongolink/config"
-	"github.com/percona/percona-mongolink/errors"
-	"github.com/percona/percona-mongolink/log"
-	"github.com/percona/percona-mongolink/util"
+	"github.com/percona/percona-link-mongodb/config"
+	"github.com/percona/percona-link-mongodb/errors"
+	"github.com/percona/percona-link-mongodb/log"
+	"github.com/percona/percona-link-mongodb/util"
 )
 
 type ConnectOptions struct {

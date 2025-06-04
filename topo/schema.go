@@ -9,7 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
-	"github.com/percona/percona-mongolink/errors"
+	"github.com/percona/percona-link-mongodb/errors"
 )
 
 type CollectionSpecification = mongo.CollectionSpecification
