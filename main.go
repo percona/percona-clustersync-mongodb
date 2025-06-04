@@ -56,7 +56,7 @@ func buildVersion() string {
 //nolint:gochecknoglobals
 var rootCmd = &cobra.Command{
 	Use:   "mongolink",
-	Short: "Percona MongoLink replication tool",
+	Short: "Percona Link for MongoDB replication tool",
 
 	SilenceUsage: true,
 
@@ -114,7 +114,7 @@ var rootCmd = &cobra.Command{
 		start, _ := cmd.Flags().GetBool("start")
 		pause, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 
-		log.Ctx(cmd.Context()).Info("Percona MongoLink " + buildVersion())
+		log.Ctx(cmd.Context()).Info("Percona Link for MongoDB " + buildVersion())
 
 		return runServer(cmd.Context(), serverOptions{
 			port:      port,

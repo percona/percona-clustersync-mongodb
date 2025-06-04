@@ -1,6 +1,6 @@
-# Percona MongoLink
+# Percona Link for MongoDB
 
-Percona MongoLink is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+Percona Link for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
 
 ## Features
 
