@@ -363,7 +363,7 @@ func main() {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
-	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
+	rootCmd.Flags().Bool("reset-state", false, "Reset stored PLM state")
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	rootCmd.Flags().MarkHidden("start")                 //nolint:errcheck
 	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
@@ -471,8 +471,8 @@ func runServer(ctx context.Context, options serverOptions) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start && srv.mlink.Status(ctx).State == mongolink.StateIdle {
-		err = srv.mlink.Start(ctx, &mongolink.StartOptions{
+	if options.start && srv.plm.Status(ctx).State == mongolink.StateIdle {
+		err = srv.plm.Start(ctx, &mongolink.StartOptions{
 			PauseOnInitialSync: options.pause,
 		})
 		if err != nil {
@@ -511,8 +511,8 @@ type server struct {
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-	// mlink is the MongoLink instance for cluster replication.
-	mlink *mongolink.MongoLink
+	// plm is the PLM instance for cluster replication.
+	plm *mongolink.PLM
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
 
@@ -605,7 +605,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		mlink:         mlink,
+		plm:           mlink,
 		stopHeartbeat: stopHeartbeat,
 		promRegistry:  promRegistry,
 	}
@@ -664,7 +664,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := s.mlink.Status(ctx)
+	status := s.plm.Status(ctx)
 
 	res := statusResponse{
 		Ok:    status.Error == nil,
@@ -766,7 +766,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		ExcludeNamespaces:  params.ExcludeNamespaces,
 	}
 
-	err := s.mlink.Start(ctx, options)
+	err := s.plm.Start(ctx, options)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -823,7 +823,7 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		IgnoreHistoryLost: params.IgnoreHistoryLost,
 	}
 
-	err := s.mlink.Finalize(ctx, *options)
+	err := s.plm.Finalize(ctx, *options)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -854,7 +854,7 @@ func (s *server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.mlink.Pause(ctx)
+	err := s.plm.Pause(ctx)
 	if err != nil {
 		writeResponse(w, pauseResponse{Err: err.Error()})
 
@@ -911,7 +911,7 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		ResumeFromFailure: params.FromFailure,
 	}
 
-	err := s.mlink.Resume(ctx, *options)
+	err := s.plm.Resume(ctx, *options)
 	if err != nil {
 		writeResponse(w, resumeResponse{Err: err.Error()})
 
@@ -1034,36 +1034,36 @@ type resumeResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
-type MongoLinkClient struct {
+type PLMClient struct {
 	port int
 }
 
-func NewClient(port int) MongoLinkClient {
-	return MongoLinkClient{port: port}
+func NewClient(port int) PLMClient {
+	return PLMClient{port: port}
 }
 
 // Status sends a request to get the status of the cluster replication.
-func (c MongoLinkClient) Status(ctx context.Context) error {
+func (c PLMClient) Status(ctx context.Context) error {
 	return doClientRequest[statusResponse](ctx, c.port, http.MethodGet, "status", nil)
 }
 
 // Start sends a request to start the cluster replication.
-func (c MongoLinkClient) Start(ctx context.Context, req startRequest) error {
+func (c PLMClient) Start(ctx context.Context, req startRequest) error {
 	return doClientRequest[startResponse](ctx, c.port, http.MethodPost, "start", req)
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c MongoLinkClient) Finalize(ctx context.Context, req finalizeRequest) error {
+func (c PLMClient) Finalize(ctx context.Context, req finalizeRequest) error {
 	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
 }
 
 // Pause sends a request to pause the cluster replication.
-func (c MongoLinkClient) Pause(ctx context.Context) error {
+func (c PLMClient) Pause(ctx context.Context) error {
 	return doClientRequest[pauseResponse](ctx, c.port, http.MethodPost, "pause", nil)
 }
 
 // Resume sends a request to resume the cluster replication.
-func (c MongoLinkClient) Resume(ctx context.Context, req resumeRequest) error {
+func (c PLMClient) Resume(ctx context.Context, req resumeRequest) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 

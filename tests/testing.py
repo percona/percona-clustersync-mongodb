@@ -2,7 +2,7 @@
 import hashlib
 
 import bson
-from mlink import MongoLink, Runner
+from mlink import PLM, Runner
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
@@ -10,13 +10,13 @@ from pymongo.collection import Collection
 class Testing:
     __test__ = False
 
-    def __init__(self, source: MongoClient, target: MongoClient, mlink: MongoLink):
+    def __init__(self, source: MongoClient, target: MongoClient, mlink: PLM):
         self.source: MongoClient = source
         self.target: MongoClient = target
-        self.mlink: MongoLink = mlink
+        self.mlink: PLM = mlink
 
     def run(self, phase: Runner.Phase, wait_timeout=None):
-        """Perform the MongoLink operation for the given phase."""
+        """Perform the PLM operation for the given phase."""
         return Runner(self.source, self.mlink, phase, {}, wait_timeout=wait_timeout)
 
     def compare_all(self, sort=None):

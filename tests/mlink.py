@@ -14,8 +14,8 @@ class WaitTimeoutError(Exception):
     """Exception raised when a wait operation times out."""
 
 
-class MongoLinkServerError(Exception):
-    """Exception raised when there is an error with the MongoLink service."""
+class PLMServerError(Exception):
+    """Exception raised when there is an error with the PLM service."""
 
     def __init__(self, message):
         super().__init__(message)
@@ -24,11 +24,11 @@ class MongoLinkServerError(Exception):
         return self.args[0]
 
 
-class MongoLink:
-    """MLink provides methods to interact with the MongoLink service."""
+class PLM:
+    """MLink provides methods to interact with the PLM service."""
 
     class State(StrEnum):
-        """State represents the state of the MongoLink service."""
+        """State represents the state of the PLM service."""
 
         FAILED = "failed"
         IDLE = "idle"
@@ -42,18 +42,18 @@ class MongoLink:
         self.uri = uri
 
     def status(self):
-        """Get the current status of the MongoLink service."""
+        """Get the current status of the PLM service."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise MongoLinkServerError(payload["error"])
+            raise PLMServerError(payload["error"])
 
         return payload
 
     def start(self, include_namespaces=None, exclude_namespaces=None, pause_on_initial_sync=False):
-        """Start the MongoLink service with the given parameters."""
+        """Start the PLM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
         if include_namespaces:
             options["includeNamespaces"] = include_namespaces
@@ -65,49 +65,49 @@ class MongoLink:
 
         payload = res.json()
         if not payload["ok"]:
-            raise MongoLinkServerError(payload["error"])
+            raise PLMServerError(payload["error"])
 
         return payload
 
     def pause(self):
-        """Pause the MongoLink service."""
+        """Pause the PLM service."""
         res = requests.post(f"{self.uri}/pause", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise MongoLinkServerError(payload["error"])
+            raise PLMServerError(payload["error"])
 
         return payload
 
     def resume(self):
-        """Resume the MongoLink service."""
+        """Resume the PLM service."""
         res = requests.post(f"{self.uri}/resume", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise MongoLinkServerError(payload["error"])
+            raise PLMServerError(payload["error"])
 
         return payload
 
     def finalize(self):
-        """Finalize the MongoLink service."""
+        """Finalize the PLM service."""
         res = requests.post(f"{self.uri}/finalize", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise MongoLinkServerError(payload["error"])
+            raise PLMServerError(payload["error"])
 
         return payload
 
 
 class Runner:
-    """Runner manages the lifecycle of the MongoLink service."""
+    """Runner manages the lifecycle of the PLM service."""
 
     class Phase(StrEnum):
-        """Phase represents the phase of the MongoLink service."""
+        """Phase represents the phase of the PLM service."""
 
         CLONE = "phase:clone"
         APPLY = "phase:apply"
@@ -116,7 +116,7 @@ class Runner:
     def __init__(
         self,
         source: MongoClient,
-        mlink: MongoLink,
+        mlink: PLM,
         phase: Phase,
         options: dict,
         wait_timeout=None,
@@ -145,32 +145,32 @@ class Runner:
         self.finalize()
 
     def start(self, pause_on_initial_sync=False):
-        """Start the MongoLink service."""
+        """Start the PLM service."""
         self.finalize(fast=True)
         self.mlink.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
 
     def finalize(self, *, fast=False):
-        """Finalize the MongoLink service."""
+        """Finalize the PLM service."""
         state = self.mlink.status()
 
-        if state["state"] == MongoLink.State.PAUSED:
+        if state["state"] == PLM.State.PAUSED:
             if state["initialSync"]["cloneCompleted"]:
                 self.mlink.resume()
                 state = self.mlink.status()
 
-        if state["state"] == MongoLink.State.RUNNING:
+        if state["state"] == PLM.State.RUNNING:
             if not fast:
                 self.wait_for_current_optime()
             self.wait_for_initial_sync()
             self.mlink.finalize()
             state = self.mlink.status()
 
-        if state["state"] == MongoLink.State.FINALIZING:
+        if state["state"] == PLM.State.FINALIZING:
             if not fast:
-                self.wait_for_state(MongoLink.State.FINALIZED)
+                self.wait_for_state(PLM.State.FINALIZED)
 
-    def wait_for_state(self, state: MongoLink.State):
-        """Wait for the MongoLink service to reach the specified state."""
+    def wait_for_state(self, state: PLM.State):
+        """Wait for the PLM service to reach the specified state."""
         if self.mlink.status()["state"] == state:
             return
 
@@ -184,7 +184,7 @@ class Runner:
     def wait_for_current_optime(self):
         """Wait for the current operation time to be applied."""
         status = self.mlink.status()
-        assert status["state"] == MongoLink.State.RUNNING, status
+        assert status["state"] == PLM.State.RUNNING, status
 
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
         for _ in range(self.wait_timeout * 2):
@@ -197,14 +197,14 @@ class Runner:
         raise WaitTimeoutError()
 
     def wait_for_initial_sync(self):
-        """Wait for the MongoLink service to be finalizable."""
+        """Wait for the PLM service to be finalizable."""
         status = self.mlink.status()
-        assert status["state"] != MongoLink.State.IDLE, status
+        assert status["state"] != PLM.State.IDLE, status
 
         if status["initialSync"]["completed"]:
             return
 
-        assert status["state"] == MongoLink.State.RUNNING, status
+        assert status["state"] == PLM.State.RUNNING, status
 
         for _ in range(self.wait_timeout * 2):
             if status["initialSync"]["completed"]:
@@ -216,9 +216,9 @@ class Runner:
         raise WaitTimeoutError()
 
     def wait_for_clone_completed(self):
-        """Wait for the MongoLink service completed clone."""
+        """Wait for the PLM service completed clone."""
         status = self.mlink.status()
-        assert status["state"] != MongoLink.State.IDLE, status
+        assert status["state"] != PLM.State.IDLE, status
 
         for _ in range(self.wait_timeout * 2):
             if status["initialSync"]["cloneCompleted"]:

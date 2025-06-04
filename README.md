@@ -34,13 +34,13 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
     make build
     ```
 
-    Alternatively, you can install MongoLink from the cloned repo using `go install`:
+    Alternatively, you can install PLM from the cloned repo using `go install`:
 
     ```sh
     go install .
     ```
 
-    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run MongoLink by typing `plm` in your terminal.
+    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona Link for MongoDB by typing `plm` in your terminal.
 
 3. Run the server:
 
@@ -143,9 +143,9 @@ bin/plm status
 curl http://localhost:2242/status
 ```
 
-## MongoLink Options
+## PLM Options
 
-When starting the MongoLink server, you can use the following options:
+When starting the PLM server, you can use the following options:
 
 - `--port`: The port on which the server will listen (default: 2242)
 - `--source`: The MongoDB connection string for the source cluster
@@ -284,7 +284,7 @@ Example:
 
 ### GET /status
 
-The /status endpoint provides the current state of the MongoLink replication process, including its progress, lag, and event processing details.
+The /status endpoint provides the current state of the PLM replication process, including its progress, lag, and event processing details.
 
 #### Response
 
@@ -373,7 +373,7 @@ export TEST_PLM_BIN=bin/plm_test
 poetry run pytest
 ```
 
-> The `--plm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the MongoLink binary. This allows the test suite to manage the MongoLink process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run MongoLink externally before running the tests.
+> The `--plm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the PLM binary. This allows the test suite to manage the PLM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PLM externally before running the tests.
 
 ## Contributing
 

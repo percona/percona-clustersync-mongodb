@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 import testing
-from mlink import MongoLink, Runner
+from mlink import PLM, Runner
 from pymongo import MongoClient
 from testing import Testing
 
@@ -594,7 +594,7 @@ def test_plm_110_rename_during_clone_and_repl(t: Testing):
 
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
-        r.wait_for_state(MongoLink.State.RUNNING)
+        r.wait_for_state(PLM.State.RUNNING)
 
         for ns in testing.list_all_namespaces(t.source):
             t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})

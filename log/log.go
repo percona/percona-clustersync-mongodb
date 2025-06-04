@@ -1,4 +1,4 @@
-// Package log provides logging utilities for the MongoLink application.
+// Package log provides logging utilities for the PLM application.
 package log
 
 import (

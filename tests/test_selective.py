@@ -6,7 +6,7 @@ from pymongo import MongoClient
 
 
 def perform_with_options(source, mlink, phase: Runner.Phase, include_ns=None, exclude_ns=None):
-    """Perform the MongoLink operation with the given options."""
+    """Perform the PLM operation with the given options."""
     mlink_options = {}
     if include_ns:
         mlink_options["include_namespaces"] = include_ns
