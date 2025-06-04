@@ -21,7 +21,7 @@ const (
 // MongoDB database and collection names.
 const (
 	// MongoLinkDatabase is the name of the MongoDB database used by MongoLink.
-	MongoLinkDatabase = "percona_mongolink"
+	MongoLinkDatabase = "percona_link_mongodb"
 	// RecoveryCollection is the name of the collection used for recovery data.
 	RecoveryCollection = "checkpoints"
 	// HeartbeatCollection is the name of the collection used for heartbeats.
