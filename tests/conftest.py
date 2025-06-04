@@ -76,7 +76,7 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
     testing.drop_all_database(target_conn)
 
 
-MLINK_PROC: subprocess.Popen = None
+PML_PROC: subprocess.Popen = None
 
 
 def start_plm(mlink_bin: str):
@@ -97,15 +97,15 @@ def manage_plm_process(request: pytest.FixtureRequest, mlink_bin: str):
         yield
         return
 
-    global MLINK_PROC  # pylint: disable=W0603
-    MLINK_PROC = start_plm(mlink_bin)
+    global PML_PROC  # pylint: disable=W0603
+    PML_PROC = start_plm(mlink_bin)
 
     def teardown():
-        if MLINK_PROC and MLINK_PROC.poll() is None:
-            stop_plm(MLINK_PROC)
+        if PML_PROC and PML_PROC.poll() is None:
+            stop_plm(PML_PROC)
 
     request.addfinalizer(teardown)
-    yield MLINK_PROC
+    yield PML_PROC
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -122,7 +122,7 @@ def restart_plm_on_failure(request: pytest.FixtureRequest, mlink_bin: str):
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
         # the test failed. restart plm process with a new state
-        global MLINK_PROC  # pylint: disable=W0603
-        if MLINK_PROC and mlink_bin:
-            stop_plm(MLINK_PROC)
-            MLINK_PROC = start_plm(mlink_bin)
+        global PML_PROC  # pylint: disable=W0603
+        if PML_PROC and mlink_bin:
+            stop_plm(PML_PROC)
+            PML_PROC = start_plm(mlink_bin)
