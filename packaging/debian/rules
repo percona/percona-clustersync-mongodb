@@ -33,10 +33,10 @@ override_dh_auto_build:
 	export PATH=/usr/local/go/bin:${PATH}
 	export GOROOT="/usr/local/go/"
 	export GOBINPATH="/usr/local/go/bin"
-	mkdir -p build/src/github.com/percona/percona-mongolink
-	cp -r `ls | grep -v build` build/src/github.com/percona/percona-mongolink/
+	mkdir -p build/src/github.com/percona/percona-link-mongodb
+	cp -r `ls | grep -v build` build/src/github.com/percona/percona-link-mongodb/
 	( \
-	  cd build/src/github.com/percona/percona-mongolink/ && \
+	  cd build/src/github.com/percona/percona-link-mongodb/ && \
 	  export GO111MODULE=on; \
 	  export GOMODCACHE=${PWD}/go-mod-cache; \
 	  for i in 1 2 3; do \
@@ -52,12 +52,12 @@ override_dh_auto_install:
 	@echo "RULES.$@"
 	mkdir -p $(TMP)
 	mkdir -p $(TMP)/default
-	cd build/src/github.com/percona/percona-mongolink/bin && cp pml $(TMP)/pml
-	cp -f packaging/conf/pml.env  $(TMP)/default/pml
-	cp -f packaging/conf/pml.service $(TMP)/pml.service
+	cd build/src/github.com/percona/percona-link-mongodb/bin && cp plm $(TMP)/plm
+	cp -f packaging/conf/plm.env  $(TMP)/default/plm
+	cp -f packaging/conf/plm.service $(TMP)/plm.service
 	cp -f LICENSE $(TMP)/LICENSE
 	ls -la $(TMP)
 
 override_dh_systemd_start:
-	dh_systemd_enable --name=pml pml.service
+	dh_systemd_enable --name=plm plm.service
 	dh_systemd_start --restart-after-upgrade

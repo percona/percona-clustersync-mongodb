@@ -20,7 +20,7 @@ Usage: $0 [OPTIONS]
         --version           Version to build
 
         --help) usage ;;
-Example $0 --builddir=/tmp/percona-mongolink --get_sources=1 --build_src_rpm=1 --build_rpm=1
+Example $0 --builddir=/tmp/percona-link-mongodb --get_sources=1 --build_src_rpm=1 --build_rpm=1
 EOF
     exit 1
 }
@@ -79,21 +79,21 @@ get_sources() {
         echo "Sources will not be downloaded"
         return 0
     fi
-    PRODUCT=percona-mongolink
+    PRODUCT=percona-link-mongodb
     PRODUCT_FULL=${PRODUCT}-${VERSION}
-    echo "PRODUCT=${PRODUCT}" >percona-mongolink.properties
-    echo "BUILD_NUMBER=${BUILD_NUMBER}" >>percona-mongolink.properties
-    echo "BUILD_ID=${BUILD_ID}" >>percona-mongolink.properties
-    echo "VERSION=${VERSION}" >>percona-mongolink.properties
-    echo "BRANCH=${BRANCH}" >>percona-mongolink.properties
+    echo "PRODUCT=${PRODUCT}" >percona-link-mongodb.properties
+    echo "BUILD_NUMBER=${BUILD_NUMBER}" >>percona-link-mongodb.properties
+    echo "BUILD_ID=${BUILD_ID}" >>percona-link-mongodb.properties
+    echo "VERSION=${VERSION}" >>percona-link-mongodb.properties
+    echo "BRANCH=${BRANCH}" >>percona-link-mongodb.properties
     git clone "$REPO" ${PRODUCT}
-    
+
     retval=$?
     if [ $retval != 0 ]; then
         echo "There were some issues during repo cloning from github. Please retry one more time"
         exit 1
     fi
-    cd percona-mongolink
+    cd percona-link-mongodb
     if [ ! -z "$BRANCH" ]; then
         git reset --hard
         git clean -xdf
@@ -108,21 +108,21 @@ get_sources() {
     echo "GITCOMMIT=${GITCOMMIT}" >>VERSION
     echo "GITBRANCH=${GITBRANCH}" >>VERSION
     echo "COMPONENT_VERSION=${COMPONENT_VERSION}" >>VERSION
-    echo "REVISION=${REVISION}" >>${WORKDIR}/percona-mongolink.properties
+    echo "REVISION=${REVISION}" >>${WORKDIR}/percona-link-mongodb.properties
     rm -fr debian rpm
-    echo "percona-mongolink (${VERSION}) unstable; urgency=low" >> packaging/debian/changelog
+    echo "percona-link-mongodb (${VERSION}) unstable; urgency=low" >> packaging/debian/changelog
     echo "  * Initial Release." >> packaging/debian/changelog
     echo " -- SurabhiBhat <surabhi.bhat@percona.com> $(date -R)" >> packaging/debian/changelog
     cd ${WORKDIR}
-    mv percona-mongolink ${PRODUCT}-${VERSION}
+    mv percona-link-mongodb ${PRODUCT}-${VERSION}
     tar --owner=0 --group=0 -czf ${PRODUCT}-${VERSION}.tar.gz ${PRODUCT}-${VERSION}
-    echo "UPLOAD=UPLOAD/experimental/BUILDS/${PRODUCT}/${PRODUCT}-${VERSION}/${BRANCH}/${REVISION}/${BUILD_ID}" >>percona-mongolink.properties
+    echo "UPLOAD=UPLOAD/experimental/BUILDS/${PRODUCT}/${PRODUCT}-${VERSION}/${BRANCH}/${REVISION}/${BUILD_ID}" >>percona-link-mongodb.properties
     mkdir $WORKDIR/source_tarball
     mkdir $CURDIR/source_tarball
     cp ${PRODUCT}-${VERSION}.tar.gz $WORKDIR/source_tarball
     cp ${PRODUCT}-${VERSION}.tar.gz $CURDIR/source_tarball
     cd $CURDIR
-    rm -rf percona-mongolink
+    rm -rf percona-link-mongodb
     return
 }
 
@@ -205,9 +205,9 @@ install_deps() {
 
 get_tar() {
     TARBALL=$1
-    TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-mongolink*.tar.gz' | sort | tail -n1))
+    TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
     if [ -z $TARFILE ]; then
-        TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-mongolink*.tar.gz' | sort | tail -n1))
+        TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
         if [ -z $TARFILE ]; then
             echo "There is no $TARBALL for build"
             exit 1
@@ -223,9 +223,9 @@ get_tar() {
 get_deb_sources() {
     param=$1
     echo $param
-    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-mongolink*.$param" | sort | tail -n1))
+    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-link-mongodb*.$param" | sort | tail -n1))
     if [ -z $FILE ]; then
-        FILE=$(basename $(find $CURDIR/source_deb -name "percona-mongolink*.$param" | sort | tail -n1))
+        FILE=$(basename $(find $CURDIR/source_deb -name "percona-link-mongodb*.$param" | sort | tail -n1))
         if [ -z $FILE ]; then
             echo "There is no sources for build"
             exit 1
@@ -251,7 +251,7 @@ build_srpm() {
     get_tar "source_tarball"
     rm -fr rpmbuild
     ls | grep -v tar.gz | xargs rm -rf
-    TARFILE=$(find . -name 'percona-mongolink*.tar.gz' | sort | tail -n1)
+    TARFILE=$(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1)
     SRC_DIR=${TARFILE%.tar.gz}
     mkdir -vp rpmbuild/{SOURCES,SPECS,BUILD,SRPMS,RPMS}
     tar vxzf ${WORKDIR}/${TARFILE} --wildcards '*/packaging' --strip=1
@@ -261,9 +261,9 @@ build_srpm() {
     sed -e "s:@@VERSION@@:${VERSION}:g" \
         -e "s:@@RELEASE@@:${RELEASE}:g" \
         -e "s:@@REVISION@@:${REVISION}:g" \
-        packaging/rpm/percona-mongolink.spec >rpmbuild/SPECS/percona-mongolink.spec
+        packaging/rpm/percona-link-mongodb.spec >rpmbuild/SPECS/percona-link-mongodb.spec
     mv -fv ${TARFILE} ${WORKDIR}/rpmbuild/SOURCES
-    rpmbuild -bs --define "_topdir ${WORKDIR}/rpmbuild" --define "version ${VERSION}" --define "dist .generic" rpmbuild/SPECS/percona-mongolink.spec
+    rpmbuild -bs --define "_topdir ${WORKDIR}/rpmbuild" --define "version ${VERSION}" --define "dist .generic" rpmbuild/SPECS/percona-link-mongodb.spec
     mkdir -p ${WORKDIR}/srpm
     mkdir -p ${CURDIR}/srpm
     cp rpmbuild/SRPMS/*.src.rpm ${CURDIR}/srpm
@@ -280,9 +280,9 @@ build_rpm() {
         echo "It is not possible to build rpm here"
         exit 1
     fi
-    SRC_RPM=$(basename $(find $WORKDIR/srpm -name 'percona-mongolink*.src.rpm' | sort | tail -n1))
+    SRC_RPM=$(basename $(find $WORKDIR/srpm -name 'percona-link-mongodb*.src.rpm' | sort | tail -n1))
     if [ -z $SRC_RPM ]; then
-        SRC_RPM=$(basename $(find $CURDIR/srpm -name 'percona-mongolink*.src.rpm' | sort | tail -n1))
+        SRC_RPM=$(basename $(find $CURDIR/srpm -name 'percona-link-mongodb*.src.rpm' | sort | tail -n1))
         if [ -z $SRC_RPM ]; then
             echo "There is no src rpm for build"
             echo "You can create it using key --build_src_rpm=1"
@@ -300,8 +300,8 @@ build_rpm() {
 
     ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
 
-    echo "RHEL=${RHEL}" >>percona-mongolink.properties
-    echo "ARCH=${ARCH}" >>percona-mongolink.properties
+    echo "RHEL=${RHEL}" >>percona-link-mongodb.properties
+    echo "ARCH=${ARCH}" >>percona-link-mongodb.properties
     [[ ${PATH} == *"/usr/local/go/bin"* && -x /usr/local/go/bin/go ]] || export PATH=/usr/local/go/bin:${PATH}
     export GOROOT="/usr/local/go/"
     export GOPATH=$(pwd)/
@@ -331,11 +331,11 @@ build_source_deb() {
         echo "It is not possible to build source deb here"
         exit 1
     fi
-    rm -rf percona-mongolink*
+    rm -rf percona-link-mongodb*
     get_tar "source_tarball"
     rm -f *.dsc *.orig.tar.gz *.changes *.tar.xz
     #
-    TARFILE=$(basename $(find . -name 'percona-mongolink*.tar.gz' | sort | tail -n1))
+    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
     DEBIAN=$(lsb_release -sc)
     ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
     tar zxf ${TARFILE}
@@ -350,8 +350,8 @@ build_source_deb() {
     cp -r packaging/debian ./
     sed -i "s:@@VERSION@@:${VERSION}:g" debian/rules
     sed -i "s:@@REVISION@@:${REVISION}:g" debian/rules
-    sed -i "s:sysconfig:default:" packaging/conf/pml.service
-    dch -D unstable --force-distribution -v "${VERSION}" "Update to new percona-mongolink version ${VERSION}"
+    sed -i "s:sysconfig:default:" packaging/conf/plm.service
+    dch -D unstable --force-distribution -v "${VERSION}" "Update to new percona-link-mongodb version ${VERSION}"
     dpkg-buildpackage -S
     cd ../
     mkdir -p $WORKDIR/source_deb
@@ -386,8 +386,8 @@ build_deb() {
     export DEBIAN=$(lsb_release -sc)
     export ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
     #
-    echo "DEBIAN=${DEBIAN}" >>percona-mongolink.properties
-    echo "ARCH=${ARCH}" >>percona-mongolink.properties
+    echo "DEBIAN=${DEBIAN}" >>percona-link-mongodb.properties
+    echo "ARCH=${ARCH}" >>percona-link-mongodb.properties
 
     #
     DSC=$(basename $(find . -name '*.dsc' | sort | tail -n1))
@@ -415,7 +415,7 @@ build_deb() {
 }
 
 CURDIR=$(pwd)
-VERSION_FILE=$CURDIR/percona-mongolink.properties
+VERSION_FILE=$CURDIR/percona-link-mongodb.properties
 args=
 WORKDIR=
 SRPM=0
@@ -432,8 +432,8 @@ VERSION="1.0"
 RELEASE="1"
 REVISION=0
 BRANCH="main"
-REPO="https://github.com/Percona-Lab/percona-mongolink.git"
-PRODUCT=percona-mongolink
+REPO="https://github.com/percona/percona-link-mongodb.git"
+PRODUCT=percona-link-mongodb
 parse_arguments PICK-ARGS-FROM-ARGV "$@"
 
 check_workdir

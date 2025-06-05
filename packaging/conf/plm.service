@@ -1,14 +1,14 @@
 [Unit]
-Description=percona-mongolink
+Description=percona-link-mongodb
 After=time-sync.target network.target
 
 [Service]
-EnvironmentFile=/etc/sysconfig/pml
+EnvironmentFile=/etc/sysconfig/plm
 Type=simple
 User=mongod
 Group=mongod
 PermissionsStartOnly=true
-ExecStart=/usr/bin/pml
+ExecStart=/usr/bin/plm
 
 [Install]
 WantedBy=multi-user.target
