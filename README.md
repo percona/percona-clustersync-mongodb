@@ -51,12 +51,10 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
     Alternatively, you can use environment variables:
 
     ```sh
-    export SOURCE_URI=<source-mongodb-uri>
-    export TARGET_URI=<target-mongodb-uri>
-    bin/plm --source $SOURCE_URI --target $TARGET_URI
+    export PLM_SOURCE_URI=<source-mongodb-uri>
+    export PLM_TARGET_URI=<target-mongodb-uri>
+    bin/plm
     ```
-
-    > Connections to the source and target must have `readPreference=primary` and `writeConcern=majority` explicitly or unset.
 
 ## Usage
 
