@@ -6,7 +6,7 @@ python = "^3.13"
 pymongo = "^4.12.1"
 pytest = "^8.3.5"
 pytest-timeout = "^2.4.0"
-requests = "^2.32.3"
+requests = "^2.32.4"
 
 [build-system]
 requires = ["poetry-core"]
