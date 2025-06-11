@@ -13,6 +13,13 @@ import (
 	"github.com/percona/percona-link-mongodb/util"
 )
 
+const (
+	// DefaultRetryInterval is the default interval for retrying transient errors.
+	DefaultRetryInterval = 1 * time.Second
+	// DefaultMaxRetries is the default maximum number of retries for transient errors.
+	DefaultMaxRetries = 3
+)
+
 // errMissingClusterTime is returned when the cluster time is missing.
 var errMissingClusterTime = errors.New("missig clusterTime")
 
@@ -186,4 +193,38 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 	}
 
 	return stats, nil
+}
+
+// RunWithRetry executes the provided function with retry logic for transient errors.
+// It retries the function up to maxRetries times,
+// with an exponential backoff starting from retryInterval.
+func RunWithRetry(
+	ctx context.Context,
+	fn func(context.Context) error,
+	retryInterval time.Duration,
+	maxRetries int,
+) error {
+	if retryInterval <= 0 || maxRetries <= 0 {
+		return errors.New("retryInterval and maxRetries must be greater than zero")
+	}
+
+	var err error
+
+	currentInterval := retryInterval
+	for range maxRetries {
+		err = fn(ctx)
+		if err == nil {
+			return nil
+		}
+
+		if !IsTransientError(err) {
+			return err //nolint:wrapcheck
+		}
+
+		log.Ctx(ctx).Warnf("Transient write error: %v, retrying in %s", err, retryInterval)
+		time.Sleep(currentInterval)
+		currentInterval *= 2
+	}
+
+	return err //nolint:wrapcheck
 }

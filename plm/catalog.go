@@ -222,7 +222,9 @@ func (c *Catalog) doCreateCollection(
 		cmd = append(cmd, bson.E{"indexOptionDefaults", opts.IndexOptionDefaults})
 	}
 
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	})
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
@@ -250,7 +252,9 @@ func (c *Catalog) doCreateView(
 		cmd = append(cmd, bson.E{"collation", opts.Collation})
 	}
 
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	})
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}
@@ -265,7 +269,9 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	err := c.target.Database(db).Collection(coll).Drop(ctx)
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).Collection(coll).Drop(ctx)
+	})
 	if err != nil {
 		return err //nolint:wrapcheck
 	}
@@ -292,7 +298,9 @@ func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 
 	for _, coll := range colls {
 		eg.Go(func() error {
-			err := c.target.Database(db).Collection(coll).Drop(grpCtx)
+			err := runWithRetry(grpCtx, func(ctx context.Context) error {
+				return c.target.Database(db).Collection(coll).Drop(ctx)
+			})
 			if err != nil {
 				return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
 			}
@@ -376,12 +384,13 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
-		res := c.target.Database(db).RunCommand(ctx, bson.D{
-			{"createIndexes", coll},
-			{"indexes", bson.A{index}},
+		err := runWithRetry(ctx, func(ctx context.Context) error {
+			return c.target.Database(db).RunCommand(ctx, bson.D{
+				{"createIndexes", coll},
+				{"indexes", bson.A{index}},
+			}).Err()
 		})
-
-		if err := res.Err(); err != nil {
+		if err != nil {
 			processedIdxs[index.Name] = err
 
 			continue
@@ -468,9 +477,9 @@ func (c *Catalog) ModifyCappedCollection(
 		cmd = append(cmd, bson.E{"cappedMax", maxDocs})
 	}
 
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
-
-	return err //nolint:wrapcheck
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	}) //nolint:wrapcheck
 }
 
 // ModifyView modifies a view in the target MongoDB.
@@ -483,9 +492,10 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 		{"viewOn", viewOn},
 		{"pipeline", pipeline},
 	}
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
-	return err //nolint:wrapcheck
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	}) //nolint:wrapcheck
 }
 
 func (c *Catalog) ModifyChangeStreamPreAndPostImages(
@@ -501,9 +511,10 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 		{"collMod", coll},
 		{"changeStreamPreAndPostImages", bson.D{{"enabled", enabled}}},
 	}
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
-	return err //nolint:wrapcheck
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	}) //nolint:wrapcheck
 }
 
 // ModifyCappedCollection modifies a capped collection in the target MongoDB.
@@ -529,9 +540,9 @@ func (c *Catalog) ModifyValidation(
 		cmd = append(cmd, bson.E{"validationAction", validationAction})
 	}
 
-	err := c.target.Database(db).RunCommand(ctx, cmd).Err()
-
-	return err //nolint:wrapcheck
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+	}) //nolint:wrapcheck
 }
 
 // ModifyIndex modifies an index in the target MongoDB.
@@ -548,7 +559,9 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 			}},
 		}
 
-		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := runWithRetry(ctx, func(ctx context.Context) error {
+			return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		})
 		if err != nil {
 			return errors.Wrap(err, "modify index: "+mods.Name)
 		}
@@ -594,7 +607,9 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 		{"dropTarget", true},
 	}
 
-	err := c.target.Database("admin").RunCommand(ctx, opts).Err()
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database("admin").RunCommand(ctx, opts).Err()
+	})
 	if err != nil {
 		if topo.IsNamespaceNotFound(err) {
 			lg.Errorf(err, "")
@@ -618,7 +633,9 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 
 	lg := log.Ctx(ctx)
 
-	err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
+	})
 	if err != nil {
 		if !topo.IsNamespaceNotFound(err) && !topo.IsIndexNotFound(err) {
 			return err //nolint:wrapcheck
@@ -803,15 +820,15 @@ func (c *Catalog) doModifyIndexOption(
 	propName string,
 	value any,
 ) error {
-	res := c.target.Database(db).RunCommand(ctx, bson.D{
-		{"collMod", coll},
-		{"index", bson.D{
-			{"name", index},
-			{propName, value},
-		}},
-	})
-
-	return res.Err() //nolint:wrapcheck
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, bson.D{
+			{"collMod", coll},
+			{"index", bson.D{
+				{"name", index},
+				{propName, value},
+			}},
+		}).Err()
+	}) //nolint:wrapcheck
 }
 
 // getIndexFromCatalog gets an index spec from the catalog.
@@ -1008,4 +1025,11 @@ func (c *Catalog) renameCollectionInCatalog(
 	c.Databases[targetDB].Collections[targetColl] = collectionEntry
 	c.deleteCollectionFromCatalog(ctx, db, coll)
 	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
+}
+
+func runWithRetry(
+	ctx context.Context,
+	fn func(context.Context) error,
+) error {
+	return topo.RunWithRetry(ctx, fn, topo.DefaultRetryInterval, topo.DefaultMaxRetries) //nolint:wrapcheck
 }

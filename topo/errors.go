@@ -1,10 +1,11 @@
 package topo
 
 import (
-	"errors"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"github.com/percona/percona-link-mongodb/errors"
 )
 
 // IsRetryableWrite checks if the error has the "RetryableWriteError" label.
@@ -68,6 +69,41 @@ func isMongoCommandError(err error, name string) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
 		return cmdErr.Name == name
+	}
+
+	return false
+}
+
+// IsTransientError checks if the error is a transient error that can be retried.
+// It checks for specific MongoDB error codes that indicate transient issues.
+func IsTransientError(err error) bool {
+	transientErrorCodes := map[int]struct{}{
+		11602: {}, // InterruptedDueToReplStateChange
+		91:    {}, // ShutdownInProgress
+		189:   {}, // PrimarySteppedDown
+		10107: {}, // NotWritablePrimary
+		13435: {}, // NotPrimaryNoSecondaryOk
+	}
+
+	var wEx mongo.WriteException
+	if errors.As(err, &wEx) {
+		for _, we := range wEx.WriteErrors {
+			if _, ok := transientErrorCodes[we.Code]; ok {
+				return true
+			}
+		}
+		if wEx.WriteConcernError != nil {
+			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
+				return true
+			}
+		}
+	}
+
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
+			return true
+		}
 	}
 
 	return false
