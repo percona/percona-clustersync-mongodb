@@ -15,7 +15,7 @@ import (
 
 const (
 	// DefaultRetryInterval is the default interval for retrying transient errors.
-	DefaultRetryInterval = 1 * time.Second
+	DefaultRetryInterval = 5 * time.Second
 	// DefaultMaxRetries is the default maximum number of retries for transient errors.
 	DefaultMaxRetries = 3
 )
@@ -211,7 +211,7 @@ func RunWithRetry(
 	var err error
 
 	currentInterval := retryInterval
-	for range maxRetries {
+	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err = fn(ctx)
 		if err == nil {
 			return nil
@@ -221,7 +221,9 @@ func RunWithRetry(
 			return err //nolint:wrapcheck
 		}
 
-		log.Ctx(ctx).Warnf("Transient write error: %v, retrying in %s", err, retryInterval)
+		log.Ctx(ctx).Warnf("Transient write error: %v, retry attempt %d retrying in %s",
+			err, attempt, currentInterval)
+
 		time.Sleep(currentInterval)
 		currentInterval *= 2
 	}
