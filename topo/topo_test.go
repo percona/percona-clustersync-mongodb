@@ -52,7 +52,7 @@ func TestRunWithRetry_FalureOnAllRetries(t *testing.T) {
 
 	maxRetries := 3
 	err := RunWithRetry(t.Context(), fn, 1*time.Millisecond, maxRetries)
-	if errors.Is(err, &transientErr) {
+	if !errors.As(err, &transientErr) {
 		t.Errorf("expected error %v, got %v", transientErr, err)
 	}
 	if calls != maxRetries {
