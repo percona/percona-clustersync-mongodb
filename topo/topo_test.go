@@ -12,7 +12,7 @@ import (
 func TestRunWithRetry_NonTransientError(t *testing.T) {
 	t.Parallel()
 
-	nonTransiantErr := errors.New("non-transient error")
+	nonTransiantErr := errors.New("non-transient error") //nolint:err113
 	calls := 0
 
 	fn := func(_ context.Context) error {
