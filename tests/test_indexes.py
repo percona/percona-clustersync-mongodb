@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from mlink import Runner
+from plm import Runner
 from testing import Testing
 
 
@@ -61,12 +61,12 @@ def test_create_partial(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hidden(t: Testing, phase: Runner.Phase):
-    with t.run(phase) as mlink:
+    with t.run(phase) as plm:
         name = t.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
         assert t.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             assert "hidden" not in t.target["db_1"]["coll_1"].index_information()[name]
 
     t.compare_all()
@@ -296,7 +296,7 @@ def test_modify_unique(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
-    with t.run(phase) as mlink:
+    with t.run(phase) as plm:
         options = {
             "unique": True,
             "hidden": True,
@@ -309,7 +309,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
             assert source_index.get(prop) == val
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             for prop, val in options.items():
                 if prop == "expireAfterSeconds":
@@ -324,7 +324,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
 def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
 
-    with t.run(phase) as mlink:
+    with t.run(phase) as plm:
         t.source["db_1"].command(
             {
                 "collMod": "coll_1",
@@ -336,7 +336,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
         assert source_index["prepareUnique"]
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
 
@@ -357,7 +357,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
             assert source_index.get(prop) == val
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             for prop, val in modify_options.items():
                 if prop == "expireAfterSeconds":
@@ -379,9 +379,9 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
     assert "hidden" not in source_index1
     assert "expireAfterSeconds" not in source_index1
 
-    with t.run(phase) as mlink:
+    with t.run(phase) as plm:
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -408,7 +408,7 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
         assert source_index2["expireAfterSeconds"] == 132
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -433,7 +433,7 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
         assert source_index3["expireAfterSeconds"] == 133
 
         if phase == Runner.Phase.APPLY:
-            mlink.wait_for_current_optime()
+            plm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -449,16 +449,16 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
 
 
 def test_manual_create_ttl(t: Testing):
-    mlink = t.run(Runner.Phase.MANUAL)
+    plm = t.run(Runner.Phase.MANUAL)
     try:
         t.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
-        mlink.start()
+        plm.start()
         t.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
-        mlink.wait_for_initial_sync()
+        plm.wait_for_initial_sync()
         t.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
-        mlink.finalize()
+        plm.finalize()
     except:
-        mlink.finalize(fast=True)
+        plm.finalize(fast=True)
         raise
 
     t.compare_all()

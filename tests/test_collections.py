@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 import testing
-from mlink import PLM, Runner
+from plm import PLM, Runner
 from pymongo import MongoClient
 from testing import Testing
 
@@ -125,6 +125,7 @@ def test_create_view_with_collation(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.timeout(15)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_timeseries_ignored(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -326,6 +327,7 @@ def test_modify_view(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.timeout(15)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_timeseries_options_ignored(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection(

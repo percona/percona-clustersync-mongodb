@@ -584,15 +584,15 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	mlink := plm.New(source, target)
+	lm := plm.New(source, target)
 
-	err = Restore(ctx, target, mlink)
+	err = Restore(ctx, target, lm)
 	if err != nil {
 		return nil, errors.Wrap(err, "recover PLM")
 	}
 
-	mlink.SetOnStateChanged(func(newState plm.State) {
-		err := DoCheckpoint(ctx, target, mlink)
+	lm.SetOnStateChanged(func(newState plm.State) {
+		err := DoCheckpoint(ctx, target, lm)
 		if err != nil {
 			log.New("http:checkpointing").Error(err, "checkpoint")
 		} else {
@@ -600,12 +600,12 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	})
 
-	go RunCheckpointing(ctx, target, mlink)
+	go RunCheckpointing(ctx, target, lm)
 
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		plm:           mlink,
+		plm:           lm,
 		stopHeartbeat: stopHeartbeat,
 		promRegistry:  promRegistry,
 	}

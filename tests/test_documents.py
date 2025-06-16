@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from mlink import Runner
+from plm import Runner
 from testing import Testing
 
 

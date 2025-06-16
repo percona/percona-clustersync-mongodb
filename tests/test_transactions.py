@@ -1,7 +1,7 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 
-from mlink import Runner
+from plm import Runner
 from testing import Testing
 
 
@@ -34,22 +34,22 @@ def test_simple_aborted(t: Testing):
 
 
 def test_mixed_with_non_trx_ops(t: Testing):
-    mlink = t.run(Runner.Phase.APPLY)
+    plm = t.run(Runner.Phase.APPLY)
     with t.source.start_session() as sess:
         for trx in range(2):
             sess.start_transaction()
             t.source["db_1"]["coll_1"].insert_one({"i": 1})
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": trx}, session=sess)
 
-            mlink.start()
+            plm.start()
             t.source["db_1"]["coll_1"].insert_one({"i": 3})
 
             t.source["db_1"]["coll_1"].insert_one({"i": 4, "trx": trx}, session=sess)
             t.source["db_1"]["coll_1"].insert_one({"i": 5})
             sess.commit_transaction()
 
-            mlink.wait_for_current_optime()
-            mlink.finalize()
+            plm.wait_for_current_optime()
+            plm.finalize()
 
     assert t.source["db_1"]["coll_1"].count_documents({}) == 10
 
@@ -57,7 +57,7 @@ def test_mixed_with_non_trx_ops(t: Testing):
 
 
 def test_mixed_with_non_trx_ops_aborted(t: Testing):
-    mlink = t.run(None)
+    plm = t.run(None)
 
     with t.source.start_session() as sess:
         for trx in range(2):
@@ -65,15 +65,15 @@ def test_mixed_with_non_trx_ops_aborted(t: Testing):
             t.source["db_1"]["coll_1"].insert_one({"i": 1})
             t.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": trx}, session=sess)
 
-            mlink.start()
+            plm.start()
             t.source["db_1"]["coll_1"].insert_one({"i": 2})
-            mlink.wait_for_initial_sync()
+            plm.wait_for_initial_sync()
 
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": trx}, session=sess)
             t.source["db_1"]["coll_1"].insert_one({"i": 3})
             sess.abort_transaction()
 
-        mlink.finalize()
+        plm.finalize()
 
     assert t.source["db_1"]["coll_1"].count_documents({}) == 6
 

@@ -5,7 +5,7 @@ import time
 
 import pytest
 import testing
-from mlink import PLM
+from plm import PLM
 from pymongo import MongoClient
 
 
@@ -52,7 +52,7 @@ def target_conn(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(scope="session")
-def mlink(request: pytest.FixtureRequest):
+def plm(request: pytest.FixtureRequest):
     """Provide a plm instance."""
     url = request.config.getoption("--plm_url") or os.environ["TEST_PLM_URL"]
     return PLM(url)
@@ -65,8 +65,8 @@ def plm_bin(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(scope="session")
-def t(source_conn: MongoClient, target_conn: MongoClient, mlink: PLM):
-    return testing.Testing(source_conn, target_conn, mlink)
+def t(source_conn: MongoClient, target_conn: MongoClient, plm: PLM):
+    return testing.Testing(source_conn, target_conn, plm)
 
 
 @pytest.fixture(autouse=True)
