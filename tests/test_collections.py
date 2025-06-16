@@ -586,7 +586,7 @@ def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
-
+@pytest.mark.timeout(30)
 def test_plm_110_rename_during_clone_and_repl(t: Testing):
     payload = random.randbytes(1000)
     for i in range(10):
