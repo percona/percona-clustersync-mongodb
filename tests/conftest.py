@@ -34,20 +34,25 @@ def pytest_collection_modifyitems(config, items):
             if "slow" in item.keywords:
                 item.add_marker(skip_slow)
 
+def source_uri(request: pytest.FixtureRequest):
+    """Provide the source MongoDB URI."""
+    return request.config.getoption("--source-uri") or os.environ["TEST_SOURCE_URI"]
+
+def target_uri(request: pytest.FixtureRequest):
+    """Provide the target MongoDB URI."""
+    return request.config.getoption("--target-uri") or os.environ["TEST_TARGET_URI"]
 
 @pytest.fixture(scope="session")
 def source_conn(request: pytest.FixtureRequest):
     """Provide a MongoClient connection to the source MongoDB."""
-    uri = request.config.getoption("--source-uri") or os.environ["TEST_SOURCE_URI"]
-    with MongoClient(uri) as conn:
+    with MongoClient(source_uri(request)) as conn:
         yield conn
 
 
 @pytest.fixture(scope="session")
 def target_conn(request: pytest.FixtureRequest):
     """Provide a MongoClient connection to the target MongoDB."""
-    uri = request.config.getoption("--target-uri") or os.environ["TEST_TARGET_URI"]
-    with MongoClient(uri) as conn:
+    with MongoClient(target_uri(request)) as conn:
         yield conn
 
 
@@ -79,8 +84,10 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
 PML_PROC: subprocess.Popen = None
 
 
-def start_plm(plm_bin: str):
-    rv = subprocess.Popen([plm_bin, "--reset-state", "--log-level=trace"])
+def start_plm(plm_bin: str, request: pytest.FixtureRequest):
+    source = source_uri(request)
+    target = target_uri(request)
+    rv = subprocess.Popen([plm_bin,"--source", source ,"--target", target, "--reset-state", "--log-level=trace"])
     time.sleep(1)
     return rv
 
@@ -98,7 +105,7 @@ def manage_plm_process(request: pytest.FixtureRequest, plm_bin: str):
         return
 
     global PML_PROC  # pylint: disable=W0603
-    PML_PROC = start_plm(plm_bin)
+    PML_PROC = start_plm(plm_bin, request)
 
     def teardown():
         if PML_PROC and PML_PROC.poll() is None:
@@ -125,4 +132,4 @@ def restart_plm_on_failure(request: pytest.FixtureRequest, plm_bin: str):
         global PML_PROC  # pylint: disable=W0603
         if PML_PROC and plm_bin:
             stop_plm(PML_PROC)
-            PML_PROC = start_plm(plm_bin)
+            PML_PROC = start_plm(plm_bin, request)
