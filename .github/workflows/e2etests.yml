@@ -41,28 +41,14 @@ jobs:
         run: |
           make test-build
 
-      - name: Run PLM
-        run: |
-          echo "Starting project..."
-          bin/plm_test \
-            --source="mongodb://source:pass@rs00:30000" \
-            --target="mongodb://target:pass@rs10:30100" \
-            --reset-state --start --log-level debug &> server.log &
-          echo $! > server.pid
-          sleep 5
-          echo "Project started with PID $(cat server.pid)"
-          cat server.log
-
       - name: Run tests (pytest)
         run: |
           export TEST_SOURCE_URI=mongodb://adm:pass@rs00:30000
           export TEST_TARGET_URI=mongodb://adm:pass@rs10:30100
           export TEST_PLM_URL=http://127.0.0.1:2242
-          poetry run pytest
+          export TEST_PLM_BIN=./bin/plm_test
 
-      - name: Show server logs (on failure)
-        if: failure()
-        run: tail -n 500 server.log
+          poetry run pytest
 
       - name: Teardown Docker Compose
         if: always()
