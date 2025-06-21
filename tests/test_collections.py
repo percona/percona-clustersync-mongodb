@@ -2,6 +2,7 @@
 import random
 from datetime import datetime
 
+import time
 import pytest
 import testing
 from plm import PLM, Runner
@@ -597,6 +598,8 @@ def test_plm_110_rename_during_clone_and_repl(t: Testing):
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
         r.wait_for_state(PLM.State.RUNNING)
+
+        time.sleep(1)  # ensure actual clone has started
 
         for ns in testing.list_all_namespaces(t.source):
             t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
