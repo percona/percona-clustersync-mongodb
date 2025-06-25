@@ -767,6 +767,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 			for _, index := range collEntry.Indexes {
 				if !index.Ready() || index.Failed {
 					finalizeSkipped = true
+
 					continue
 				}
 
