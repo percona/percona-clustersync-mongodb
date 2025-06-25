@@ -33,6 +33,15 @@ def test_create_unique(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_create_non_unique_with_the_same_fields_as_unique(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True, name="unique_idx")
+        t.source["db_1"]["coll_1"].create_index({"i": 1}, name="non_unique_idx")
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_prepare_unique(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, prepareUnique=True)
