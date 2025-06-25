@@ -509,10 +509,7 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
             name="idx_3",
         )
 
-    target_idx_count = len(t.target["db_1"]["coll_1"].index_information())
-    source_idx_count = len(t.source["db_1"]["coll_1"].index_information())
-
-    assert source_idx_count - 1 == target_idx_count
+    t.compare_all()
 
 
 def test_plm_95_drop_index_for_non_existing_namespace(t: Testing):
