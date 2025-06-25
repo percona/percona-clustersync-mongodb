@@ -99,6 +99,7 @@ type collectionCatalog struct {
 type indexCatalogEntry struct {
 	*topo.IndexSpecification
 	Incomplete bool `bson:"incomplete"`
+	Failed     bool `bson:"failed"`
 }
 
 func (i indexCatalogEntry) Ready() bool {
@@ -401,10 +402,13 @@ func (c *Catalog) CreateIndexes(
 
 	successfulIdxs := make([]indexCatalogEntry, 0, len(processedIdxs))
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
+
+	failedIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
 	var idxErrors []error
 
 	for _, idx := range indexes {
 		if err := processedIdxs[idx.Name]; err != nil {
+			failedIdxs = append(failedIdxs, idx)
 			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
 
 			continue
@@ -418,9 +422,42 @@ func (c *Catalog) CreateIndexes(
 	c.addIndexesToCatalog(ctx, db, coll, successfulIdxs)
 
 	if len(idxErrors) > 0 {
+		c.AddFailedIndexes(ctx, db, coll, failedIdxs)
+
 		lg.Errorf(errors.Join(idxErrors...),
 			"One or more indexes failed to create on %s.%s", db, coll)
 	}
+
+	return nil
+}
+
+// RecreateIndex recreates an index in the target MongoDB.
+func (c *Catalog) RecreateIndex(
+	ctx context.Context,
+	db string,
+	coll string,
+	idx *topo.IndexSpecification,
+) error {
+	lg := log.Ctx(ctx)
+
+	if idx == nil {
+		lg.Error(nil, "No index to create")
+
+		return nil
+	}
+
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		return c.target.Database(db).RunCommand(ctx, bson.D{
+			{"createIndexes", coll},
+			{"indexes", bson.A{idx}},
+		}).Err()
+	})
+	if err != nil {
+		return errors.Wrap(err, "recreate index: "+idx.Name)
+	}
+
+	lg.Debugf("Created index on %s.%s: %s", db, coll, idx.Name)
+	c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: idx}})
 
 	return nil
 }
@@ -452,6 +489,35 @@ func (c *Catalog) AddIncompleteIndexes(
 		}
 
 		lg.Tracef("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
+	}
+
+	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
+}
+
+// AddFailedIndexes adds indexes in the catalog that failed to crate on the target cluster.
+// The indexes have set [indexCatalogEntry.Failed] flag.
+func (c *Catalog) AddFailedIndexes(
+	ctx context.Context,
+	db string,
+	coll string,
+	indexes []*topo.IndexSpecification,
+) {
+	lg := log.Ctx(ctx)
+
+	if len(indexes) == 0 {
+		lg.Error(nil, "No failed indexes to add")
+
+		return
+	}
+
+	indexEntries := make([]indexCatalogEntry, len(indexes))
+	for i, index := range indexes {
+		indexEntries[i] = indexCatalogEntry{
+			IndexSpecification: index,
+			Failed:             true,
+		}
+
+		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
 	}
 
 	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
@@ -729,8 +795,29 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
 				if !index.Ready() {
-					lg.Warnf("Index %s on %s.%s was incomplete during replication, skipping it",
+					lg.Warnf("Index %s on %s.%s was incomplete during replication, trying to create it",
 						index.Name, db, coll)
+
+					err := c.RecreateIndex(ctx, db, coll, index.IndexSpecification)
+					if err != nil {
+						lg.Warnf("Failed to create skipped index %s on %s.%s: %v", index.Name, db, coll, err)
+					} else {
+						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
+					}
+
+					continue
+				}
+
+				if index.Failed {
+					lg.Warnf("Index %s on %s.%s failed to create during replication, trying to recreate it",
+						index.Name, db, coll)
+
+					err := c.RecreateIndex(ctx, db, coll, index.IndexSpecification)
+					if err != nil {
+						lg.Warnf("Failed to recreate index %s on %s.%s: %v", index.Name, db, coll, err)
+					} else {
+						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
+					}
 
 					continue
 				}
@@ -888,9 +975,6 @@ func (c *Catalog) addIndexesToCatalog(
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
-				lg.Warnf("add indexes: index %q already exists in %q namespace",
-					index.Name, db+"."+coll)
-
 				collCat.Indexes[i] = index
 				found = true
 

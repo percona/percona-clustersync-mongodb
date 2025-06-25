@@ -620,7 +620,7 @@ func (ml *PLM) Finalize(ctx context.Context, options FinalizeOptions) error {
 		return errors.New("initial sync is not completed")
 	}
 
-	lg := log.Ctx(ctx)
+	lg := log.New("finalize")
 	lg.Info("Starting Finalization")
 
 	if status.Repl.IsRunning() {
@@ -663,7 +663,7 @@ func (ml *PLM) Finalize(ctx context.Context, options FinalizeOptions) error {
 		go ml.onStateChanged(StateFinalized)
 	}()
 
-	log.New("plm").Info("Finalizing")
+	lg.Info("Finalizing")
 
 	go ml.onStateChanged(StateFinalizing)
 
