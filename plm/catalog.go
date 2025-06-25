@@ -858,7 +858,7 @@ func (c *Catalog) finalizeSkippedIndexes(ctx context.Context) {
 	lg.Info("Finalizing skipped indexes")
 
 	// create index as is, wihtout any temporary modifications
-	createIndex := func(db string, coll string, idx *topo.IndexSpecification,
+	createIndex := func(db, coll string, idx *topo.IndexSpecification,
 	) error {
 		if idx == nil {
 			lg.Error(nil, "No index to create")
