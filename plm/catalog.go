@@ -431,37 +431,6 @@ func (c *Catalog) CreateIndexes(
 	return nil
 }
 
-// RecreateIndex recreates an index in the target MongoDB.
-func (c *Catalog) RecreateIndex(
-	ctx context.Context,
-	db string,
-	coll string,
-	idx *topo.IndexSpecification,
-) error {
-	lg := log.Ctx(ctx)
-
-	if idx == nil {
-		lg.Error(nil, "No index to create")
-
-		return nil
-	}
-
-	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, bson.D{
-			{"createIndexes", coll},
-			{"indexes", bson.A{idx}},
-		}).Err()
-	})
-	if err != nil {
-		return errors.Wrap(err, "recreate index: "+idx.Name)
-	}
-
-	lg.Debugf("Created index on %s.%s: %s", db, coll, idx.Name)
-	c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: idx}})
-
-	return nil
-}
-
 // AddIncompleteIndexes adds indexes in the catalog but do not create them on the target cluster.
 // The indexes have set [indexCatalogEntry.Incomplete] flag.
 func (c *Catalog) AddIncompleteIndexes(
@@ -791,34 +760,13 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	var idxErrors []error
 
+	finalizeSkipped := false
+
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
-				if !index.Ready() {
-					lg.Warnf("Index %s on %s.%s was incomplete during replication, trying to create it",
-						index.Name, db, coll)
-
-					err := c.RecreateIndex(ctx, db, coll, index.IndexSpecification)
-					if err != nil {
-						lg.Warnf("Failed to create skipped index %s on %s.%s: %v", index.Name, db, coll, err)
-					} else {
-						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
-					}
-
-					continue
-				}
-
-				if index.Failed {
-					lg.Warnf("Index %s on %s.%s failed to create during replication, trying to recreate it",
-						index.Name, db, coll)
-
-					err := c.RecreateIndex(ctx, db, coll, index.IndexSpecification)
-					if err != nil {
-						lg.Warnf("Failed to recreate index %s on %s.%s: %v", index.Name, db, coll, err)
-					} else {
-						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
-					}
-
+				if !index.Ready() || index.Failed {
+					finalizeSkipped = true
 					continue
 				}
 
@@ -891,11 +839,82 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 		}
 	}
 
+	if finalizeSkipped {
+		c.finalizeSkippedIndexes(ctx)
+	}
+
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
 	return nil
+}
+
+// finalizeSkippedIndexes finalizes indexes that were skipped
+// during replication, failed and incomplete.
+func (c *Catalog) finalizeSkippedIndexes(ctx context.Context) {
+	lg := log.Ctx(ctx)
+	lg.Info("Finalizing skipped indexes")
+
+	// create index as is, wihtout any temporary modifications
+	createIndex := func(db string, coll string, idx *topo.IndexSpecification,
+	) error {
+		if idx == nil {
+			lg.Error(nil, "No index to create")
+
+			return nil
+		}
+
+		err := runWithRetry(ctx, func(ctx context.Context) error {
+			return c.target.Database(db).RunCommand(ctx, bson.D{
+				{"createIndexes", coll},
+				{"indexes", bson.A{idx}},
+			}).Err()
+		})
+		if err != nil {
+			return errors.Wrap(err, "recreate index: "+idx.Name)
+		}
+
+		lg.Debugf("Created index on %s.%s: %s", db, coll, idx.Name)
+		c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: idx}})
+
+		return nil
+	}
+
+	for db, colls := range c.Databases {
+		for coll, collEntry := range colls.Collections {
+			for _, index := range collEntry.Indexes {
+				if !index.Ready() {
+					lg.Warnf("Index %s on %s.%s was incomplete during replication, trying to create it",
+						index.Name, db, coll)
+
+					err := createIndex(db, coll, index.IndexSpecification)
+					if err != nil {
+						lg.Warnf("Failed to create skipped index %s on %s.%s: %v",
+							index.Name, db, coll, err)
+					} else {
+						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
+					}
+
+					continue
+				}
+
+				if index.Failed {
+					lg.Warnf("Index %s on %s.%s failed to create during replication, trying to recreate it",
+						index.Name, db, coll)
+
+					err := createIndex(db, coll, index.IndexSpecification)
+					if err != nil {
+						lg.Warnf("Failed to recreate index %s on %s.%s: %v", index.Name, db, coll, err)
+					} else {
+						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
+					}
+
+					continue
+				}
+			}
+		}
+	}
 }
 
 // doModifyIndexOption modifies an index property in the target MongoDB.
