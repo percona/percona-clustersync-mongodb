@@ -102,8 +102,8 @@ type indexCatalogEntry struct {
 	Failed     bool `bson:"failed"`
 }
 
-func (i indexCatalogEntry) Ready() bool {
-	return !i.Incomplete
+func (i indexCatalogEntry) Unsuccessful() bool {
+	return i.Failed || i.Incomplete
 }
 
 // NewCatalog creates a new Catalog.
@@ -760,13 +760,13 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	var idxErrors []error
 
-	finalizeSkipped := false
+	foundUnsuccessfulIdx := false
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
-				if !index.Ready() || index.Failed {
-					finalizeSkipped = true
+				if index.Unsuccessful() {
+					foundUnsuccessfulIdx = true
 
 					continue
 				}
@@ -840,8 +840,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 		}
 	}
 
-	if finalizeSkipped {
-		c.finalizeSkippedIndexes(ctx)
+	if foundUnsuccessfulIdx {
+		c.finalizeUnsuccessfulIndexes(ctx)
 	}
 
 	if len(idxErrors) > 0 {
@@ -851,68 +851,45 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	return nil
 }
 
-// finalizeSkippedIndexes finalizes indexes that were skipped
-// during replication, failed and incomplete.
-func (c *Catalog) finalizeSkippedIndexes(ctx context.Context) {
+// finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
+// during replication, failed or incomplete.
+func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 	lg := log.Ctx(ctx)
-	lg.Info("Finalizing skipped indexes")
-
-	// create index as is, wihtout any temporary modifications
-	createIndex := func(db, coll string, idx *topo.IndexSpecification,
-	) error {
-		if idx == nil {
-			lg.Error(nil, "No index to create")
-
-			return nil
-		}
-
-		err := runWithRetry(ctx, func(ctx context.Context) error {
-			return c.target.Database(db).RunCommand(ctx, bson.D{
-				{"createIndexes", coll},
-				{"indexes", bson.A{idx}},
-			}).Err()
-		})
-		if err != nil {
-			return errors.Wrap(err, "recreate index: "+idx.Name)
-		}
-
-		lg.Debugf("Created index on %s.%s: %s", db, coll, idx.Name)
-		c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: idx}})
-
-		return nil
-	}
+	lg.Info("Finalizing unsuccessful indexes")
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
-				if !index.Ready() {
-					lg.Warnf("Index %s on %s.%s was incomplete during replication, trying to create it",
+				if !index.Unsuccessful() {
+					continue // skip successful indexes
+				}
+
+				if index.Incomplete {
+					lg.Infof("Index %s on %s.%s was incomplete during replication, trying to create it",
 						index.Name, db, coll)
-
-					err := createIndex(db, coll, index.IndexSpecification)
-					if err != nil {
-						lg.Warnf("Failed to create skipped index %s on %s.%s: %v",
-							index.Name, db, coll, err)
-					} else {
-						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
-					}
-
-					continue
 				}
 
 				if index.Failed {
-					lg.Warnf("Index %s on %s.%s failed to create during replication, trying to recreate it",
+					lg.Infof("Index %s on %s.%s failed to create during replication, trying to recreate it",
 						index.Name, db, coll)
+				}
 
-					err := createIndex(db, coll, index.IndexSpecification)
-					if err != nil {
-						lg.Warnf("Failed to recreate index %s on %s.%s: %v", index.Name, db, coll, err)
-					} else {
-						lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
-					}
+				err := runWithRetry(ctx, func(ctx context.Context) error {
+					return c.target.Database(db).RunCommand(ctx, bson.D{
+						{"createIndexes", coll},
+						{"indexes", bson.A{index.IndexSpecification}},
+					}).Err()
+				})
+				if err != nil {
+					lg.Warnf("Failed to recreate unsuccessful index %s on %s.%s: %v",
+						index.Name, db, coll, err)
 
 					continue
 				}
+
+				lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
+
+				c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: index.IndexSpecification}})
 			}
 		}
 	}
