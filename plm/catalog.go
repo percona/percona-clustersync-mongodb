@@ -463,7 +463,7 @@ func (c *Catalog) AddIncompleteIndexes(
 	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
 }
 
-// AddFailedIndexes adds indexes in the catalog that failed to crate on the target cluster.
+// AddFailedIndexes adds indexes in the catalog that failed to create on the target cluster.
 // The indexes have set [indexCatalogEntry.Failed] flag.
 func (c *Catalog) AddFailedIndexes(
 	ctx context.Context,
