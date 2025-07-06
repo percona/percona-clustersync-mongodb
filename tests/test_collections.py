@@ -589,6 +589,7 @@ def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
+
 @pytest.mark.timeout(30)
 def test_plm_110_rename_during_clone_and_repl(t: Testing):
     payload = random.randbytes(1000)
@@ -626,5 +627,18 @@ def test_plm_110_rename_during_clone_and_repl(t: Testing):
         for ns in testing.list_all_namespaces(t.source):
             db, coll = ns.split(".", 1)
             t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
+
+    t.compare_all()
+
+
+def test_plm_126_clone_with_nan_id_document(t: Testing):
+    t.source["db_1"]["coll_1"].insert_one({"_id": float("nan"), "i": 100})
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": random.uniform(1e5, 1e10), "i": i} for i in range(50)]
+    )
+
+    with t.run(phase=Runner.Phase.CLONE) as r:
+        r.start()
+        r.wait_for_clone_completed()
 
     t.compare_all()
