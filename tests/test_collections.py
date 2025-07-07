@@ -8,6 +8,7 @@ import testing
 from plm import PLM, Runner
 from pymongo import MongoClient
 from testing import Testing
+from bson.decimal128 import Decimal128
 
 
 def ensure_collection(source: MongoClient, target: MongoClient, db: str, coll: str, **kwargs):
@@ -635,6 +636,28 @@ def test_plm_126_clone_with_nan_id_document(t: Testing):
     t.source["db_1"]["coll_1"].insert_one({"_id": float("nan"), "i": 100})
     t.source["db_1"]["coll_1"].insert_many(
         [{"_id": random.uniform(1e5, 1e10), "i": i} for i in range(50)]
+    )
+
+    with t.run(phase=Runner.Phase.CLONE) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+    sourceDocCount = t.source["db_1"]["coll_1"].count_documents({})
+    targetDocCount = t.target["db_1"]["coll_1"].count_documents({})
+    assert sourceDocCount == targetDocCount
+
+
+@pytest.mark.skip(reason="Clone with NaN _id is not supported for multi-id types")
+def test_clone_with_nan_id_document_multi_id_types(t: Testing):
+    t.source["db_1"]["coll_1"].insert_one({"_id": Decimal128("NaN"), "i": 200})
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": random.uniform(1e5, 1e10), "i": i} for i in range(50)]
+    )
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": Decimal128(str(random.uniform(1e5, 1e10))), "i": i} for i in range(50)]
+    )
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": "inel" + str(random.uniform(1e5, 1e10)), "i": i} for i in range(50)]
     )
 
     with t.run(phase=Runner.Phase.CLONE) as r:
