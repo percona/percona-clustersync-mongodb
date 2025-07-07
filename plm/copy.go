@@ -242,7 +242,7 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
-		go segmenter.handleNanDoc(readResultC, nextID)
+		go segmenter.handleNanIDDoc(readResultC, nextID)
 	}
 
 	collectionReadCtx, stopCollectionRead := context.WithCancel(ctx)
@@ -779,8 +779,8 @@ func (seg *Segmenter) findSegmentMaxKey(
 	return raw.Lookup("_id"), nil
 }
 
-// handleNanDoc sends a document with NaN _id to the readResultC channel if it exists.
-func (seg *Segmenter) handleNanDoc(
+// handleNanIDDoc sends a document with NaN _id to the readResultC channel if it exists.
+func (seg *Segmenter) handleNanIDDoc(
 	readResults chan<- readBatchResult,
 	nextID nextBatchIDFunc,
 ) {
