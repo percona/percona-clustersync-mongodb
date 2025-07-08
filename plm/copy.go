@@ -801,9 +801,8 @@ func (seg *Segmenter) handleNanIDDoc(
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
 func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
-	findOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
-
-	minRaw, err := mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+	minRaw, err := mcoll.FindOne(ctx, bson.D{},
+		options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})).Raw()
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "min _id")
 	}
@@ -813,18 +812,16 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(minRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = minRaw
 
-		findOptions = options.FindOne().SetSort(bson.D{{"_id", 1}}).
-			SetProjection(bson.D{{"_id", 1}}).SetSkip(1)
-
-		minRaw, err = mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+		minRaw, err = mcoll.FindOne(ctx, bson.D{},
+			options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
+			Raw()
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "min _id (next document)")
 		}
 	}
 
-	findOptions = options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
-
-	maxRaw, err := mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+	maxRaw, err := mcoll.FindOne(ctx, bson.D{},
+		options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})).Raw()
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "max _id")
 	}
@@ -832,10 +829,9 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(maxRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = maxRaw
 
-		findOptions = options.FindOne().SetSort(bson.D{{"_id", -1}}).
-			SetProjection(bson.D{{"_id", 1}}).SetSkip(1)
-
-		maxRaw, err = mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+		maxRaw, err = mcoll.FindOne(ctx, bson.D{},
+			options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
+			Raw()
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "min _id (next document)")
 		}
