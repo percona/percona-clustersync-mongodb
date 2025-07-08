@@ -170,9 +170,13 @@ var startCmd = &cobra.Command{
 		}
 
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
+		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
+		excludeNamespaces, _ := cmd.Flags().GetStringSlice("exclude-namespaces")
 
 		startOptions := startRequest{
 			PauseOnInitialSync: pauseOnInitialSync,
+			IncludeNamespaces:  includeNamespaces,
+			ExcludeNamespaces:  excludeNamespaces,
 		}
 
 		return NewClient(port).Start(cmd.Context(), startOptions)
@@ -374,6 +378,10 @@ func main() {
 	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
+	startCmd.Flags().StringSlice("include-namespaces", nil,
+		"Namespaces to include in the replication (e.g. db1.collection1,db2.collection2)")
+	startCmd.Flags().StringSlice("exclude-namespaces", nil,
+		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
 
 	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
 

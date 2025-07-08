@@ -73,7 +73,7 @@ bin/plm start
 ```sh
 curl -X POST http://localhost:2242/start -d '{
     "includeNamespaces": ["db1.collection1", "db2.collection2"],
-    "excludeNamespaces": ["db3.collection3"]
+    "excludeNamespaces": ["db3.collection3", "db4.*"]
 }'
 ```
 
