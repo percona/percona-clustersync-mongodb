@@ -654,24 +654,25 @@ func NewSegmenter(
 		return s, nil
 	}
 
-	keyRangeByType, err := getIDKeyRangeByType(ctx, mcoll)
+	multiTypeIDkeyRanges, err := getMultiTypeIDKeyRanges(ctx, mcoll)
 	if err != nil {
 		return nil, errors.Wrap(err, "get ID key range by type")
 	}
 
-	if len(keyRangeByType) == 0 {
+	if len(multiTypeIDkeyRanges) == 0 {
 		return nil, errEOC // empty collection
 	}
 
-	currIDRange := keyRangeByType[0]
-	keyRanges := keyRangeByType[1:]
+	currIDRange := multiTypeIDkeyRanges[0]
+	remainingKeyRanges := multiTypeIDkeyRanges[1:]
 
 	s := &Segmenter{
 		mcoll:       mcoll,
 		segmentSize: segmentSize,
 		batchSize:   batchSize,
-		keyRanges:   keyRanges,
+		keyRanges:   remainingKeyRanges,
 		currIDRange: currIDRange,
+		nanDoc:      *nanDoc,
 	}
 
 	return s, nil
@@ -848,30 +849,44 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	return ret, &nanDoc, nil
 }
 
-// getIDKeyRangeByType returns a slice of keyRange grouped by the BSON type of the _id field.
+// getMultiTypeIDKeyRanges returns a slice of keyRange grouped by the BSON type of the _id field.
 // It performs an aggregation that groups documents by _id type, computing the min and max _id
 // for each group. This allows the Segmenter to handle collections with heterogeneous _id types
 // by processing each type range sequentially.
-func getIDKeyRangeByType(ctx context.Context, mcoll *mongo.Collection) ([]keyRange, error) {
-	cur, err := mcoll.Aggregate(ctx, mongo.Pipeline{
-		bson.D{{"$group", bson.D{
-			{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
-			{"minKey", bson.D{{"$min", "$_id"}}},
-			{"maxKey", bson.D{{"$max", "$_id"}}},
-		}}},
-	})
+func getMultiTypeIDKeyRanges(ctx context.Context, mcoll *mongo.Collection) ([]keyRange, error) {
+	cur, err := mcoll.Aggregate(ctx,
+		mongo.Pipeline{
+			// Match only numeric types that are not NaN
+			bson.D{{"$match", bson.D{
+				{"$expr", bson.D{
+					// Only allow if _id is not NaN
+					{"$ne", bson.A{"$_id", bson.D{{"$literal", math.NaN()}}}},
+				}},
+			}}},
+			// Group by type and find min/max
+			bson.D{{"$group", bson.D{
+				{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
+				{"minKey", bson.D{{"$min", "$_id"}}},
+				{"maxKey", bson.D{{"$max", "$_id"}}},
+			}}},
+		})
 	if err != nil {
 		return nil, errors.Wrap(err, "query")
 	}
 
-	var segmentRanges []keyRange
+	var keyRanges []keyRange
 
-	err = cur.All(ctx, &segmentRanges)
+	err = cur.All(ctx, &keyRanges)
 	if err != nil {
 		return nil, errors.Wrap(err, "all")
 	}
 
-	return segmentRanges, nil
+	for i := range keyRanges {
+		log.Ctx(ctx).Debugf("Keyrange %d: type: %s, range [%v <=> %v]", i+1,
+			keyRanges[i].Min.Type.String(), keyRanges[i].Min, keyRanges[i].Max)
+	}
+
+	return keyRanges, nil
 }
 
 // CappedSegmenter provides sequential cursor access for capped collections.
