@@ -801,8 +801,9 @@ func (seg *Segmenter) handleNanIDDoc(
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
 func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
-	minRaw, err := mcoll.FindOne(ctx, bson.D{},
-		options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})).Raw()
+	minIDOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
+
+	minRaw, err := mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw()
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "min _id")
 	}
@@ -812,16 +813,15 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(minRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = minRaw
 
-		minRaw, err = mcoll.FindOne(ctx, bson.D{},
-			options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
-			Raw()
+		minRaw, err = mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw()
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "min _id (skip NaN)")
 		}
 	}
 
-	maxRaw, err := mcoll.FindOne(ctx, bson.D{},
-		options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})).Raw()
+	maxIDOptions := options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
+
+	maxRaw, err := mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw()
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "max _id")
 	}
@@ -829,9 +829,7 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(maxRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = maxRaw
 
-		maxRaw, err = mcoll.FindOne(ctx, bson.D{},
-			options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
-			Raw()
+		maxRaw, err = mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw()
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "max _id (skip NaN)")
 		}
