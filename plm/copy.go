@@ -816,7 +816,7 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 			options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
 			Raw()
 		if err != nil {
-			return keyRange{}, nil, errors.Wrap(err, "min _id (next document)")
+			return keyRange{}, nil, errors.Wrap(err, "min _id (skip NaN)")
 		}
 	}
 
@@ -833,7 +833,7 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 			options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}}).SetSkip(1)).
 			Raw()
 		if err != nil {
-			return keyRange{}, nil, errors.Wrap(err, "min _id (next document)")
+			return keyRange{}, nil, errors.Wrap(err, "max _id (skip NaN)")
 		}
 	}
 
