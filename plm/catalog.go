@@ -160,7 +160,6 @@ func (c *Catalog) CreateCollection(
 	coll string,
 	opts *CreateCollectionOptions,
 ) error {
-
 	if opts.ViewOn != "" {
 		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
 			return errors.New("timeseries is not supported: " + db + "." + coll)
@@ -270,7 +269,6 @@ func (c *Catalog) doCreateView(
 
 // DropCollection drops a collection in the target MongoDB.
 func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
-
 	err := runWithRetry(ctx, func(ctx context.Context) error {
 		return c.target.Database(db).Collection(coll).Drop(ctx)
 	})
@@ -289,7 +287,6 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 
 // DropDatabase drops a database in the target MongoDB.
 func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
-
 	lg := log.Ctx(ctx)
 
 	colls, err := topo.ListCollectionNames(ctx, c.target, db)
@@ -505,7 +502,6 @@ func (c *Catalog) ModifyCappedCollection(
 	sizeBytes *int64,
 	maxDocs *int64,
 ) error {
-
 	cmd := bson.D{{"collMod", coll}}
 	if sizeBytes != nil {
 		cmd = append(cmd, bson.E{"cappedSize", sizeBytes})
@@ -522,7 +518,6 @@ func (c *Catalog) ModifyCappedCollection(
 
 // ModifyView modifies a view in the target MongoDB.
 func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error {
-
 	cmd := bson.D{
 		{"collMod", view},
 		{"viewOn", viewOn},
@@ -540,7 +535,6 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	coll string,
 	enabled bool,
 ) error {
-
 	cmd := bson.D{
 		{"collMod", coll},
 		{"changeStreamPreAndPostImages", bson.D{{"enabled", enabled}}},
@@ -560,7 +554,6 @@ func (c *Catalog) ModifyValidation(
 	validationLevel *string,
 	validationAction *string,
 ) error {
-
 	cmd := bson.D{{"collMod", coll}}
 	if validator != nil {
 		cmd = append(cmd, bson.E{"validator", validator})
@@ -581,7 +574,6 @@ func (c *Catalog) ModifyValidation(
 
 // ModifyIndex modifies an index in the target MongoDB.
 func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *ModifyIndexOption) error {
-
 	if mods.ExpireAfterSeconds != nil {
 		cmd := bson.D{
 			{"collMod", coll},
@@ -628,7 +620,6 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 }
 
 func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl string) error {
-
 	lg := log.Ctx(ctx)
 
 	opts := bson.D{
@@ -659,7 +650,6 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 
 // DropIndex drops an index in the target MongoDB.
 func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
-
 	lg := log.Ctx(ctx)
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
