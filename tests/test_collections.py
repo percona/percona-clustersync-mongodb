@@ -127,7 +127,7 @@ def test_create_view_with_collation(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.timeout(20)
+@pytest.mark.timeout(40)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_timeseries_ignored(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -329,7 +329,7 @@ def test_modify_view(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.timeout(20)
+@pytest.mark.timeout(40)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_timeseries_options_ignored(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection(

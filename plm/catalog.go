@@ -160,8 +160,6 @@ func (c *Catalog) CreateCollection(
 	coll string,
 	opts *CreateCollectionOptions,
 ) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	if opts.ViewOn != "" {
 		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
@@ -208,9 +206,11 @@ func (c *Catalog) doCreateCollection(
 	if opts.Validator != nil {
 		cmd = append(cmd, bson.E{"validator", opts.Validator})
 	}
+
 	if opts.ValidationLevel != nil {
 		cmd = append(cmd, bson.E{"validationLevel", opts.ValidationLevel})
 	}
+
 	if opts.ValidationAction != nil {
 		cmd = append(cmd, bson.E{"validationAction", opts.ValidationAction})
 	}
@@ -229,9 +229,12 @@ func (c *Catalog) doCreateCollection(
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
+
 	log.Ctx(ctx).Debugf("Created collection %s.%s", db, coll)
 
+	c.lock.Lock()
 	c.addCollectionToCatalog(ctx, db, coll)
+	c.lock.Unlock()
 
 	return nil
 }
@@ -267,8 +270,6 @@ func (c *Catalog) doCreateView(
 
 // DropCollection drops a collection in the target MongoDB.
 func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
 		return c.target.Database(db).Collection(coll).Drop(ctx)
@@ -276,17 +277,18 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 	if err != nil {
 		return err //nolint:wrapcheck
 	}
+
 	log.Ctx(ctx).Debugf("Dropped collection %s.%s", db, coll)
 
+	c.lock.Lock()
 	c.deleteCollectionFromCatalog(ctx, db, coll)
+	c.lock.Unlock()
 
 	return nil
 }
 
 // DropDatabase drops a database in the target MongoDB.
 func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	lg := log.Ctx(ctx)
 
@@ -326,9 +328,6 @@ func (c *Catalog) CreateIndexes(
 	coll string,
 	indexes []*topo.IndexSpecification,
 ) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
 	lg := log.Ctx(ctx)
 
 	if len(indexes) == 0 {
@@ -404,10 +403,12 @@ func (c *Catalog) CreateIndexes(
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 
 	failedIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+
 	var idxErrors []error
 
 	for _, idx := range indexes {
-		if err := processedIdxs[idx.Name]; err != nil {
+		err := processedIdxs[idx.Name]
+		if err != nil {
 			failedIdxs = append(failedIdxs, idx)
 			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
 
@@ -419,7 +420,10 @@ func (c *Catalog) CreateIndexes(
 	}
 
 	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
+
+	c.lock.Lock()
 	c.addIndexesToCatalog(ctx, db, coll, successfulIdxs)
+	c.lock.Unlock()
 
 	if len(idxErrors) > 0 {
 		c.AddFailedIndexes(ctx, db, coll, failedIdxs)
@@ -439,9 +443,6 @@ func (c *Catalog) AddIncompleteIndexes(
 	coll string,
 	indexes []*topo.IndexSpecification,
 ) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
 	lg := log.Ctx(ctx)
 
 	if len(indexes) == 0 {
@@ -460,7 +461,9 @@ func (c *Catalog) AddIncompleteIndexes(
 		lg.Tracef("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
 	}
 
+	c.lock.Lock()
 	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
+	c.lock.Unlock()
 }
 
 // AddFailedIndexes adds indexes in the catalog that failed to create on the target cluster.
@@ -489,7 +492,9 @@ func (c *Catalog) AddFailedIndexes(
 		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
 	}
 
+	c.lock.Lock()
 	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
+	c.lock.Unlock()
 }
 
 // ModifyCappedCollection modifies a capped collection in the target MongoDB.
@@ -500,8 +505,6 @@ func (c *Catalog) ModifyCappedCollection(
 	sizeBytes *int64,
 	maxDocs *int64,
 ) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	cmd := bson.D{{"collMod", coll}}
 	if sizeBytes != nil {
@@ -519,8 +522,6 @@ func (c *Catalog) ModifyCappedCollection(
 
 // ModifyView modifies a view in the target MongoDB.
 func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	cmd := bson.D{
 		{"collMod", view},
@@ -539,8 +540,6 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	coll string,
 	enabled bool,
 ) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	cmd := bson.D{
 		{"collMod", coll},
@@ -561,16 +560,16 @@ func (c *Catalog) ModifyValidation(
 	validationLevel *string,
 	validationAction *string,
 ) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	cmd := bson.D{{"collMod", coll}}
 	if validator != nil {
 		cmd = append(cmd, bson.E{"validator", validator})
 	}
+
 	if validationLevel != nil {
 		cmd = append(cmd, bson.E{"validationLevel", validationLevel})
 	}
+
 	if validationAction != nil {
 		cmd = append(cmd, bson.E{"validationAction", validationAction})
 	}
@@ -582,8 +581,6 @@ func (c *Catalog) ModifyValidation(
 
 // ModifyIndex modifies an index in the target MongoDB.
 func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *ModifyIndexOption) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	if mods.ExpireAfterSeconds != nil {
 		cmd := bson.D{
@@ -631,8 +628,6 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 }
 
 func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl string) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	lg := log.Ctx(ctx)
 
@@ -654,6 +649,7 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 
 		return errors.Wrap(err, "rename collection")
 	}
+
 	lg.Debugf("Renamed collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
 
 	c.renameCollectionInCatalog(ctx, db, coll, targetDB, targetColl)
@@ -663,8 +659,6 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 
 // DropIndex drops an index in the target MongoDB.
 func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 
 	lg := log.Ctx(ctx)
 
@@ -917,6 +911,9 @@ func (c *Catalog) doModifyIndexOption(
 
 // getIndexFromCatalog gets an index spec from the catalog.
 func (c *Catalog) getIndexFromCatalog(db, coll, index string) *topo.IndexSpecification {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	dbCat, ok := c.Databases[db]
 	if !ok || len(dbCat.Collections) == 0 {
 		return nil
@@ -967,6 +964,7 @@ func (c *Catalog) addIndexesToCatalog(
 	}
 
 	idxNames := make([]string, 0, len(collCat.Indexes))
+
 	for _, index := range indexes {
 		found := false
 
@@ -992,6 +990,9 @@ func (c *Catalog) addIndexesToCatalog(
 
 // removeIndexFromCatalog removes an index from the catalog.
 func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	lg := log.Ctx(ctx)
 
 	databaseEntry, ok := c.Databases[db]
@@ -1068,13 +1069,18 @@ func (c *Catalog) deleteCollectionFromCatalog(ctx context.Context, db, coll stri
 	}
 
 	delete(databaseEntry.Collections, coll)
+
 	if len(databaseEntry.Collections) == 0 {
 		delete(c.Databases, db)
 	}
+
 	log.Ctx(ctx).Debugf("Collection deleted from catalog %s.%s", db, coll)
 }
 
 func (c *Catalog) deleteDatabaseFromCatalog(ctx context.Context, db string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	delete(c.Databases, db)
 	log.Ctx(ctx).Debugf("Database deleted from catalog %s", db)
 }
@@ -1086,6 +1092,9 @@ func (c *Catalog) renameCollectionInCatalog(
 	targetDB string,
 	targetColl string,
 ) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	lg := log.Ctx(ctx)
 
 	databaseEntry, ok := c.Databases[db]
@@ -1105,6 +1114,7 @@ func (c *Catalog) renameCollectionInCatalog(
 	c.addCollectionToCatalog(ctx, targetDB, targetColl)
 	c.Databases[targetDB].Collections[targetColl] = collectionEntry
 	c.deleteCollectionFromCatalog(ctx, db, coll)
+
 	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
 }
 
