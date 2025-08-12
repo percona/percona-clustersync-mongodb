@@ -30,9 +30,9 @@ func TestFilter(t *testing.T) {
 				"coll_2": false,
 			},
 			"db_2": {
-				"coll_0": false,
-				"coll_1": false,
-				"coll_2": false,
+				"coll_0": true,
+				"coll_1": true,
+				"coll_2": true,
 			},
 		}
 
@@ -103,12 +103,12 @@ func TestFilter(t *testing.T) {
 
 		namespaces := map[string]map[string]bool{
 			"db_0": {
-				"coll_0": false,
-				"coll_1": false,
-				"coll_2": false,
+				"coll_0": true,
+				"coll_1": true,
+				"coll_2": true,
 			},
 			"db_1": {
-				"coll_0": false,
+				"coll_0": true,
 				"coll_1": true,
 				"coll_2": false,
 			},

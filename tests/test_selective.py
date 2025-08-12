@@ -93,23 +93,26 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
         t.plm,
         phase,
         include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
-        exclude_ns=["db_0.*", "db_1.coll_0"],
+        exclude_ns=["db_0.*", "db_1.coll_0", "db_3.coll_1"],
     ):
-        for db in range(3):
+        for db in range(4):
             for coll in range(3):
                 t.source["db_1"]["coll_1"].create_index({"i": 1})
                 t.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
 
     expected = {
-        # "db_0.coll_0",
-        # "db_0.coll_1",
-        # "db_0.coll_2",
-        # "db_1.coll_0",
+        "db_0.coll_0",
+        "db_0.coll_1",
+        "db_0.coll_2",
+        "db_1.coll_0",
         "db_1.coll_1",
         # "db_1.coll_2",
         "db_2.coll_0",
         "db_2.coll_1",
         # "db_2.coll_2",
+        "db_3.coll_0",
+        # "db_3.coll_1",
+        "db_3.coll_2",
     }
 
     assert expected == set(testing.list_all_namespaces(t.target))

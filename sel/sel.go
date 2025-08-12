@@ -21,14 +21,34 @@ func MakeFilter(include, exclude []string) NSFilter {
 	excludeFilter := doMakeFitler(exclude)
 
 	return func(db, coll string) bool {
-		if len(includeFilter) != 0 && !includeFilter.Has(db, coll) {
+		_, dbFiltered := includeFilter[db]
+		included := len(includeFilter) > 0 && includeFilter.Has(db, coll)
+
+		if included && dbFiltered {
+			// if the namespace is included, it is allowed
+			return true
+		}
+
+		if dbFiltered {
+			// if the database is filtered, but the namespace is not included,
+			// it is not allowed
 			return false
 		}
 
-		if len(excludeFilter) != 0 && excludeFilter.Has(db, coll) {
+		_, dbFiltered = excludeFilter[db]
+		excluded := len(excludeFilter) > 0 && excludeFilter.Has(db, coll)
+
+		if excluded && dbFiltered {
+			// if the namespace is excluded, it is not allowed
 			return false
 		}
 
+		if dbFiltered {
+			// if the database is filtered, but the namespace is not excluded, it is allowed
+			return true
+		}
+
+		// if the namespace is not present in either filter, it is allowed by default
 		return true
 	}
 }
