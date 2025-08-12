@@ -21,34 +21,39 @@ func MakeFilter(include, exclude []string) NSFilter {
 	excludeFilter := doMakeFitler(exclude)
 
 	return func(db, coll string) bool {
-		_, dbFiltered := includeFilter[db]
-		included := len(includeFilter) > 0 && includeFilter.Has(db, coll)
+		_, dbIncluded := includeFilter[db]
+		_, dbExcluded := excludeFilter[db]
 
-		if included && dbFiltered {
-			// if the namespace is included, it is allowed
+		nsIncluded := len(includeFilter) > 0 && includeFilter.Has(db, coll)
+		nsExcluded := len(excludeFilter) > 0 && excludeFilter.Has(db, coll)
+
+		if nsIncluded && dbIncluded && !nsExcluded {
+			// If the namespace is included, it is allowed.
+			// Also make sure that the namespace is not excluded,
+			// because exclusion takes precedence.
 			return true
 		}
 
-		if dbFiltered {
-			// if the database is filtered, but the namespace is not included,
-			// it is not allowed
+		if dbIncluded && !nsExcluded {
+			// If the database is included in the filter,
+			// but the namespace is not included, it is not allowed.
+			// Also make sure that the namespace is not excluded,
+			// because exclusion takes precedence.
 			return false
 		}
 
-		_, dbFiltered = excludeFilter[db]
-		excluded := len(excludeFilter) > 0 && excludeFilter.Has(db, coll)
-
-		if excluded && dbFiltered {
-			// if the namespace is excluded, it is not allowed
+		if nsExcluded && dbExcluded {
+			// If the namespace is excluded, it is not allowed.
 			return false
 		}
 
-		if dbFiltered {
-			// if the database is filtered, but the namespace is not excluded, it is allowed
+		if dbExcluded {
+			// If the database is included in the filter,
+			// but the namespace is not excluded, it is allowed.
 			return true
 		}
 
-		// if the namespace is not present in either filter, it is allowed by default
+		// If the namespace is not present in either filter, it is allowed by default.
 		return true
 	}
 }

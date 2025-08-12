@@ -101,15 +101,18 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
                 t.source[f"db_{db}"][f"coll_{coll}"].insert_one({})
 
     expected = {
-        "db_0.coll_0",
-        "db_0.coll_1",
-        "db_0.coll_2",
-        "db_1.coll_0",
+        # "db_0.coll_0",
+        # "db_0.coll_1",
+        # "db_0.coll_2",
+
+        # "db_1.coll_0",
         "db_1.coll_1",
         # "db_1.coll_2",
+
         "db_2.coll_0",
         "db_2.coll_1",
         # "db_2.coll_2",
+
         "db_3.coll_0",
         # "db_3.coll_1",
         "db_3.coll_2",
