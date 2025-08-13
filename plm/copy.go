@@ -491,21 +491,12 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertBatchTask) {
 	startedAt := time.Now()
 
 	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection)
-	_, err := collection.InsertMany(ctx, task.Documents, insertOptions)
-	if topo.IsRetryableWrite(err) {
-		zl.Warn().
-			Err(err).
-			Uint32("id", task.ID).
-			Int("size_bytes", task.SizeBytes).
-			Int("count", len(task.Documents)).
-			Dur("elapsed", time.Since(startedAt).Round(time.Millisecond)).
-			Msgf("insert batch %d [RetryableWrite]", task.ID)
 
-		startedAt = time.Now()
+	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := collection.InsertMany(ctx, task.Documents, insertOptions)
 
-		// try one more time
-		_, err = collection.InsertMany(ctx, task.Documents, insertOptions)
-	}
+		return errors.Wrapf(err, "insert batch: id %d, doc count %d", task.ID, len(task.Documents))
+	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
 
 	count := len(task.Documents)
 

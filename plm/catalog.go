@@ -223,10 +223,12 @@ func (c *Catalog) doCreateCollection(
 	}
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "create collection %s.%s", db, coll)
 	})
 	if err != nil {
-		return errors.Wrap(err, "create collection")
+		return err //nolint:wrapcheck
 	}
 
 	log.Ctx(ctx).Debugf("Created collection %s.%s", db, coll)
@@ -256,10 +258,12 @@ func (c *Catalog) doCreateView(
 	}
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "create view %s.%s", db, view)
 	})
 	if err != nil {
-		return errors.Wrap(err, "create view")
+		return err //nolint:wrapcheck
 	}
 
 	log.Ctx(ctx).Debugf("Created view %s.%s", db, view)
@@ -270,7 +274,9 @@ func (c *Catalog) doCreateView(
 // DropCollection drops a collection in the target MongoDB.
 func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).Collection(coll).Drop(ctx)
+		err := c.target.Database(db).Collection(coll).Drop(ctx)
+
+		return errors.Wrapf(err, "drop collection %s.%s", db, coll)
 	})
 	if err != nil {
 		return err //nolint:wrapcheck
@@ -299,10 +305,12 @@ func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 	for _, coll := range colls {
 		eg.Go(func() error {
 			err := runWithRetry(grpCtx, func(ctx context.Context) error {
-				return c.target.Database(db).Collection(coll).Drop(ctx)
+				err := c.target.Database(db).Collection(coll).Drop(ctx)
+
+				return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
 			})
 			if err != nil {
-				return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
+				return err // nolint:wrapcheck
 			}
 
 			lg.Debugf("Dropped collection %s.%s", db, coll)
@@ -382,10 +390,12 @@ func (c *Catalog) CreateIndexes(
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
 		err := runWithRetry(ctx, func(ctx context.Context) error {
-			return c.target.Database(db).RunCommand(ctx, bson.D{
+			err := c.target.Database(db).RunCommand(ctx, bson.D{
 				{"createIndexes", coll},
 				{"indexes", bson.A{index}},
 			}).Err()
+
+			return errors.Wrapf(err, "create index %s.%s.%s", db, coll, index.Name)
 		})
 		if err != nil {
 			processedIdxs[index.Name] = err
@@ -512,7 +522,9 @@ func (c *Catalog) ModifyCappedCollection(
 	}
 
 	return runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "modify capped collection %s.%s", db, coll)
 	}) //nolint:wrapcheck
 }
 
@@ -525,7 +537,9 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 	}
 
 	return runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "modify view %s.%s", db, view)
 	}) //nolint:wrapcheck
 }
 
@@ -541,7 +555,9 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	}
 
 	return runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "modify changeStreamPreAndPostImages %s.%s", db, coll)
 	}) //nolint:wrapcheck
 }
 
@@ -568,7 +584,9 @@ func (c *Catalog) ModifyValidation(
 	}
 
 	return runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, cmd).Err()
+		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+		return errors.Wrapf(err, "modify validation %s.%s", db, coll)
 	}) //nolint:wrapcheck
 }
 
@@ -584,10 +602,12 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 		}
 
 		err := runWithRetry(ctx, func(ctx context.Context) error {
-			return c.target.Database(db).RunCommand(ctx, cmd).Err()
+			err := c.target.Database(db).RunCommand(ctx, cmd).Err()
+
+			return errors.Wrapf(err, "modify index %s.%s.%s", db, coll, mods.Name)
 		})
 		if err != nil {
-			return errors.Wrap(err, "modify index: "+mods.Name)
+			return err //nolint:wrapcheck
 		}
 	}
 
@@ -629,7 +649,9 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 	}
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database("admin").RunCommand(ctx, opts).Err()
+		err := c.target.Database("admin").RunCommand(ctx, opts).Err()
+
+		return errors.Wrapf(err, "rename collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
 	})
 	if err != nil {
 		if topo.IsNamespaceNotFound(err) {
@@ -638,7 +660,7 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 			return nil
 		}
 
-		return errors.Wrap(err, "rename collection")
+		return err //nolint:wrapcheck
 	}
 
 	lg.Debugf("Renamed collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
@@ -653,7 +675,9 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 	lg := log.Ctx(ctx)
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
+		err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
+
+		return errors.Wrapf(err, "drop index %s.%s.%s", db, coll, index)
 	})
 	if err != nil {
 		if !topo.IsNamespaceNotFound(err) && !topo.IsIndexNotFound(err) {
@@ -859,10 +883,12 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 				}
 
 				err := runWithRetry(ctx, func(ctx context.Context) error {
-					return c.target.Database(db).RunCommand(ctx, bson.D{
+					err := c.target.Database(db).RunCommand(ctx, bson.D{
 						{"createIndexes", coll},
 						{"indexes", bson.A{index.IndexSpecification}},
 					}).Err()
+
+					return errors.Wrapf(err, "recreate index %s.%s.%s", db, coll, index.Name)
 				})
 				if err != nil {
 					lg.Warnf("Failed to recreate unsuccessful index %s on %s.%s: %v",
@@ -889,13 +915,15 @@ func (c *Catalog) doModifyIndexOption(
 	value any,
 ) error {
 	return runWithRetry(ctx, func(ctx context.Context) error {
-		return c.target.Database(db).RunCommand(ctx, bson.D{
+		err := c.target.Database(db).RunCommand(ctx, bson.D{
 			{"collMod", coll},
 			{"index", bson.D{
 				{"name", index},
 				{propName, value},
 			}},
 		}).Err()
+
+		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, index, propName)
 	}) //nolint:wrapcheck
 }
 

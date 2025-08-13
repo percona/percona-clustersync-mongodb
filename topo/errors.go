@@ -8,20 +8,6 @@ import (
 	"github.com/percona/percona-link-mongodb/errors"
 )
 
-// IsRetryableWrite checks if the error has the "RetryableWriteError" label.
-func IsRetryableWrite(err error) bool {
-	for err != nil {
-		le, ok := err.(mongo.LabeledError) //nolint:errorlint
-		if ok {
-			return le.HasErrorLabel("RetryableWriteError")
-		}
-
-		err = errors.Unwrap(err)
-	}
-
-	return false
-}
-
 // IsIndexNotFound checks if an error is an index not found error.
 func IsIndexNotFound(err error) bool {
 	return isMongoCommandError(err, "IndexNotFound")
@@ -88,22 +74,28 @@ func IsTransientError(err error) bool {
 	var wEx mongo.WriteException
 	if errors.As(err, &wEx) {
 		for _, we := range wEx.WriteErrors {
-			if _, ok := transientErrorCodes[we.Code]; ok {
-				return true
-			}
+			_, ok := transientErrorCodes[we.Code]
+
+			return ok
 		}
+
 		if wEx.WriteConcernError != nil {
-			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
-				return true
-			}
+			_, ok := transientErrorCodes[wEx.WriteConcernError.Code]
+
+			return ok
 		}
 	}
 
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
-		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
-			return true
-		}
+		_, ok := transientErrorCodes[int(cmdErr.Code)]
+
+		return ok
+	}
+
+	le, ok := err.(mongo.LabeledError) //nolint:errorlint
+	if ok {
+		return le.HasErrorLabel("RetryableWriteError")
 	}
 
 	return false

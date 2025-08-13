@@ -211,6 +211,7 @@ func RunWithRetry(
 	var err error
 
 	currentInterval := retryInterval
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err = fn(ctx)
 		if err == nil {

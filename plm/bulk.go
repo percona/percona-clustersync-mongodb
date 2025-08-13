@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona/percona-link-mongodb/errors"
+	"github.com/percona/percona-link-mongodb/topo"
 )
 
 //nolint:gochecknoglobals
@@ -58,9 +59,13 @@ func (o *clientBulkWrite) Empty() bool {
 }
 
 func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
-	_, err := m.BulkWrite(ctx, o.writes, clientBulkOptions)
+	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := m.BulkWrite(ctx, o.writes, clientBulkOptions)
+
+		return errors.Wrap(err, "bulk write")
+	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
 	if err != nil {
-		return 0, errors.Wrap(err, "bulk write")
+		return 0, err // nolint:wrapcheck
 	}
 
 	size := len(o.writes)
@@ -152,9 +157,14 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 	for ns, ops := range o.writes {
 		grp.Go(func() error {
 			mcoll := m.Database(ns.Database).Collection(ns.Collection)
-			_, err := mcoll.BulkWrite(grpCtx, ops, collectionBulkOptions)
+
+			err := topo.RunWithRetry(ctx, func(_ context.Context) error {
+				_, err := mcoll.BulkWrite(grpCtx, ops, collectionBulkOptions)
+
+				return errors.Wrapf(err, "bulk write %q", ns)
+			}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
 			if err != nil {
-				return errors.Wrapf(err, "bulkWrite %q", ns)
+				return err // nolint:wrapcheck
 			}
 
 			total.Add(int64(len(ops)))
