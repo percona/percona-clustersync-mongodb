@@ -25,6 +25,7 @@ func TestRunWithRetry_NonTransientError(t *testing.T) {
 	if !errors.Is(err, nonTransiantErr) {
 		t.Errorf("expected error %v, got %v", nonTransiantErr, err)
 	}
+
 	if calls != 1 {
 		t.Errorf("expected fn to be called once, got %d", calls)
 	}
@@ -51,10 +52,12 @@ func TestRunWithRetry_FalureOnAllRetries(t *testing.T) {
 	}
 
 	maxRetries := 3
+
 	err := RunWithRetry(t.Context(), fn, 1*time.Millisecond, maxRetries)
 	if !errors.As(err, &transientErr) {
 		t.Errorf("expected error %v, got %v", transientErr, err)
 	}
+
 	if calls != maxRetries {
 		t.Errorf("expected fn to be called %d times, got %d", maxRetries, calls)
 	}
@@ -86,6 +89,7 @@ func TestRunWithRetry_SuccessOnRetry(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
+
 	if calls != 2 {
 		t.Errorf("expected fn to be called 2 times, got %d", calls)
 	}

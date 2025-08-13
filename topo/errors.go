@@ -69,8 +69,8 @@ func IsTransient(err error) bool {
 	}
 
 	le, ok := err.(mongo.LabeledError) //nolint:errorlint
-	if ok {
-		return le.HasErrorLabel("RetryableWriteError")
+	if ok && le.HasErrorLabel("RetryableWriteError") {
+		return true
 	}
 
 	transientErrorCodes := map[int]struct{}{
