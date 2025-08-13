@@ -1,6 +1,7 @@
 package topo
 
 import (
+	"context"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -63,6 +64,15 @@ func isMongoCommandError(err error, name string) bool {
 // IsTransientError checks if the error is a transient error that can be retried.
 // It checks for specific MongoDB error codes that indicate transient issues.
 func IsTransientError(err error) bool {
+	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	le, ok := err.(mongo.LabeledError) //nolint:errorlint
+	if ok {
+		return le.HasErrorLabel("RetryableWriteError")
+	}
+
 	transientErrorCodes := map[int]struct{}{
 		11602: {}, // InterruptedDueToReplStateChange
 		91:    {}, // ShutdownInProgress
@@ -91,11 +101,6 @@ func IsTransientError(err error) bool {
 		_, ok := transientErrorCodes[int(cmdErr.Code)]
 
 		return ok
-	}
-
-	le, ok := err.(mongo.LabeledError) //nolint:errorlint
-	if ok {
-		return le.HasErrorLabel("RetryableWriteError")
 	}
 
 	return false
