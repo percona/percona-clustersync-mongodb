@@ -218,7 +218,7 @@ func RunWithRetry(
 			return nil
 		}
 
-		if !IsTransientError(err) {
+		if !IsTransient(err) {
 			return err //nolint:wrapcheck
 		}
 

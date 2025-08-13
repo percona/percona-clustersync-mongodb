@@ -61,9 +61,9 @@ func isMongoCommandError(err error, name string) bool {
 	return false
 }
 
-// IsTransientError checks if the error is a transient error that can be retried.
+// IsTransient checks if the error is a transient error that can be retried.
 // It checks for specific MongoDB error codes that indicate transient issues.
-func IsTransientError(err error) bool {
+func IsTransient(err error) bool {
 	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
