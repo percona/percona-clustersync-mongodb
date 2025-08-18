@@ -27,7 +27,8 @@ func IsNamespaceNotFound(err error) bool {
 func IsCollectionDropped(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
-		return strings.Contains(cmdErr.Message, "collection dropped")
+		return strings.Contains(cmdErr.Message, "collection dropped") ||
+			strings.Contains(cmdErr.Message, "index '_id_' dropped")
 	}
 
 	return false
