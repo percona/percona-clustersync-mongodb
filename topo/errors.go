@@ -85,23 +85,23 @@ func IsTransient(err error) bool {
 	var wEx mongo.WriteException
 	if errors.As(err, &wEx) {
 		for _, we := range wEx.WriteErrors {
-			_, ok := transientErrorCodes[we.Code]
-
-			return ok
+			if _, ok := transientErrorCodes[we.Code]; ok {
+				return true
+			}
 		}
 
 		if wEx.WriteConcernError != nil {
-			_, ok := transientErrorCodes[wEx.WriteConcernError.Code]
-
-			return ok
+			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
+				return true
+			}
 		}
 	}
 
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
-		_, ok := transientErrorCodes[int(cmdErr.Code)]
-
-		return ok
+		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
+			return true
+		}
 	}
 
 	return false
