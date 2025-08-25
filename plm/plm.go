@@ -246,8 +246,7 @@ func (ml *PLM) Status(ctx context.Context) *Status {
 	}
 
 	if s.Repl.IsStarted() {
-		intialSyncLag := max(int64(s.Clone.FinishTS.T)-int64(s.Repl.LastReplicatedOpTime.T), 0)
-		s.InitialSyncLagTime = intialSyncLag
+		s.InitialSyncLagTime = 0
 		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
 	}
 
@@ -270,7 +269,9 @@ func (ml *PLM) Status(ctx context.Context) *Status {
 		}
 	}
 
-	s.InitialSyncLagTime = s.TotalLagTime
+	if !s.InitialSyncCompleted {
+		s.InitialSyncLagTime = s.TotalLagTime
+	}
 
 	return s
 }
