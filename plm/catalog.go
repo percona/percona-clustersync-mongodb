@@ -227,7 +227,7 @@ func (c *Catalog) doCreateCollection(
 
 		return errors.Wrapf(err, "create collection %s.%s", db, coll)
 	})
-	if err != nil {
+	if err != nil && !topo.IsNamespaceExists(err) {
 		return err //nolint:wrapcheck
 	}
 
