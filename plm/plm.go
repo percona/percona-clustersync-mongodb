@@ -246,7 +246,6 @@ func (ml *PLM) Status(ctx context.Context) *Status {
 	}
 
 	if s.Repl.IsStarted() {
-		s.InitialSyncLagTime = 0
 		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
 	}
 
