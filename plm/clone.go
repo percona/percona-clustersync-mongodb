@@ -732,7 +732,13 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return nil
 	}
 
-	builtIndexes := make([]*topo.IndexSpecification, 0, len(indexes)-len(unfinishedBuilds))
+	builtIndexesCap := len(indexes) - len(unfinishedBuilds)
+	if builtIndexesCap < 0 {
+		builtIndexesCap = 0
+	}
+
+	builtIndexes := make([]*topo.IndexSpecification, 0, builtIndexesCap)
+
 	incompleteIndexes := make([]*topo.IndexSpecification, 0, len(unfinishedBuilds))
 
 	for _, index := range indexes {

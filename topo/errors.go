@@ -23,6 +23,10 @@ func IsNamespaceNotFound(err error) bool {
 	return isMongoCommandError(err, "NamespaceNotFound")
 }
 
+func IsNamespaceExists(err error) bool {
+	return isMongoCommandError(err, "NamespaceExists")
+}
+
 // IsCollectionDropped checks if the error is caused by a collection being dropped.
 func IsCollectionDropped(err error) bool {
 	var cmdErr mongo.CommandError
