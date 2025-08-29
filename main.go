@@ -993,9 +993,9 @@ type statusResponse struct {
 	Info string `json:"info,omitempty"`
 
 	// LagTime is the current lag time in logical seconds.
-	LagTime int64 `json:"lagTime,omitempty"`
+	LagTime int64 `json:"lagTime"`
 	// EventsProcessed is the number of events processed.
-	EventsProcessed int64 `json:"eventsProcessed,omitempty"`
+	EventsProcessed int64 `json:"eventsProcessed"`
 	// LastReplicatedOpTime is the last replicated operation time.
 	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
 
