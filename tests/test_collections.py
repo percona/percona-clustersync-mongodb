@@ -11,12 +11,10 @@ from testing import Testing
 from bson.decimal128 import Decimal128
 
 
-def ensure_collection(source: MongoClient, target: MongoClient, db: str, coll: str, **kwargs):
-    """Create a collection in the source and target MongoDB."""
+def ensure_collection(source: MongoClient, db: str, coll: str, **kwargs):
+    """Create a collection in the source MongoDB."""
     source[db].drop_collection(coll)
-    target[db].drop_collection(coll)
     source[db].create_collection(coll, **kwargs)
-    target[db].create_collection(coll, **kwargs)
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -192,7 +190,7 @@ def test_create_with_validation(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_collection(t: Testing, phase: Runner.Phase):
-    ensure_collection(t.source, t.target, "db_1", "coll_1")
+    ensure_collection(t.source, "db_1", "coll_1")
 
     with t.run(phase):
         t.source["db_1"].drop_collection("coll_1")
@@ -213,10 +211,9 @@ def test_drop_capped_collection(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_view(t: Testing, phase: Runner.Phase):
-    ensure_collection(t.source, t.target, "db_1", "coll_1")
+    ensure_collection(t.source, "db_1", "coll_1")
     ensure_collection(
         t.source,
-        t.target,
         "db_1",
         "view_1",
         viewOn="coll_1",
@@ -232,10 +229,9 @@ def test_drop_view(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_view_source_collection(t: Testing, phase: Runner.Phase):
-    ensure_collection(t.source, t.target, "db_1", "coll_1")
+    ensure_collection(t.source, "db_1", "coll_1")
     ensure_collection(
         t.source,
-        t.target,
         "db_1",
         "view_1",
         viewOn="coll_1",
@@ -294,9 +290,9 @@ def test_modify_clustered_ttl_ignored(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_capped_size(t: Testing, phase: Runner.Phase):
-    ensure_collection(t.source, t.target, "db_1", "coll_1", capped=True, size=1111, max=222)
-    ensure_collection(t.source, t.target, "db_1", "coll_2", capped=True, size=1111, max=222)
-    ensure_collection(t.source, t.target, "db_1", "coll_3", capped=True, size=1111, max=222)
+    ensure_collection(t.source, "db_1", "coll_1", capped=True, size=1111, max=222)
+    ensure_collection(t.source, "db_1", "coll_2", capped=True, size=1111, max=222)
+    ensure_collection(t.source, "db_1", "coll_3", capped=True, size=1111, max=222)
 
     with t.run(phase):
         t.source["db_1"].command({"collMod": "coll_1", "cappedSize": 3333, "cappedMax": 444})
@@ -431,7 +427,7 @@ def test_modify_validation_unset(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_capped_size_with_validation(t: Testing, phase: Runner.Phase):
-    ensure_collection(t.source, t.target, "db_1", "coll_1", capped=True, size=1111)
+    ensure_collection(t.source, "db_1", "coll_1", capped=True, size=1111)
 
     with t.run(phase):
         t.source["db_1"].command(
