@@ -1,0 +1,60 @@
+name: CI
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      plm_branch:
+        description: "PLM branch"
+        required: false
+      tests_ver:
+        description: "QA tests version"
+        required: false
+
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches:
+      - main
+    paths-ignore:
+      - "tests/**"
+      - "packaging/**"
+jobs:
+  test:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        psmdb: ["6.0", "7.0", "8.0"]
+    env:
+      PLM_BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.event.inputs.plm_branch || 'main' }}
+    steps:
+      - name: Checkout testing repo
+        uses: actions/checkout@v4
+        with:
+          repository: Percona-QA/psmdb-testing
+          ref: ${{ github.event.inputs.tests_ver || 'main'}}
+          path: psmdb-testing
+
+      - name: Setup environment with PSMDB ${{ matrix.psmdb }} and PLM PR/branch ${{ github.head_ref || github.event.inputs.plm_branch || env.PLM_BRANCH }}
+        run: |
+          MONGODB_IMAGE=perconalab/percona-server-mongodb:${{ matrix.psmdb }} docker compose build easyrsa
+          MONGODB_IMAGE=perconalab/percona-server-mongodb:${{ matrix.psmdb }} docker compose build
+          docker compose up -d
+        working-directory: psmdb-testing/plm-pytest
+
+      - name: Test ${{ matrix.test }} sync on PSMDB ${{ matrix.psmdb }} and PLM PR/branch ${{ github.head_ref || github.event.inputs.plm_branch || env.PLM_BRANCH }}
+        run: |
+          docker compose run --rm test pytest -s --junitxml=junit.xml
+        working-directory: psmdb-testing/plm-pytest
+
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v5
+        if: success() || failure()
+        with:
+          report_paths: '**/junit.xml'
+          include_passed: True
+          detailed_summary: True
+          include_time_in_summary: True
