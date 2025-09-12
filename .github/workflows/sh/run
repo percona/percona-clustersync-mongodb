@@ -4,7 +4,6 @@ SBASE=$(dirname "$0")
 # shellcheck source=/dev/null
 source "$SBASE/util"
 
-export MONGO_IMAGE=mongo:8
 export compose="$SBASE/compose.yml"
 
 # dcf up -d src-cfg0 src-rs00 src-rs10 tgt-cfg0 tgt-rs00 tgt-rs10
