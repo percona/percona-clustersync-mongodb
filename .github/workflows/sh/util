@@ -30,7 +30,11 @@ msh() {
 
 mwait() {
     echo "waiting for $1"
-    while ! dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()" >/dev/null 2>&1; do sleep 0.2; done
+    while ! dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "db.version()" >/dev/null 2>&1; do
+        echo "fialed to connect to $1, retrying"
+        dcf logs "${1%:*}"
+        sleep 0.2
+    done
     dcf exec "${1%:*}" mongosh --quiet --port "${1#*:}" --eval "disableTelemetry()" >/dev/null
 }
 

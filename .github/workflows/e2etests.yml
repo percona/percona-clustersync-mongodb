@@ -84,7 +84,7 @@ jobs:
 
       - name: Update hosts file
         run: |
-          echo "127.0.0.1 src-mongos src-cfg0 src-rs00 src-rs01 tgt-mongos tgs-cfg0 tgt-rs00 tgt-rs01" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 src-mongos src-cfg0 src-rs00 src-rs01 tgt-mongos tgt-cfg0 tgt-rs00 tgt-rs01" | sudo tee -a /etc/hosts
 
       - name: Start source and target clusters
         run: |

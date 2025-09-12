@@ -6,7 +6,6 @@ source "$SBASE/util"
 
 export compose="$SBASE/compose.yml"
 
-# dcf up -d src-cfg0 src-rs00 src-rs10 tgt-cfg0 tgt-rs00 tgt-rs10
 dcf up -d src-cfg0 src-rs00 src-rs10
 
 mwait "src-cfg0:27000" && rsinit "src/cfg" "src-cfg0:27000"
