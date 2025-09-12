@@ -4,7 +4,7 @@ name: E2E Tests
 on: [pull_request]
 
 jobs:
-  rs:
+  replset:
     runs-on: ubuntu-latest
 
     steps:
@@ -52,4 +52,54 @@ jobs:
 
       - name: Teardown Docker Compose
         if: always()
-        run: docker compose -f .github/workflows/rs/compose.yml down
+        run: docker compose -f .github/workflows/sh/compose.yml down
+
+  sharded:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.create false
+
+      - name: Install Python dependencies
+        run: |
+          poetry install --no-interaction --no-root
+
+      - name: Update hosts file
+        run: |
+          echo "127.0.0.1 src-mongos src-cfg0 src-rs00 src-rs01 tgt-mongos tgs-cfg0 tgt-rs00 tgt-rs01" | sudo tee -a /etc/hosts
+
+      - name: Start source and target clusters
+        run: |
+          .github/workflows/sh/run
+
+      - name: Build the project
+        run: |
+          make test-build
+
+      - name: Run tests (pytest)
+        run: |
+          export TEST_SOURCE_URI=mongodb://adm:pass@src-mongos:27017
+          export TEST_TARGET_URI=mongodb://adm:pass@tgt-mongos:29017
+          export TEST_PLM_URL=http://127.0.0.1:2242
+          export TEST_PLM_BIN=./bin/plm_test
+
+          poetry run pytest
+
+      - name: Teardown Docker Compose
+        if: always()
+        run: docker compose -f .github/workflows/sh/compose.yml down
