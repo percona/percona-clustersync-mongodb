@@ -3,6 +3,9 @@ name: E2E Tests
 
 on: [pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   replset:
     runs-on: ubuntu-latest
