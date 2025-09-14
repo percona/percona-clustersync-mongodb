@@ -6,6 +6,9 @@ from testing import Testing
 
 
 def test_simple(t: Testing):
+    t.source["db_1"].create_collection("coll_1")
+    t.source["db_2"].create_collection("coll_2")
+
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:
             sess.start_transaction()
@@ -13,13 +16,19 @@ def test_simple(t: Testing):
             t.source["db_2"]["coll_2"].insert_one({"i": 2}, session=sess)
             sess.commit_transaction()
 
-    assert t.source["db_1"]["coll_1"].count_documents({}) == 1
+
+        t.source["db_1"]["coll_1"].insert_one({"i": 2})
+
+    assert t.source["db_1"]["coll_1"].count_documents({}) == 2
     assert t.source["db_2"]["coll_2"].count_documents({}) == 1
 
     t.compare_all()
 
 
 def test_simple_aborted(t: Testing):
+    t.source["db_1"].create_collection("coll_1")
+    t.source["db_2"].create_collection("coll_2")
+
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:
             sess.start_transaction()
@@ -27,8 +36,9 @@ def test_simple_aborted(t: Testing):
             t.source["db_2"]["coll_2"].insert_one({"i": 2}, session=sess)
             sess.abort_transaction()
 
-    assert "db_1" not in t.source.list_database_names()
-    assert "db_2" not in t.source.list_database_names()
+        t.source["db_1"]["coll_1"].insert_one({"i": 2})
+
+    assert t.source["db_1"]["coll_1"].count_documents({}) == 1
 
     t.compare_all()
 
@@ -81,6 +91,8 @@ def test_mixed_with_non_trx_ops_aborted(t: Testing):
 
 
 def test_in_progress(t: Testing):
+    t.source["db_1"].create_collection("coll_1")
+
     with t.source.start_session() as sess:
         sess.start_transaction()
         t.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": 1}, session=sess)
@@ -89,7 +101,9 @@ def test_in_progress(t: Testing):
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
             sess.commit_transaction()
 
-    assert t.source["db_1"]["coll_1"].count_documents({}) == 2
+            t.source["db_1"]["coll_1"].insert_one({"i": 3})
+
+    assert t.source["db_1"]["coll_1"].count_documents({}) == 3
 
     t.compare_all()
 
@@ -188,6 +202,8 @@ def test_concurrent_trx_one_aborted(t: Testing):
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": 1}, session=sess)
             sess.commit_transaction()
 
+            t.source["db_1"]["coll_1"].insert_one({"i": 10})
+
     def run_transaction_2():
         with t.source.start_session() as sess:
             sess.start_transaction()
@@ -196,6 +212,8 @@ def test_concurrent_trx_one_aborted(t: Testing):
             t.source["db_2"]["coll_2"].insert_one({"i": 4, "trx": 2}, session=sess)
             event_2.set()
             sess.abort_transaction()
+
+            t.source["db_2"]["coll_2"].insert_one({"i": 10})
 
     with t.run(Runner.Phase.APPLY):
         thread1 = threading.Thread(target=run_transaction_1)
@@ -207,8 +225,9 @@ def test_concurrent_trx_one_aborted(t: Testing):
         thread1.join()
         thread2.join()
 
-    assert t.source["db_1"]["coll_1"].count_documents({}) == 2
-    assert "db_2" not in t.source.list_database_names()
+    assert t.source["db_1"]["coll_1"].count_documents({}) == 3
+    assert t.source["db_2"]["coll_2"].count_documents({}) == 1
+    # assert "db_2" not in t.source.list_database_names()
 
     t.compare_all()
 
