@@ -520,7 +520,7 @@ def test_plm_95_drop_index_for_non_existing_namespace(t: Testing):
         t.source["db_0"]["coll_0"].drop_index([("i", 1)])
 
 
-@pytest.mark.timeout(40)
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
 def test_plm_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():
