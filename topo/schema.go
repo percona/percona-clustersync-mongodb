@@ -195,3 +195,67 @@ func ListInProgressIndexBuilds(
 
 	return names, nil
 }
+
+// Structs for returned sharding info
+type ChunkInfo struct {
+	Shard string
+	Min   bson.M
+	Max   bson.M
+}
+
+type ShardingInfo struct {
+	NS        string       `bson:"_id"`
+	ShardKey  bson.D       `bson:"key"`
+	UUID      *bson.Binary `bson:"uuid"`
+	Unique    bool         `bson:"unique"`
+	NoBalance bool         `bson:"noBalance"`
+
+	Chunks []ChunkInfo
+}
+
+func (s ShardingInfo) IsSharded() bool {
+	return s.ShardKey != nil
+}
+
+// Helper function
+func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, collName string) (*ShardingInfo, error) {
+	collNS := dbName + "." + collName
+
+	// Look up collection spec in config.collections
+	info := &ShardingInfo{}
+
+	err := m.Database("config").
+		Collection("collections").
+		FindOne(ctx, bson.M{"_id": collNS}).
+		Decode(info)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsSharded() {
+		// Query chunks for this namespace
+		chunksColl := m.Database("config").Collection("chunks")
+
+		cursor, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+		if err != nil {
+			return nil, err
+		}
+		defer cursor.Close(ctx)
+
+		for cursor.Next(ctx) {
+			var c bson.M
+			if err := cursor.Decode(&c); err != nil {
+				return nil, err
+			}
+
+			ci := ChunkInfo{
+				Shard: c["shard"].(string),
+				Min:   c["min"].(bson.M),
+				Max:   c["max"].(bson.M),
+			}
+			info.Chunks = append(info.Chunks, ci)
+		}
+	}
+
+	return info, nil
+}

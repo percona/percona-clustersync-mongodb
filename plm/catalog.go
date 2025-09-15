@@ -1136,6 +1136,39 @@ func (c *Catalog) renameCollectionInCatalog(
 	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
 }
 
+func (c *Catalog) ShardCollection(
+	ctx context.Context,
+	db string,
+	coll string,
+	shardKey bson.D,
+	unique bool,
+) error {
+	enableCmd := bson.D{{"enableSharding", db}}
+
+	err := c.target.Database("admin").RunCommand(ctx, enableCmd).Err()
+	if err != nil {
+		return errors.Wrap(err, "enable sharding")
+	}
+
+	// Now shard the collection with a shard key
+	shardCmd := bson.D{
+		{"shardCollection", db + "." + coll},
+		{"key", shardKey}, // Shard key
+	}
+	if unique {
+		shardCmd = append(shardCmd, bson.E{"unique", true})
+	}
+
+	err = c.target.Database("admin").RunCommand(ctx, shardCmd).Err()
+	if err != nil {
+		return errors.Wrap(err, "shard collection")
+	}
+
+	log.Ctx(ctx).Infof("Sharded collection %s.%s", db, coll)
+
+	return nil
+}
+
 func runWithRetry(
 	ctx context.Context,
 	fn func(context.Context) error,
