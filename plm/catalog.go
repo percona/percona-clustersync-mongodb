@@ -1151,15 +1151,16 @@ func (c *Catalog) ShardCollection(
 	}
 
 	// Now shard the collection with a shard key
-	shardCmd := bson.D{
+	cmd := bson.D{
 		{"shardCollection", db + "." + coll},
 		{"key", shardKey}, // Shard key
+		// {"collation", bson.D{{"locale", "simple"}}},
 	}
 	if unique {
-		shardCmd = append(shardCmd, bson.E{"unique", true})
+		cmd = append(cmd, bson.E{"unique", true})
 	}
 
-	err = c.target.Database("admin").RunCommand(ctx, shardCmd).Err()
+	err = c.target.Database("admin").RunCommand(ctx, cmd).Err()
 	if err != nil {
 		return errors.Wrap(err, "shard collection")
 	}
