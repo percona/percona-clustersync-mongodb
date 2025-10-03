@@ -14,6 +14,7 @@ Usage: $0 [OPTIONS]
         --build_src_deb  If it is set - source deb package will be built
         --build_rpm         If it is set - rpm will be built
         --build_deb         If it is set - deb will be built
+        --build_tarball     If it is set - tarball will be built
         --install_deps      Install build dependencies(root privileges are required)
         --branch            Branch for build
         --repo              Repo for build
@@ -44,6 +45,7 @@ parse_arguments() {
         --build_src_deb=*) SDEB="$val" ;;
         --build_rpm=*) RPM="$val" ;;
         --build_deb=*) DEB="$val" ;;
+        --build_tarball=*) TARBALL="$val" ;;
         --get_sources=*) SOURCE="$val" ;;
         --branch=*) BRANCH="$val" ;;
         --repo=*) REPO="$val" ;;
@@ -414,6 +416,56 @@ build_deb() {
     cp $WORKDIR/*.deb $CURDIR/deb
 }
 
+build_tarball() {
+    if [ $TARBALL = 0 ]; then
+        echo "Binary tarball will not be created"
+        return
+    fi
+    get_tar "source_tarball"
+    cd $WORKDIR
+    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
+
+    if [ -f /etc/debian_version ]; then
+        export DEBIAN_VERSION="$(lsb_release -sc)"
+        export DEBIAN="$(lsb_release -sc)"
+    fi
+    #
+    if [ -f /etc/redhat-release ]; then
+        RHEL=$(rpm --eval %rhel)
+    fi
+    #
+    ARCH=$(uname -m 2>/dev/null || true)
+    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | grep -v "tools" | tail -n1))
+    PLMDIR=${TARFILE%.tar.gz}
+    PLMDIR_ABS=${WORKDIR}/${PLMDIR}
+
+    tar xzf $TARFILE
+    rm -f $TARFILE
+    mkdir -p build/src/github.com/percona/percona-link-mongodb
+    mv ${PLMDIR}/* build/src/github.com/percona/percona-link-mongodb/
+    export PATH=/usr/local/go/bin:${PATH}
+    export GOROOT="/usr/local/go/"
+    export GOPATH=${PWD}/build
+    export PATH="/usr/local/go/bin:${PATH}:${GOPATH}"
+    export GOBINPATH="/usr/local/go/bin"
+
+    cd build/src/github.com/percona/percona-link-mongodb/
+    source VERSION
+    export VERSION
+    export GITBRANCH
+    export GITCOMMIT
+    make build
+    cp ./bin/plm ${WORKDIR}/${PLMDIR}/
+    cd ${WORKDIR}/
+
+    tar --owner=0 --group=0 -czf ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${PLMDIR}
+    DIRNAME="tarball"
+    mkdir -p ${WORKDIR}/${DIRNAME}
+    mkdir -p ${CURDIR}/${DIRNAME}
+    cp ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${WORKDIR}/${DIRNAME}
+    cp ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${CURDIR}/${DIRNAME}
+}
+
 CURDIR=$(pwd)
 VERSION_FILE=$CURDIR/percona-link-mongodb.properties
 args=
@@ -444,3 +496,4 @@ build_srpm
 build_source_deb
 build_rpm
 build_deb
+build_tarball
