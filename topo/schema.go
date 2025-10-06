@@ -217,7 +217,6 @@ func (s ShardingInfo) IsSharded() bool {
 	return s.ShardKey != nil
 }
 
-// Helper function
 func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, collName string) (*ShardingInfo, error) {
 	collNS := dbName + "." + collName
 
@@ -229,23 +228,28 @@ func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, col
 		FindOne(ctx, bson.M{"_id": collNS}).
 		Decode(info)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "find collection %s in config.collections", collNS)
 	}
 
 	if info.IsSharded() {
-		// Query chunks for this namespace
 		chunksColl := m.Database("config").Collection("chunks")
 
-		cursor, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "find chunks for %s", collNS)
 		}
-		defer cursor.Close(ctx)
+		defer cur.Close(ctx)
 
-		for cursor.Next(ctx) {
+		if err := cur.Err(); err != nil { // nolint:noinlineerr
+			return nil, errors.Wrap(err, "iterate chunks")
+		}
+
+		for cur.Next(ctx) {
 			var c bson.M
-			if err := cursor.Decode(&c); err != nil {
-				return nil, err
+
+			err := cur.Decode(&c)
+			if err != nil {
+				return nil, errors.Wrap(err, "decode chunk")
 			}
 
 			ci := ChunkInfo{

@@ -419,7 +419,7 @@ func (c *Clone) doCollectionClone(
 	}
 
 	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !strings.Contains(err.Error(), "no documents in resul") {
+	if err != nil && !strings.Contains(err.Error(), "no documents in result") {
 		return errors.Wrap(err, "get sharding info")
 	}
 

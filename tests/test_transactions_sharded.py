@@ -28,7 +28,7 @@ def test_simple(t: Testing):
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
     t.source["db_2"].create_collection("coll_2")
-    t.source.admin.command("shardCollection", "db_1.coll_2", key={"_id": 1})
+    t.source.admin.command("shardCollection", "db_2.coll_2", key={"_id": 1})
 
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:
@@ -73,7 +73,7 @@ def test_simple_aborted(t: Testing):
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
     t.source["db_2"].create_collection("coll_2")
-    t.source.admin.command("shardCollection", "db_1.coll_2", key={"_id": 1})
+    t.source.admin.command("shardCollection", "db_2.coll_2", key={"_id": 1})
 
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:

@@ -1145,24 +1145,32 @@ func (c *Catalog) ShardCollection(
 ) error {
 	enableCmd := bson.D{{"enableSharding", db}}
 
-	err := c.target.Database("admin").RunCommand(ctx, enableCmd).Err()
-	if err != nil {
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		err := c.target.Database("admin").RunCommand(ctx, enableCmd).Err()
+
 		return errors.Wrap(err, "enable sharding")
+	})
+	if err != nil {
+		return err //nolint:wrapcheck
 	}
 
-	// Now shard the collection with a shard key
 	cmd := bson.D{
 		{"shardCollection", db + "." + coll},
-		{"key", shardKey}, // Shard key
+		{"key", shardKey},
 		// {"collation", bson.D{{"locale", "simple"}}},
 	}
+
 	if unique {
 		cmd = append(cmd, bson.E{"unique", true})
 	}
 
-	err = c.target.Database("admin").RunCommand(ctx, cmd).Err()
-	if err != nil {
+	err = runWithRetry(ctx, func(ctx context.Context) error {
+		err = c.target.Database("admin").RunCommand(ctx, cmd).Err()
+
 		return errors.Wrap(err, "shard collection")
+	})
+	if err != nil {
+		return err //nolint:wrapcheck
 	}
 
 	log.Ctx(ctx).Infof("Sharded collection %s.%s", db, coll)

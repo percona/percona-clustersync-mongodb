@@ -487,7 +487,6 @@ type RenameEvent struct {
 	OperationDescription renameOpDesc `bson:"operationDescription"`
 }
 
-
 type ShardCollectionEvent struct {
 	// OperationDescription is additional information on the change operation.
 	//
@@ -500,10 +499,6 @@ type ShardCollectionEvent struct {
 
 // shardCollectionOpDesc represents the description of the shard collection operation.
 type shardCollectionOpDesc struct {
-
-	// NS is the namespace of the collection that was sharded.
-	NS Namespace `bson:"ns"`
-
 	// NumInitialChunks is the number of initial chunks created.
 	NumInitialChunks *int32 `bson:"numInitialChunks,omitempty"`
 
