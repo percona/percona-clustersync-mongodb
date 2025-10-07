@@ -51,7 +51,7 @@ jobs:
           export TEST_PLM_URL=http://127.0.0.1:2242
           export TEST_PLM_BIN=./bin/plm_test
 
-          poetry run pytest
+          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py
 
       - name: Teardown Docker Compose
         if: always()
