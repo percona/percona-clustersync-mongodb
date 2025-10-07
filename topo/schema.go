@@ -196,7 +196,6 @@ func ListInProgressIndexBuilds(
 	return names, nil
 }
 
-// Structs for returned sharding info
 type ChunkInfo struct {
 	Shard string
 	Min   bson.M
