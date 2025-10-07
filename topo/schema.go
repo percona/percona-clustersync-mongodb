@@ -252,7 +252,7 @@ func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, col
 				return nil, errors.Wrap(err, "decode chunk")
 			}
 
-			ci := ChunkInfo{
+			ci := ChunkInfo{ //nolint:forcetypeassert
 				Shard: c["shard"].(string),
 				Min:   c["min"].(bson.M),
 				Max:   c["max"].(bson.M),
