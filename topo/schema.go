@@ -195,3 +195,70 @@ func ListInProgressIndexBuilds(
 
 	return names, nil
 }
+
+type ChunkInfo struct {
+	Shard string `bson:"shard"`
+	Min   bson.M `bson:"min"`
+	Max   bson.M `bson:"max"`
+}
+
+type ShardingInfo struct {
+	NS        string       `bson:"_id"`
+	ShardKey  bson.D       `bson:"key"`
+	UUID      *bson.Binary `bson:"uuid"`
+	Unique    bool         `bson:"unique"`
+	NoBalance bool         `bson:"noBalance"`
+
+	Chunks []ChunkInfo
+}
+
+func (s ShardingInfo) IsSharded() bool {
+	return s.ShardKey != nil
+}
+
+func GetCollectionShardingInfo(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName, collName string,
+) (*ShardingInfo, error) {
+	collNS := dbName + "." + collName
+
+	info := &ShardingInfo{}
+
+	err := m.Database("config").
+		Collection("collections").
+		FindOne(ctx, bson.M{"_id": collNS}).
+		Decode(info)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, ErrNotFound
+		}
+
+		return nil, errors.Wrapf(err, "find collection %s in config.collections", collNS)
+	}
+
+	if !info.IsSharded() {
+		return info, nil
+	}
+
+	chunksColl := m.Database("config").Collection("chunks")
+
+	cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+	if err != nil {
+		return nil, errors.Wrapf(err, "find chunks for %s", collNS)
+	}
+	defer cur.Close(ctx)
+
+	if err := cur.Err(); err != nil { // nolint:noinlineerr
+		return nil, errors.Wrap(err, "iterate chunks")
+	}
+
+	var chunks []ChunkInfo
+
+	err = cur.All(ctx, &chunks)
+	if err != nil {
+		return nil, errors.Wrap(err, "read chunks")
+	}
+
+	return info, nil
+}

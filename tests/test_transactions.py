@@ -16,7 +16,6 @@ def test_simple(t: Testing):
             t.source["db_2"]["coll_2"].insert_one({"i": 2}, session=sess)
             sess.commit_transaction()
 
-
         t.source["db_1"]["coll_1"].insert_one({"i": 2})
 
     assert t.source["db_1"]["coll_1"].count_documents({}) == 2

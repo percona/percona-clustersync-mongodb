@@ -487,6 +487,31 @@ type RenameEvent struct {
 	OperationDescription renameOpDesc `bson:"operationDescription"`
 }
 
+type ShardCollectionEvent struct {
+	// OperationDescription is additional information on the change operation.
+	//
+	// This document and its subfields only appear when the change stream uses
+	// expanded events.
+	//
+	// New in version 6.0.
+	OperationDescription shardCollectionOpDesc `bson:"operationDescription"`
+}
+
+// shardCollectionOpDesc represents the description of the shard collection operation.
+type shardCollectionOpDesc struct {
+	// NumInitialChunks is the number of initial chunks created.
+	NumInitialChunks *int32 `bson:"numInitialChunks,omitempty"`
+
+	// PresplitHashedZones indicates whether the collection was presplit.
+	PresplitHashedZones *bool `bson:"presplitHashedZones,omitempty"`
+
+	// ShardKey is the shard key used for the collection.
+	ShardKey bson.D `bson:"shardKey"`
+
+	// Unique indicates whether the shard key is unique.
+	Unique bool `bson:"unique,omitempty"`
+}
+
 // renameOpDesc represents the description of the rename operation.
 type renameOpDesc struct {
 	// DropTarget is UUID of the collection that was dropped in the rename operation.
@@ -513,6 +538,7 @@ func (e ParsingError) Unwrap() error {
 
 type ChangeEvent struct {
 	EventHeader
+
 	Event any
 }
 
@@ -575,7 +601,10 @@ func parseChangeEvent(data bson.Raw, change *ChangeEvent) error {
 		change.Event = e
 
 	case ShardCollection:
-		return errors.ErrUnsupported
+		var e ShardCollectionEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
+
 	case ReshardCollection:
 		return errors.ErrUnsupported
 	case RefineCollectionShardKey:

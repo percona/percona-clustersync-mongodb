@@ -98,6 +98,7 @@ type collectionCatalog struct {
 
 type indexCatalogEntry struct {
 	*topo.IndexSpecification
+
 	Incomplete bool `bson:"incomplete"`
 	Failed     bool `bson:"failed"`
 }
@@ -561,7 +562,7 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	}) //nolint:wrapcheck
 }
 
-// ModifyCappedCollection modifies a capped collection in the target MongoDB.
+// ModifyValidation modifies a capped collection in the target MongoDB.
 func (c *Catalog) ModifyValidation(
 	ctx context.Context,
 	db string,
@@ -1134,6 +1135,36 @@ func (c *Catalog) renameCollectionInCatalog(
 	c.deleteCollectionFromCatalog(ctx, db, coll)
 
 	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
+}
+
+func (c *Catalog) ShardCollection(
+	ctx context.Context,
+	db string,
+	coll string,
+	shardKey bson.D,
+	unique bool,
+) error {
+	cmd := bson.D{
+		{"shardCollection", db + "." + coll},
+		{"key", shardKey},
+	}
+
+	if unique {
+		cmd = append(cmd, bson.E{"unique", true})
+	}
+
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		err := c.target.Database("admin").RunCommand(ctx, cmd).Err()
+
+		return errors.Wrap(err, "shard collection")
+	})
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
+	log.Ctx(ctx).Infof("Sharded collection %s.%s", db, coll)
+
+	return nil
 }
 
 func runWithRetry(

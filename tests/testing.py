@@ -33,6 +33,42 @@ class Testing:
             for coll in source_colls:
                 compare_namespace(self.source, self.target, db, coll, sort)
 
+    def compare_all_sharded(self, sort=None):
+        """Compare all databases and collections between source and target MongoDB, including sharding and shard key."""
+        source_dbs = set(list_databases(self.source))
+        target_dbs = set(list_databases(self.target))
+        assert source_dbs == target_dbs, f"{source_dbs} != {target_dbs}"
+
+        for db in source_dbs:
+            source_colls = set(list_collections(self.source, db))
+            target_colls = set(list_collections(self.target, db))
+            assert source_colls == target_colls, f"{db} :: {source_colls} != {target_colls}"
+
+            for coll in source_colls:
+                # Check if collection is sharded and compare shard keys
+                source_config = self.source["config"]["collections"].find_one(
+                    {"_id": f"{db}.{coll}"}
+                )
+                target_config = self.target["config"]["collections"].find_one(
+                    {"_id": f"{db}.{coll}"}
+                )
+
+                source_sharded = source_config is not None and source_config.get("key") is not None
+                target_sharded = target_config is not None and target_config.get("key") is not None
+                assert (
+                    source_sharded == target_sharded
+                ), f"{db}.{coll}: sharded={source_sharded} != {target_sharded}"
+
+                if source_sharded:
+                    assert (
+                        source_config["key"] == target_config["key"]
+                    ), f"{db}.{coll}: shard key {source_config['key']} != {target_config['key']}"
+                    assert source_config.get("unique", False) == target_config.get(
+                        "unique", False
+                    ), f"{db}.{coll}: unique {source_config.get('unique', False)} != {target_config.get('unique', False)}"
+
+                compare_namespace(self.source, self.target, db, coll, sort)
+
 
 def drop_all_database(source: MongoClient):
     """Drop all databases in the MongoDB."""
