@@ -1,20 +1,13 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-import random
 from datetime import datetime
 
-import time
 import pytest
-import testing
-from plm import PLM, Runner
-from pymongo import MongoClient
+from plm import Runner
 from testing import Testing
-from bson.decimal128 import Decimal128
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_shard_collection(t: Testing, phase: Runner.Phase):
-    t.source.admin.command("enableSharding", "db_1")
-
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1")
         t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
@@ -27,7 +20,6 @@ def test_shard_collection(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_drop_sharded(t: Testing, phase: Runner.Phase):
-    t.source.admin.command("enableSharding", "db_1")
     t.source["db_1"].drop_collection("coll_1")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
@@ -40,8 +32,6 @@ def test_drop_sharded(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_rename_sharded(t: Testing, phase: Runner.Phase):
-    t.source.admin.command("enableSharding", "db_1")
-
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1")
         t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})

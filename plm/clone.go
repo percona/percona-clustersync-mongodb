@@ -5,7 +5,6 @@ import (
 	"context"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -419,7 +418,7 @@ func (c *Clone) doCollectionClone(
 	}
 
 	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !strings.Contains(err.Error(), "no documents in result") {
+	if err != nil && !errors.Is(err, topo.ErrNotFound) {
 		return errors.Wrap(err, "get sharding info")
 	}
 
@@ -442,6 +441,7 @@ func (c *Clone) doCollectionClone(
 	lg.Infof("Collection %q has been created", ns.String())
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
+
 	if spec.UUID != nil {
 		c.catalog.SetCollectionUUID(ctx, ns.Database, ns.Collection, spec.UUID)
 	}
@@ -451,7 +451,8 @@ func (c *Clone) doCollectionClone(
 	updateC := copyManager.Do(nsCtx, ns, spec)
 
 	for update := range updateC {
-		if err := update.Err; err != nil {
+		err := update.Err
+		if err != nil {
 			switch {
 			case topo.IsCollectionDropped(err):
 				lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
@@ -659,6 +660,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 
 type namespaceInfo struct {
 	Namespace
+
 	UUID *bson.Binary
 }
 

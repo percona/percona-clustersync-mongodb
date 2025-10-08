@@ -197,9 +197,9 @@ func ListInProgressIndexBuilds(
 }
 
 type ChunkInfo struct {
-	Shard string
-	Min   bson.M
-	Max   bson.M
+	Shard string `bson:"shard"`
+	Min   bson.M `bson:"min"`
+	Max   bson.M `bson:"max"`
 }
 
 type ShardingInfo struct {
@@ -216,10 +216,13 @@ func (s ShardingInfo) IsSharded() bool {
 	return s.ShardKey != nil
 }
 
-func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, collName string) (*ShardingInfo, error) {
+func GetCollectionShardingInfo(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName, collName string,
+) (*ShardingInfo, error) {
 	collNS := dbName + "." + collName
 
-	// Look up collection spec in config.collections
 	info := &ShardingInfo{}
 
 	err := m.Database("config").
@@ -227,37 +230,34 @@ func GetCollectionShardingInfo(ctx context.Context, m *mongo.Client, dbName, col
 		FindOne(ctx, bson.M{"_id": collNS}).
 		Decode(info)
 	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, ErrNotFound
+		}
+
 		return nil, errors.Wrapf(err, "find collection %s in config.collections", collNS)
 	}
 
-	if info.IsSharded() {
-		chunksColl := m.Database("config").Collection("chunks")
+	if !info.IsSharded() {
+		return info, nil
+	}
 
-		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
-		if err != nil {
-			return nil, errors.Wrapf(err, "find chunks for %s", collNS)
-		}
-		defer cur.Close(ctx)
+	chunksColl := m.Database("config").Collection("chunks")
 
-		if err := cur.Err(); err != nil { // nolint:noinlineerr
-			return nil, errors.Wrap(err, "iterate chunks")
-		}
+	cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+	if err != nil {
+		return nil, errors.Wrapf(err, "find chunks for %s", collNS)
+	}
+	defer cur.Close(ctx)
 
-		for cur.Next(ctx) {
-			var c bson.M
+	if err := cur.Err(); err != nil { // nolint:noinlineerr
+		return nil, errors.Wrap(err, "iterate chunks")
+	}
 
-			err := cur.Decode(&c)
-			if err != nil {
-				return nil, errors.Wrap(err, "decode chunk")
-			}
+	var chunks []ChunkInfo
 
-			ci := ChunkInfo{ //nolint:forcetypeassert
-				Shard: c["shard"].(string),
-				Min:   c["min"].(bson.M),
-				Max:   c["max"].(bson.M),
-			}
-			info.Chunks = append(info.Chunks, ci)
-		}
+	err = cur.All(ctx, &chunks)
+	if err != nil {
+		return nil, errors.Wrap(err, "read chunks")
 	}
 
 	return info, nil

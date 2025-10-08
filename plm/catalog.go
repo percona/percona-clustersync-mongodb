@@ -98,6 +98,7 @@ type collectionCatalog struct {
 
 type indexCatalogEntry struct {
 	*topo.IndexSpecification
+
 	Incomplete bool `bson:"incomplete"`
 	Failed     bool `bson:"failed"`
 }
@@ -561,7 +562,7 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	}) //nolint:wrapcheck
 }
 
-// ModifyCappedCollection modifies a capped collection in the target MongoDB.
+// ModifyValidation modifies a capped collection in the target MongoDB.
 func (c *Catalog) ModifyValidation(
 	ctx context.Context,
 	db string,
@@ -1143,29 +1144,17 @@ func (c *Catalog) ShardCollection(
 	shardKey bson.D,
 	unique bool,
 ) error {
-	enableCmd := bson.D{{"enableSharding", db}}
-
-	err := runWithRetry(ctx, func(ctx context.Context) error {
-		err := c.target.Database("admin").RunCommand(ctx, enableCmd).Err()
-
-		return errors.Wrap(err, "enable sharding")
-	})
-	if err != nil {
-		return err //nolint:wrapcheck
-	}
-
 	cmd := bson.D{
 		{"shardCollection", db + "." + coll},
 		{"key", shardKey},
-		// {"collation", bson.D{{"locale", "simple"}}},
 	}
 
 	if unique {
 		cmd = append(cmd, bson.E{"unique", true})
 	}
 
-	err = runWithRetry(ctx, func(ctx context.Context) error {
-		err = c.target.Database("admin").RunCommand(ctx, cmd).Err()
+	err := runWithRetry(ctx, func(ctx context.Context) error {
+		err := c.target.Database("admin").RunCommand(ctx, cmd).Err()
 
 		return errors.Wrap(err, "shard collection")
 	})

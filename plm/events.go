@@ -538,6 +538,7 @@ func (e ParsingError) Unwrap() error {
 
 type ChangeEvent struct {
 	EventHeader
+
 	Event any
 }
 

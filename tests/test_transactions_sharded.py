@@ -9,7 +9,6 @@ def test_shard_collection_in_tx(t: Testing):
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess:
             sess.start_transaction()
-            t.source.admin.command("enableSharding", "db_1")
             t.source["db_1"].create_collection("coll_1")
             t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
             t.source["db_1"]["coll_1"].insert_one({"i": 1}, session=sess)
@@ -23,8 +22,6 @@ def test_shard_collection_in_tx(t: Testing):
 
 
 def test_simple(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
-    t.source.admin.command("enableSharding", "db_2")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
     t.source["db_2"].create_collection("coll_2")
@@ -46,7 +43,6 @@ def test_simple(t: Testing):
 
 
 def test_simple_mix(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
 
@@ -68,8 +64,6 @@ def test_simple_mix(t: Testing):
 
 
 def test_simple_aborted(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
-    t.source.admin.command("enableSharding", "db_2")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
     t.source["db_2"].create_collection("coll_2")
@@ -90,7 +84,6 @@ def test_simple_aborted(t: Testing):
 
 
 def test_simple_aborted_mix(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
     t.source["db_2"].create_collection("coll_2")
@@ -110,7 +103,6 @@ def test_simple_aborted_mix(t: Testing):
 
 
 def test_in_progress(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
 
@@ -130,7 +122,6 @@ def test_in_progress(t: Testing):
 
 
 def test_in_progress_aborted(t: Testing):
-    t.source.admin.command("enableSharding", "db_1")
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": 1})
 

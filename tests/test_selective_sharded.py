@@ -40,7 +40,6 @@ def test_create_collection_with_include_only(t: testing.Testing, phase: Runner.P
         include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
     ):
         for db in range(3):
-            t.source.admin.command("enableSharding", f"db_{db}")
             for coll in range(3):
                 t.source["db_1"]["coll_1"].create_index({"i": 1})
                 t.source.admin.command("shardCollection", f"db_{db}.coll_{coll}", key={"_id": 1})
@@ -68,7 +67,6 @@ def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.P
         t.source, t.plm, phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]
     ):
         for db in range(3):
-            t.source.admin.command("enableSharding", f"db_{db}")
             for coll in range(3):
                 t.source["db_1"]["coll_1"].create_index({"i": 1})
                 t.source.admin.command("shardCollection", f"db_{db}.coll_{coll}", key={"_id": 1})
@@ -100,7 +98,6 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
         exclude_ns=["db_0.*", "db_1.coll_0", "db_3.coll_1"],
     ):
         for db in range(4):
-            t.source.admin.command("enableSharding", f"db_{db}")
             for coll in range(3):
                 t.source["db_1"]["coll_1"].create_index({"i": 1})
                 t.source.admin.command("shardCollection", f"db_{db}.coll_{coll}", key={"_id": 1})
