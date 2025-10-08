@@ -163,6 +163,12 @@ bin/plm \
     --log-json
 ```
 
+## Environment Variables
+
+- `PLM_SOURCE_URI`: MongoDB connection string for the source cluster.
+- `PLM_TARGET_URI`: MongoDB connection string for the target cluster.
+- `PLM_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
+
 ## Log JSON Fields
 
 When using the `--log-json` option, the logs will be output in JSON format with the following fields:

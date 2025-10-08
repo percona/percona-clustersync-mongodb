@@ -44,9 +44,10 @@ const (
 	DisconnectTimeout = 5 * time.Second
 	// CloseCursorTimeout is the timeout duration for closing cursor.
 	CloseCursorTimeout = 10 * time.Second
-	// OperationTimeout is the timeout duration for MonngoDB client operations like
-	// insert, update, delete, etc.
-	OperationTimeout = 5 * time.Minute
+	// DefaultOperationTimeout is the default timeout duration for MongoDB client
+	// operations like insert, update, delete, etc. It can be overridden via
+	// environment variable (see config.OperationTimeout()).
+	DefaultOperationTimeout = 5 * time.Minute
 )
 
 // Change stream and replication settings.
