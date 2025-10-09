@@ -84,16 +84,16 @@ func UseTargetClientCompressors() []string {
 	return rv
 }
 
-// OperationTimeout returns the effective timeout for MongoDB client operations.
-// If the environment variable `PLM_OPERATION_TIMEOUT` is set, it must be a valid
+// OperationMongoDBCliTimeout returns the effective timeout for MongoDB client operations.
+// If the environment variable `PLM_MONGODB_CLI_OPERATION_TIMEOUT` is set, it must be a valid
 // time duration string (e.g., "30s", "2m", "1h"). Otherwise, the
-// DefaultOperationTimeout is used.
-func OperationTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("PLM_OPERATION_TIMEOUT")); v != "" {
+// DefaultMongoDBCliOperationTimeout is used.
+func OperationMongoDBCliTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("PLM_MONGODB_CLI_OPERATION_TIMEOUT")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
 		}
 	}
 
-	return DefaultOperationTimeout
+	return DefaultMongoDBCliOperationTimeout
 }

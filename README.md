@@ -167,7 +167,7 @@ bin/plm \
 
 - `PLM_SOURCE_URI`: MongoDB connection string for the source cluster.
 - `PLM_TARGET_URI`: MongoDB connection string for the target cluster.
-- `PLM_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
+- `PLM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
 
 ## Log JSON Fields
 
