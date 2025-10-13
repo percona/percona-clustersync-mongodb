@@ -717,6 +717,10 @@ func (c *Clone) createCollection(
 		return errors.Wrap(err, "create collection")
 	}
 
+	if shInfo == nil {
+		println("AAAAAAAAAAAAAAAAAAAAa shInfo is nil")
+	}
+
 	if shInfo != nil && shInfo.IsSharded() {
 		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
 		if err != nil {

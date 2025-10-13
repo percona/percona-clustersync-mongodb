@@ -231,6 +231,7 @@ func GetCollectionShardingInfo(
 		Decode(info)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
+			println("AAAAAAAAAAAAAAAAAAAAa no documents")
 			return nil, ErrNotFound
 		}
 
