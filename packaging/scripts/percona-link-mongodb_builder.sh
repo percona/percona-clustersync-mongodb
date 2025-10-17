@@ -117,7 +117,7 @@ get_sources() {
     echo " -- SurabhiBhat <surabhi.bhat@percona.com> $(date -R)" >> packaging/debian/changelog
     cd ${WORKDIR}
     mv percona-link-mongodb ${PRODUCT}-${VERSION}
-    tar --owner=0 --group=0 -czf ${PRODUCT}-${VERSION}.tar.gz ${PRODUCT}-${VERSION}
+    tar --owner=0 --group=0 --exclude=.* -czf ${PRODUCT}-${VERSION}.tar.gz ${PRODUCT}-${VERSION}
     echo "UPLOAD=UPLOAD/experimental/BUILDS/${PRODUCT}/${PRODUCT}-${VERSION}/${BRANCH}/${REVISION}/${BUILD_ID}" >>percona-link-mongodb.properties
     mkdir $WORKDIR/source_tarball
     mkdir $CURDIR/source_tarball
