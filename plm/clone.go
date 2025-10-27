@@ -417,12 +417,8 @@ func (c *Clone) doCollectionClone(
 		return ErrTimeseriesUnsupported
 	}
 
-	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !errors.Is(err, topo.ErrNotFound) {
-		return errors.Wrap(err, "get sharding info")
-	}
 
-	err = c.createCollection(ctx, ns, spec, shInfo)
+	err = c.createCollection(ctx, ns, spec)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			lg.Errorf(err, "Failed to create %q collection", ns.String())
@@ -435,6 +431,18 @@ func (c *Clone) doCollectionClone(
 		err = c.createIndexes(ctx, ns)
 		if err != nil {
 			return errors.Wrap(err, "create indexes")
+		}
+	}
+
+	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
+	if err != nil && !errors.Is(err, topo.ErrNotFound) {
+		return errors.Wrap(err, "get sharding info")
+	}
+
+	if shInfo != nil && shInfo.IsSharded() {
+		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+		if err != nil {
+			return errors.Wrap(err, "shard collection")
 		}
 	}
 
@@ -694,7 +702,6 @@ func (c *Clone) createCollection(
 	ctx context.Context,
 	ns Namespace,
 	spec *topo.CollectionSpecification,
-	shInfo *topo.ShardingInfo,
 ) error {
 	if spec.Type == topo.TypeTimeseries {
 		return ErrTimeseriesUnsupported
@@ -715,13 +722,6 @@ func (c *Clone) createCollection(
 	err = c.catalog.CreateCollection(ctx, ns.Database, ns.Collection, &createOptions)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
-	}
-
-	if shInfo != nil && shInfo.IsSharded() {
-		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
-		if err != nil {
-			return errors.Wrap(err, "shard collection")
-		}
 	}
 
 	return nil
