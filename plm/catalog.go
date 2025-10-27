@@ -378,6 +378,22 @@ func (c *Catalog) CreateIndexes(
 			lg.Info("Create hidden index as unhidden: " + index.Name)
 		}
 
+		if index.Collation == nil {
+			lg.Info("Create index with missing collation, setting simple collation: " + index.Name)
+
+			d := bson.D{{"locale", "simple"}}
+
+			collation, err := bson.Marshal(d)
+			if err != nil {
+				return errors.Wrapf(err, "marshal simple collation for index %s.%s.%s",
+					db, coll, index.Name)
+			}
+
+			idxCopy := *index
+			idxCopy.Collation = collation
+			index = &idxCopy
+		}
+
 		idxs = append(idxs, index)
 	}
 
@@ -1147,6 +1163,7 @@ func (c *Catalog) ShardCollection(
 	cmd := bson.D{
 		{"shardCollection", db + "." + coll},
 		{"key", shardKey},
+		{"collation", bson.D{{"locale", "simple"}}},
 	}
 
 	if unique {
