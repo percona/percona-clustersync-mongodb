@@ -417,7 +417,6 @@ func (c *Clone) doCollectionClone(
 		return ErrTimeseriesUnsupported
 	}
 
-
 	err = c.createCollection(ctx, ns, spec)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -434,6 +433,8 @@ func (c *Clone) doCollectionClone(
 		}
 	}
 
+	lg.Infof("Collection %q created", ns.String())
+
 	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil && !errors.Is(err, topo.ErrNotFound) {
 		return errors.Wrap(err, "get sharding info")
@@ -446,7 +447,7 @@ func (c *Clone) doCollectionClone(
 		}
 	}
 
-	lg.Infof("Collection %q has been created", ns.String())
+	lg.Infof("Collection %q sharded", ns.String())
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
 

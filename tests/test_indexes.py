@@ -25,6 +25,16 @@ def test_create_with_collation(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_create_with_inherited_collation(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1_collation", collation={"locale": "en_US"})
+        t.source["db_1"]["coll_1_collation"].create_index({"i": 1})
+        t.source["db_1"]["coll_1_collation"].create_index({"j": 1}, collation={"locale": "simple"})
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_unique(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
