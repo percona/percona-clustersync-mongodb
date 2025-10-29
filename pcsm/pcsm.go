@@ -3,7 +3,7 @@ Package pcsm provides functionality for cloning and replicating data between Mon
 
 This package includes the following main components:
 
-  - PLM: Manages the overall replication process, including cloning and change replication.
+  - PCSM: Manages the overall replication process, including cloning and change replication.
 
   - Clone: Handles the cloning of data from a source MongoDB cluster to a target MongoDB cluster.
 
@@ -30,7 +30,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-// State represents the state of the PLM.
+// State represents the state of the PCSM.
 type State string
 
 const (
@@ -50,9 +50,9 @@ const (
 
 type OnStateChangedFunc func(newState State)
 
-// Status represents the status of the PLM.
+// Status represents the status of the PCSM.
 type Status struct {
-	// State is the current state of the PLM.
+	// State is the current state of the PCSM.
 	State State
 	// Error is the error message if the operation failed.
 	Error error
@@ -83,7 +83,7 @@ type PCSM struct {
 
 	pauseOnInitialSync bool
 
-	state State // Current state of the PLM
+	state State // Current state of the PCSM
 
 	catalog *Catalog // Catalog for managing collections and indexes
 	clone   *Clone   // Clone process
@@ -94,7 +94,7 @@ type PCSM struct {
 	lock sync.Mutex
 }
 
-// New creates a new PLM.
+// New creates a new PCSM.
 func New(source, target *mongo.Client) *PCSM {
 	return &PCSM{
 		source:         source,
@@ -151,7 +151,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	defer ml.lock.Unlock()
 
 	if ml.state != StateIdle {
-		return errors.New("cannot recover: invalid PLM state")
+		return errors.New("cannot recover: invalid PCSM state")
 	}
 
 	var cp checkpoint
@@ -221,7 +221,7 @@ func (ml *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 	ml.lock.Unlock()
 }
 
-// Status returns the current status of the PLM.
+// Status returns the current status of the PCSM.
 func (ml *PCSM) Status(ctx context.Context) *Status {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
@@ -281,7 +281,7 @@ func (ml *PCSM) resetError() {
 	ml.repl.resetError()
 }
 
-// StartOptions represents the options for starting the PLM.
+// StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to finalize after the initial sync.
 	PauseOnInitialSync bool
@@ -636,8 +636,8 @@ func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
 
 		err = ml.repl.Status().Err
 		if err != nil {
-			// no need to set the PLM failed status here.
-			// [PLM.setFailed] is called in [PLM.run].
+			// no need to set the PCSM failed status here.
+			// [PCSM.setFailed] is called in [PCSM.run].
 			return errors.Wrap(err, "post-pause change replication")
 		}
 	}

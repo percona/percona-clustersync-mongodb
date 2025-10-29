@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 import pytest
 import testing
-from pcsm import PLM, Runner
+from pcsm import PCSM, Runner
 from pymongo import MongoClient
 from testing import Testing
 from bson.decimal128 import Decimal128
@@ -595,7 +595,7 @@ def test_pcsm_110_rename_during_clone_and_repl(t: Testing):
 
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
-        r.wait_for_state(PLM.State.RUNNING)
+        r.wait_for_state(PCSM.State.RUNNING)
 
         time.sleep(1)  # ensure actual clone has started
 

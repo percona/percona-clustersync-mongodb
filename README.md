@@ -34,7 +34,7 @@ Percona ClusterSync for MongoDB is a tool for replicating data from a source Mon
     make build
     ```
 
-    Alternatively, you can install PLM from the cloned repo using `go install`:
+    Alternatively, you can install PCSM from the cloned repo using `go install`:
 
     ```sh
     go install .
@@ -51,8 +51,8 @@ Percona ClusterSync for MongoDB is a tool for replicating data from a source Mon
     Alternatively, you can use environment variables:
 
     ```sh
-    export PLM_SOURCE_URI=<source-mongodb-uri>
-    export PLM_TARGET_URI=<target-mongodb-uri>
+    export PCSM_SOURCE_URI=<source-mongodb-uri>
+    export PCSM_TARGET_URI=<target-mongodb-uri>
     bin/pcsm
     ```
 
@@ -141,9 +141,9 @@ bin/pcsm status
 curl http://localhost:2242/status
 ```
 
-## PLM Options
+## PCSM Options
 
-When starting the PLM server, you can use the following options:
+When starting the PCSM server, you can use the following options:
 
 - `--port`: The port on which the server will listen (default: 2242)
 - `--source`: The MongoDB connection string for the source cluster
@@ -165,9 +165,9 @@ bin/pcsm \
 
 ## Environment Variables
 
-- `PLM_SOURCE_URI`: MongoDB connection string for the source cluster.
-- `PLM_TARGET_URI`: MongoDB connection string for the target cluster.
-- `PLM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
+- `PCSM_SOURCE_URI`: MongoDB connection string for the source cluster.
+- `PCSM_TARGET_URI`: MongoDB connection string for the target cluster.
+- `PCSM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
 
 ## Log JSON Fields
 
@@ -265,7 +265,7 @@ Resumes the replication process.
 
 #### Request Body
 
-- `fromFailure` (optional): Allows PLM to resume from failed state
+- `fromFailure` (optional): Allows PCSM to resume from failed state
 
 Example:
 
@@ -288,7 +288,7 @@ Example:
 
 ### GET /status
 
-The /status endpoint provides the current state of the PLM replication process, including its progress, lag, and event processing details.
+The /status endpoint provides the current state of the PCSM replication process, including its progress, lag, and event processing details.
 
 #### Response
 
@@ -372,16 +372,16 @@ Alternatively, you can use environment variables:
 ```sh
 export TEST_SOURCE_URI=<source-mongodb-uri>
 export TEST_TARGET_URI=<target-mongodb-uri>
-export TEST_PLM_URL=http://localhost:2242
-export TEST_PLM_BIN=bin/pcsm_test
+export TEST_PCSM_URL=http://localhost:2242
+export TEST_PCSM_BIN=bin/pcsm_test
 poetry run pytest
 ```
 
-> The `--pcsm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the PLM binary. This allows the test suite to manage the PLM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PLM externally before running the tests.
+> The `--pcsm-bin` flag or `TEST_PCSM_BIN` environment variable specifies the path to the PCSM binary. This allows the test suite to manage the PCSM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PCSM externally before running the tests.
 
 ## Contributing
 
-Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PLM/issues) issue describing the proposed change, then submit a pull request on GitHub.
+Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PCSM/issues) issue describing the proposed change, then submit a pull request on GitHub.
 
 ## License
 

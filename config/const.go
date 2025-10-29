@@ -20,7 +20,7 @@ const (
 
 // MongoDB database and collection names.
 const (
-	// PCSMDatabase is the name of the MongoDB database used by PLM.
+	// PCSMDatabase is the name of the MongoDB database used by PCSM.
 	PCSMDatabase = "percona_clustersync_mongodb"
 	// RecoveryCollection is the name of the collection used for recovery data.
 	RecoveryCollection = "checkpoints"

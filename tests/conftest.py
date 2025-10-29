@@ -5,7 +5,7 @@ import time
 
 import pytest
 import testing
-from pcsm import PLM
+from pcsm import PCSM
 from pymongo import MongoClient
 
 
@@ -13,8 +13,8 @@ def pytest_addoption(parser):
     """Add custom command-line options to pytest."""
     parser.addoption("--source-uri", help="MongoDB URI for source")
     parser.addoption("--target-uri", help="MongoDB URI for target")
-    parser.addoption("--pcsm_url", help="PLM url")
-    parser.addoption("--pcsm-bin", help="Path to the PLM binary")
+    parser.addoption("--pcsm_url", help="PCSM url")
+    parser.addoption("--pcsm-bin", help="Path to the PCSM binary")
     parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
 
 
@@ -59,18 +59,18 @@ def target_conn(request: pytest.FixtureRequest):
 @pytest.fixture(scope="session")
 def pcsm(request: pytest.FixtureRequest):
     """Provide a pcsm instance."""
-    url = request.config.getoption("--pcsm_url") or os.environ["TEST_PLM_URL"]
-    return PLM(url)
+    url = request.config.getoption("--pcsm_url") or os.environ["TEST_PCSM_URL"]
+    return PCSM(url)
 
 
 @pytest.fixture(scope="session")
 def pcsm_bin(request: pytest.FixtureRequest):
-    """Provide the path to the PLM binary."""
-    return request.config.getoption("--pcsm-bin") or os.getenv("TEST_PLM_BIN")
+    """Provide the path to the PCSM binary."""
+    return request.config.getoption("--pcsm-bin") or os.getenv("TEST_PCSM_BIN")
 
 
 @pytest.fixture(scope="session")
-def t(source_conn: MongoClient, target_conn: MongoClient, pcsm: PLM):
+def t(source_conn: MongoClient, target_conn: MongoClient, pcsm: PCSM):
     return testing.Testing(source_conn, target_conn, pcsm)
 
 
@@ -81,7 +81,7 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
     testing.drop_all_database(target_conn)
 
 
-PLM_PROC: subprocess.Popen = None
+PCSM_PROC: subprocess.Popen = None
 
 
 def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest):
@@ -104,15 +104,15 @@ def manage_pcsm_process(request: pytest.FixtureRequest, pcsm_bin: str):
         yield
         return
 
-    global PLM_PROC  # pylint: disable=W0603
-    PLM_PROC = start_pcsm(pcsm_bin, request)
+    global PCSM_PROC  # pylint: disable=W0603
+    PCSM_PROC = start_pcsm(pcsm_bin, request)
 
     def teardown():
-        if PLM_PROC and PLM_PROC.poll() is None:
-            stop_pcsm(PLM_PROC)
+        if PCSM_PROC and PCSM_PROC.poll() is None:
+            stop_pcsm(PCSM_PROC)
 
     request.addfinalizer(teardown)
-    yield PLM_PROC
+    yield PCSM_PROC
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -129,7 +129,7 @@ def restart_pcsm_on_failure(request: pytest.FixtureRequest, pcsm_bin: str):
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
         # the test failed. restart pcsm process with a new state
-        global PLM_PROC  # pylint: disable=W0603
-        if PLM_PROC and pcsm_bin:
-            stop_pcsm(PLM_PROC)
-            PLM_PROC = start_pcsm(pcsm_bin, request)
+        global PCSM_PROC  # pylint: disable=W0603
+        if PCSM_PROC and pcsm_bin:
+            stop_pcsm(PCSM_PROC)
+            PCSM_PROC = start_pcsm(pcsm_bin, request)

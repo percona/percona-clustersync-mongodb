@@ -88,7 +88,7 @@ var rootCmd = &cobra.Command{
 
 		sourceURI, _ := cmd.Flags().GetString("source")
 		if sourceURI == "" {
-			sourceURI = os.Getenv("PLM_SOURCE_URI")
+			sourceURI = os.Getenv("PCSM_SOURCE_URI")
 		}
 		if sourceURI == "" {
 			return errors.New("required flag --source not set")
@@ -96,7 +96,7 @@ var rootCmd = &cobra.Command{
 
 		targetURI, _ := cmd.Flags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PLM_TARGET_URI")
+			targetURI = os.Getenv("PCSM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -240,11 +240,11 @@ var resumeCmd = &cobra.Command{
 //nolint:gochecknoglobals
 var resetCmd = &cobra.Command{
 	Use:   "reset",
-	Short: "Reset PLM state (heartbeat and recovery data)",
+	Short: "Reset PCSM state (heartbeat and recovery data)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.Flags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PLM_TARGET_URI")
+			targetURI = os.Getenv("PCSM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -269,7 +269,7 @@ var resetRecoveryCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PLM_TARGET_URI")
+			targetURI = os.Getenv("PCSM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -308,7 +308,7 @@ var resetHeartbeatCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		targetURI, _ := cmd.InheritedFlags().GetString("target")
 		if targetURI == "" {
-			targetURI = os.Getenv("PLM_TARGET_URI")
+			targetURI = os.Getenv("PCSM_TARGET_URI")
 		}
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -345,14 +345,14 @@ func getPort(flags *pflag.FlagSet) (int, error) {
 		return port, nil
 	}
 
-	portVar := os.Getenv("PLM_PORT")
+	portVar := os.Getenv("PCSM_PORT")
 	if portVar == "" {
 		return port, nil
 	}
 
 	parsedPort, err := strconv.ParseInt(portVar, 10, 32)
 	if err != nil {
-		return 0, errors.Errorf("invalid environment variable PLM_PORT='%s'", portVar)
+		return 0, errors.Errorf("invalid environment variable PCSM_PORT='%s'", portVar)
 	}
 
 	return int(parsedPort), nil
@@ -367,7 +367,7 @@ func main() {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
-	rootCmd.Flags().Bool("reset-state", false, "Reset stored PLM state")
+	rootCmd.Flags().Bool("reset-state", false, "Reset stored PCSM state")
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	rootCmd.Flags().MarkHidden("start")                 //nolint:errcheck
 	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
@@ -519,7 +519,7 @@ type server struct {
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-	// pcsm is the PLM instance for cluster replication.
+	// pcsm is the PCSM instance for cluster replication.
 	pcsm *pcsm.PCSM
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
@@ -596,7 +596,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {
-		return nil, errors.Wrap(err, "recover PLM")
+		return nil, errors.Wrap(err, "recover PCSM")
 	}
 
 	pcs.SetOnStateChanged(func(newState pcsm.State) {
@@ -1042,36 +1042,36 @@ type resumeResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
-type PLMClient struct {
+type PCSMClient struct {
 	port int
 }
 
-func NewClient(port int) PLMClient {
-	return PLMClient{port: port}
+func NewClient(port int) PCSMClient {
+	return PCSMClient{port: port}
 }
 
 // Status sends a request to get the status of the cluster replication.
-func (c PLMClient) Status(ctx context.Context) error {
+func (c PCSMClient) Status(ctx context.Context) error {
 	return doClientRequest[statusResponse](ctx, c.port, http.MethodGet, "status", nil)
 }
 
 // Start sends a request to start the cluster replication.
-func (c PLMClient) Start(ctx context.Context, req startRequest) error {
+func (c PCSMClient) Start(ctx context.Context, req startRequest) error {
 	return doClientRequest[startResponse](ctx, c.port, http.MethodPost, "start", req)
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c PLMClient) Finalize(ctx context.Context, req finalizeRequest) error {
+func (c PCSMClient) Finalize(ctx context.Context, req finalizeRequest) error {
 	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
 }
 
 // Pause sends a request to pause the cluster replication.
-func (c PLMClient) Pause(ctx context.Context) error {
+func (c PCSMClient) Pause(ctx context.Context) error {
 	return doClientRequest[pauseResponse](ctx, c.port, http.MethodPost, "pause", nil)
 }
 
 // Resume sends a request to resume the cluster replication.
-func (c PLMClient) Resume(ctx context.Context, req resumeRequest) error {
+func (c PCSMClient) Resume(ctx context.Context, req resumeRequest) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 

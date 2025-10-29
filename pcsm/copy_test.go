@@ -18,45 +18,46 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 func getNamespace() pcsm.Namespace {
-	s := os.Getenv("PLM_TEST_NAMESPACE")
+	s := os.Getenv("PCSM_TEST_NAMESPACE")
 	if s == "" {
-		panic("PLM_TEST_NAMESPACE is empty")
+		panic("PCSM_TEST_NAMESPACE is empty")
 	}
 
 	db, coll, _ := strings.Cut(s, ".")
 	if db == "" || coll == "" {
-		panic("PLM_TEST_NAMESPACE contains invalid namespace")
+		panic("PCSM_TEST_NAMESPACE contains invalid namespace")
 	}
 
 	return pcsm.Namespace{db, coll}
 }
 
 func getSourceURI() string {
-	s := os.Getenv("PLM_SOURCE_URI")
+	s := os.Getenv("PCSM_SOURCE_URI")
 	if s == "" {
-		panic("PLM_SOURCE_URI is empty")
+		panic("PCSM_SOURCE_URI is empty")
 	}
 
 	return s
 }
 
 func getTargetURI() string {
-	s := os.Getenv("PLM_TARGET_URI")
+	s := os.Getenv("PCSM_TARGET_URI")
 	if s == "" {
-		panic("PLM_TARGET_URI is empty")
+		panic("PCSM_TARGET_URI is empty")
 	}
 
 	return s
 }
 
 func getNumInsertWorker() int {
-	num, err := strconv.Atoi(os.Getenv("PLM_TEST_NUM_INSERT_WORKER"))
+	num, err := strconv.Atoi(os.Getenv("PCSM_TEST_NUM_INSERT_WORKER"))
 	if err != nil {
-		panic(fmt.Sprintf("PLM_TEST_NUM_INSERT_WORKER: %v", err))
+		panic(fmt.Sprintf("PCSM_TEST_NUM_INSERT_WORKER: %v", err))
 	}
 
 	if num < 1 {
@@ -67,9 +68,9 @@ func getNumInsertWorker() int {
 }
 
 func getReadBatchSize() int {
-	size, err := humanize.ParseBytes(os.Getenv("PLM_TEST_READ_BACTH_SIZE"))
+	size, err := humanize.ParseBytes(os.Getenv("PCSM_TEST_READ_BACTH_SIZE"))
 	if err != nil {
-		panic(fmt.Sprintf("PLM_TEST_READ_BACTH_SIZE: %v", err))
+		panic(fmt.Sprintf("PCSM_TEST_READ_BACTH_SIZE: %v", err))
 	}
 
 	size = max(size, 1)
@@ -78,9 +79,9 @@ func getReadBatchSize() int {
 }
 
 func getInsertBatchSize() int {
-	size, err := humanize.ParseBytes(os.Getenv("PLM_TEST_INSERT_BACTH_SIZE"))
+	size, err := humanize.ParseBytes(os.Getenv("PCSM_TEST_INSERT_BACTH_SIZE"))
 	if err != nil {
-		panic(fmt.Sprintf("PLM_TEST_INSERT_BACTH_SIZE: %v", err))
+		panic(fmt.Sprintf("PCSM_TEST_INSERT_BACTH_SIZE: %v", err))
 	}
 
 	size = max(size, 1)

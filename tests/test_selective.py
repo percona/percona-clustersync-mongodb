@@ -6,7 +6,7 @@ from pymongo import MongoClient
 
 
 def perform_with_options(source, pcsm, phase: Runner.Phase, include_ns=None, exclude_ns=None):
-    """Perform the PLM operation with the given options."""
+    """Perform the PCSM operation with the given options."""
     pcsm_options = {}
     if include_ns:
         pcsm_options["include_namespaces"] = include_ns

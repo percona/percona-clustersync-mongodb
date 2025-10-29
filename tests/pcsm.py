@@ -14,8 +14,8 @@ class WaitTimeoutError(Exception):
     """Exception raised when a wait operation times out."""
 
 
-class PLMServerError(Exception):
-    """Exception raised when there is an error with the PLM service."""
+class PCSMServerError(Exception):
+    """Exception raised when there is an error with the PCSM service."""
 
     def __init__(self, message):
         super().__init__(message)
@@ -24,11 +24,11 @@ class PLMServerError(Exception):
         return self.args[0]
 
 
-class PLM:
-    """PLM provides methods to interact with the PLM service."""
+class PCSM:
+    """PCSM provides methods to interact with the PCSM service."""
 
     class State(StrEnum):
-        """State represents the state of the PLM service."""
+        """State represents the state of the PCSM service."""
 
         FAILED = "failed"
         IDLE = "idle"
@@ -38,22 +38,22 @@ class PLM:
         FINALIZED = "finalized"
 
     def __init__(self, uri: str):
-        """Initialize PLM with the given URI."""
+        """Initialize PCSM with the given URI."""
         self.uri = uri
 
     def status(self):
-        """Get the current status of the PLM service."""
+        """Get the current status of the PCSM service."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise PLMServerError(payload["error"])
+            raise PCSMServerError(payload["error"])
 
         return payload
 
     def start(self, include_namespaces=None, exclude_namespaces=None, pause_on_initial_sync=False):
-        """Start the PLM service with the given parameters."""
+        """Start the PCSM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
         if include_namespaces:
             options["includeNamespaces"] = include_namespaces
@@ -65,49 +65,49 @@ class PLM:
 
         payload = res.json()
         if not payload["ok"]:
-            raise PLMServerError(payload["error"])
+            raise PCSMServerError(payload["error"])
 
         return payload
 
     def pause(self):
-        """Pause the PLM service."""
+        """Pause the PCSM service."""
         res = requests.post(f"{self.uri}/pause", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise PLMServerError(payload["error"])
+            raise PCSMServerError(payload["error"])
 
         return payload
 
     def resume(self):
-        """Resume the PLM service."""
+        """Resume the PCSM service."""
         res = requests.post(f"{self.uri}/resume", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise PLMServerError(payload["error"])
+            raise PCSMServerError(payload["error"])
 
         return payload
 
     def finalize(self):
-        """Finalize the PLM service."""
+        """Finalize the PCSM service."""
         res = requests.post(f"{self.uri}/finalize", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
         payload = res.json()
         if not payload["ok"]:
-            raise PLMServerError(payload["error"])
+            raise PCSMServerError(payload["error"])
 
         return payload
 
 
 class Runner:
-    """Runner manages the lifecycle of the PLM service."""
+    """Runner manages the lifecycle of the PCSM service."""
 
     class Phase(StrEnum):
-        """Phase represents the phase of the PLM service."""
+        """Phase represents the phase of the PCSM service."""
 
         CLONE = "phase:clone"
         APPLY = "phase:apply"
@@ -116,7 +116,7 @@ class Runner:
     def __init__(
         self,
         source: MongoClient,
-        pcsm: PLM,
+        pcsm: PCSM,
         phase: Phase,
         options: dict,
         wait_timeout=None,
@@ -145,32 +145,32 @@ class Runner:
         self.finalize()
 
     def start(self, pause_on_initial_sync=False):
-        """Start the PLM service."""
+        """Start the PCSM service."""
         self.finalize(fast=True)
         self.pcsm.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
 
     def finalize(self, *, fast=False):
-        """Finalize the PLM service."""
+        """Finalize the PCSM service."""
         state = self.pcsm.status()
 
-        if state["state"] == PLM.State.PAUSED:
+        if state["state"] == PCSM.State.PAUSED:
             if state["initialSync"]["cloneCompleted"]:
                 self.pcsm.resume()
                 state = self.pcsm.status()
 
-        if state["state"] == PLM.State.RUNNING:
+        if state["state"] == PCSM.State.RUNNING:
             if not fast:
                 self.wait_for_current_optime()
             self.wait_for_initial_sync()
             self.pcsm.finalize()
             state = self.pcsm.status()
 
-        if state["state"] == PLM.State.FINALIZING:
+        if state["state"] == PCSM.State.FINALIZING:
             if not fast:
-                self.wait_for_state(PLM.State.FINALIZED)
+                self.wait_for_state(PCSM.State.FINALIZED)
 
-    def wait_for_state(self, state: PLM.State):
-        """Wait for the PLM service to reach the specified state."""
+    def wait_for_state(self, state: PCSM.State):
+        """Wait for the PCSM service to reach the specified state."""
         if self.pcsm.status()["state"] == state:
             return
 
@@ -184,7 +184,7 @@ class Runner:
     def wait_for_current_optime(self):
         """Wait for the current operation time to be applied."""
         status = self.pcsm.status()
-        assert status["state"] == PLM.State.RUNNING, status
+        assert status["state"] == PCSM.State.RUNNING, status
 
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
         for _ in range(self.wait_timeout * 2):
@@ -197,14 +197,14 @@ class Runner:
         raise WaitTimeoutError()
 
     def wait_for_initial_sync(self):
-        """Wait for the PLM service to be finalizable."""
+        """Wait for the PCSM service to be finalizable."""
         status = self.pcsm.status()
-        assert status["state"] != PLM.State.IDLE, status
+        assert status["state"] != PCSM.State.IDLE, status
 
         if status["initialSync"]["completed"]:
             return
 
-        assert status["state"] == PLM.State.RUNNING, status
+        assert status["state"] == PCSM.State.RUNNING, status
 
         for _ in range(self.wait_timeout * 2):
             if status["initialSync"]["completed"]:
@@ -216,9 +216,9 @@ class Runner:
         raise WaitTimeoutError()
 
     def wait_for_clone_completed(self):
-        """Wait for the PLM service completed clone."""
+        """Wait for the PCSM service completed clone."""
         status = self.pcsm.status()
-        assert status["state"] != PLM.State.IDLE, status
+        assert status["state"] != PCSM.State.IDLE, status
 
         for _ in range(self.wait_timeout * 2):
             if status["initialSync"]["cloneCompleted"]:
