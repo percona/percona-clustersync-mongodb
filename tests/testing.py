@@ -2,7 +2,7 @@
 import hashlib
 
 import bson
-from plm import PLM, Runner
+from pcsm import PLM, Runner
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
@@ -10,14 +10,14 @@ from pymongo.collection import Collection
 class Testing:
     __test__ = False
 
-    def __init__(self, source: MongoClient, target: MongoClient, plm: PLM):
+    def __init__(self, source: MongoClient, target: MongoClient, pcsm: PLM):
         self.source: MongoClient = source
         self.target: MongoClient = target
-        self.plm: PLM = plm
+        self.pcsm: PLM = pcsm
 
     def run(self, phase: Runner.Phase, wait_timeout=None):
         """Perform the PLM operation for the given phase."""
-        return Runner(self.source, self.plm, phase, {}, wait_timeout=wait_timeout)
+        return Runner(self.source, self.pcsm, phase, {}, wait_timeout=wait_timeout)
 
     def compare_all(self, sort=None):
         """Compare all databases and collections between source and target MongoDB."""

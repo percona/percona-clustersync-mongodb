@@ -27,7 +27,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
-	"github.com/percona/percona-clustersync-mongodb/plm"
+	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
@@ -55,7 +55,7 @@ func buildVersion() string {
 
 //nolint:gochecknoglobals
 var rootCmd = &cobra.Command{
-	Use:   "plm",
+	Use:   "pcsm",
 	Short: "Percona ClusterSync for MongoDB replication tool",
 
 	SilenceUsage: true,
@@ -77,7 +77,7 @@ var rootCmd = &cobra.Command{
 
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		// Check if this is the root command being executed without a subcommand
-		if cmd.CalledAs() != "plm" || cmd.ArgsLenAtDash() != -1 {
+		if cmd.CalledAs() != "pcsm" || cmd.ArgsLenAtDash() != -1 {
 			return nil
 		}
 
@@ -479,8 +479,8 @@ func runServer(ctx context.Context, options serverOptions) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start && srv.plm.Status(ctx).State == plm.StateIdle {
-		err = srv.plm.Start(ctx, &plm.StartOptions{
+	if options.start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
+		err = srv.pcsm.Start(ctx, &pcsm.StartOptions{
 			PauseOnInitialSync: options.pause,
 		})
 		if err != nil {
@@ -519,8 +519,8 @@ type server struct {
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-	// plm is the PLM instance for cluster replication.
-	plm *plm.PLM
+	// pcsm is the PLM instance for cluster replication.
+	pcsm *pcsm.PCSM
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
 
@@ -592,15 +592,15 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	lm := plm.New(source, target)
+	pcs := pcsm.New(source, target)
 
-	err = Restore(ctx, target, lm)
+	err = Restore(ctx, target, pcs)
 	if err != nil {
 		return nil, errors.Wrap(err, "recover PLM")
 	}
 
-	lm.SetOnStateChanged(func(newState plm.State) {
-		err := DoCheckpoint(ctx, target, lm)
+	pcs.SetOnStateChanged(func(newState pcsm.State) {
+		err := DoCheckpoint(ctx, target, pcs)
 		if err != nil {
 			log.New("http:checkpointing").Error(err, "checkpoint")
 		} else {
@@ -608,12 +608,12 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	})
 
-	go RunCheckpointing(ctx, target, lm)
+	go RunCheckpointing(ctx, target, pcs)
 
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		plm:           lm,
+		pcsm:          pcs,
 		stopHeartbeat: stopHeartbeat,
 		promRegistry:  promRegistry,
 	}
@@ -672,7 +672,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := s.plm.Status(ctx)
+	status := s.pcsm.Status(ctx)
 
 	res := statusResponse{
 		Ok:    status.Error == nil,
@@ -683,7 +683,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		res.Err = err.Error()
 	}
 
-	if status.State == plm.StateIdle {
+	if status.State == pcsm.StateIdle {
 		writeResponse(w, res)
 
 		return
@@ -708,17 +708,17 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case status.State == plm.StateRunning && !status.Clone.IsFinished():
+	case status.State == pcsm.StateRunning && !status.Clone.IsFinished():
 		res.Info = "Initial Sync: Cloning Data"
-	case status.State == plm.StateRunning && !status.InitialSyncCompleted:
+	case status.State == pcsm.StateRunning && !status.InitialSyncCompleted:
 		res.Info = "Initial Sync: Replicating Changes"
-	case status.State == plm.StateRunning:
+	case status.State == pcsm.StateRunning:
 		res.Info = "Replicating Changes"
-	case status.State == plm.StateFinalizing:
+	case status.State == pcsm.StateFinalizing:
 		res.Info = "Finalizing"
-	case status.State == plm.StateFinalized:
+	case status.State == pcsm.StateFinalized:
 		res.Info = "Finalized"
-	case status.State == plm.StateFailed:
+	case status.State == pcsm.StateFailed:
 		res.Info = "Failed"
 	}
 
@@ -768,13 +768,13 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &plm.StartOptions{
+	options := &pcsm.StartOptions{
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
 		ExcludeNamespaces:  params.ExcludeNamespaces,
 	}
 
-	err := s.plm.Start(ctx, options)
+	err := s.pcsm.Start(ctx, options)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -827,11 +827,11 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &plm.FinalizeOptions{
+	options := &pcsm.FinalizeOptions{
 		IgnoreHistoryLost: params.IgnoreHistoryLost,
 	}
 
-	err := s.plm.Finalize(ctx, *options)
+	err := s.pcsm.Finalize(ctx, *options)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -862,7 +862,7 @@ func (s *server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.plm.Pause(ctx)
+	err := s.pcsm.Pause(ctx)
 	if err != nil {
 		writeResponse(w, pauseResponse{Err: err.Error()})
 
@@ -915,11 +915,11 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &plm.ResumeOptions{
+	options := &pcsm.ResumeOptions{
 		ResumeFromFailure: params.FromFailure,
 	}
 
-	err := s.plm.Resume(ctx, *options)
+	err := s.pcsm.Resume(ctx, *options)
 	if err != nil {
 		writeResponse(w, resumeResponse{Err: err.Error()})
 
@@ -988,7 +988,7 @@ type statusResponse struct {
 	Err string `json:"error,omitempty"`
 
 	// State is the current state of the replication.
-	State plm.State `json:"state"`
+	State pcsm.State `json:"state"`
 	// Info provides additional information about the current state.
 	Info string `json:"info,omitempty"`
 

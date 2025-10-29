@@ -5,7 +5,7 @@ import time
 
 import pytest
 import testing
-from plm import PLM
+from pcsm import PLM
 from pymongo import MongoClient
 
 
@@ -13,8 +13,8 @@ def pytest_addoption(parser):
     """Add custom command-line options to pytest."""
     parser.addoption("--source-uri", help="MongoDB URI for source")
     parser.addoption("--target-uri", help="MongoDB URI for target")
-    parser.addoption("--plm_url", help="PLM url")
-    parser.addoption("--plm-bin", help="Path to the PLM binary")
+    parser.addoption("--pcsm_url", help="PLM url")
+    parser.addoption("--pcsm-bin", help="Path to the PLM binary")
     parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
 
 
@@ -57,21 +57,21 @@ def target_conn(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(scope="session")
-def plm(request: pytest.FixtureRequest):
-    """Provide a plm instance."""
-    url = request.config.getoption("--plm_url") or os.environ["TEST_PLM_URL"]
+def pcsm(request: pytest.FixtureRequest):
+    """Provide a pcsm instance."""
+    url = request.config.getoption("--pcsm_url") or os.environ["TEST_PLM_URL"]
     return PLM(url)
 
 
 @pytest.fixture(scope="session")
-def plm_bin(request: pytest.FixtureRequest):
+def pcsm_bin(request: pytest.FixtureRequest):
     """Provide the path to the PLM binary."""
-    return request.config.getoption("--plm-bin") or os.getenv("TEST_PLM_BIN")
+    return request.config.getoption("--pcsm-bin") or os.getenv("TEST_PLM_BIN")
 
 
 @pytest.fixture(scope="session")
-def t(source_conn: MongoClient, target_conn: MongoClient, plm: PLM):
-    return testing.Testing(source_conn, target_conn, plm)
+def t(source_conn: MongoClient, target_conn: MongoClient, pcsm: PLM):
+    return testing.Testing(source_conn, target_conn, pcsm)
 
 
 @pytest.fixture(autouse=True)
@@ -84,32 +84,32 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
 PLM_PROC: subprocess.Popen = None
 
 
-def start_plm(plm_bin: str, request: pytest.FixtureRequest):
+def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest):
     source = source_uri(request)
     target = target_uri(request)
-    rv = subprocess.Popen([plm_bin,"--source", source ,"--target", target, "--reset-state", "--log-level=trace"])
+    rv = subprocess.Popen([pcsm_bin,"--source", source ,"--target", target, "--reset-state", "--log-level=trace"])
     time.sleep(1)
     return rv
 
 
-def stop_plm(proc: subprocess.Popen):
+def stop_pcsm(proc: subprocess.Popen):
     proc.terminate()
     return proc.wait()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def manage_plm_process(request: pytest.FixtureRequest, plm_bin: str):
-    """Start plm before tests and terminate it after all tests."""
-    if not plm_bin:
+def manage_pcsm_process(request: pytest.FixtureRequest, pcsm_bin: str):
+    """Start pcsm before tests and terminate it after all tests."""
+    if not pcsm_bin:
         yield
         return
 
     global PLM_PROC  # pylint: disable=W0603
-    PLM_PROC = start_plm(plm_bin, request)
+    PLM_PROC = start_pcsm(pcsm_bin, request)
 
     def teardown():
         if PLM_PROC and PLM_PROC.poll() is None:
-            stop_plm(PLM_PROC)
+            stop_pcsm(PLM_PROC)
 
     request.addfinalizer(teardown)
     yield PLM_PROC
@@ -124,12 +124,12 @@ def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
 
 
 @pytest.fixture(autouse=True)
-def restart_plm_on_failure(request: pytest.FixtureRequest, plm_bin: str):
+def restart_pcsm_on_failure(request: pytest.FixtureRequest, pcsm_bin: str):
     yield
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
-        # the test failed. restart plm process with a new state
+        # the test failed. restart pcsm process with a new state
         global PLM_PROC  # pylint: disable=W0603
-        if PLM_PROC and plm_bin:
-            stop_plm(PLM_PROC)
-            PLM_PROC = start_plm(plm_bin, request)
+        if PLM_PROC and pcsm_bin:
+            stop_pcsm(PLM_PROC)
+            PLM_PROC = start_pcsm(pcsm_bin, request)

@@ -116,13 +116,13 @@ class Runner:
     def __init__(
         self,
         source: MongoClient,
-        plm: PLM,
+        pcsm: PLM,
         phase: Phase,
         options: dict,
         wait_timeout=None,
     ):
         self.source: MongoClient = source
-        self.plm = plm
+        self.pcsm = pcsm
         self.phase = phase
         self.options = options
         self.wait_timeout = wait_timeout or 10
@@ -147,23 +147,23 @@ class Runner:
     def start(self, pause_on_initial_sync=False):
         """Start the PLM service."""
         self.finalize(fast=True)
-        self.plm.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
+        self.pcsm.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
 
     def finalize(self, *, fast=False):
         """Finalize the PLM service."""
-        state = self.plm.status()
+        state = self.pcsm.status()
 
         if state["state"] == PLM.State.PAUSED:
             if state["initialSync"]["cloneCompleted"]:
-                self.plm.resume()
-                state = self.plm.status()
+                self.pcsm.resume()
+                state = self.pcsm.status()
 
         if state["state"] == PLM.State.RUNNING:
             if not fast:
                 self.wait_for_current_optime()
             self.wait_for_initial_sync()
-            self.plm.finalize()
-            state = self.plm.status()
+            self.pcsm.finalize()
+            state = self.pcsm.status()
 
         if state["state"] == PLM.State.FINALIZING:
             if not fast:
@@ -171,19 +171,19 @@ class Runner:
 
     def wait_for_state(self, state: PLM.State):
         """Wait for the PLM service to reach the specified state."""
-        if self.plm.status()["state"] == state:
+        if self.pcsm.status()["state"] == state:
             return
 
         for _ in range(self.wait_timeout * 2):
             time.sleep(0.5)
-            if self.plm.status()["state"] == state:
+            if self.pcsm.status()["state"] == state:
                 return
 
         raise WaitTimeoutError()
 
     def wait_for_current_optime(self):
         """Wait for the current operation time to be applied."""
-        status = self.plm.status()
+        status = self.pcsm.status()
         assert status["state"] == PLM.State.RUNNING, status
 
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
@@ -192,13 +192,13 @@ class Runner:
                 return
 
             time.sleep(0.5)
-            status = self.plm.status()
+            status = self.pcsm.status()
 
         raise WaitTimeoutError()
 
     def wait_for_initial_sync(self):
         """Wait for the PLM service to be finalizable."""
-        status = self.plm.status()
+        status = self.pcsm.status()
         assert status["state"] != PLM.State.IDLE, status
 
         if status["initialSync"]["completed"]:
@@ -211,13 +211,13 @@ class Runner:
                 return
 
             time.sleep(0.5)
-            status = self.plm.status()
+            status = self.pcsm.status()
 
         raise WaitTimeoutError()
 
     def wait_for_clone_completed(self):
         """Wait for the PLM service completed clone."""
-        status = self.plm.status()
+        status = self.pcsm.status()
         assert status["state"] != PLM.State.IDLE, status
 
         for _ in range(self.wait_timeout * 2):
@@ -225,14 +225,14 @@ class Runner:
                 return
 
             time.sleep(0.5)
-            status = self.plm.status()
+            status = self.pcsm.status()
 
         raise WaitTimeoutError()
 
     @property
     def last_applied_op(self):
         """Get the last applied operation time."""
-        status = self.plm.status()
+        status = self.pcsm.status()
         if last_replicated_op_time := status.get("lastReplicatedOpTime"):
             t_s, i_s = last_replicated_op_time.split(".")
             return bson.Timestamp(int(t_s), int(i_s))

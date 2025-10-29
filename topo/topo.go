@@ -42,7 +42,7 @@ func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 	raw, err := m.Database("admin").RunCommand(ctx, bson.D{
 		{"appendOplogNote", 1},
-		{"data", bson.D{{"msg", "plm:tick"}}},
+		{"data", bson.D{{"msg", "pcsm:tick"}}},
 	}).Raw()
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck

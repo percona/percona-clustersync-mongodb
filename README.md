@@ -40,12 +40,12 @@ Percona ClusterSync for MongoDB is a tool for replicating data from a source Mon
     go install .
     ```
 
-    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona ClusterSync for MongoDB by typing `plm` in your terminal.
+    > This will install `pcsm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona ClusterSync for MongoDB by typing `pcsm` in your terminal.
 
 3. Run the server:
 
     ```sh
-    bin/plm --source <source-mongodb-uri> --target <target-mongodb-uri>
+    bin/pcsm --source <source-mongodb-uri> --target <target-mongodb-uri>
     ```
 
     Alternatively, you can use environment variables:
@@ -53,7 +53,7 @@ Percona ClusterSync for MongoDB is a tool for replicating data from a source Mon
     ```sh
     export PLM_SOURCE_URI=<source-mongodb-uri>
     export PLM_TARGET_URI=<target-mongodb-uri>
-    bin/plm
+    bin/pcsm
     ```
 
 ## Usage
@@ -65,7 +65,7 @@ To start the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/plm start
+bin/pcsm start
 ```
 
 #### Using HTTP API
@@ -84,7 +84,7 @@ To finalize the replication process, you can either use the command-line interfa
 #### Using Command-Line Interface
 
 ```sh
-bin/plm finalize
+bin/pcsm finalize
 ```
 
 #### Using HTTP API
@@ -100,7 +100,7 @@ To pause the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/plm pause
+bin/pcsm pause
 ```
 
 #### Using HTTP API
@@ -116,7 +116,7 @@ To resume the replication process, you can either use the command-line interface
 #### Using Command-Line Interface
 
 ```sh
-bin/plm resume
+bin/pcsm resume
 ```
 
 #### Using HTTP API
@@ -132,7 +132,7 @@ To check the current status of the replication process, you can either use the c
 #### Using Command-Line Interface
 
 ```sh
-bin/plm status
+bin/pcsm status
 ```
 
 #### Using HTTP API
@@ -155,7 +155,7 @@ When starting the PLM server, you can use the following options:
 Example:
 
 ```sh
-bin/plm \
+bin/pcsm \
     --source <source-mongodb-uri> \
     --target <target-mongodb-uri> \
     --port 2242 \
@@ -192,7 +192,7 @@ Example:
   "message": "Cloned db_1.coll_1" }
 
 { "level": "info",
-  "s": "plm",
+  "s": "pcsm",
   "elapsed_secs": 0,
   "time": "2025-02-23 11:26:03.857",
   "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
@@ -363,8 +363,8 @@ To run the tests, use the following command:
 poetry run pytest \
     --source-uri <source-mongodb-uri> \
     --target-uri <target-mongodb-uri> \
-    --plm_url http://localhost:2242 \
-    --plm-bin bin/plm_test
+    --pcsm_url http://localhost:2242 \
+    --pcsm-bin bin/pcsm_test
 ```
 
 Alternatively, you can use environment variables:
@@ -373,11 +373,11 @@ Alternatively, you can use environment variables:
 export TEST_SOURCE_URI=<source-mongodb-uri>
 export TEST_TARGET_URI=<target-mongodb-uri>
 export TEST_PLM_URL=http://localhost:2242
-export TEST_PLM_BIN=bin/plm_test
+export TEST_PLM_BIN=bin/pcsm_test
 poetry run pytest
 ```
 
-> The `--plm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the PLM binary. This allows the test suite to manage the PLM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PLM externally before running the tests.
+> The `--pcsm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the PLM binary. This allows the test suite to manage the PLM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PLM externally before running the tests.
 
 ## Contributing
 

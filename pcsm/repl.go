@@ -1,4 +1,4 @@
-package plm
+package pcsm
 
 import (
 	"context"
@@ -420,7 +420,7 @@ func (r *Repl) watchChangeEvents(
 			return errors.Wrap(err, "cursor")
 		}
 
-		// no event available yet. progress plm time
+		// no event available yet. progress pcsm time
 		if sourceTS.After(lastEventTS) {
 			changeC <- &ChangeEvent{
 				EventHeader: EventHeader{
