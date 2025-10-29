@@ -481,7 +481,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			continue
 		}
 
-		if change.Namespace.Database == config.PLMDatabase {
+		if change.Namespace.Database == config.PCSMDatabase {
 			if r.bulkWrite.Empty() {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime

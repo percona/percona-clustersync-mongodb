@@ -35,7 +35,7 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 
 	var cp checkpoint
 
-	err := m.Database(config.PLMDatabase).
+	err := m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		FindOne(ctx, bson.D{{"_id", recoveryID}}).
 		Decode(&cp)
@@ -90,7 +90,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		return errNoRecoveryData
 	}
 
-	_, err = m.Database(config.PLMDatabase).
+	_, err = m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		ReplaceOne(ctx,
 			bson.D{{"_id", recoveryID}},
@@ -108,7 +108,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 }
 
 func DeleteRecoveryData(ctx context.Context, m *mongo.Client) error {
-	_, err := m.Database(config.PLMDatabase).
+	_, err := m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		DeleteOne(ctx, bson.D{{"_id", recoveryID}})
 

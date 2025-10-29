@@ -7,7 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-const metricNamespace = "percona_link_mongodb"
+const metricNamespace = "percona_clustersync_mongodb"
 
 // Counters.
 var (

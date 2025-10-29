@@ -587,7 +587,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	total := uint64(0)
 
 	for _, db := range databases {
-		if db == config.PLMDatabase {
+		if db == config.PCSMDatabase {
 			continue
 		}
 

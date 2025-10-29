@@ -79,7 +79,7 @@ def drop_all_database(source: MongoClient):
 def list_databases(client: MongoClient):
     """List all databases in the given MongoClient."""
     for name in client.list_database_names():
-        if name not in ("admin", "config", "local", "percona_link_mongodb"):
+        if name not in ("admin", "config", "local", "percona_clustersync_mongodb"):
             yield name
 
 
