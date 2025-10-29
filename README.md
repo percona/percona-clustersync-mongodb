@@ -1,6 +1,6 @@
-# Percona Link for MongoDB
+# Percona ClusterSync for MongoDB
 
-Percona Link for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+Percona ClusterSync for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
 
 ## Features
 
@@ -40,7 +40,7 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
     go install .
     ```
 
-    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona Link for MongoDB by typing `plm` in your terminal.
+    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona ClusterSync for MongoDB by typing `plm` in your terminal.
 
 3. Run the server:
 
