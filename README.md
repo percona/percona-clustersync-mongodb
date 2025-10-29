@@ -24,8 +24,8 @@ Percona ClusterSync for MongoDB is a tool for replicating data from a source Mon
 1. Clone the repository:
 
     ```sh
-    git clone https://github.com/percona/percona-link-mongodb.git
-    cd percona-link-mongodb
+    git clone https://github.com/percona/percona-clustersync-mongodb.git
+    cd percona-clustersync-mongodb
     ```
 
 2. Build the project using the Makefile:

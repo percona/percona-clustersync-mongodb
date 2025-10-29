@@ -14,12 +14,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
-	"github.com/percona/percona-link-mongodb/metrics"
-	"github.com/percona/percona-link-mongodb/sel"
-	"github.com/percona/percona-link-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/sel"
+	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.

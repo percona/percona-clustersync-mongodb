@@ -23,13 +23,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
-	"github.com/percona/percona-link-mongodb/metrics"
-	"github.com/percona/percona-link-mongodb/plm"
-	"github.com/percona/percona-link-mongodb/topo"
-	"github.com/percona/percona-link-mongodb/util"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/plm"
+	"github.com/percona/percona-clustersync-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 // Constants for server configuration.
