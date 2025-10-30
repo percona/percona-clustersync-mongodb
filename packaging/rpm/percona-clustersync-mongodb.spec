@@ -20,7 +20,7 @@ Requires(preun):  systemd
 Requires(postun): systemd
 
 %description
-Percona Link for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+Percona ClusterSync for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
 
 %prep
 %setup -q -n percona-clustersync-mongodb-%{version}
