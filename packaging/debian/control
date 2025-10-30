@@ -1,10 +1,10 @@
-Source: percona-link-mongodb
+Source: percona-clustersync-mongodb
 Section: utils
 Priority: optional
 Maintainer: Percona LLC
 Version: %{version}
 Homepage: https://percona.com
 
-Package: percona-link-mongodb
+Package: percona-clustersync-mongodb
 Architecture: any
-Description: Percona Link for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+Description: Percona ClusterSync for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.

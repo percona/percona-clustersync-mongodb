@@ -1,4 +1,4 @@
-debian/tmp/plm /usr/bin/
-debian/tmp/default/plm /etc/default/
-debian/tmp/plm.service /lib/systemd/system/
-debian/tmp/LICENSE /usr/share/doc/percona-link-mongodb/
+debian/tmp/pcsm /usr/bin/
+debian/tmp/default/pcsm /etc/default/
+debian/tmp/pcsm.service /lib/systemd/system/
+debian/tmp/LICENSE /usr/share/doc/percona-clustersync-mongodb/

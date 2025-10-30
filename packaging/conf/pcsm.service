@@ -1,14 +1,14 @@
 [Unit]
-Description=percona-link-mongodb
+Description=percona-clustersync-mongodb
 After=time-sync.target network.target
 
 [Service]
-EnvironmentFile=/etc/sysconfig/plm
+EnvironmentFile=/etc/sysconfig/pcsm
 Type=simple
 User=mongod
 Group=mongod
 PermissionsStartOnly=true
-ExecStart=/usr/bin/plm
+ExecStart=/usr/bin/pcsm
 
 [Install]
 WantedBy=multi-user.target
