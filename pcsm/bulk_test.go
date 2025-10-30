@@ -1,4 +1,4 @@
-package plm //nolint
+package pcsm //nolint
 
 import (
 	"testing"

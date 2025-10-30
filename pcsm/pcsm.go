@@ -1,9 +1,9 @@
 /*
-Package plm provides functionality for cloning and replicating data between MongoDB clusters.
+Package pcsm provides functionality for cloning and replicating data between MongoDB clusters.
 
 This package includes the following main components:
 
-  - PLM: Manages the overall replication process, including cloning and change replication.
+  - PCSM: Manages the overall replication process, including cloning and change replication.
 
   - Clone: Handles the cloning of data from a source MongoDB cluster to a target MongoDB cluster.
 
@@ -11,7 +11,7 @@ This package includes the following main components:
 
   - Catalog: Manages collections and indexes in the target MongoDB cluster.
 */
-package plm
+package pcsm
 
 import (
 	"context"
@@ -22,37 +22,37 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
-	"github.com/percona/percona-link-mongodb/metrics"
-	"github.com/percona/percona-link-mongodb/sel"
-	"github.com/percona/percona-link-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/sel"
+	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-// State represents the state of the PLM.
+// State represents the state of the PCSM.
 type State string
 
 const (
-	// StateFailed indicates that the plm has failed.
+	// StateFailed indicates that the pcsm has failed.
 	StateFailed = "failed"
-	// StateIdle indicates that the plm is idle.
+	// StateIdle indicates that the pcsm is idle.
 	StateIdle = "idle"
-	// StateRunning indicates that the plm is running.
+	// StateRunning indicates that the pcsm is running.
 	StateRunning = "running"
-	// StatePaused indicates that the plm is paused.
+	// StatePaused indicates that the pcsm is paused.
 	StatePaused = "paused"
-	// StateFinalizing indicates that the plm is finalizing.
+	// StateFinalizing indicates that the pcsm is finalizing.
 	StateFinalizing = "finalizing"
-	// StateFinalized indicates that the plm has been finalized.
+	// StateFinalized indicates that the pcsm has been finalized.
 	StateFinalized = "finalized"
 )
 
 type OnStateChangedFunc func(newState State)
 
-// Status represents the status of the PLM.
+// Status represents the status of the PCSM.
 type Status struct {
-	// State is the current state of the PLM.
+	// State is the current state of the PCSM.
 	State State
 	// Error is the error message if the operation failed.
 	Error error
@@ -70,8 +70,8 @@ type Status struct {
 	Clone CloneStatus
 }
 
-// PLM manages the replication process.
-type PLM struct {
+// PCSM manages the replication process.
+type PCSM struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
@@ -83,7 +83,7 @@ type PLM struct {
 
 	pauseOnInitialSync bool
 
-	state State // Current state of the PLM
+	state State // Current state of the PCSM
 
 	catalog *Catalog // Catalog for managing collections and indexes
 	clone   *Clone   // Clone process
@@ -94,9 +94,9 @@ type PLM struct {
 	lock sync.Mutex
 }
 
-// New creates a new PLM.
-func New(source, target *mongo.Client) *PLM {
-	return &PLM{
+// New creates a new PCSM.
+func New(source, target *mongo.Client) *PCSM {
+	return &PCSM{
 		source:         source,
 		target:         target,
 		state:          StateIdle,
@@ -116,7 +116,7 @@ type checkpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (ml *PLM) Checkpoint(context.Context) ([]byte, error) {
+func (ml *PCSM) Checkpoint(context.Context) ([]byte, error) {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -146,12 +146,12 @@ func (ml *PLM) Checkpoint(context.Context) ([]byte, error) {
 	return bson.Marshal(cp) //nolint:wrapcheck
 }
 
-func (ml *PLM) Recover(ctx context.Context, data []byte) error {
+func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
 	if ml.state != StateIdle {
-		return errors.New("cannot recover: invalid PLM state")
+		return errors.New("cannot recover: invalid PCSM state")
 	}
 
 	var cp checkpoint
@@ -211,7 +211,7 @@ func (ml *PLM) Recover(ctx context.Context, data []byte) error {
 }
 
 // SetOnStateChanged set the f function to be called on each state change.
-func (ml *PLM) SetOnStateChanged(f OnStateChangedFunc) {
+func (ml *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 	if f == nil {
 		f = func(State) {}
 	}
@@ -221,8 +221,8 @@ func (ml *PLM) SetOnStateChanged(f OnStateChangedFunc) {
 	ml.lock.Unlock()
 }
 
-// Status returns the current status of the PLM.
-func (ml *PLM) Status(ctx context.Context) *Status {
+// Status returns the current status of the PCSM.
+func (ml *PCSM) Status(ctx context.Context) *Status {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -256,7 +256,7 @@ func (ml *PLM) Status(ctx context.Context) *Status {
 	sourceTime, err := topo.ClusterTime(ctx, ml.source)
 	if err != nil {
 		// Do not block status if source cluster is lost
-		log.New("plm").Error(err, "Status: get source cluster time")
+		log.New("pcsm").Error(err, "Status: get source cluster time")
 	} else {
 		switch {
 		case !s.Repl.LastReplicatedOpTime.IsZero():
@@ -275,13 +275,13 @@ func (ml *PLM) Status(ctx context.Context) *Status {
 	return s
 }
 
-func (ml *PLM) resetError() {
+func (ml *PCSM) resetError() {
 	ml.err = nil
 	ml.clone.resetError()
 	ml.repl.resetError()
 }
 
-// StartOptions represents the options for starting the PLM.
+// StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to finalize after the initial sync.
 	PauseOnInitialSync bool
@@ -292,20 +292,20 @@ type StartOptions struct {
 }
 
 // Start starts the replication process with the given options.
-func (ml *PLM) Start(_ context.Context, options *StartOptions) error {
+func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
 	switch ml.state {
 	case StateRunning, StateFinalizing, StateFailed:
 		err := errors.New("already running")
-		log.New("plm:start").Error(err, "")
+		log.New("pcsm:start").Error(err, "")
 
 		return err
 
 	case StatePaused:
 		err := errors.New("paused")
-		log.New("plm:start").Error(err, "")
+		log.New("pcsm:start").Error(err, "")
 
 		return err
 	}
@@ -328,23 +328,23 @@ func (ml *PLM) Start(_ context.Context, options *StartOptions) error {
 	return nil
 }
 
-func (ml *PLM) setFailed(err error) {
+func (ml *PCSM) setFailed(err error) {
 	ml.lock.Lock()
 	ml.state = StateFailed
 	ml.err = err
 	ml.lock.Unlock()
 
-	log.New("plm").Error(err, "Cluster Replication has failed")
+	log.New("pcsm").Error(err, "Cluster Replication has failed")
 
 	go ml.onStateChanged(StateFailed)
 }
 
 // run executes the cluster replication.
-func (ml *PLM) run() {
+func (ml *PCSM) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	lg := log.New("plm")
+	lg := log.New("pcsm")
 
 	lg.Info("Starting Cluster Replication")
 
@@ -397,7 +397,7 @@ func (ml *PLM) run() {
 	}
 }
 
-func (ml *PLM) monitorInitialSync(ctx context.Context) {
+func (ml *PCSM) monitorInitialSync(ctx context.Context) {
 	lg := log.New("monitor:initial-sync-lag-time")
 
 	t := time.NewTicker(time.Second)
@@ -463,7 +463,7 @@ func (ml *PLM) monitorInitialSync(ctx context.Context) {
 	}
 }
 
-func (ml *PLM) monitorLagTime(ctx context.Context) {
+func (ml *PCSM) monitorLagTime(ctx context.Context) {
 	lg := log.New("monitor:lag-time")
 
 	t := time.NewTicker(time.Second)
@@ -508,23 +508,23 @@ func (ml *PLM) monitorLagTime(ctx context.Context) {
 }
 
 // Pause pauses the replication process.
-func (ml *PLM) Pause(ctx context.Context) error {
+func (ml *PCSM) Pause(ctx context.Context) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
 	err := ml.doPause(ctx)
 	if err != nil {
-		log.New("plm").Error(err, "Pause Cluster Replication")
+		log.New("pcsm").Error(err, "Pause Cluster Replication")
 
 		return err
 	}
 
-	log.New("plm").Info("Cluster Replication paused")
+	log.New("pcsm").Info("Cluster Replication paused")
 
 	return nil
 }
 
-func (ml *PLM) doPause(ctx context.Context) error {
+func (ml *PCSM) doPause(ctx context.Context) error {
 	if ml.state != StateRunning {
 		return errors.New("cannot pause: not running")
 	}
@@ -551,7 +551,7 @@ type ResumeOptions struct {
 }
 
 // Resume resumes the replication process.
-func (ml *PLM) Resume(ctx context.Context, options ResumeOptions) error {
+func (ml *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -561,17 +561,17 @@ func (ml *PLM) Resume(ctx context.Context, options ResumeOptions) error {
 
 	err := ml.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
-		log.New("plm").Error(err, "Resume Cluster Replication")
+		log.New("pcsm").Error(err, "Resume Cluster Replication")
 
 		return err
 	}
 
-	log.New("plm").Info("Cluster Replication resumed")
+	log.New("pcsm").Info("Cluster Replication resumed")
 
 	return nil
 }
 
-func (ml *PLM) doResume(_ context.Context, fromFailure bool) error {
+func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsStarted() && !fromFailure {
@@ -596,7 +596,7 @@ type FinalizeOptions struct {
 }
 
 // Finalize finalizes the replication process.
-func (ml *PLM) Finalize(ctx context.Context, options FinalizeOptions) error {
+func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
 	status := ml.Status(ctx)
 
 	ml.lock.Lock()
@@ -636,8 +636,8 @@ func (ml *PLM) Finalize(ctx context.Context, options FinalizeOptions) error {
 
 		err = ml.repl.Status().Err
 		if err != nil {
-			// no need to set the PLM failed status here.
-			// [PLM.setFailed] is called in [PLM.run].
+			// no need to set the PCSM failed status here.
+			// [PCSM.setFailed] is called in [PCSM.run].
 			return errors.Wrap(err, "post-pause change replication")
 		}
 	}

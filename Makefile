@@ -20,11 +20,11 @@ all: build
 
 # Build production binary (optimized for runtime speed and size)
 build:
-	go build $(BUILD_FLAGS) -o bin/plm .
+	go build $(BUILD_FLAGS) -o bin/pcsm .
 
 # Build test binary with race detection and debugging enabled
 test-build:
-	go build $(TEST_BUILD_FLAGS) -o bin/plm_test .
+	go build $(TEST_BUILD_FLAGS) -o bin/pcsm_test .
 
 # Run tests with race detection
 test:

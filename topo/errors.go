@@ -6,7 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona/percona-link-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/errors"
 )
 
 // IsIndexNotFound checks if an error is an index not found error.

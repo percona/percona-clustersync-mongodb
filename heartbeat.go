@@ -8,9 +8,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
 var (
@@ -18,7 +18,7 @@ var (
 	errStaleHeartbeat    = errors.New("stale heartbeat")
 )
 
-const heartbeatID = "plm"
+const heartbeatID = "pcsm"
 
 type StopHeartbeat func(context.Context) error
 
@@ -142,7 +142,7 @@ func doFirstHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 
 	currBeat := time.Now().Unix()
 
-	_, err := m.Database(config.PLMDatabase).
+	_, err := m.Database(config.PCSMDatabase).
 		Collection(config.HeartbeatCollection).
 		InsertOne(timeoutCtx, bson.D{{"_id", heartbeatID}, {"time", currBeat}})
 	if err == nil {
@@ -153,7 +153,7 @@ func doFirstHeartbeat(ctx context.Context, m *mongo.Client) (int64, error) {
 		return 0, err //nolint:wrapcheck
 	}
 
-	raw, err := m.Database(config.PLMDatabase).
+	raw, err := m.Database(config.PCSMDatabase).
 		Collection(config.HeartbeatCollection).
 		FindOne(ctx, bson.D{{"_id", heartbeatID}}).
 		Raw()
@@ -181,7 +181,7 @@ func doHeartbeat(ctx context.Context, m *mongo.Client, lastBeat int64) (int64, e
 
 	currBeat := time.Now().Unix()
 
-	raw, err := m.Database(config.PLMDatabase).
+	raw, err := m.Database(config.PCSMDatabase).
 		Collection(config.HeartbeatCollection).
 		FindOneAndUpdate(timeoutCtx,
 			bson.D{{"_id", heartbeatID}},
@@ -206,7 +206,7 @@ func doHeartbeat(ctx context.Context, m *mongo.Client, lastBeat int64) (int64, e
 }
 
 func DeleteHeartbeat(ctx context.Context, m *mongo.Client) error {
-	_, err := m.Database(config.PLMDatabase).
+	_, err := m.Database(config.PCSMDatabase).
 		Collection(config.HeartbeatCollection).
 		DeleteOne(ctx, bson.D{{"_id", heartbeatID}})
 

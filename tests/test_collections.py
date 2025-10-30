@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 import pytest
 import testing
-from plm import PLM, Runner
+from pcsm import PCSM, Runner
 from pymongo import MongoClient
 from testing import Testing
 from bson.decimal128 import Decimal128
@@ -53,7 +53,7 @@ def test_create_diff_uuid(t: Testing, phase: Runner.Phase):
     assert source_info["name"] == "coll_1" == target_info["name"]
 
     if source_info["info"]["uuid"] == target_info["info"]["uuid"]:
-        # plm does not use applyOps. no possible to preserveUUID
+        # pcsm does not use applyOps. no possible to preserveUUID
         pytest.xfail("colllection UUID should not be equal")
 
 
@@ -558,7 +558,7 @@ def test_rename_with_drop_target(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_plm_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
+def test_pcsm_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].create_collection("coll_1", capped=True, size=2147483648, max=2147483647)
 
@@ -566,7 +566,7 @@ def test_plm_120_capped_size_overflow(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
+def test_pcsm_109_rename_complex(t: Testing, phase: Runner.Phase):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(1000))
@@ -588,14 +588,14 @@ def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.timeout(30)
-def test_plm_110_rename_during_clone_and_repl(t: Testing):
+def test_pcsm_110_rename_during_clone_and_repl(t: Testing):
     payload = random.randbytes(1000)
     for i in range(10):
         t.source["db_1"][f"coll_{i}"].insert_many({"payload": payload} for _ in range(500))
 
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
-        r.wait_for_state(PLM.State.RUNNING)
+        r.wait_for_state(PCSM.State.RUNNING)
 
         time.sleep(1)  # ensure actual clone has started
 

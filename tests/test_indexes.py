@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from plm import Runner
+from pcsm import Runner
 from testing import Testing
 
 
@@ -80,12 +80,12 @@ def test_create_partial(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_hidden(t: Testing, phase: Runner.Phase):
-    with t.run(phase) as plm:
+    with t.run(phase) as pcsm:
         name = t.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
         assert t.source["db_1"]["coll_1"].index_information()[name]["hidden"]
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             assert "hidden" not in t.target["db_1"]["coll_1"].index_information()[name]
 
     t.compare_all()
@@ -315,7 +315,7 @@ def test_modify_unique(t: Testing, phase: Runner.Phase):
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
-    with t.run(phase) as plm:
+    with t.run(phase) as pcsm:
         options = {
             "unique": True,
             "hidden": True,
@@ -328,7 +328,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
             assert source_index.get(prop) == val
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             for prop, val in options.items():
                 if prop == "expireAfterSeconds":
@@ -343,7 +343,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
 def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
 
-    with t.run(phase) as plm:
+    with t.run(phase) as pcsm:
         t.source["db_1"].command(
             {
                 "collMod": "coll_1",
@@ -355,7 +355,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
         assert source_index["prepareUnique"]
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
 
@@ -376,7 +376,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
             assert source_index.get(prop) == val
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             for prop, val in modify_options.items():
                 if prop == "expireAfterSeconds":
@@ -398,9 +398,9 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
     assert "hidden" not in source_index1
     assert "expireAfterSeconds" not in source_index1
 
-    with t.run(phase) as plm:
+    with t.run(phase) as pcsm:
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -427,7 +427,7 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
         assert source_index2["expireAfterSeconds"] == 132
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -452,7 +452,7 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
         assert source_index3["expireAfterSeconds"] == 133
 
         if phase == Runner.Phase.APPLY:
-            plm.wait_for_current_optime()
+            pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
@@ -468,23 +468,23 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
 
 
 def test_manual_create_ttl(t: Testing):
-    plm = t.run(Runner.Phase.MANUAL)
+    pcsm = t.run(Runner.Phase.MANUAL)
     try:
         t.source["db_1"]["coll_1"].create_index({"a": 1}, expireAfterSeconds=1)
-        plm.start()
+        pcsm.start()
         t.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
-        plm.wait_for_initial_sync()
+        pcsm.wait_for_initial_sync()
         t.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
-        plm.finalize()
+        pcsm.finalize()
     except:
-        plm.finalize(fast=True)
+        pcsm.finalize(fast=True)
         raise
 
     t.compare_all()
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_plm_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
+def test_pcsm_56_ttl_mismatch(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"].drop_collection("coll_1")
         t.source["db_1"]["coll_1"].insert_many(
@@ -522,7 +522,7 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
     t.compare_all()
 
 
-def test_plm_95_drop_index_for_non_existing_namespace(t: Testing):
+def test_pcsm_95_drop_index_for_non_existing_namespace(t: Testing):
     t.source["db_0"]["coll_0"].create_index([("i", 1)])
 
     with t.run(phase=Runner.Phase.APPLY):
@@ -532,7 +532,7 @@ def test_plm_95_drop_index_for_non_existing_namespace(t: Testing):
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
-def test_plm_118_ignore_incomplete_index(t: Testing, index_status: str):
+def test_pcsm_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():
         try:
             t.source["db_1"]["coll_1"].create_index([("a", 1), ("i", "text")])

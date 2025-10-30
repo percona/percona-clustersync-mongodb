@@ -1,6 +1,6 @@
-# Percona Link for MongoDB
+# Percona ClusterSync for MongoDB
 
-Percona Link for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+Percona ClusterSync for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
 
 ## Features
 
@@ -24,8 +24,8 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
 1. Clone the repository:
 
     ```sh
-    git clone https://github.com/percona/percona-link-mongodb.git
-    cd percona-link-mongodb
+    git clone https://github.com/percona/percona-clustersync-mongodb.git
+    cd percona-clustersync-mongodb
     ```
 
 2. Build the project using the Makefile:
@@ -34,26 +34,26 @@ Percona Link for MongoDB is a tool for replicating data from a source MongoDB cl
     make build
     ```
 
-    Alternatively, you can install PLM from the cloned repo using `go install`:
+    Alternatively, you can install PCSM from the cloned repo using `go install`:
 
     ```sh
     go install .
     ```
 
-    > This will install `plm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona Link for MongoDB by typing `plm` in your terminal.
+    > This will install `pcsm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona ClusterSync for MongoDB by typing `pcsm` in your terminal.
 
 3. Run the server:
 
     ```sh
-    bin/plm --source <source-mongodb-uri> --target <target-mongodb-uri>
+    bin/pcsm --source <source-mongodb-uri> --target <target-mongodb-uri>
     ```
 
     Alternatively, you can use environment variables:
 
     ```sh
-    export PLM_SOURCE_URI=<source-mongodb-uri>
-    export PLM_TARGET_URI=<target-mongodb-uri>
-    bin/plm
+    export PCSM_SOURCE_URI=<source-mongodb-uri>
+    export PCSM_TARGET_URI=<target-mongodb-uri>
+    bin/pcsm
     ```
 
 ## Usage
@@ -65,7 +65,7 @@ To start the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/plm start
+bin/pcsm start
 ```
 
 #### Using HTTP API
@@ -84,7 +84,7 @@ To finalize the replication process, you can either use the command-line interfa
 #### Using Command-Line Interface
 
 ```sh
-bin/plm finalize
+bin/pcsm finalize
 ```
 
 #### Using HTTP API
@@ -100,7 +100,7 @@ To pause the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/plm pause
+bin/pcsm pause
 ```
 
 #### Using HTTP API
@@ -116,7 +116,7 @@ To resume the replication process, you can either use the command-line interface
 #### Using Command-Line Interface
 
 ```sh
-bin/plm resume
+bin/pcsm resume
 ```
 
 #### Using HTTP API
@@ -132,7 +132,7 @@ To check the current status of the replication process, you can either use the c
 #### Using Command-Line Interface
 
 ```sh
-bin/plm status
+bin/pcsm status
 ```
 
 #### Using HTTP API
@@ -141,9 +141,9 @@ bin/plm status
 curl http://localhost:2242/status
 ```
 
-## PLM Options
+## PCSM Options
 
-When starting the PLM server, you can use the following options:
+When starting the PCSM server, you can use the following options:
 
 - `--port`: The port on which the server will listen (default: 2242)
 - `--source`: The MongoDB connection string for the source cluster
@@ -155,7 +155,7 @@ When starting the PLM server, you can use the following options:
 Example:
 
 ```sh
-bin/plm \
+bin/pcsm \
     --source <source-mongodb-uri> \
     --target <target-mongodb-uri> \
     --port 2242 \
@@ -165,9 +165,9 @@ bin/plm \
 
 ## Environment Variables
 
-- `PLM_SOURCE_URI`: MongoDB connection string for the source cluster.
-- `PLM_TARGET_URI`: MongoDB connection string for the target cluster.
-- `PLM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
+- `PCSM_SOURCE_URI`: MongoDB connection string for the source cluster.
+- `PCSM_TARGET_URI`: MongoDB connection string for the target cluster.
+- `PCSM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
 
 ## Log JSON Fields
 
@@ -192,7 +192,7 @@ Example:
   "message": "Cloned db_1.coll_1" }
 
 { "level": "info",
-  "s": "plm",
+  "s": "pcsm",
   "elapsed_secs": 0,
   "time": "2025-02-23 11:26:03.857",
   "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
@@ -265,7 +265,7 @@ Resumes the replication process.
 
 #### Request Body
 
-- `fromFailure` (optional): Allows PLM to resume from failed state
+- `fromFailure` (optional): Allows PCSM to resume from failed state
 
 Example:
 
@@ -288,7 +288,7 @@ Example:
 
 ### GET /status
 
-The /status endpoint provides the current state of the PLM replication process, including its progress, lag, and event processing details.
+The /status endpoint provides the current state of the PCSM replication process, including its progress, lag, and event processing details.
 
 #### Response
 
@@ -363,8 +363,8 @@ To run the tests, use the following command:
 poetry run pytest \
     --source-uri <source-mongodb-uri> \
     --target-uri <target-mongodb-uri> \
-    --plm_url http://localhost:2242 \
-    --plm-bin bin/plm_test
+    --pcsm_url http://localhost:2242 \
+    --pcsm-bin bin/pcsm_test
 ```
 
 Alternatively, you can use environment variables:
@@ -372,16 +372,16 @@ Alternatively, you can use environment variables:
 ```sh
 export TEST_SOURCE_URI=<source-mongodb-uri>
 export TEST_TARGET_URI=<target-mongodb-uri>
-export TEST_PLM_URL=http://localhost:2242
-export TEST_PLM_BIN=bin/plm_test
+export TEST_PCSM_URL=http://localhost:2242
+export TEST_PCSM_BIN=bin/pcsm_test
 poetry run pytest
 ```
 
-> The `--plm-bin` flag or `TEST_PLM_BIN` environment variable specifies the path to the PLM binary. This allows the test suite to manage the PLM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PLM externally before running the tests.
+> The `--pcsm-bin` flag or `TEST_PCSM_BIN` environment variable specifies the path to the PCSM binary. This allows the test suite to manage the PCSM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PCSM externally before running the tests.
 
 ## Contributing
 
-Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PLM/issues) issue describing the proposed change, then submit a pull request on GitHub.
+Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PCSM/issues) issue describing the proposed change, then submit a pull request on GitHub.
 
 ## License
 

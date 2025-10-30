@@ -2,7 +2,7 @@
 import hashlib
 
 import bson
-from plm import PLM, Runner
+from pcsm import PCSM, Runner
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
@@ -10,14 +10,14 @@ from pymongo.collection import Collection
 class Testing:
     __test__ = False
 
-    def __init__(self, source: MongoClient, target: MongoClient, plm: PLM):
+    def __init__(self, source: MongoClient, target: MongoClient, pcsm: PCSM):
         self.source: MongoClient = source
         self.target: MongoClient = target
-        self.plm: PLM = plm
+        self.pcsm: PCSM = pcsm
 
     def run(self, phase: Runner.Phase, wait_timeout=None):
-        """Perform the PLM operation for the given phase."""
-        return Runner(self.source, self.plm, phase, {}, wait_timeout=wait_timeout)
+        """Perform the PCSM operation for the given phase."""
+        return Runner(self.source, self.pcsm, phase, {}, wait_timeout=wait_timeout)
 
     def compare_all(self, sort=None):
         """Compare all databases and collections between source and target MongoDB."""
@@ -79,7 +79,7 @@ def drop_all_database(source: MongoClient):
 def list_databases(client: MongoClient):
     """List all databases in the given MongoClient."""
     for name in client.list_database_names():
-        if name not in ("admin", "config", "local", "percona_link_mongodb"):
+        if name not in ("admin", "config", "local", "percona_clustersync_mongodb"):
             yield name
 
 

@@ -1,4 +1,4 @@
-module github.com/percona/percona-link-mongodb
+module github.com/percona/percona-clustersync-mongodb
 
 go 1.24
 

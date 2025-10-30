@@ -1,7 +1,7 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 
-from plm import Runner
+from pcsm import Runner
 from testing import Testing
 
 
@@ -43,22 +43,22 @@ def test_simple_aborted(t: Testing):
 
 
 def test_mixed_with_non_trx_ops(t: Testing):
-    plm = t.run(Runner.Phase.APPLY)
+    pcsm = t.run(Runner.Phase.APPLY)
     with t.source.start_session() as sess:
         for trx in range(2):
             sess.start_transaction()
             t.source["db_1"]["coll_1"].insert_one({"i": 1})
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": trx}, session=sess)
 
-            plm.start()
+            pcsm.start()
             t.source["db_1"]["coll_1"].insert_one({"i": 3})
 
             t.source["db_1"]["coll_1"].insert_one({"i": 4, "trx": trx}, session=sess)
             t.source["db_1"]["coll_1"].insert_one({"i": 5})
             sess.commit_transaction()
 
-            plm.wait_for_current_optime()
-            plm.finalize()
+            pcsm.wait_for_current_optime()
+            pcsm.finalize()
 
     assert t.source["db_1"]["coll_1"].count_documents({}) == 10
 
@@ -66,7 +66,7 @@ def test_mixed_with_non_trx_ops(t: Testing):
 
 
 def test_mixed_with_non_trx_ops_aborted(t: Testing):
-    plm = t.run(None)
+    pcsm = t.run(None)
 
     with t.source.start_session() as sess:
         for trx in range(2):
@@ -74,15 +74,15 @@ def test_mixed_with_non_trx_ops_aborted(t: Testing):
             t.source["db_1"]["coll_1"].insert_one({"i": 1})
             t.source["db_1"]["coll_1"].insert_one({"i": 1, "trx": trx}, session=sess)
 
-            plm.start()
+            pcsm.start()
             t.source["db_1"]["coll_1"].insert_one({"i": 2})
-            plm.wait_for_initial_sync()
+            pcsm.wait_for_initial_sync()
 
             t.source["db_1"]["coll_1"].insert_one({"i": 2, "trx": trx}, session=sess)
             t.source["db_1"]["coll_1"].insert_one({"i": 3})
             sess.abort_transaction()
 
-        plm.finalize()
+        pcsm.finalize()
 
     assert t.source["db_1"]["coll_1"].count_documents({}) == 6
 
@@ -269,7 +269,7 @@ def test_concurrent_trx_all_aborted(t: Testing):
     t.compare_all()
 
 
-def test_plm_103_panic_after_trx(t: Testing):
+def test_pcsm_103_panic_after_trx(t: Testing):
     with t.run(phase=Runner.Phase.APPLY):
         with t.source.start_session() as sess, sess.start_transaction():
             t.source["db_1"]["coll_1"].insert_one({"i": 1}, session=sess)

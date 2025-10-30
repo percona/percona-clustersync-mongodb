@@ -1,4 +1,4 @@
-package plm
+package pcsm
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
-	"github.com/percona/percona-link-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 var ErrTimeseriesUnsupported = errors.New("timeseries is not supported")

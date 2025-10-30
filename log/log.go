@@ -1,4 +1,4 @@
-// Package log provides logging utilities for the PLM application.
+// Package log provides logging utilities for the PCSM application.
 package log
 
 import (

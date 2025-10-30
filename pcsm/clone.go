@@ -1,4 +1,4 @@
-package plm
+package pcsm
 
 import (
 	"cmp"
@@ -14,12 +14,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
-	"github.com/percona/percona-link-mongodb/metrics"
-	"github.com/percona/percona-link-mongodb/sel"
-	"github.com/percona/percona-link-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/sel"
+	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
@@ -587,7 +587,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 	total := uint64(0)
 
 	for _, db := range databases {
-		if db == config.PLMDatabase {
+		if db == config.PCSMDatabase {
 			continue
 		}
 

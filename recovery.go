@@ -8,14 +8,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/percona/percona-link-mongodb/config"
-	"github.com/percona/percona-link-mongodb/errors"
-	"github.com/percona/percona-link-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
 var errNoRecoveryData = errors.New("no recovery data")
 
-const recoveryID = "plm"
+const recoveryID = "pcsm"
 
 type Recoverable interface {
 	Checkpoint(ctx context.Context) ([]byte, error)
@@ -35,7 +35,7 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 
 	var cp checkpoint
 
-	err := m.Database(config.PLMDatabase).
+	err := m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		FindOne(ctx, bson.D{{"_id", recoveryID}}).
 		Decode(&cp)
@@ -90,7 +90,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		return errNoRecoveryData
 	}
 
-	_, err = m.Database(config.PLMDatabase).
+	_, err = m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		ReplaceOne(ctx,
 			bson.D{{"_id", recoveryID}},
@@ -108,7 +108,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 }
 
 func DeleteRecoveryData(ctx context.Context, m *mongo.Client) error {
-	_, err := m.Database(config.PLMDatabase).
+	_, err := m.Database(config.PCSMDatabase).
 		Collection(config.RecoveryCollection).
 		DeleteOne(ctx, bson.D{{"_id", recoveryID}})
 
