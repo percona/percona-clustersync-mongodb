@@ -33,10 +33,10 @@ override_dh_auto_build:
 	export PATH=/usr/local/go/bin:${PATH}
 	export GOROOT="/usr/local/go/"
 	export GOBINPATH="/usr/local/go/bin"
-	mkdir -p build/src/github.com/percona/percona-link-mongodb
-	cp -r `ls | grep -v build` build/src/github.com/percona/percona-link-mongodb/
+	mkdir -p build/src/github.com/percona/percona-clustersync-mongodb
+	cp -r `ls | grep -v build` build/src/github.com/percona/percona-clustersync-mongodb/
 	( \
-	  cd build/src/github.com/percona/percona-link-mongodb/ && \
+	  cd build/src/github.com/percona/percona-clustersync-mongodb/ && \
 	  export GO111MODULE=on; \
 	  export GOMODCACHE=${PWD}/go-mod-cache; \
 	  for i in 1 2 3; do \
@@ -52,12 +52,12 @@ override_dh_auto_install:
 	@echo "RULES.$@"
 	mkdir -p $(TMP)
 	mkdir -p $(TMP)/default
-	cd build/src/github.com/percona/percona-link-mongodb/bin && cp plm $(TMP)/plm
-	cp -f packaging/conf/plm.env  $(TMP)/default/plm
-	cp -f packaging/conf/plm.service $(TMP)/plm.service
+	cd build/src/github.com/percona/percona-clustersync-mongodb/bin && cp pcsm $(TMP)/pcsm
+	cp -f packaging/conf/pcsm.env  $(TMP)/default/pcsm
+	cp -f packaging/conf/pcsm.service $(TMP)/pcsm.service
 	cp -f LICENSE $(TMP)/LICENSE
 	ls -la $(TMP)
 
 override_dh_systemd_start:
-	dh_systemd_enable --name=plm plm.service
+	dh_systemd_enable --name=pcsm pcsm.service
 	dh_systemd_start --restart-after-upgrade

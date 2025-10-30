@@ -9,10 +9,10 @@ usage () {
     cat <<EOF
 Usage: $0 [OPTIONS]
     The following options may be given :
-        --plm_version        PostgreSQL major_version.minor_version
+        --pcsm_version        PostgreSQL major_version.minor_version
         --repo_type         Repository type
         --help) usage ;;
-Example $0 --plm_version=7.0.18-11 --repo_type=testing
+Example $0 --pcsm_version=7.0.18-11 --repo_type=testing
 EOF
         exit 1
 }
@@ -33,7 +33,7 @@ parse_arguments() {
         val=$(echo "$arg" | sed -e 's;^--[^=]*=;;')
         case "$arg" in
             --builddir=*) WORKDIR="$val" ;;
-            --plm_version=*) PLM_VERSION="$val" ;;
+            --pcsm_version=*) PCSM_VERSION="$val" ;;
             --repo_type=*) REPO_TYPE="$val" ;;
             --git_repo=*) GIT_REPO="$val" ;;
             --git_branch=*) GIT_BRANCH="$val" ;;
@@ -49,7 +49,7 @@ parse_arguments() {
 }
 
 CWD=$(pwd)
-PLM_VERSION=0.5.0
+PCSM_VERSION=0.5.0
 REPO_TYPE=testing
 ARCH=$(uname -m)
 
@@ -103,15 +103,15 @@ install_dependencies() {
 install_dependencies
 
 # Install Percona repo and PostgreSQL
-install_percona_link_mongodb() {
+install_percona_clustersync_mongodb() {
   case "$PLATFORM_ID" in
     ol|rhel|centos|oraclelinux|amzn)
       # Install Percona repo on RHEL/CentOS/OracleLinux
       curl -sO https://repo.percona.com/yum/percona-release-latest.noarch.rpm
       dnf install -y percona-release-latest.noarch.rpm
-      percona-release enable plm ${REPO_TYPE}
+      percona-release enable pcsm ${REPO_TYPE}
       dnf install -y \
-	percona-link-mongodb
+	percona-clustersync-mongodb
       ;;
     ubuntu|debian)
       # Install Percona repo on Ubuntu/Debian
@@ -120,12 +120,12 @@ install_percona_link_mongodb() {
       apt --fix-broken install -y  # Fix broken dependencies
       apt update
 
-      # Explicitly enable the plm repository
+      # Explicitly enable the pcsm repository
       percona-release enable telemetry
-      percona-release enable plm ${REPO_TYPE}
+      percona-release enable pcsm ${REPO_TYPE}
       apt-get update
       apt-get install -y \
-	percona-link-mongodb
+	percona-clustersync-mongodb
       ;;
     *)
       echo "Unsupported platform: $PLATFORM_ID"
@@ -135,20 +135,20 @@ install_percona_link_mongodb() {
 }
 
 # Install Percona repository and PostgreSQL
-install_percona_link_mongodb
+install_percona_clustersync_mongodb
 
 # Install Syft (if not already installed)
 if ! command -v syft &>/dev/null; then
   curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 fi
 
-mkdir -p $CWD/plm_sbom
+mkdir -p $CWD/pcsm_sbom
 
 # Generate full SBOM using db fallback
 echo "Generating full SBOM via db..."
 syft dir:/ --output cyclonedx-json > sbom-full-db.json
 
-# Filter PLM components and preserve SBOM structure
+# Filter PCSM components and preserve SBOM structure
 jq '{
   "$schema": ."$schema",
   "bomFormat": .bomFormat,
@@ -157,6 +157,6 @@ jq '{
   "version": .version,
   "metadata": .metadata,
   "components": [.components[] | select(.name | test("mongodb|percona"; "i"))]
-}' sbom-full-db.json > $CWD/plm_sbom/sbom-percona-link-mongodb-${PLM_VERSION}-${PLATFORM}-${ARCH}.json
+}' sbom-full-db.json > $CWD/pcsm_sbom/sbom-percona-clustersync-mongodb-${PCSM_VERSION}-${PLATFORM}-${ARCH}.json
 
-echo "✅ SBOM for Percona Backup for MongoDB ${PLM_VERSION} written to: $CWD/plm_sbom/sbom-percona-link-mongodb-${PLM_VERSION}-${PLATFORM}-${ARCH}.json"
+echo "✅ SBOM for Percona Backup for MongoDB ${PCSM_VERSION} written to: $CWD/pcsm_sbom/sbom-percona-clustersync-mongodb-${PCSM_VERSION}-${PLATFORM}-${ARCH}.json"

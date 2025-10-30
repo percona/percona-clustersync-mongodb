@@ -21,7 +21,7 @@ Usage: $0 [OPTIONS]
         --version           Version to build
 
         --help) usage ;;
-Example $0 --builddir=/tmp/percona-link-mongodb --get_sources=1 --build_src_rpm=1 --build_rpm=1
+Example $0 --builddir=/tmp/percona-clustersync-mongodb --get_sources=1 --build_src_rpm=1 --build_rpm=1
 EOF
     exit 1
 }
@@ -81,13 +81,13 @@ get_sources() {
         echo "Sources will not be downloaded"
         return 0
     fi
-    PRODUCT=percona-link-mongodb
+    PRODUCT=percona-clustersync-mongodb
     PRODUCT_FULL=${PRODUCT}-${VERSION}
-    echo "PRODUCT=${PRODUCT}" >percona-link-mongodb.properties
-    echo "BUILD_NUMBER=${BUILD_NUMBER}" >>percona-link-mongodb.properties
-    echo "BUILD_ID=${BUILD_ID}" >>percona-link-mongodb.properties
-    echo "VERSION=${VERSION}" >>percona-link-mongodb.properties
-    echo "BRANCH=${BRANCH}" >>percona-link-mongodb.properties
+    echo "PRODUCT=${PRODUCT}" >percona-clustersync-mongodb.properties
+    echo "BUILD_NUMBER=${BUILD_NUMBER}" >>percona-clustersync-mongodb.properties
+    echo "BUILD_ID=${BUILD_ID}" >>percona-clustersync-mongodb.properties
+    echo "VERSION=${VERSION}" >>percona-clustersync-mongodb.properties
+    echo "BRANCH=${BRANCH}" >>percona-clustersync-mongodb.properties
     git clone "$REPO" ${PRODUCT}
 
     retval=$?
@@ -95,7 +95,7 @@ get_sources() {
         echo "There were some issues during repo cloning from github. Please retry one more time"
         exit 1
     fi
-    cd percona-link-mongodb
+    cd percona-clustersync-mongodb
     if [ ! -z "$BRANCH" ]; then
         git reset --hard
         git clean -xdf
@@ -110,21 +110,21 @@ get_sources() {
     echo "GITCOMMIT=${GITCOMMIT}" >>VERSION
     echo "GITBRANCH=${GITBRANCH}" >>VERSION
     echo "COMPONENT_VERSION=${COMPONENT_VERSION}" >>VERSION
-    echo "REVISION=${REVISION}" >>${WORKDIR}/percona-link-mongodb.properties
+    echo "REVISION=${REVISION}" >>${WORKDIR}/percona-clustersync-mongodb.properties
     rm -fr debian rpm
-    echo "percona-link-mongodb (${VERSION}) unstable; urgency=low" >> packaging/debian/changelog
+    echo "percona-clustersync-mongodb (${VERSION}) unstable; urgency=low" >> packaging/debian/changelog
     echo "  * Initial Release." >> packaging/debian/changelog
     echo " -- SurabhiBhat <surabhi.bhat@percona.com> $(date -R)" >> packaging/debian/changelog
     cd ${WORKDIR}
-    mv percona-link-mongodb ${PRODUCT}-${VERSION}
+    mv percona-clustersync-mongodb ${PRODUCT}-${VERSION}
     tar --owner=0 --group=0 --exclude=.* -czf ${PRODUCT}-${VERSION}.tar.gz ${PRODUCT}-${VERSION}
-    echo "UPLOAD=UPLOAD/experimental/BUILDS/${PRODUCT}/${PRODUCT}-${VERSION}/${BRANCH}/${REVISION}/${BUILD_ID}" >>percona-link-mongodb.properties
+    echo "UPLOAD=UPLOAD/experimental/BUILDS/${PRODUCT}/${PRODUCT}-${VERSION}/${BRANCH}/${REVISION}/${BUILD_ID}" >>percona-clustersync-mongodb.properties
     mkdir $WORKDIR/source_tarball
     mkdir $CURDIR/source_tarball
     cp ${PRODUCT}-${VERSION}.tar.gz $WORKDIR/source_tarball
     cp ${PRODUCT}-${VERSION}.tar.gz $CURDIR/source_tarball
     cd $CURDIR
-    rm -rf percona-link-mongodb
+    rm -rf percona-clustersync-mongodb
     return
 }
 
@@ -207,9 +207,9 @@ install_deps() {
 
 get_tar() {
     TARBALL=$1
-    TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
+    TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
     if [ -z $TARFILE ]; then
-        TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
+        TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
         if [ -z $TARFILE ]; then
             echo "There is no $TARBALL for build"
             exit 1
@@ -225,9 +225,9 @@ get_tar() {
 get_deb_sources() {
     param=$1
     echo $param
-    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-link-mongodb*.$param" | sort | tail -n1))
+    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
     if [ -z $FILE ]; then
-        FILE=$(basename $(find $CURDIR/source_deb -name "percona-link-mongodb*.$param" | sort | tail -n1))
+        FILE=$(basename $(find $CURDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
         if [ -z $FILE ]; then
             echo "There is no sources for build"
             exit 1
@@ -253,7 +253,7 @@ build_srpm() {
     get_tar "source_tarball"
     rm -fr rpmbuild
     ls | grep -v tar.gz | xargs rm -rf
-    TARFILE=$(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1)
+    TARFILE=$(find . -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1)
     SRC_DIR=${TARFILE%.tar.gz}
     mkdir -vp rpmbuild/{SOURCES,SPECS,BUILD,SRPMS,RPMS}
     tar vxzf ${WORKDIR}/${TARFILE} --wildcards '*/packaging' --strip=1
@@ -263,9 +263,9 @@ build_srpm() {
     sed -e "s:@@VERSION@@:${VERSION}:g" \
         -e "s:@@RELEASE@@:${RELEASE}:g" \
         -e "s:@@REVISION@@:${REVISION}:g" \
-        packaging/rpm/percona-link-mongodb.spec >rpmbuild/SPECS/percona-link-mongodb.spec
+        packaging/rpm/percona-clustersync-mongodb.spec >rpmbuild/SPECS/percona-clustersync-mongodb.spec
     mv -fv ${TARFILE} ${WORKDIR}/rpmbuild/SOURCES
-    rpmbuild -bs --define "_topdir ${WORKDIR}/rpmbuild" --define "version ${VERSION}" --define "dist .generic" rpmbuild/SPECS/percona-link-mongodb.spec
+    rpmbuild -bs --define "_topdir ${WORKDIR}/rpmbuild" --define "version ${VERSION}" --define "dist .generic" rpmbuild/SPECS/percona-clustersync-mongodb.spec
     mkdir -p ${WORKDIR}/srpm
     mkdir -p ${CURDIR}/srpm
     cp rpmbuild/SRPMS/*.src.rpm ${CURDIR}/srpm
@@ -282,9 +282,9 @@ build_rpm() {
         echo "It is not possible to build rpm here"
         exit 1
     fi
-    SRC_RPM=$(basename $(find $WORKDIR/srpm -name 'percona-link-mongodb*.src.rpm' | sort | tail -n1))
+    SRC_RPM=$(basename $(find $WORKDIR/srpm -name 'percona-clustersync-mongodb*.src.rpm' | sort | tail -n1))
     if [ -z $SRC_RPM ]; then
-        SRC_RPM=$(basename $(find $CURDIR/srpm -name 'percona-link-mongodb*.src.rpm' | sort | tail -n1))
+        SRC_RPM=$(basename $(find $CURDIR/srpm -name 'percona-clustersync-mongodb*.src.rpm' | sort | tail -n1))
         if [ -z $SRC_RPM ]; then
             echo "There is no src rpm for build"
             echo "You can create it using key --build_src_rpm=1"
@@ -302,8 +302,8 @@ build_rpm() {
 
     ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
 
-    echo "RHEL=${RHEL}" >>percona-link-mongodb.properties
-    echo "ARCH=${ARCH}" >>percona-link-mongodb.properties
+    echo "RHEL=${RHEL}" >>percona-clustersync-mongodb.properties
+    echo "ARCH=${ARCH}" >>percona-clustersync-mongodb.properties
     [[ ${PATH} == *"/usr/local/go/bin"* && -x /usr/local/go/bin/go ]] || export PATH=/usr/local/go/bin:${PATH}
     export GOROOT="/usr/local/go/"
     export GOPATH=$(pwd)/
@@ -333,11 +333,11 @@ build_source_deb() {
         echo "It is not possible to build source deb here"
         exit 1
     fi
-    rm -rf percona-link-mongodb*
+    rm -rf percona-clustersync-mongodb*
     get_tar "source_tarball"
     rm -f *.dsc *.orig.tar.gz *.changes *.tar.xz
     #
-    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
+    TARFILE=$(basename $(find . -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
     DEBIAN=$(lsb_release -sc)
     ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
     tar zxf ${TARFILE}
@@ -352,8 +352,8 @@ build_source_deb() {
     cp -r packaging/debian ./
     sed -i "s:@@VERSION@@:${VERSION}:g" debian/rules
     sed -i "s:@@REVISION@@:${REVISION}:g" debian/rules
-    sed -i "s:sysconfig:default:" packaging/conf/plm.service
-    dch -D unstable --force-distribution -v "${VERSION}" "Update to new percona-link-mongodb version ${VERSION}"
+    sed -i "s:sysconfig:default:" packaging/conf/pcsm.service
+    dch -D unstable --force-distribution -v "${VERSION}" "Update to new percona-clustersync-mongodb version ${VERSION}"
     dpkg-buildpackage -S
     cd ../
     mkdir -p $WORKDIR/source_deb
@@ -388,8 +388,8 @@ build_deb() {
     export DEBIAN=$(lsb_release -sc)
     export ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
     #
-    echo "DEBIAN=${DEBIAN}" >>percona-link-mongodb.properties
-    echo "ARCH=${ARCH}" >>percona-link-mongodb.properties
+    echo "DEBIAN=${DEBIAN}" >>percona-clustersync-mongodb.properties
+    echo "ARCH=${ARCH}" >>percona-clustersync-mongodb.properties
 
     #
     DSC=$(basename $(find . -name '*.dsc' | sort | tail -n1))
@@ -423,7 +423,7 @@ build_tarball() {
     fi
     get_tar "source_tarball"
     cd $WORKDIR
-    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | tail -n1))
+    TARFILE=$(basename $(find . -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
 
     if [ -f /etc/debian_version ]; then
         export DEBIAN_VERSION="$(lsb_release -sc)"
@@ -435,39 +435,39 @@ build_tarball() {
     fi
     #
     ARCH=$(uname -m 2>/dev/null || true)
-    TARFILE=$(basename $(find . -name 'percona-link-mongodb*.tar.gz' | sort | grep -v "tools" | tail -n1))
-    PLMDIR=${TARFILE%.tar.gz}
-    PLMDIR_ABS=${WORKDIR}/${PLMDIR}
+    TARFILE=$(basename $(find . -name 'percona-clustersync-mongodb*.tar.gz' | sort | grep -v "tools" | tail -n1))
+    PCSMDIR=${TARFILE%.tar.gz}
+    PCSMDIR_ABS=${WORKDIR}/${PCSMDIR}
 
     tar xzf $TARFILE
     rm -f $TARFILE
-    mkdir -p build/src/github.com/percona/percona-link-mongodb
-    mv ${PLMDIR}/* build/src/github.com/percona/percona-link-mongodb/
+    mkdir -p build/src/github.com/percona/percona-clustersync-mongodb
+    mv ${PCSMDIR}/* build/src/github.com/percona/percona-clustersync-mongodb/
     export PATH=/usr/local/go/bin:${PATH}
     export GOROOT="/usr/local/go/"
     export GOPATH=${PWD}/build
     export PATH="/usr/local/go/bin:${PATH}:${GOPATH}"
     export GOBINPATH="/usr/local/go/bin"
 
-    cd build/src/github.com/percona/percona-link-mongodb/
+    cd build/src/github.com/percona/percona-clustersync-mongodb/
     source VERSION
     export VERSION
     export GITBRANCH
     export GITCOMMIT
     make build
-    cp ./bin/plm ${WORKDIR}/${PLMDIR}/
+    cp ./bin/pcsm ${WORKDIR}/${PCSMDIR}/
     cd ${WORKDIR}/
 
-    tar --owner=0 --group=0 -czf ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${PLMDIR}
+    tar --owner=0 --group=0 -czf ${WORKDIR}/${PCSMDIR}-${ARCH}.tar.gz ${PCSMDIR}
     DIRNAME="tarball"
     mkdir -p ${WORKDIR}/${DIRNAME}
     mkdir -p ${CURDIR}/${DIRNAME}
-    cp ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${WORKDIR}/${DIRNAME}
-    cp ${WORKDIR}/${PLMDIR}-${ARCH}.tar.gz ${CURDIR}/${DIRNAME}
+    cp ${WORKDIR}/${PCSMDIR}-${ARCH}.tar.gz ${WORKDIR}/${DIRNAME}
+    cp ${WORKDIR}/${PCSMDIR}-${ARCH}.tar.gz ${CURDIR}/${DIRNAME}
 }
 
 CURDIR=$(pwd)
-VERSION_FILE=$CURDIR/percona-link-mongodb.properties
+VERSION_FILE=$CURDIR/percona-clustersync-mongodb.properties
 args=
 WORKDIR=
 SRPM=0
@@ -484,8 +484,8 @@ VERSION="1.0"
 RELEASE="1"
 REVISION=0
 BRANCH="main"
-REPO="https://github.com/percona/percona-link-mongodb.git"
-PRODUCT=percona-link-mongodb
+REPO="https://github.com/percona/percona-clustersync-mongodb.git"
+PRODUCT=percona-clustersync-mongodb
 parse_arguments PICK-ARGS-FROM-ARGV "$@"
 
 check_workdir
