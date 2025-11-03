@@ -689,8 +689,8 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res.EventsProcessed = status.Repl.EventsProcessed
-	res.LagTime = status.TotalLagTime
+	res.EventsApplied = status.Repl.EventsApplied
+	res.LagTimeSeconds = status.TotalLagTimeSeconds
 
 	if !status.Repl.LastReplicatedOpTime.IsZero() {
 		res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
@@ -699,12 +699,12 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res.InitialSync = &statusInitialSyncResponse{
-		Completed: status.InitialSyncCompleted,
-		LagTime:   status.InitialSyncLagTime,
+		Completed:      status.InitialSyncCompleted,
+		LagTimeSeconds: status.InitialSyncLagTimeSeconds,
 
-		CloneCompleted:     status.Clone.IsFinished(),
-		EstimatedCloneSize: status.Clone.EstimatedTotalSize,
-		ClonedSize:         status.Clone.CopiedSize,
+		CloneCompleted:          status.Clone.IsFinished(),
+		EstimatedCloneSizeBytes: status.Clone.EstimatedTotalSizeBytes,
+		ClonedSizeBytes:         status.Clone.CopiedSizeBytes,
 	}
 
 	switch {
@@ -992,10 +992,10 @@ type statusResponse struct {
 	// Info provides additional information about the current state.
 	Info string `json:"info,omitempty"`
 
-	// LagTime is the current lag time in logical seconds.
-	LagTime int64 `json:"lagTime"`
-	// EventsProcessed is the number of events processed.
-	EventsProcessed int64 `json:"eventsProcessed"`
+	// LagTimeSeconds is the current lag time in logical seconds.
+	LagTimeSeconds int64 `json:"lagTimeSeconds"`
+	// EventsApplied is the number of events applied.
+	EventsApplied int64 `json:"eventsApplied"`
 	// LastReplicatedOpTime is the last replicated operation time.
 	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
 
@@ -1005,13 +1005,13 @@ type statusResponse struct {
 
 // statusInitialSyncResponse represents the initial sync status in the /status response.
 type statusInitialSyncResponse struct {
-	// LagTime is the lag time in logical seconds until the initial sync completed.
-	LagTime int64 `json:"lagTime,omitempty"`
+	// LagTimeSeconds is the lag time in logical seconds until the initial sync completed.
+	LagTimeSeconds int64 `json:"lagTimeSeconds,omitempty"`
 
-	// EstimatedCloneSize is the estimated total size of the clone.
-	EstimatedCloneSize uint64 `json:"estimatedCloneSize,omitempty"`
-	// ClonedSize is the size of the data that has been cloned.
-	ClonedSize uint64 `json:"clonedSize"`
+	// EstimatedCloneSizeBytes is the estimated total size of the clone in bytes.
+	EstimatedCloneSizeBytes uint64 `json:"estimatedCloneSizeBytes,omitempty"`
+	// ClonedSizeBytes is the size of the data that has been cloned.
+	ClonedSizeBytes uint64 `json:"clonedSizeBytes"`
 
 	// Completed indicates if the initial sync is completed.
 	Completed bool `json:"completed"`

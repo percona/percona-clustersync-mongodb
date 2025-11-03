@@ -12,9 +12,9 @@ const metricNamespace = "percona_clustersync_mongodb"
 // Counters.
 var (
 	//nolint:gochecknoglobals
-	eventsProcessedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name:      "events_processed_total",
-		Help:      "Total number of events processed.",
+	eventsAppliedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "events_applied_total",
+		Help:      "Total number of events applied.",
 		Namespace: metricNamespace,
 	})
 
@@ -101,7 +101,7 @@ func Init(reg prometheus.Registerer) {
 		copyReadBatchDurationSeconds,
 		copyInsertBatchDurationSeconds,
 
-		eventsProcessedTotal,
+		eventsAppliedTotal,
 		lagTimeSeconds,
 		intialSyncLagTimeSeconds,
 	)
@@ -144,9 +144,9 @@ func SetCopyInsertBatchDurationSeconds(dur time.Duration) {
 	copyInsertBatchDurationSeconds.Set(float64(dur.Seconds()))
 }
 
-// AddEventsProcessed increments the total number of events processed counter.
-func AddEventsProcessed(v int) {
-	eventsProcessedTotal.Add(float64(v))
+// AddEventsApplied increments the total number of events applied counter.
+func AddEventsApplied(v int) {
+	eventsAppliedTotal.Add(float64(v))
 }
 
 // SetLagTimeSeconds sets the lag time in seconds gauge.

@@ -40,7 +40,7 @@ type Repl struct {
 	lock sync.Mutex
 	err  error
 
-	eventsProcessed int64
+	eventsApplied int64
 
 	startTime time.Time
 	pauseTime time.Time
@@ -61,7 +61,7 @@ type ReplStatus struct {
 	PauseTime time.Time
 
 	LastReplicatedOpTime bson.Timestamp // Last applied operation time
-	EventsProcessed      int64          // Number of events processed
+	EventsApplied        int64          // Number of events applied
 
 	Err error
 }
@@ -95,7 +95,7 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 type replCheckpoint struct {
 	StartTime            time.Time      `bson:"startTime,omitempty"`
 	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
-	EventsProcessed      int64          `bson:"events,omitempty"`
+	EventsApplied        int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
@@ -112,7 +112,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		EventsProcessed:      r.eventsProcessed,
+		EventsApplied:        r.eventsApplied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
 
@@ -145,7 +145,7 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 
 	r.startTime = cp.StartTime
 	r.pauseTime = pauseTime
-	r.eventsProcessed = cp.EventsProcessed
+	r.eventsApplied = cp.EventsApplied
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
 	if cp.UseClientBulkWrite {
@@ -168,7 +168,7 @@ func (r *Repl) Status() ReplStatus {
 
 	return ReplStatus{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
-		EventsProcessed:      r.eventsProcessed,
+		EventsApplied:        r.eventsApplied,
 
 		StartTime: r.startTime,
 		PauseTime: r.pauseTime,
@@ -485,10 +485,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			if r.bulkWrite.Empty() {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
-				r.eventsProcessed++
+				r.eventsApplied++
 				r.lock.Unlock()
 
-				metrics.AddEventsProcessed(1)
+				metrics.AddEventsApplied(1)
 			}
 
 			continue
@@ -498,10 +498,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			if r.bulkWrite.Empty() {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
-				r.eventsProcessed++
+				r.eventsApplied++
 				r.lock.Unlock()
 
-				metrics.AddEventsProcessed(1)
+				metrics.AddEventsApplied(1)
 			}
 
 			continue
@@ -552,10 +552,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime
-			r.eventsProcessed++
+			r.eventsApplied++
 			r.lock.Unlock()
 
-			metrics.AddEventsProcessed(1)
+			metrics.AddEventsApplied(1)
 
 			switch change.OperationType { //nolint:exhaustive
 			case Create, Rename, Drop, DropDatabase:
@@ -603,10 +603,10 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 
 	r.lock.Lock()
 	r.lastReplicatedOpTime = r.bulkTS
-	r.eventsProcessed += int64(size)
+	r.eventsApplied += int64(size)
 	r.lock.Unlock()
 
-	metrics.AddEventsProcessed(size)
+	metrics.AddEventsApplied(size)
 
 	log.New("bulk:write").
 		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDoneAt))).

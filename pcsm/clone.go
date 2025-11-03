@@ -47,8 +47,8 @@ type Clone struct {
 
 // CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
-	EstimatedTotalSize uint64 // Estimated total bytes to be copied
-	CopiedSize         uint64 // Bytes copied so far
+	EstimatedTotalSizeBytes uint64 // Estimated total bytes to be copied
+	CopiedSizeBytes         uint64 // Bytes copied so far
 
 	StartTS  bson.Timestamp
 	FinishTS bson.Timestamp
@@ -148,13 +148,13 @@ func (c *Clone) Status() CloneStatus {
 	defer c.lock.Unlock()
 
 	return CloneStatus{
-		EstimatedTotalSize: c.totalSize,
-		CopiedSize:         c.copiedSize.Load(),
-		StartTS:            c.startTS,
-		FinishTS:           c.finishTS,
-		StartTime:          c.startTime,
-		FinishTime:         c.finishTime,
-		Err:                c.err,
+		EstimatedTotalSizeBytes: c.totalSize,
+		CopiedSizeBytes:         c.copiedSize.Load(),
+		StartTS:                 c.startTS,
+		FinishTS:                c.finishTS,
+		StartTime:               c.startTime,
+		FinishTime:              c.finishTime,
+		Err:                     c.err,
 	}
 }
 
