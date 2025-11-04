@@ -299,7 +299,10 @@ The /status endpoint provides the current state of the PCSM replication process,
 
 - `lagTimeSeconds`: the current lag time in logical seconds between source and target clusters.
 - `eventsApplied`: the number of events applied to the target cluster.
-- `lastReplicatedOpTime`: the last replicated operation time.
+- `lastReplicatedOpTime`: the last replicated operation time
+- `lastReplicatedOpTime.ts`: op time timestamp
+- `lastReplicatedOpTime.isoDate`: op time ts in human-readable form
+
 
 - `initialSync.completed`: indicates if the initial sync is completed.
 - `initialSync.lagTimeSeconds`: the lag time in logical seconds until the initial sync completed.
@@ -318,7 +321,10 @@ Example:
 
     "lagTimeSeconds": 22,
     "eventsApplied": 5000,
-    "lastReplicatedOpTime": "1740335200.5",
+    "lastReplicatedOpTime": {
+        "ts": "1762241863.1",
+        "isoDate": "2025-11-04T07:37:43Z"
+    },
 
     "initialSync": {
         "completed": false,
