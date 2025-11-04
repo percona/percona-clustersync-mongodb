@@ -488,6 +488,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		r.eventsRead.Add(1)
+		metrics.IncEventsRead()
 
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.bulkWrite.Empty() {

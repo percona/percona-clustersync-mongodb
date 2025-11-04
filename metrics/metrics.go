@@ -12,6 +12,13 @@ const metricNamespace = "percona_clustersync_mongodb"
 // Counters.
 var (
 	//nolint:gochecknoglobals
+	eventsReadTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "events_read_total",
+		Help:      "Total number of events read from the source.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
 	eventsAppliedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name:      "events_applied_total",
 		Help:      "Total number of events applied.",
@@ -142,6 +149,11 @@ func SetCopyReadBatchDurationSeconds(dur time.Duration) {
 // operation.
 func SetCopyInsertBatchDurationSeconds(dur time.Duration) {
 	copyInsertBatchDurationSeconds.Set(float64(dur.Seconds()))
+}
+
+// IncEventsRead increments the total number of events read counter.
+func IncEventsRead() {
+	eventsReadTotal.Inc()
 }
 
 // AddEventsApplied increments the total number of events applied counter.
