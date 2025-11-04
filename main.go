@@ -693,9 +693,17 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	res.LagTimeSeconds = status.TotalLagTimeSeconds
 
 	if !status.Repl.LastReplicatedOpTime.IsZero() {
-		res.LastReplicatedOpTime = fmt.Sprintf("%d.%d",
+		ts := fmt.Sprintf("%d.%d",
 			status.Repl.LastReplicatedOpTime.T,
 			status.Repl.LastReplicatedOpTime.I)
+
+		isoDate := time.Unix(int64(status.Repl.LastReplicatedOpTime.T),
+			int64(status.Repl.LastReplicatedOpTime.I)).UTC()
+
+		res.LastReplicatedOpTime = &lastReplicatedOpTime{
+			TS:      ts,
+			ISODate: isoDate.Format(time.RFC3339),
+		}
 	}
 
 	res.InitialSync = &statusInitialSyncResponse{
@@ -997,10 +1005,15 @@ type statusResponse struct {
 	// EventsApplied is the number of events applied.
 	EventsApplied int64 `json:"eventsApplied"`
 	// LastReplicatedOpTime is the last replicated operation time.
-	LastReplicatedOpTime string `json:"lastReplicatedOpTime,omitempty"`
+	LastReplicatedOpTime *lastReplicatedOpTime `json:"lastReplicatedOpTime,omitempty"`
 
 	// InitialSync contains the initial sync status details.
 	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
+}
+
+type lastReplicatedOpTime struct {
+	TS      string `json:"ts"`
+	ISODate string `json:"isoDate"`
 }
 
 // statusInitialSyncResponse represents the initial sync status in the /status response.
