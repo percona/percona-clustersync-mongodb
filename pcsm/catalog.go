@@ -134,7 +134,6 @@ func (c *Catalog) UnlockWrite() {
 func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
 	// do not call [sync.RWMutex.RLock] to avoid deadlock through recursive read-locking
 	// that may happen during clone or change replication
-
 	if len(c.Databases) == 0 {
 		return nil
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -40,6 +41,7 @@ type Repl struct {
 	lock sync.Mutex
 	err  error
 
+	eventsRead    atomic.Int64
 	eventsApplied int64
 
 	startTime time.Time
@@ -61,6 +63,7 @@ type ReplStatus struct {
 	PauseTime time.Time
 
 	LastReplicatedOpTime bson.Timestamp // Last applied operation time
+	EventsRead           int64          // Number of events read from the source
 	EventsApplied        int64          // Number of events applied
 
 	Err error
@@ -95,6 +98,7 @@ func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilt
 type replCheckpoint struct {
 	StartTime            time.Time      `bson:"startTime,omitempty"`
 	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
+	EventsRead           int64          `bson:"eventsRead,omitempty"`
 	EventsApplied        int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
@@ -112,6 +116,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
+		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        r.eventsApplied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
@@ -168,6 +173,7 @@ func (r *Repl) Status() ReplStatus {
 
 	return ReplStatus{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
+		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        r.eventsApplied,
 
 		StartTime: r.startTime,
@@ -480,6 +486,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 			continue
 		}
+
+		r.eventsRead.Add(1)
 
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.bulkWrite.Empty() {

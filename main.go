@@ -689,6 +689,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	res.EventsRead = status.Repl.EventsRead
 	res.EventsApplied = status.Repl.EventsApplied
 	res.LagTimeSeconds = status.TotalLagTimeSeconds
 
@@ -1002,6 +1003,8 @@ type statusResponse struct {
 
 	// LagTimeSeconds is the current lag time in logical seconds.
 	LagTimeSeconds int64 `json:"lagTimeSeconds"`
+	// EventsRead is the number of events read from the source. Not counting tick events.
+	EventsRead int64 `json:"eventsRead"`
 	// EventsApplied is the number of events applied.
 	EventsApplied int64 `json:"eventsApplied"`
 	// LastReplicatedOpTime is the last replicated operation time.
