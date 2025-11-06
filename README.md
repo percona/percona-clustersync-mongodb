@@ -297,16 +297,19 @@ The /status endpoint provides the current state of the PCSM replication process,
 - `info`: provides additional information about the current state.
 - `error` (optional): the error message if the operation failed.
 
-- `lagTime`: the current lag time in logical seconds between source and target clusters.
-- `eventsProcessed`: the number of events processed.
-- `lastReplicatedOpTime`: the last replicated operation time.
+- `lagTimeSeconds`: the current lag time in logical seconds between source and target clusters.
+- `eventsApplied`: the number of events applied to the target cluster.
+- `lastReplicatedOpTime`: the last replicated operation time
+- `lastReplicatedOpTime.ts`: op time timestamp
+- `lastReplicatedOpTime.isoDate`: op time ts in human-readable form
+
 
 - `initialSync.completed`: indicates if the initial sync is completed.
-- `initialSync.lagTime`: the lag time in logical seconds until the initial sync completed.
+- `initialSync.lagTimeSeconds`: the lag time in logical seconds until the initial sync completed.
 
 - `initialSync.cloneCompleted`: indicates if the cloning process is completed.
-- `initialSync.estimatedCloneSize`: the estimated total size of the clone.
-- `initialSync.clonedSize`: the size of the data that has been cloned.
+- `initialSync.estimatedCloneSizeBytes`: the estimated total size of the clone.
+- `initialSync.clonedSizeBytes`: the size of the data that has been cloned.
 
 Example:
 
@@ -316,17 +319,20 @@ Example:
     "state": "running",
     "info": "Initial Sync",
 
-    "lagTime": 22,
-    "eventsProcessed": 5000,
-    "lastReplicatedOpTime": "1740335200.5",
+    "lagTimeSeconds": 22,
+    "eventsApplied": 5000,
+    "lastReplicatedOpTime": {
+        "ts": "1762241863.1",
+        "isoDate": "2025-11-04T07:37:43Z"
+    },
 
     "initialSync": {
         "completed": false,
-        "lagTime": 5,
+        "lagTimeSeconds": 5,
 
         "cloneCompleted": false,
-        "estimatedCloneSize": 5000000000,
-        "clonedSize": 2500000000
+        "estimatedCloneSizeBytes": 5000000000,
+        "clonedSizeBytes": 2500000000
     }
 }
 ```

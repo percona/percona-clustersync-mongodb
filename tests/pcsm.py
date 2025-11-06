@@ -233,7 +233,8 @@ class Runner:
     def last_applied_op(self):
         """Get the last applied operation time."""
         status = self.pcsm.status()
-        if last_replicated_op_time := status.get("lastReplicatedOpTime"):
+        last_replicated_op_time = status.get("lastReplicatedOpTime", {}).get("ts")
+        if last_replicated_op_time:
             t_s, i_s = last_replicated_op_time.split(".")
             return bson.Timestamp(int(t_s), int(i_s))
 

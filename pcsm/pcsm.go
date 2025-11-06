@@ -57,10 +57,10 @@ type Status struct {
 	// Error is the error message if the operation failed.
 	Error error
 
-	// TotalLagTime is the current lag time in logical seconds between source and target clusters.
-	TotalLagTime int64
-	// InitialSyncLagTime is the lag time during the initial sync.
-	InitialSyncLagTime int64
+	// TotalLagTimeSeconds is the current lag time in logical seconds between source and target clusters.
+	TotalLagTimeSeconds int64
+	// InitialSyncLagTimeSeconds is the lag time during the initial sync.
+	InitialSyncLagTimeSeconds int64
 	// InitialSyncCompleted indicates if the initial sync is completed.
 	InitialSyncCompleted bool
 
@@ -261,15 +261,15 @@ func (ml *PCSM) Status(ctx context.Context) *Status {
 		switch {
 		case !s.Repl.LastReplicatedOpTime.IsZero():
 			totalLag := int64(sourceTime.T) - int64(s.Repl.LastReplicatedOpTime.T)
-			s.TotalLagTime = totalLag
+			s.TotalLagTimeSeconds = totalLag
 		case !s.Clone.StartTS.IsZero():
 			totalLag := int64(sourceTime.T) - int64(s.Clone.StartTS.T)
-			s.TotalLagTime = totalLag
+			s.TotalLagTimeSeconds = totalLag
 		}
 	}
 
 	if !s.InitialSyncCompleted {
-		s.InitialSyncLagTime = s.TotalLagTime
+		s.InitialSyncLagTimeSeconds = s.TotalLagTimeSeconds
 	}
 
 	return s
