@@ -1,0 +1,143 @@
+services:
+
+  # ----------------- Source -----------------
+  src-mongos:
+    image: percona/percona-server-mongodb:8.0
+    container_name: src-mongos
+    hostname: src-mongos
+    ports: ["27017:27017"]
+    volumes: ["./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongos",
+        "-f",
+        "/cfg/mongos.conf",
+        "--configdb",
+        "src-cfg/src-cfg0:27000",
+      ]
+
+  src-cfg0:
+    image: percona/percona-server-mongodb:8.0
+    container_name: src-cfg0
+    hostname: src-cfg0
+    ports: ["27000:27000"]
+    volumes: ["src-cfg0:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/configsvr.conf",
+        "--replSet",
+        "src-cfg",
+        "--port",
+        "27000",
+      ]
+
+  src-rs00:
+    image: percona/percona-server-mongodb:8.0
+    container_name: src-rs00
+    hostname: src-rs00
+    ports: ["30000:30000"]
+    volumes: ["src-rs00:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs0",
+        "--port",
+        "30000",
+      ]
+
+  src-rs10:
+    image: percona/percona-server-mongodb:8.0
+    container_name: src-rs10
+    hostname: src-rs10
+    ports: ["30100:30100"]
+    volumes: ["src-rs10:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs1",
+        "--port",
+        "30100",
+      ]
+
+  # ----------------- Target -----------------
+  tgt-mongos:
+    image: percona/percona-server-mongodb:8.0
+    container_name: tgt-mongos
+    hostname: tgt-mongos
+    ports: ["29017:27017"]
+    volumes: ["./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongos",
+        "-f",
+        "/cfg/mongos.conf",
+        "--configdb",
+        "tgt-cfg/tgt-cfg0:28000",
+      ]
+
+  tgt-cfg0:
+    image: percona/percona-server-mongodb:8.0
+    container_name: tgt-cfg0
+    hostname: tgt-cfg0
+    ports: ["28000:28000"]
+    volumes: ["tgt-cfg0:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/configsvr.conf",
+        "--replSet",
+        "tgt-cfg",
+        "--port",
+        "28000",
+      ]
+
+  tgt-rs00:
+    image: percona/percona-server-mongodb:8.0
+    container_name: tgt-rs00
+    hostname: tgt-rs00
+    ports: ["40000:40000"]
+    volumes: ["tgt-rs00:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs0",
+        "--port",
+        "40000",
+      ]
+
+  tgt-rs10:
+    image: percona/percona-server-mongodb:8.0
+    container_name: tgt-rs10
+    hostname: tgt-rs10
+    ports: ["40100:40100"]
+    volumes: ["tgt-rs10:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs1",
+        "--port",
+        "40100",
+      ]
+
+volumes:
+  src-cfg0:
+  src-rs00:
+  src-rs10:
+  tgt-cfg0:
+  tgt-rs00:
+  tgt-rs10:
