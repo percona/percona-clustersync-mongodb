@@ -1,0 +1,122 @@
+services:
+  rs00:
+    image: mongo:8
+    container_name: rs00
+    hostname: rs00
+    ports: ["30000:30000"]
+    volumes: ["rs00:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs0",
+        "--port=30000",
+        "--bind_ip_all",
+      ]
+
+  rs01:
+    image: mongo:8
+    container_name: rs01
+    hostname: rs01
+    ports: ["30001:30001"]
+    volumes: ["rs01:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs0",
+        "--port=30001",
+        "--bind_ip_all",
+      ]
+
+  rs02:
+    image: mongo:8
+    container_name: rs02
+    hostname: rs02
+    ports: ["30002:30002"]
+    volumes: ["rs02:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs0",
+        "--port=30002",
+        "--bind_ip_all",
+      ]
+
+  rs10:
+    image: mongo:8
+    container_name: rs10
+    hostname: rs10
+    ports: ["30100:30100"]
+    volumes: ["rs10:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs1",
+        "--port=30100",
+        "--bind_ip_all",
+      ]
+
+  rs11:
+    image: mongo:8
+    container_name: rs11
+    hostname: rs11
+    ports: ["30101:30101"]
+    volumes: ["rs11:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs1",
+        "--port=30101",
+        "--bind_ip_all",
+      ]
+
+  rs12:
+    image: mongo:8
+    container_name: rs12
+    hostname: rs12
+    ports: ["30102:30102"]
+    volumes: ["rs12:/data/db", "./mongo/:/cfg:ro"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g # Maximum memory MongoDB can use (2GB)
+        reservations:
+          memory: 512m # Soft limit (container tries to stay within 512MB)
+    command:
+      [
+        "--replSet=rs1",
+        "--port=30102",
+        "--bind_ip_all",
+      ]
+
+volumes:
+  rs00:
+  rs01:
+  rs02:
+  rs10:
+  rs11:
+  rs12:
