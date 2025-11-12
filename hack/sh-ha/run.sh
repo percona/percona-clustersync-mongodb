@@ -9,6 +9,8 @@ source "$BASE/util"
 
 SDIR="$BASE/sh-ha"
 
+chmod 400 "$SDIR"/mongo/keyFile
+
 export MONGO_IMAGE=mongo:8
 export compose=$SDIR/compose.yml
 
