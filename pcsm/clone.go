@@ -441,13 +441,14 @@ func (c *Clone) doCollectionClone(
 	}
 
 	if shInfo != nil && shInfo.IsSharded() {
-		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
-		if err != nil {
-			return errors.Wrap(err, "shard collection")
-		}
+		// err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+		// if err != nil {
+		// 	return errors.Wrap(err, "shard collection")
+		// }
+
+		lg.Infof("Cloning sharded collection %q as non-sharded to the target replica-set cluster", ns.String())
 	}
 
-	lg.Infof("Collection %q sharded", ns.String())
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
 

@@ -729,12 +729,13 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		return ErrInvalidateEvent
 
 	case ShardCollection:
-		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
-		err = r.catalog.ShardCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			event.OperationDescription.ShardKey,
-			event.OperationDescription.Unique)
+		lg.Warnf("Unsupported operation type: %s, for replica-set target", string(change.OperationType))
+		// event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
+		// err = r.catalog.ShardCollection(ctx,
+		// 	change.Namespace.Database,
+		// 	change.Namespace.Collection,
+		// 	event.OperationDescription.ShardKey,
+		// 	event.OperationDescription.Unique)
 
 	case ReshardCollection:
 		fallthrough
