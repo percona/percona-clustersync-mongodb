@@ -19,6 +19,11 @@ on:
     paths-ignore:
       - "tests/**"
       - "packaging/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     if: github.event.pull_request.draft == false
@@ -28,6 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         psmdb: ["6.0", "7.0", "8.0"]
+        shard: [0, 1, 2, 3, 4]
     env:
       PCSM_BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.event.inputs.pcsm_branch || 'main' }}
     steps:
@@ -45,9 +51,9 @@ jobs:
           docker compose up -d
         working-directory: psmdb-testing/pcsm-pytest
 
-      - name: Test ${{ matrix.test }} sync on PSMDB ${{ matrix.psmdb }} and PCSM PR/branch ${{ github.head_ref || github.event.inputs.pcsm_branch || env.PCSM_BRANCH }}
+      - name: Run pytest shard ${{ matrix.shard }} on PSMDB ${{ matrix.psmdb }} and PCSM PR/branch ${{ github.head_ref || github.event.inputs.pcsm_branch || env.PCSM_BRANCH }}
         run: |
-          docker compose run --rm test pytest -s --junitxml=junit.xml
+          docker compose run --rm test pytest -s -v --junitxml=junit.xml --shard-id=${{ matrix.shard }} --num-shards=5 -m 'not jenkins'
         working-directory: psmdb-testing/pcsm-pytest
 
       - name: Publish Test Report
