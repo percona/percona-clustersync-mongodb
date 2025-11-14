@@ -1160,13 +1160,15 @@ func (c *Catalog) ShardCollection(
 	unique bool,
 ) error {
 	cmd := bson.D{
-		{"shardCollection", db + "." + coll},
-		{"key", shardKey},
-		{"collation", bson.D{{"locale", "simple"}}},
+		{Key: "shardCollection", Value: db + "." + coll},
+		{Key: "key", Value: shardKey},
 	}
 
 	if unique {
-		cmd = append(cmd, bson.E{"unique", true})
+		cmd = append(cmd,
+			bson.E{Key: "unique", Value: true},
+			bson.E{Key: "enforceUniquenessCheck", Value: false},
+		)
 	}
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
