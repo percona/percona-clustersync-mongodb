@@ -1162,6 +1162,7 @@ func (c *Catalog) ShardCollection(
 	cmd := bson.D{
 		{Key: "shardCollection", Value: db + "." + coll},
 		{Key: "key", Value: shardKey},
+		{"collation", bson.D{{"locale", "simple"}}},
 	}
 
 	if unique {
