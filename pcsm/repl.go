@@ -116,7 +116,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		EventsRead:           r.eventsRead.Load(),
+		EventsRead:           r.eventsApplied,
 		EventsApplied:        r.eventsApplied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
@@ -151,6 +151,7 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 	r.startTime = cp.StartTime
 	r.pauseTime = pauseTime
 	r.eventsApplied = cp.EventsApplied
+	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
 	if cp.UseClientBulkWrite {
