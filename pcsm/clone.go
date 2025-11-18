@@ -445,9 +445,9 @@ func (c *Clone) doCollectionClone(
 		if err != nil {
 			return errors.Wrap(err, "shard collection")
 		}
-	}
 
-	lg.Infof("Collection %q sharded", ns.String())
+		lg.Infof("Collection %q sharded", ns.String())
+	}
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
 

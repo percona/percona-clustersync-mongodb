@@ -1186,7 +1186,7 @@ func (c *Catalog) ShardCollection(
 		return err //nolint:wrapcheck
 	}
 
-	log.Ctx(ctx).Infof("Sharded collection %s.%s", db, coll)
+	log.Ctx(ctx).Debugf("Sharded collection %s.%s", db, coll)
 
 	// update c.databases[db].collections[coll].sharded = true
 	c.lock.Lock()
