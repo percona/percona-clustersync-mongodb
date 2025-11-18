@@ -341,7 +341,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 				prevNS := ns
 				ns = namespaceInfo{
-					Namespace: Namespace{prevNS.Database, name},
+					Namespace: Namespace{Database: prevNS.Database, Collection: name},
 					UUID:      prevNS.UUID,
 				}
 
@@ -407,7 +407,7 @@ func (c *Clone) doCollectionClone(
 	spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		if errors.Is(err, topo.ErrNotFound) {
-			return NamespaceNotFoundError(ns)
+			return NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
 		return errors.Wrap(err, "$collStats")
@@ -617,7 +617,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 				collGrp.Go(func() error {
 					if spec.Type == topo.TypeView {
 						mu.Lock()
-						sm[Namespace{db, spec.Name}] = sizeMapElem{}
+						sm[Namespace{Database: db, Collection: spec.Name}] = sizeMapElem{}
 						mu.Unlock()
 
 						return nil
@@ -633,7 +633,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 					}
 
 					mu.Lock()
-					sm[Namespace{db, spec.Name}] = sizeMapElem{
+					sm[Namespace{Database: db, Collection: spec.Name}] = sizeMapElem{
 						UUID:  spec.UUID,
 						Size:  uint64(stats.Size), //nolint:gosec
 						Count: stats.Count,

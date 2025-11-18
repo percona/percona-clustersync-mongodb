@@ -33,7 +33,7 @@ func getNamespace() pcsm.Namespace {
 		panic("PCSM_TEST_NAMESPACE contains invalid namespace")
 	}
 
-	return pcsm.Namespace{db, coll}
+	return pcsm.Namespace{Database: db, Collection: coll}
 }
 
 func getSourceURI() string {

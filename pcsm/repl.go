@@ -153,10 +153,15 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 	r.eventsApplied = cp.EventsApplied
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
+	targetVer, err := topo.Version(context.Background(), r.target)
+	if err != nil {
+		return errors.Wrap(err, "major version")
+	}
+
 	if cp.UseClientBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	}
 
 	if cp.Error != "" {
@@ -210,15 +215,15 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.New("already started")
 	}
 
-	serverVersion, err := topo.Version(ctx, r.target)
+	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(serverVersion).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+	if topo.Support(targetVer).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
