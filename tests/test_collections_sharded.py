@@ -57,6 +57,13 @@ def test_create_collection_with_collation(t: Testing, phase: Runner.Phase):
         t.source.admin.command(
             "shardCollection", "db_1.coll_1", key={"name": 1}, collation={"locale": "simple"}
         )
+        t.source["db_1"]["coll_1"].insert_many([{"name": "n3"}, {"name": "n2"}, {"name": "n3"}])
+
+        t.source["db_1"].create_collection("coll_2", collation={"locale": "en", "strength": 2})
+        t.source.admin.command(
+            "shardCollection", "db_1.coll_2", key={"_id": "hashed"}, collation={"locale": "simple"}
+        )
+        t.source["db_1"]["coll_2"].insert_many([{"_id": 11}, {"_id": 22}, {"_id": 33}])
 
     t.compare_all_sharded()
 

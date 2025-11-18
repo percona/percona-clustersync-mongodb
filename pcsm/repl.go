@@ -573,7 +573,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			metrics.AddEventsApplied(1)
 
 			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase:
+			case Create, Rename, Drop, DropDatabase, ShardCollection:
 				uuidMap = r.catalog.UUIDMap()
 			}
 		}
@@ -741,6 +741,8 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			change.Namespace.Collection,
 			event.OperationDescription.ShardKey,
 			event.OperationDescription.Unique)
+
+		lg.Infof("Collection %q has been sharded", change.Namespace)
 
 	case ReshardCollection:
 		fallthrough

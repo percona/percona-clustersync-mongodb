@@ -1188,7 +1188,6 @@ func (c *Catalog) ShardCollection(
 
 	log.Ctx(ctx).Debugf("Sharded collection %s.%s", db, coll)
 
-	// update c.databases[db].collections[coll].sharded = true
 	c.lock.Lock()
 	databaseEntry := c.Databases[db]
 	collectionEntry := databaseEntry.Collections[coll]
