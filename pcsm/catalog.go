@@ -94,6 +94,7 @@ type collectionCatalog struct {
 	AddedAt bson.Timestamp
 	UUID    *bson.Binary
 	Indexes []indexCatalogEntry
+	Sharded bool
 }
 
 type indexCatalogEntry struct {
@@ -767,7 +768,11 @@ func (c *Catalog) UUIDMap() UUIDMap {
 	for db, dbCat := range c.Databases {
 		for coll, collCat := range dbCat.Collections {
 			if collCat.UUID != nil {
-				uuidMap[hex.EncodeToString(collCat.UUID.Data)] = Namespace{db, coll}
+				uuidMap[hex.EncodeToString(collCat.UUID.Data)] = Namespace{
+					Database:   db,
+					Collection: coll,
+					Sharded:    collCat.Sharded,
+				}
 			}
 		}
 	}
@@ -1181,7 +1186,15 @@ func (c *Catalog) ShardCollection(
 		return err //nolint:wrapcheck
 	}
 
-	log.Ctx(ctx).Infof("Sharded collection %s.%s", db, coll)
+	log.Ctx(ctx).Debugf("Sharded collection %s.%s", db, coll)
+
+	c.lock.Lock()
+	databaseEntry := c.Databases[db]
+	collectionEntry := databaseEntry.Collections[coll]
+	collectionEntry.Sharded = true
+	databaseEntry.Collections[coll] = collectionEntry
+	c.Databases[db] = databaseEntry
+	c.lock.Unlock()
 
 	return nil
 }

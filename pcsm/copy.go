@@ -598,7 +598,7 @@ func NewSegmenter(
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
 		if errors.Is(err, topo.ErrNotFound) {
-			return nil, NamespaceNotFoundError(ns)
+			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
 		return nil, errors.Wrap(err, "$collStats")
@@ -897,7 +897,7 @@ func NewCappedSegmenter(
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
 		if errors.Is(err, topo.ErrNotFound) {
-			return nil, NamespaceNotFoundError(ns)
+			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
 		return nil, errors.Wrap(err, "$collStats")
