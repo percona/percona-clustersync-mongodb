@@ -95,6 +95,9 @@ type Namespace struct {
 
 	// Collection is the name of the collection where the event occurred.
 	Collection string `bson:"coll"`
+
+	// Sharded indicates whether the collection is sharded.
+	Sharded bool
 }
 
 func (ns Namespace) String() string {

@@ -20,6 +20,9 @@ import (
 var yes = true // for ref
 
 //nolint:gochecknoglobals
+var simpleCollation = &options.Collation{Locale: "simple"}
+
+//nolint:gochecknoglobals
 var clientBulkOptions = options.ClientBulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
@@ -41,12 +44,14 @@ type bulkWrite interface {
 }
 
 type clientBulkWrite struct {
-	writes []mongo.ClientBulkWrite
+	useSimpleCollation bool
+	writes             []mongo.ClientBulkWrite
 }
 
-func newClientBulkWrite(size int) *clientBulkWrite {
+func newClientBulkWrite(size int, useSimpleCollation bool) *clientBulkWrite {
 	return &clientBulkWrite{
-		make([]mongo.ClientBulkWrite, 0, size),
+		useSimpleCollation: useSimpleCollation,
+		writes:             make([]mongo.ClientBulkWrite, 0, size),
 	}
 }
 
@@ -76,67 +81,93 @@ func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) 
 }
 
 func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+	m := &mongo.ClientReplaceOneModel{
+		Filter:      event.DocumentKey,
+		Replacement: event.FullDocument,
+		Upsert:      &yes,
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
-		Model: &mongo.ClientReplaceOneModel{
-			Filter:      event.DocumentKey,
-			Replacement: event.FullDocument,
-			Upsert:      &yes,
-		},
+		Model:      m,
 	}
 
 	o.writes = append(o.writes, bw)
 }
 
 func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+	m := &mongo.ClientUpdateOneModel{
+		Filter: event.DocumentKey,
+		Update: collectUpdateOps(event),
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
-		Model: &mongo.ClientUpdateOneModel{
-			Filter: event.DocumentKey,
-			Update: collectUpdateOps(event),
-		},
+		Model:      m,
 	}
 
 	o.writes = append(o.writes, bw)
 }
 
 func (o *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+	m := &mongo.ClientReplaceOneModel{
+		Filter:      event.DocumentKey,
+		Replacement: event.FullDocument,
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
-		Model: &mongo.ClientReplaceOneModel{
-			Filter:      event.DocumentKey,
-			Replacement: event.FullDocument,
-		},
+		Model:      m,
 	}
 
 	o.writes = append(o.writes, bw)
 }
 
 func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+	m := &mongo.ClientDeleteOneModel{
+		Filter: event.DocumentKey,
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
 	bw := mongo.ClientBulkWrite{
 		Database:   ns.Database,
 		Collection: ns.Collection,
-		Model: &mongo.ClientDeleteOneModel{
-			Filter: event.DocumentKey,
-		},
+		Model:      m,
 	}
 
 	o.writes = append(o.writes, bw)
 }
 
 type collectionBulkWrite struct {
-	max    int
-	count  int
-	writes map[Namespace][]mongo.WriteModel
+	useSimpleCollation bool
+	max                int
+	count              int
+	writes             map[Namespace][]mongo.WriteModel
 }
 
-func newCollectionBulkWrite(size int) *collectionBulkWrite {
+func newCollectionBulkWrite(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
 	return &collectionBulkWrite{
-		max:    size,
-		writes: make(map[Namespace][]mongo.WriteModel),
+		useSimpleCollation: nonDefaultCollationSupport,
+		max:                size,
+		writes:             make(map[Namespace][]mongo.WriteModel),
 	}
 }
 
@@ -185,37 +216,61 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 }
 
 func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
-	o.writes[ns] = append(o.writes[ns], &mongo.ReplaceOneModel{
+	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
 		Upsert:      &yes,
-	})
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
+	o.writes[ns] = append(o.writes[ns], m)
 
 	o.count++
 }
 
 func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
-	o.writes[ns] = append(o.writes[ns], &mongo.UpdateOneModel{
+	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
-	})
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
+	o.writes[ns] = append(o.writes[ns], m)
 
 	o.count++
 }
 
 func (o *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
-	o.writes[ns] = append(o.writes[ns], &mongo.ReplaceOneModel{
+	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
-	})
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
+	o.writes[ns] = append(o.writes[ns], m)
 
 	o.count++
 }
 
 func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
-	o.writes[ns] = append(o.writes[ns], &mongo.DeleteOneModel{
+	m := &mongo.DeleteOneModel{
 		Filter: event.DocumentKey,
-	})
+	}
+
+	if ns.Sharded && o.useSimpleCollation {
+		m.Collation = simpleCollation
+	}
+
+	o.writes[ns] = append(o.writes[ns], m)
 
 	o.count++
 }
