@@ -98,6 +98,9 @@ type Namespace struct {
 
 	// Sharded indicates whether the collection is sharded.
 	Sharded bool
+
+	// ShardKey is the shard key used for the collection.
+	ShardKey bson.D
 }
 
 func (ns Namespace) String() string {
