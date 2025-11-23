@@ -11,7 +11,6 @@ SDIR="$BASE/sh"
 
 chmod 400 "$SDIR"/mongo/keyFile
 
-export MONGO_IMAGE=mongo:8
 export compose=$SDIR/compose.yml
 
 # dcf up -d src-cfg0 src-rs00 src-rs10 tgt-cfg0 tgt-rs00 tgt-rs10
