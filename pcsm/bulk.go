@@ -160,14 +160,14 @@ type collectionBulkWrite struct {
 	useSimpleCollation bool
 	max                int
 	count              int
-	writes             map[Namespace][]mongo.WriteModel
+	writes             map[string][]mongo.WriteModel
 }
 
 func newCollectionBulkWrite(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,
 		max:                size,
-		writes:             make(map[Namespace][]mongo.WriteModel),
+		writes:             make(map[string][]mongo.WriteModel),
 	}
 }
 
@@ -186,13 +186,18 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 	grp.SetLimit(runtime.NumCPU())
 
 	for ns, ops := range o.writes {
+		namespace, err := parseNamespace(ns)
+		if err != nil {
+			return 0, errors.Wrapf(err, "parse namespace %q", namespace)
+		}
+
 		grp.Go(func() error {
-			mcoll := m.Database(ns.Database).Collection(ns.Collection)
+			mcoll := m.Database(namespace.Database).Collection(namespace.Collection)
 
 			err := topo.RunWithRetry(ctx, func(_ context.Context) error {
 				_, err := mcoll.BulkWrite(grpCtx, ops, collectionBulkOptions)
 
-				return errors.Wrapf(err, "bulk write %q", ns)
+				return errors.Wrapf(err, "bulk write %q", namespace)
 			}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
 			if err != nil {
 				return err // nolint:wrapcheck
@@ -216,6 +221,22 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 }
 
 func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+	missingShardKeys := bson.D{}
+
+	if ns.Sharded && ns.ShardKey != nil {
+		for _, k := range ns.ShardKey {
+			_, err := event.FullDocument.LookupErr(k.Key)
+			if err != nil {
+				missingShardKeys = append(missingShardKeys, bson.E{Key: k.Key, Value: nil})
+			}
+		}
+	}
+
+	// we need to add shard key fields with null values to the filter for replaceOne to work
+	// for documents missing shard key fields in the fullDocument
+	// This is requered for MongodDB versions before 8.0
+	event.DocumentKey = append(event.DocumentKey, missingShardKeys...)
+
 	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -226,7 +247,7 @@ func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns] = append(o.writes[ns], m)
+	o.writes[ns.String()] = append(o.writes[ns.String()], m)
 
 	o.count++
 }
@@ -241,7 +262,7 @@ func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns] = append(o.writes[ns], m)
+	o.writes[ns.String()] = append(o.writes[ns.String()], m)
 
 	o.count++
 }
@@ -256,7 +277,7 @@ func (o *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns] = append(o.writes[ns], m)
+	o.writes[ns.String()] = append(o.writes[ns.String()], m)
 
 	o.count++
 }
@@ -270,7 +291,7 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns] = append(o.writes[ns], m)
+	o.writes[ns.String()] = append(o.writes[ns.String()], m)
 
 	o.count++
 }
@@ -406,4 +427,17 @@ func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
 	_, err := strconv.Atoi(parts[len(parts)-1])
 
 	return err == nil
+}
+
+func parseNamespace(ns string) (Namespace, error) {
+	parts := strings.SplitN(ns, ".", 2) //nolint:mnd
+
+	if len(parts) != 2 { //nolint:mnd
+		return Namespace{}, errors.Errorf("invalid namespace %q", ns)
+	}
+
+	return Namespace{
+		Database:   parts[0],
+		Collection: parts[1],
+	}, nil
 }
