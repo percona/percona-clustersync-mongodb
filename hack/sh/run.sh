@@ -11,7 +11,6 @@ SDIR="$BASE/sh"
 
 chmod 400 "$SDIR"/mongo/keyFile
 
-export MONGO_IMAGE=mongo:8
 export compose=$SDIR/compose.yml
 
 # dcf up -d src-cfg0 src-rs00 src-rs10 tgt-cfg0 tgt-rs00 tgt-rs10
@@ -26,7 +25,7 @@ msh "adm:pass@src-mongos:27017" --eval "
     sh.addShard('rs0/src-rs00:30000'); //
     sh.addShard('rs1/src-rs10:30100');
 "
-msh "adm:pass@src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
+# msh "adm:pass@src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 
 dcf up -d tgt-cfg0 tgt-rs00 tgt-rs10
 
@@ -39,4 +38,4 @@ msh "adm:pass@tgt-mongos:27017" --eval "
     sh.addShard('rs0/tgt-rs00:40000'); //
     sh.addShard('rs1/tgt-rs10:40100');
 "
-msh "adm:pass@tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
+# msh "adm:pass@tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"

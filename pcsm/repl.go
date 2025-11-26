@@ -116,7 +116,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	cp := &replCheckpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		EventsRead:           r.eventsRead.Load(),
+		EventsRead:           r.eventsApplied,
 		EventsApplied:        r.eventsApplied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 	}
@@ -151,12 +151,18 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 	r.startTime = cp.StartTime
 	r.pauseTime = pauseTime
 	r.eventsApplied = cp.EventsApplied
+	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
+	targetVer, err := topo.Version(context.Background(), r.target)
+	if err != nil {
+		return errors.Wrap(err, "major version")
+	}
+
 	if cp.UseClientBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	}
 
 	if cp.Error != "" {
@@ -210,15 +216,15 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.New("already started")
 	}
 
-	serverVersion, err := topo.Version(ctx, r.target)
+	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(serverVersion).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize)
+	if topo.Support(targetVer).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
+		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize)
+		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
@@ -567,7 +573,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			metrics.AddEventsApplied(1)
 
 			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase:
+			case Create, Rename, Drop, DropDatabase, ShardCollection:
 				uuidMap = r.catalog.UUIDMap()
 			}
 		}
@@ -735,6 +741,8 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			change.Namespace.Collection,
 			event.OperationDescription.ShardKey,
 			event.OperationDescription.Unique)
+
+		lg.Infof("Collection %q has been sharded", change.Namespace)
 
 	case ReshardCollection:
 		fallthrough

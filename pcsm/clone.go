@@ -263,7 +263,11 @@ func (c *Clone) run() error {
 	lg.With(log.Size(c.totalSize)).
 		Infof("Estimated Total Size %s", humanize.Bytes(c.totalSize))
 
-	namespaces := c.listPrioritizedNamespaces()
+	namespaces, err := c.listPrioritizedNamespaces()
+	if err != nil {
+		return errors.Wrap(err, "list prioritized namespaces")
+	}
+
 	if len(namespaces) != 0 {
 		err = c.doClone(ctx, namespaces)
 		if err != nil {
@@ -341,14 +345,14 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 				prevNS := ns
 				ns = namespaceInfo{
-					Namespace: Namespace{prevNS.Database, name},
+					Namespace: Namespace{Database: prevNS.Database, Collection: name},
 					UUID:      prevNS.UUID,
 				}
 
 				c.lock.Lock()
-				elem := c.sizeMap[prevNS.Namespace]
-				delete(c.sizeMap, prevNS.Namespace)
-				c.sizeMap[prevNS.Namespace] = elem
+				elem := c.sizeMap[prevNS.String()]
+				delete(c.sizeMap, prevNS.String())
+				c.sizeMap[prevNS.String()] = elem
 				c.lock.Unlock()
 
 				lg.Infof("Collection %s was renamed to %s. Retrying to clone the collection",
@@ -390,7 +394,7 @@ func (c *Clone) doCollectionClone(
 	var copiedSizeBytesSinceLastLog uint64
 
 	c.lock.Lock()
-	nsSize := c.sizeMap[ns]
+	nsSize := c.sizeMap[ns.String()]
 	c.lock.Unlock()
 
 	lg.With(log.Count(nsSize.Count), log.Size(nsSize.Size)).
@@ -407,7 +411,7 @@ func (c *Clone) doCollectionClone(
 	spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		if errors.Is(err, topo.ErrNotFound) {
-			return NamespaceNotFoundError(ns)
+			return NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
 		return errors.Wrap(err, "$collStats")
@@ -445,9 +449,9 @@ func (c *Clone) doCollectionClone(
 		if err != nil {
 			return errors.Wrap(err, "shard collection")
 		}
-	}
 
-	lg.Infof("Collection %q sharded", ns.String())
+		lg.Infof("Collection %q sharded", ns.String())
+	}
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
 
@@ -475,9 +479,9 @@ func (c *Clone) doCollectionClone(
 
 				// update estimated size
 				c.lock.Lock()
-				c.totalSize -= c.sizeMap[ns].Size
+				c.totalSize -= c.sizeMap[ns.String()].Size
 				totalSize := c.totalSize
-				delete(c.sizeMap, ns)
+				delete(c.sizeMap, ns.String())
 				c.lock.Unlock()
 
 				metrics.SetEstimatedTotalSizeBytes(totalSize)
@@ -538,10 +542,10 @@ func (c *Clone) doCollectionClone(
 	}
 
 	c.lock.Lock()
-	diff := c.sizeMap[ns].Size - totalCopiedSizeBytes
+	diff := c.sizeMap[ns.String()].Size - totalCopiedSizeBytes
 	c.totalSize -= diff // adjust
 	totalSize := c.totalSize
-	delete(c.sizeMap, ns)
+	delete(c.sizeMap, ns.String())
 	c.lock.Unlock()
 
 	metrics.SetEstimatedTotalSizeBytes(totalSize)
@@ -563,7 +567,7 @@ func (c *Clone) doCollectionClone(
 	return nil
 }
 
-type sizeMap map[Namespace]sizeMapElem
+type sizeMap map[string]sizeMapElem
 
 type sizeMapElem struct {
 	UUID  *bson.Binary
@@ -615,9 +619,10 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 				}
 
 				collGrp.Go(func() error {
+					ns := db + "." + spec.Name
 					if spec.Type == topo.TypeView {
 						mu.Lock()
-						sm[Namespace{db, spec.Name}] = sizeMapElem{}
+						sm[ns] = sizeMapElem{}
 						mu.Unlock()
 
 						return nil
@@ -629,11 +634,11 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 							return nil
 						}
 
-						return errors.Wrapf(err, "get collection stats for %q", db+"."+spec.Name)
+						return errors.Wrapf(err, "get collection stats for %q", ns)
 					}
 
 					mu.Lock()
-					sm[Namespace{db, spec.Name}] = sizeMapElem{
+					sm[ns] = sizeMapElem{
 						UUID:  spec.UUID,
 						Size:  uint64(stats.Size), //nolint:gosec
 						Count: stats.Count,
@@ -673,21 +678,27 @@ type namespaceInfo struct {
 	UUID *bson.Binary
 }
 
-func (c *Clone) listPrioritizedNamespaces() []namespaceInfo {
+func (c *Clone) listPrioritizedNamespaces() ([]namespaceInfo, error) {
 	namespaces := []namespaceInfo{}
+
 	for ns, elem := range c.sizeMap {
+		namespace, err := parseNamespace(ns)
+		if err != nil {
+			return nil, errors.Wrapf(err, "parse namespace %q", ns)
+		}
+
 		namespaces = append(namespaces, namespaceInfo{
-			Namespace: ns,
+			Namespace: namespace,
 			UUID:      elem.UUID,
 		})
 	}
 
 	// sort from larger to smaller
 	slices.SortFunc(namespaces, func(a, b namespaceInfo) int {
-		return cmp.Compare(c.sizeMap[b.Namespace].Size, c.sizeMap[a.Namespace].Size)
+		return cmp.Compare(c.sizeMap[b.Namespace.String()].Size, c.sizeMap[a.Namespace.String()].Size)
 	})
 
-	return namespaces
+	return namespaces, nil
 }
 
 type NamespaceNotFoundError struct {
