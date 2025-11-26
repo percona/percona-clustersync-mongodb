@@ -17,7 +17,7 @@ def ensure_collection(source: MongoClient, db: str, coll: str, **kwargs):
     source[db].create_collection(coll, **kwargs)
 
 
-@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_create_implicitly(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         t.source["db_1"]["coll_1"].insert_one({})

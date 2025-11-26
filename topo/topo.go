@@ -7,8 +7,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 const (
@@ -151,59 +153,121 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 }
 
 // GetCollStats retrieves statistics for a specific collection.
-func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+func GetCollStatsOld(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
 	c := m.Database(db).Collection(coll)
 
-	count, err := c.EstimatedDocumentCount(ctx)
-	if err != nil {
-		if IsNamespaceNotFound(err) {
-			return nil, ErrNotFound
-		}
-
-		return nil, errors.Wrap(err, "estimatedDocumentCount")
-	}
-
-	if count == 0 {
-		return &CollStats{Count: 0, Size: 0, AvgObjSize: 0}, nil
-	}
-
-	cur, err := c.Aggregate(ctx, mongo.Pipeline{
-		{{"$group", bson.D{
+	pipeline := mongo.Pipeline{
+		bson.D{{"$group", bson.D{
 			{"_id", nil},
 			{"size", bson.D{{"$sum", bson.D{{"$bsonSize", "$$ROOT"}}}}},
+			{"count", bson.D{{"$sum", 1}}},
+		}}},
+		bson.D{{"$project", bson.D{
+			{"_id", 0},
+			{"size", 1},
+			{"count", 1},
+			{"avgObjSize", bson.D{{"$divide", bson.A{"$size", "$count"}}}},
+		}}},
+	}
+
+	cur, err := c.Aggregate(ctx, pipeline)
+	if err != nil {
+		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "aggregate coll stats")
+	}
+
+	defer func() {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
+		}
+	}()
+
+	// Define struct for decoding
+	type stats struct {
+		Size       int64   `bson:"size"`
+		Count      int64   `bson:"count"`
+		AvgObjSize float64 `bson:"avgObjSize"`
+	}
+
+	s := stats{}
+	if cur.Next(ctx) {
+		if err := cur.Decode(&s); err != nil {
+			return nil, errors.Wrap(err, "decode")
+		}
+	} else if err := cur.Err(); err != nil {
+		return nil, errors.Wrap(err, "cursor error")
+	}
+
+	oldStats, err := GetCollStats(ctx, m, db, coll)
+	if err != nil {
+		return nil, errors.Wrap(err, "get old coll stats")
+	}
+
+	if s.Count != oldStats.Count {
+		log.Ctx(ctx).Warnf("AAAAAAAAAAA Collection %s.%s count mismatch: aggregate=%d, collStats=%d", db, coll, s.Count, oldStats.Count)
+	}
+	if s.Size != oldStats.Size {
+		log.Ctx(ctx).Warnf("AAAAAAAAAAAA Collection %s.%s size mismatch: aggregate=%d, collStats=%d", db, coll, s.Size, oldStats.Size)
+	}
+	if int64(s.AvgObjSize) != oldStats.AvgObjSize {
+		log.Ctx(ctx).Warnf("AAAAAAAAA Collection %s.%s avgObjSize mismatch: aggregate=%d, collStats=%d", db, coll, int64(s.AvgObjSize), oldStats.AvgObjSize)
+	}
+
+	log.Ctx(ctx).Debugf("Collection %s.%s stats: %+v", db, coll, s)
+
+	return &CollStats{
+		Count:      s.Count,
+		Size:       s.Size,
+		AvgObjSize: int64(s.AvgObjSize),
+	}, nil
+}
+
+// GetCollStats retrieves statistics for a specific collection.
+func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
+		{{"$collStats", bson.D{{"storageStats", bson.D{}}}}},
+		{{"$project", bson.D{
+			{"size", "$storageStats.size"},
+			{"count", "$storageStats.count"},
+			{"avgObjSize", "$storageStats.avgObjSize"},
 		}}},
 	})
 	if err != nil {
 		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "$collStats")
+	}
+
+	defer func() {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
+		}
+	}()
+
+	stats := &CollStats{}
+
+	if !cur.Next(ctx) {
+		err = cur.Err()
+		if err == nil {
 			return nil, ErrNotFound
 		}
 
-		return nil, errors.Wrap(err, "aggregate bsonSize")
-	}
-	defer cur.Close(ctx)
-
-	var result struct {
-		Size int64 `bson:"size"`
+		return nil, errors.Wrap(err, "$collStas: cursor")
 	}
 
-	if !cur.Next(ctx) {
-		if cur.Err() != nil {
-			return nil, errors.Wrap(cur.Err(), "cursor")
-		}
-
-		return nil, ErrNotFound
-	}
-
-	err = cur.Decode(&result)
+	err = cur.Decode(stats)
 	if err != nil {
-		return nil, errors.Wrap(err, "decode bsonSize")
+		return nil, errors.Wrap(err, "decode")
 	}
 
-	return &CollStats{
-		Count:      count,
-		Size:       result.Size,
-		AvgObjSize: result.Size / count,
-	}, nil
+	return stats, nil
 }
 
 // RunWithRetry executes the provided function with retry logic for transient errors.
