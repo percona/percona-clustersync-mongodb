@@ -177,6 +177,7 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 		if IsNamespaceNotFound(err) {
 			return nil, ErrNotFound
 		}
+
 		return nil, errors.Wrap(err, "aggregate bsonSize")
 	}
 	defer cur.Close(ctx)
