@@ -195,14 +195,15 @@ class Runner:
         # Get the cluster time after the marker write - guaranteed to be after all prior ops
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
 
-        for i in range(self.wait_timeout * 2):
-            if curr_optime <= self.last_applied_op:
-                print(f"Last applied op {self.last_applied_op} has reached {curr_optime}.")
+        for _ in range(self.wait_timeout * 2):
+            last_applied = self.last_applied_op
+            if curr_optime <= last_applied:
+                # Even though the oplog entry is replicated, PCSM may not have finished
+                # writing to the target database. Add a small delay to ensure completion.
+                time.sleep(0.3)
                 return
 
             time.sleep(0.5)
-            status = self.pcsm.status()
-            print(f"Waiting for last applied op {self.last_applied_op} to reach {curr_optime}... {i}")
 
         raise WaitTimeoutError()
 
