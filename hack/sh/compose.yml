@@ -67,6 +67,23 @@ services:
         "30100",
       ]
 
+  src-rs20:
+    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    container_name: src-rs20
+    hostname: src-rs20
+    ports: ["30200:30200"]
+    volumes: ["src-rs20:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs2",
+        "--port",
+        "30200",
+      ]
+
   # ----------------- Target -----------------
   tgt-mongos:
     image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
@@ -134,10 +151,29 @@ services:
         "40100",
       ]
 
+  tgt-rs20:
+    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    container_name: tgt-rs20
+    hostname: tgt-rs20
+    ports: ["40200:40200"]
+    volumes: ["tgt-rs20:/data/db", "./mongo/:/cfg:ro"]
+    command:
+      [
+        "mongod",
+        "-f",
+        "/cfg/shardsvr.conf",
+        "--replSet",
+        "rs2",
+        "--port",
+        "40200",
+      ]
+
 volumes:
   src-cfg0:
   src-rs00:
   src-rs10:
+  src-rs20:
   tgt-cfg0:
   tgt-rs00:
   tgt-rs10:
+  tgt-rs20:

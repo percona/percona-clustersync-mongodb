@@ -9,13 +9,6 @@ RDIR="$BASE/rs"
 
 export compose="$RDIR/compose.yml"
 
-# https://www.mongodb.com/docs/v7.0/tutorial/deploy-sharded-cluster-with-keyfile-access-control/
-if [ ! -s "$RDIR/mongo/keyFile" ]; then
-    echo >&2 generate "$RDIR/mongo/keyFile"
-    openssl rand -base64 756 >"$RDIR/mongo/keyFile"
-    chmod 400 "$RDIR/mongo/keyFile"
-fi
-
 dcf up -d rs00 rs01 rs02 rs10 rs11 rs12
 
 mwait "rs00:30000"
