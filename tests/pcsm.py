@@ -186,7 +186,15 @@ class Runner:
         status = self.pcsm.status()
         assert status["state"] == PCSM.State.RUNNING, status
 
+        # Force a write operation to ensure we capture a timestamp after all prior writes
+        # Using a dummy write ensures operations are serialized in the oplog
+        marker_db = "pcsm_marker_db"
+        marker_coll = "optime_marker"
+        self.source[marker_db][marker_coll].insert_one({"marker": True})
+
+        # Get the cluster time after the marker write - guaranteed to be after all prior ops
         curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
+
         for _ in range(self.wait_timeout * 2):
             if curr_optime <= self.last_applied_op:
                 return
