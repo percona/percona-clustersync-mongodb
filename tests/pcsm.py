@@ -188,8 +188,8 @@ class Runner:
 
         # Force a write operation to ensure we capture a timestamp after all prior writes
         # Using a dummy write ensures operations are serialized in the oplog
-        marker_db = "pcsm_marker_db"
-        marker_coll = "optime_marker"
+        marker_db = "pcsm_test_sync_db"
+        marker_coll = "sync_point"
         self.source[marker_db][marker_coll].insert_one({"marker": True})
 
         # Get the cluster time after the marker write - guaranteed to be after all prior ops
