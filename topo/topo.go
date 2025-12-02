@@ -153,81 +153,32 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 }
 
 // GetCollStats retrieves statistics for a specific collection.
-func GetCollStatsOld(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
-	c := m.Database(db).Collection(coll)
-
-	pipeline := mongo.Pipeline{
-		bson.D{{"$group", bson.D{
-			{"_id", nil},
-			{"size", bson.D{{"$sum", bson.D{{"$bsonSize", "$$ROOT"}}}}},
-			{"count", bson.D{{"$sum", 1}}},
-		}}},
-		bson.D{{"$project", bson.D{
-			{"_id", 0},
-			{"size", 1},
-			{"count", 1},
-			{"avgObjSize", bson.D{{"$divide", bson.A{"$size", "$count"}}}},
-		}}},
-	}
-
-	cur, err := c.Aggregate(ctx, pipeline)
+func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	stats, err := collStatsStorage(ctx, m, db, coll)
 	if err != nil {
-		if IsNamespaceNotFound(err) {
-			err = ErrNotFound
-		}
-
-		return nil, errors.Wrap(err, "aggregate coll stats")
+		return nil, err //nolint:wrapcheck
 	}
 
-	defer func() {
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+	// If avgObjSize is 0, $collStats may have stale metadata (common with newly sharded collections).
+	// Fall back to document-based aggregation for accurate statistics.
+	if stats.AvgObjSize == 0 {
+		log.Ctx(ctx).Warnf("Collection %s.%s has avgObjSize=0 from $collStats (possibly stale metadata). "+
+			"Falling back to document-based aggregation for accurate stats", db, coll)
+
+		stats, err = collStatsAggregation(ctx, m, db, coll)
 		if err != nil {
-			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
+			return nil, err //nolint:wrapcheck
 		}
-	}()
 
-	// Define struct for decoding
-	type stats struct {
-		Size       int64   `bson:"size"`
-		Count      int64   `bson:"count"`
-		AvgObjSize float64 `bson:"avgObjSize"`
+		log.Ctx(ctx).Infof("Collection %s.%s stats from fallback: count=%d, size=%d, avgObjSize=%d",
+			db, coll, stats.Count, stats.Size, stats.AvgObjSize)
 	}
 
-	s := stats{}
-	if cur.Next(ctx) {
-		if err := cur.Decode(&s); err != nil {
-			return nil, errors.Wrap(err, "decode")
-		}
-	} else if err := cur.Err(); err != nil {
-		return nil, errors.Wrap(err, "cursor error")
-	}
-
-	oldStats, err := GetCollStats(ctx, m, db, coll)
-	if err != nil {
-		return nil, errors.Wrap(err, "get old coll stats")
-	}
-
-	if s.Count != oldStats.Count {
-		log.Ctx(ctx).Warnf("AAAAAAAAAAA Collection %s.%s count mismatch: aggregate=%d, collStats=%d", db, coll, s.Count, oldStats.Count)
-	}
-	if s.Size != oldStats.Size {
-		log.Ctx(ctx).Warnf("AAAAAAAAAAAA Collection %s.%s size mismatch: aggregate=%d, collStats=%d", db, coll, s.Size, oldStats.Size)
-	}
-	if int64(s.AvgObjSize) != oldStats.AvgObjSize {
-		log.Ctx(ctx).Warnf("AAAAAAAAA Collection %s.%s avgObjSize mismatch: aggregate=%d, collStats=%d", db, coll, int64(s.AvgObjSize), oldStats.AvgObjSize)
-	}
-
-	log.Ctx(ctx).Debugf("Collection %s.%s stats: %+v", db, coll, s)
-
-	return &CollStats{
-		Count:      s.Count,
-		Size:       s.Size,
-		AvgObjSize: int64(s.AvgObjSize),
-	}, nil
+	return stats, nil
 }
 
-// GetCollStats retrieves statistics for a specific collection.
-func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+// collStatsStorage retrieves statistics for a specific collection using $collStats.
+func collStatsStorage(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
 	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
 		{{"$collStats", bson.D{{"storageStats", bson.D{}}}}},
 		{{"$project", bson.D{
@@ -269,6 +220,60 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 
 	return stats, nil
 }
+
+// collStatsAggregation retrieves statistics for a specific collection using aggregation.
+func collStatsAggregation(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	c := m.Database(db).Collection(coll)
+
+	pipeline := mongo.Pipeline{
+		bson.D{{"$group", bson.D{
+			{"_id", nil},
+			{"size", bson.D{{"$sum", bson.D{{"$bsonSize", "$$ROOT"}}}}},
+			{"count", bson.D{{"$sum", 1}}},
+		}}},
+		bson.D{{"$project", bson.D{
+			{"_id", 0},
+			{"size", 1},
+			{"count", 1},
+			{"avgObjSize", bson.D{{"$divide", bson.A{"$size", "$count"}}}},
+		}}},
+	}
+
+	cur, err := c.Aggregate(ctx, pipeline)
+	if err != nil {
+		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "aggregate coll stats")
+	}
+
+	defer func() {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
+		}
+	}()
+
+	stats := &CollStats{}
+
+	if !cur.Next(ctx) {
+		err = cur.Err()
+		if err == nil {
+			return nil, ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "cursor")
+	}
+
+	err = cur.Decode(stats)
+	if err != nil {
+		return nil, errors.Wrap(err, "decode")
+	}
+
+	return stats, nil
+}
+
 
 // RunWithRetry executes the provided function with retry logic for transient errors.
 // It retries the function up to maxRetries times,
