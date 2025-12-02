@@ -186,13 +186,20 @@ class Runner:
         status = self.pcsm.status()
         assert status["state"] == PCSM.State.RUNNING, status
 
-        curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
+        result = self.source.admin.command(
+            {"appendOplogNote": 1, "data": {"msg": "test:sync_point"}}
+        )
+        curr_optime = result["$clusterTime"]["clusterTime"]
+
         for _ in range(self.wait_timeout * 2):
-            if curr_optime <= self.last_applied_op:
+            last_applied = self.last_applied_op
+            if curr_optime <= last_applied:
+                # Even though the oplog entry is replicated, PCSM may not have finished
+                # writing to the target database. Add a small delay to ensure completion.
+                time.sleep(0.3)
                 return
 
             time.sleep(0.5)
-            status = self.pcsm.status()
 
         raise WaitTimeoutError()
 
