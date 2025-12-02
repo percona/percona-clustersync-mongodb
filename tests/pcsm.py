@@ -186,12 +186,10 @@ class Runner:
         status = self.pcsm.status()
         assert status["state"] == PCSM.State.RUNNING, status
 
-        # Force a write operation to ensure we capture a timestamp after all prior writes
-        # Using a dummy write ensures operations are serialized in the oplog
-        self.source["pcsm_test_sync_db"]["sync_point"].insert_one({"point": True})
-
-        # Get the cluster time after the dummy write - guaranteed to be after all prior ops
-        curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
+        result = self.source.admin.command(
+            {"appendOplogNote": 1, "data": {"msg": "test:sync_point"}}
+        )
+        curr_optime = result["$clusterTime"]["clusterTime"]
 
         for _ in range(self.wait_timeout * 2):
             last_applied = self.last_applied_op
