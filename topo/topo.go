@@ -274,7 +274,6 @@ func collStatsAggregation(ctx context.Context, m *mongo.Client, db, coll string)
 	return stats, nil
 }
 
-
 // RunWithRetry executes the provided function with retry logic for transient errors.
 // It retries the function up to maxRetries times,
 // with an exponential backoff starting from retryInterval.
