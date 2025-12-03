@@ -260,7 +260,7 @@ func collStatsAggregation(ctx context.Context, m *mongo.Client, db, coll string)
 	if !cur.Next(ctx) {
 		err = cur.Err()
 		if err == nil {
-			return nil, ErrNotFound
+			return &CollStats{Count: 0, Size: 0, AvgObjSize: 0}, nil
 		}
 
 		return nil, errors.Wrap(err, "cursor")
