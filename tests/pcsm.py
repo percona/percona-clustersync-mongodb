@@ -165,9 +165,15 @@ class Runner:
                 state = self.pcsm.status()
 
         if state["state"] == PCSM.State.RUNNING:
+            # First, always wait for initial sync to complete
+            self.wait_for_initial_sync()
+
             if not fast:
-                # For CLONE phase: if initial sync is already completed, PCSM has caught up
-                # and might not be actively processing new oplogs. Skip wait in this case.
+                # Refresh state after initial sync completes
+                state = self.pcsm.status()
+
+                # For CLONE phase: if initial sync completed, PCSM has caught up and might
+                # not be actively processing new oplogs. Skip wait_for_current_optime().
                 # For APPLY/MANUAL phase: always wait to ensure real-time operations are replicated.
                 skip_wait = self.phase == self.Phase.CLONE and state["initialSync"]["completed"]
 
@@ -179,7 +185,6 @@ class Runner:
                         self.target.admin.command("ping")
                         time.sleep(min(0.05 * (2**retry), 0.2))
 
-            self.wait_for_initial_sync()
             self.pcsm.finalize()
             state = self.pcsm.status()
 
