@@ -158,11 +158,27 @@ class Runner:
         if state["state"] == PCSM.State.PAUSED:
             if state["initialSync"]["cloneCompleted"]:
                 self.pcsm.resume()
+                # After resuming, wait briefly to ensure the replication stream is fully active
+                # before attempting to sync to current optime. This prevents race conditions
+                # where wait_for_current_optime() is called before the change stream starts.
+                time.sleep(0.5)
                 state = self.pcsm.status()
 
         if state["state"] == PCSM.State.RUNNING:
             if not fast:
-                self.wait_for_current_optime()
+                # For CLONE phase: if initial sync is already completed, PCSM has caught up
+                # and might not be actively processing new oplogs. Skip wait in this case.
+                # For APPLY/MANUAL phase: always wait to ensure real-time operations are replicated.
+                skip_wait = self.phase == self.Phase.CLONE and state["initialSync"]["completed"]
+
+                if not skip_wait:
+                    self.wait_for_current_optime()
+                else:
+                    # CLONE phase with initial sync done - just ensure metadata is visible
+                    for retry in range(6):
+                        self.target.admin.command("ping")
+                        time.sleep(min(0.05 * (2**retry), 0.2))
+
             self.wait_for_initial_sync()
             self.pcsm.finalize()
             state = self.pcsm.status()
