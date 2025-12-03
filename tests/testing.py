@@ -17,7 +17,7 @@ class Testing:
 
     def run(self, phase: Runner.Phase, wait_timeout=None):
         """Perform the PCSM operation for the given phase."""
-        return Runner(self.source, self.pcsm, phase, {}, wait_timeout=wait_timeout)
+        return Runner(self.source, self.target, self.pcsm, phase, {}, wait_timeout=wait_timeout)
 
     def compare_all(self, sort=None):
         """Compare all databases and collections between source and target MongoDB."""
