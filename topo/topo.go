@@ -152,16 +152,43 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 	return result, err //nolint:wrapcheck
 }
 
-// GetCollStats runs the collStats aggregate stage.
+// GetCollStats retrieves statistics for a specific collection.
 func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
-	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
+	stats, err := collStatsFromStorageStats(ctx, m, db, coll)
+	if err != nil {
+		return nil, err //nolint:wrapcheck
+	}
+
+	// If avgObjSize is 0, $collStats may have stale metadata (common with newly sharded collections).
+	// Fall back to document-based aggregation for accurate statistics.
+	if stats.AvgObjSize == 0 {
+		log.Ctx(ctx).Debugf("Collection %s.%s has avgObjSize=0 from $collStats (possibly stale metadata). "+
+			"Falling back to document-based bsonSize aggregation for accurate stats", db, coll)
+
+		stats, err = collStatsFromDocsAggregation(ctx, m, db, coll)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
+
+		log.Ctx(ctx).Debugf("Collection %s.%s stats from fallback: count=%d, size=%d, avgObjSize=%d",
+			db, coll, stats.Count, stats.Size, stats.AvgObjSize)
+	}
+
+	return stats, nil
+}
+
+// collStatsFromStorageStats retrieves statistics for a specific collection using $collStats.
+func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	p := mongo.Pipeline{
 		{{"$collStats", bson.D{{"storageStats", bson.D{}}}}},
 		{{"$project", bson.D{
 			{"size", "$storageStats.size"},
 			{"count", "$storageStats.count"},
 			{"avgObjSize", "$storageStats.avgObjSize"},
 		}}},
-	})
+	}
+
+	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
 	if err != nil {
 		if IsNamespaceNotFound(err) {
 			err = ErrNotFound
@@ -178,6 +205,7 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 	}()
 
 	stats := &CollStats{}
+
 	if !cur.Next(ctx) {
 		err = cur.Err()
 		if err == nil {
@@ -185,6 +213,57 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 		}
 
 		return nil, errors.Wrap(err, "$collStas: cursor")
+	}
+
+	err = cur.Decode(stats)
+	if err != nil {
+		return nil, errors.Wrap(err, "decode")
+	}
+
+	return stats, nil
+}
+
+// collStatsFromDocsAggregation retrieves statistics for a specific collection by aggregating document sizes.
+func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
+	p := mongo.Pipeline{
+		bson.D{{"$group", bson.D{
+			{"_id", nil},
+			{"size", bson.D{{"$sum", bson.D{{"$bsonSize", "$$ROOT"}}}}},
+			{"count", bson.D{{"$sum", 1}}},
+		}}},
+		bson.D{{"$project", bson.D{
+			{"_id", 0},
+			{"size", 1},
+			{"count", 1},
+			{"avgObjSize", bson.D{{"$divide", bson.A{"$size", "$count"}}}},
+		}}},
+	}
+
+	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
+	if err != nil {
+		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
+
+		return nil, errors.Wrap(err, "aggregate coll stats")
+	}
+
+	defer func() {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
+			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
+		}
+	}()
+
+	stats := &CollStats{}
+
+	if !cur.Next(ctx) {
+		err = cur.Err()
+		if err == nil {
+			return &CollStats{Count: 0, Size: 0, AvgObjSize: 0}, nil
+		}
+
+		return nil, errors.Wrap(err, "cursor")
 	}
 
 	err = cur.Decode(stats)

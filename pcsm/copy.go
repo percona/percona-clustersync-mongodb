@@ -601,7 +601,7 @@ func NewSegmenter(
 			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
-		return nil, errors.Wrap(err, "$collStats")
+		return nil, errors.Wrap(err, "get collection stats")
 	}
 
 	if stats.AvgObjSize == 0 {
@@ -900,7 +900,7 @@ func NewCappedSegmenter(
 			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
-		return nil, errors.Wrap(err, "$collStats")
+		return nil, errors.Wrap(err, "get collection stats")
 	}
 
 	if stats.AvgObjSize == 0 {
