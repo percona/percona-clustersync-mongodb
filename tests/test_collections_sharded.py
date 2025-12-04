@@ -85,3 +85,12 @@ def test_create_collection_with_collation_with_shard_key_index_prefix(
         )
 
     t.compare_all_sharded()
+
+@pytest.mark.parametrize("phase", [Runner.Phase.CLONE])
+def test_clone_document_sharded(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1")
+        t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": "hashed"})
+        t.source["db_1"]["coll_1"].insert_one({"name": "Alice", "age": 30})
+
+    t.compare_all_sharded()
