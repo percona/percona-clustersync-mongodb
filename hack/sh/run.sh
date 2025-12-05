@@ -28,9 +28,14 @@ export compose=$SDIR/compose.yml
 SRC_SHARDS="${SRC_SHARDS:-2}"
 TGT_SHARDS="${TGT_SHARDS:-2}"
 
-# Validate shard counts against available init scripts and compose services
-MAX_SRC_SHARDS=3  # src/rs0.js, src/rs1.js, src/rs2.js
-MAX_TGT_SHARDS=3  # tgt/rs0.js, tgt/rs1.js, tgt/rs2.js
+# Port mappings for each shard (must match compose.yml)
+# Source shards: rs0=30000, rs1=30100, rs2=30200
+# Target shards: rs0=40000, rs1=40100, rs2=40200
+SRC_SHARD_PORTS=(30000 30100 30200)
+TGT_SHARD_PORTS=(40000 40100 40200)
+
+MAX_SRC_SHARDS=${#SRC_SHARD_PORTS[@]}
+MAX_TGT_SHARDS=${#TGT_SHARD_PORTS[@]}
 
 if [ "$SRC_SHARDS" -gt "$MAX_SRC_SHARDS" ]; then
     echo "ERROR: SRC_SHARDS=$SRC_SHARDS exceeds maximum $MAX_SRC_SHARDS"
@@ -61,7 +66,7 @@ mwait "src-cfg0:27000" && rsinit "src/cfg" "src-cfg0:27000"
 
 # Initialize source shards
 for i in $(seq 0 $((SRC_SHARDS - 1))); do
-    PORT=$((30000 + i * 100))
+    PORT=${SRC_SHARD_PORTS[$i]}
     mwait "src-rs${i}0:${PORT}" && rsinit "src/rs${i}" "src-rs${i}0:${PORT}"
 done
 
@@ -71,7 +76,7 @@ dcf up -d src-mongos && mwait "src-mongos:27017"
 # Add source shards to cluster
 ADD_SHARDS_CMD=""
 for i in $(seq 0 $((SRC_SHARDS - 1))); do
-    PORT=$((30000 + i * 100))
+    PORT=${SRC_SHARD_PORTS[$i]}
     ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/src-rs${i}0:${PORT}'); "
 done
 msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
@@ -90,7 +95,7 @@ mwait "tgt-cfg0:28000" && rsinit "tgt/cfg" "tgt-cfg0:28000"
 
 # Initialize target shards
 for i in $(seq 0 $((TGT_SHARDS - 1))); do
-    PORT=$((40000 + i * 100))
+    PORT=${TGT_SHARD_PORTS[$i]}
     mwait "tgt-rs${i}0:${PORT}" && rsinit "tgt/rs${i}" "tgt-rs${i}0:${PORT}"
 done
 
@@ -100,7 +105,7 @@ dcf up -d tgt-mongos && mwait "tgt-mongos:27017"
 # Add target shards to cluster
 ADD_SHARDS_CMD=""
 for i in $(seq 0 $((TGT_SHARDS - 1))); do
-    PORT=$((40000 + i * 100))
+    PORT=${TGT_SHARD_PORTS[$i]}
     ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/tgt-rs${i}0:${PORT}'); "
 done
 msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
