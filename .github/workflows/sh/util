@@ -55,7 +55,5 @@ rsinit() {
         echo "uninitialized primary: $1"
         exit 1
     fi
-    msh "$2" "/cfg/users.adm.js"
-    msh "adm:pass@$2" "/cfg/users.js"
-    msh "adm:pass@$2" "/cfg/scripts/deprioritize.js"
+    msh "$2" "/cfg/scripts/deprioritize.js"
 }
