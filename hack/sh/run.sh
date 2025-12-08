@@ -6,8 +6,10 @@
 #   SRC_SHARDS=1 ./run.sh         # Custom source shards, default target
 #   TGT_SHARDS=3 ./run.sh         # Default source, custom target shards
 #   SRC_SHARDS=3 TGT_SHARDS=1 ./run.sh  # Custom both
+#   SRC_SHARDS=0 TGT_SHARDS=2 ./run.sh  # Target only
+#   SRC_SHARDS=2 TGT_SHARDS=0 ./run.sh  # Source only
 #
-# Limits: Max 3 shards each for source and target
+# Limits: Max 3 shards each for source and target (0 = skip source/target cluster)
 # Services are named: src-rs{N}0 and tgt-rs{N}0 where N is the shard index (0-based)
 # Ports: source shards start at 30000 (increment by 100), target shards at 40000
 
@@ -49,63 +51,76 @@ if [ "$TGT_SHARDS" -gt "$MAX_TGT_SHARDS" ]; then
     exit 1
 fi
 
-echo "Starting source cluster with $SRC_SHARDS shards (max: $MAX_SRC_SHARDS)"
-echo "Starting target cluster with $TGT_SHARDS shards (max: $MAX_TGT_SHARDS)"
 
-# Build list of source shard services to start
-SRC_SERVICES="src-cfg0"
-for i in $(seq 0 $((SRC_SHARDS - 1))); do
-    SRC_SERVICES="$SRC_SERVICES src-rs${i}0"
-done
 
-# Start source config server and shards
-dcf up -d $SRC_SERVICES
+# Start source sharded cluster only if SRC_SHARDS > 0
+if [ "$SRC_SHARDS" -gt 0 ]; then
+    echo "Starting source cluster with $SRC_SHARDS shards (max: $MAX_SRC_SHARDS)"
 
-# Initialize source config server
-mwait "src-cfg0:27000" && rsinit "src/cfg" "src-cfg0:27000"
+    # Build list of source shard services to start
+    SRC_SERVICES="src-cfg0"
+    for i in $(seq 0 $((SRC_SHARDS - 1))); do
+        SRC_SERVICES="$SRC_SERVICES src-rs${i}0"
+    done
 
-# Initialize source shards
-for i in $(seq 0 $((SRC_SHARDS - 1))); do
-    PORT=${SRC_SHARD_PORTS[$i]}
-    mwait "src-rs${i}0:${PORT}" && rsinit "src/rs${i}" "src-rs${i}0:${PORT}"
-done
+    # Start source config server and shards
+    dcf up -d $SRC_SERVICES
 
-# Start source mongos
-dcf up -d src-mongos && mwait "src-mongos:27017"
+    # Initialize source config server
+    mwait "src-cfg0:27000" && rsinit "src/cfg" "src-cfg0:27000"
 
-# Add source shards to cluster
-ADD_SHARDS_CMD=""
-for i in $(seq 0 $((SRC_SHARDS - 1))); do
-    PORT=${SRC_SHARD_PORTS[$i]}
-    ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/src-rs${i}0:${PORT}'); "
-done
-msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
+    # Initialize source shards
+    for i in $(seq 0 $((SRC_SHARDS - 1))); do
+        PORT=${SRC_SHARD_PORTS[$i]}
+        mwait "src-rs${i}0:${PORT}" && rsinit "src/rs${i}" "src-rs${i}0:${PORT}"
+    done
 
-# Build list of target shard services to start
-TGT_SERVICES="tgt-cfg0"
-for i in $(seq 0 $((TGT_SHARDS - 1))); do
-    TGT_SERVICES="$TGT_SERVICES tgt-rs${i}0"
-done
+    # Start source mongos
+    dcf up -d src-mongos && mwait "src-mongos:27017"
 
-# Start target config server and shards
-dcf up -d $TGT_SERVICES
+    # Add source shards to cluster
+    ADD_SHARDS_CMD=""
+    for i in $(seq 0 $((SRC_SHARDS - 1))); do
+        PORT=${SRC_SHARD_PORTS[$i]}
+        ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/src-rs${i}0:${PORT}'); "
+    done
+    msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
+else
+    echo "Skipping source cluster (SRC_SHARDS=0)"
+fi
 
-# Initialize target config server
-mwait "tgt-cfg0:28000" && rsinit "tgt/cfg" "tgt-cfg0:28000"
+# Start target sharded cluster only if TGT_SHARDS > 0
+if [ "$TGT_SHARDS" -gt 0 ]; then
+    echo "Starting target cluster with $TGT_SHARDS shards (max: $MAX_TGT_SHARDS)"
 
-# Initialize target shards
-for i in $(seq 0 $((TGT_SHARDS - 1))); do
-    PORT=${TGT_SHARD_PORTS[$i]}
-    mwait "tgt-rs${i}0:${PORT}" && rsinit "tgt/rs${i}" "tgt-rs${i}0:${PORT}"
-done
+    # Build list of target shard services to start
+    TGT_SERVICES="tgt-cfg0"
+    for i in $(seq 0 $((TGT_SHARDS - 1))); do
+        TGT_SERVICES="$TGT_SERVICES tgt-rs${i}0"
+    done
 
-# Start target mongos
-dcf up -d tgt-mongos && mwait "tgt-mongos:27017"
+    # Start target config server and shards
+    dcf up -d $TGT_SERVICES
 
-# Add target shards to cluster
-ADD_SHARDS_CMD=""
-for i in $(seq 0 $((TGT_SHARDS - 1))); do
-    PORT=${TGT_SHARD_PORTS[$i]}
-    ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/tgt-rs${i}0:${PORT}'); "
-done
-msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
+    # Initialize target config server
+    mwait "tgt-cfg0:28000" && rsinit "tgt/cfg" "tgt-cfg0:28000"
+
+    # Initialize target shards
+    for i in $(seq 0 $((TGT_SHARDS - 1))); do
+        PORT=${TGT_SHARD_PORTS[$i]}
+        mwait "tgt-rs${i}0:${PORT}" && rsinit "tgt/rs${i}" "tgt-rs${i}0:${PORT}"
+    done
+
+    # Start target mongos
+    dcf up -d tgt-mongos && mwait "tgt-mongos:27017"
+
+    # Add target shards to cluster
+    ADD_SHARDS_CMD=""
+    for i in $(seq 0 $((TGT_SHARDS - 1))); do
+        PORT=${TGT_SHARD_PORTS[$i]}
+        ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/tgt-rs${i}0:${PORT}'); "
+    done
+    msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
+else
+    echo "Skipping target cluster (TGT_SHARDS=0)"
+fi
