@@ -228,7 +228,7 @@ def test_update_one_multiple_arrays(t: Testing, phase: Runner.Phase):
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
-def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
+def test_update_one_with_truncated_arrays(t: Testing, phase: Runner.Phase):
     t.source["db_1"]["coll_1"].insert_one(
         {
             "i": "f1",
