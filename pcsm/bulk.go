@@ -2,6 +2,7 @@ package pcsm
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,6 +68,13 @@ func (o *clientBulkWrite) Empty() bool {
 func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
 	totalSize := len(o.writes)
 
+	println("AAAAAAAAAAAAAAA Executing bulk write with", totalSize, "operations")
+
+	for i, write := range o.writes {
+		fmt.Printf(" OPERATION %s.%s, op index %d --->  %v\n",
+			write.Database, write.Collection, i, write.Model)
+	}
+
 	err := o.doWithRetry(ctx, m, o.writes)
 	if err != nil {
 		return 0, err // nolint:wrapcheck
@@ -99,14 +107,23 @@ func (o *clientBulkWrite) doWithRetry(ctx context.Context, m *mongo.Client, writ
 		var bwe mongo.ClientBulkWriteException
 
 		if errors.As(bulkErr, &bwe) {
-			// Find the first error (in ordered mode, there should only be one)
+			// Find the first error by looking for the minimum index in the map
+			// (in ordered mode, there should only be one error)
 			if len(bwe.WriteErrors) > 0 {
-				firstErr := bwe.WriteErrors[0]
+				// Find the minimum index in the WriteErrors map
+				minIdx := -1
+				for idx := range bwe.WriteErrors {
+					if minIdx == -1 || idx < minIdx {
+						minIdx = idx
+					}
+				}
+
+				firstErr := bwe.WriteErrors[minIdx]
 
 				// Only handle duplicate key errors on ReplaceOne operations
 				if mongo.IsDuplicateKeyError(firstErr) {
-					if firstErr.Index >= 0 && firstErr.Index < len(writes) {
-						write := writes[firstErr.Index]
+					if minIdx >= 0 && minIdx < len(writes) {
+						write := writes[minIdx]
 
 						replaceModel, ok := write.Model.(*mongo.ClientReplaceOneModel)
 						if ok {
@@ -118,7 +135,7 @@ func (o *clientBulkWrite) doWithRetry(ctx context.Context, m *mongo.Client, writ
 
 							// Retry remaining operations (from index+1 onwards)
 							// These operations were never executed due to ordered semantics
-							remainingWrites := writes[firstErr.Index+1:]
+							remainingWrites := writes[minIdx+1:]
 
 							return o.doWithRetry(ctx, m, remainingWrites)
 						}
