@@ -12,6 +12,7 @@ linters:
     - nolintlint
     - varnamelen
     - wsl
+    - wsl_v5
     - funcorder
   settings:
     govet:
