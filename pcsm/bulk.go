@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
@@ -64,20 +65,72 @@ func (o *clientBulkWrite) Empty() bool {
 }
 
 func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
-	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
-		_, err := m.BulkWrite(ctx, o.writes, clientBulkOptions)
+	totalSize := len(o.writes)
 
-		return errors.Wrap(err, "bulk write")
-	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	err := o.doWithRetry(ctx, m, o.writes)
 	if err != nil {
 		return 0, err // nolint:wrapcheck
 	}
 
-	size := len(o.writes)
 	clear(o.writes)
 	o.writes = o.writes[:0]
 
-	return size, nil
+	return totalSize, nil
+}
+
+// doWithRetry executes bulk write operations with retry logic for duplicate key errors.
+// In ordered mode, when an error occurs at index N, operations 0..N-1 are applied,
+// operation N fails, and N+1..end are never executed. This function handles operation N
+// and retries the remaining operations recursively.
+func (o *clientBulkWrite) doWithRetry(ctx context.Context, m *mongo.Client, writes []mongo.ClientBulkWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+
+	var bulkErr error
+
+	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := m.BulkWrite(ctx, writes, clientBulkOptions)
+		bulkErr = err
+
+		return errors.Wrap(err, "bulk write")
+	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	if err != nil {
+		var bwe mongo.ClientBulkWriteException
+
+		if errors.As(bulkErr, &bwe) {
+			// Find the first error (in ordered mode, there should only be one)
+			if len(bwe.WriteErrors) > 0 {
+				firstErr := bwe.WriteErrors[0]
+
+				// Only handle duplicate key errors on ReplaceOne operations
+				if mongo.IsDuplicateKeyError(firstErr) {
+					if firstErr.Index >= 0 && firstErr.Index < len(writes) {
+						write := writes[firstErr.Index]
+
+						replaceModel, ok := write.Model.(*mongo.ClientReplaceOneModel)
+						if ok {
+							// Handle the duplicate key error with delete+insert
+							err := o.handleDuplicateKeyError(ctx, m, write.Database, write.Collection, replaceModel)
+							if err != nil {
+								return err
+							}
+
+							// Retry remaining operations (from index+1 onwards)
+							// These operations were never executed due to ordered semantics
+							remainingWrites := writes[firstErr.Index+1:]
+
+							return o.doWithRetry(ctx, m, remainingWrites)
+						}
+					}
+				}
+			}
+		}
+
+		return err // nolint:wrapcheck
+	}
+
+	return nil
 }
 
 func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
@@ -156,6 +209,56 @@ func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.writes = append(o.writes, bw)
 }
 
+// handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
+func (o *clientBulkWrite) handleDuplicateKeyError(
+	ctx context.Context,
+	m *mongo.Client,
+	database string,
+	collection string,
+	replaceModel *mongo.ClientReplaceOneModel,
+) error {
+	// Extract _id from the replacement document
+	var doc bson.D
+	data, err := bson.Marshal(replaceModel.Replacement)
+	if err != nil {
+		return errors.Wrap(err, "marshal replacement document")
+	}
+	err = bson.Unmarshal(data, &doc)
+	if err != nil {
+		return errors.Wrap(err, "unmarshal replacement document")
+	}
+
+	// Find _id in document
+	var docID any
+	for _, elem := range doc {
+		if elem.Key == "_id" {
+			docID = elem.Value
+
+			break
+		}
+	}
+	if docID == nil {
+		return errors.New("no _id found in replacement document")
+	}
+
+	log.Ctx(ctx).With(log.NS(database, collection)).
+		Infof("Retrying with delete+insert fallback for _id: %v", docID)
+
+	coll := m.Database(database).Collection(collection)
+
+	_, err = coll.DeleteOne(ctx, bson.D{{"_id", docID}})
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.Wrap(err, "delete before insert")
+	}
+
+	_, err = coll.InsertOne(ctx, replaceModel.Replacement)
+	if err != nil {
+		return errors.Wrap(err, "insert after delete")
+	}
+
+	return nil
+}
+
 type collectionBulkWrite struct {
 	useSimpleCollation bool
 	max                int
@@ -194,11 +297,7 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 		grp.Go(func() error {
 			mcoll := m.Database(namespace.Database).Collection(namespace.Collection)
 
-			err := topo.RunWithRetry(ctx, func(_ context.Context) error {
-				_, err := mcoll.BulkWrite(grpCtx, ops, collectionBulkOptions)
-
-				return errors.Wrapf(err, "bulk write %q", namespace)
-			}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+			err := o.doWithRetry(grpCtx, mcoll, namespace, ops)
 			if err != nil {
 				return err // nolint:wrapcheck
 			}
@@ -218,6 +317,66 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 	o.count = 0
 
 	return int(total.Load()), nil
+}
+
+// doWithRetry executes bulk write operations for a single namespace with retry logic for duplicate key errors.
+// In ordered mode, when an error occurs at index N, operations 0..N-1 are applied,
+// operation N fails, and N+1..end are never executed. This function handles operation N
+// and retries the remaining operations recursively.
+func (o *collectionBulkWrite) doWithRetry(
+	ctx context.Context,
+	coll *mongo.Collection,
+	namespace Namespace,
+	ops []mongo.WriteModel,
+) error {
+	if len(ops) == 0 {
+		return nil
+	}
+
+	var bulkErr error
+
+	err := topo.RunWithRetry(ctx, func(_ context.Context) error {
+		_, err := coll.BulkWrite(ctx, ops, collectionBulkOptions)
+		bulkErr = err
+
+		return errors.Wrapf(err, "bulk write %q", namespace)
+	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	if err != nil {
+		var bwe mongo.BulkWriteException
+
+		if errors.As(bulkErr, &bwe) {
+			// Find the first error (in ordered mode, there should only be one)
+			if len(bwe.WriteErrors) > 0 {
+				firstErr := bwe.WriteErrors[0]
+
+				// Only handle duplicate key errors on ReplaceOne operations
+				if mongo.IsDuplicateKeyError(firstErr) {
+					if firstErr.Index >= 0 && firstErr.Index < len(ops) {
+						op := ops[firstErr.Index]
+
+						replaceModel, ok := op.(*mongo.ReplaceOneModel)
+						if ok {
+							// Handle the duplicate key error with delete+insert
+							err := o.handleDuplicateKeyError(ctx, coll, replaceModel)
+							if err != nil {
+								return err
+							}
+
+							// Retry remaining operations (from index+1 onwards)
+							// These operations were never executed due to ordered semantics
+							remainingOps := ops[firstErr.Index+1:]
+
+							return o.doWithRetry(ctx, coll, namespace, remainingOps)
+						}
+					}
+				}
+			}
+		}
+
+		return err // nolint:wrapcheck
+	}
+
+	return nil
 }
 
 func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
@@ -294,6 +453,54 @@ func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	o.writes[ns.String()] = append(o.writes[ns.String()], m)
 
 	o.count++
+}
+
+// handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
+func (o *collectionBulkWrite) handleDuplicateKeyError(
+	ctx context.Context,
+	coll *mongo.Collection,
+	replaceModel *mongo.ReplaceOneModel,
+) error {
+	// Extract _id from the replacement document
+	var doc bson.D
+	data, err := bson.Marshal(replaceModel.Replacement)
+	if err != nil {
+		return errors.Wrap(err, "marshal replacement document")
+	}
+	err = bson.Unmarshal(data, &doc)
+	if err != nil {
+		return errors.Wrap(err, "unmarshal replacement document")
+	}
+
+	// Find _id in document
+	var docID any
+	for _, elem := range doc {
+		if elem.Key == "_id" {
+			docID = elem.Value
+
+			break
+		}
+	}
+	if docID == nil {
+		return errors.New("no _id found in replacement document")
+	}
+
+	log.Ctx(ctx).With(log.NS(coll.Database().Name(), coll.Name())).
+		Infof("Retrying with delete+insert fallback for _id: %v", docID)
+
+	// Delete existing document by _id
+	_, err = coll.DeleteOne(ctx, bson.D{{"_id", docID}})
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.Wrap(err, "delete before insert")
+	}
+
+	// Insert the new document
+	_, err = coll.InsertOne(ctx, replaceModel.Replacement)
+	if err != nil {
+		return errors.Wrap(err, "insert after delete")
+	}
+
+	return nil
 }
 
 func collectUpdateOps(event *UpdateEvent) any {
