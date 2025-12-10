@@ -177,7 +177,8 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 					},
 				}},
 			})
-			if err := res.Err(); err != nil {
+			err := res.Err()
+			if err != nil {
 				b.Fatalf("Failed to create index: %v", err)
 			}
 		}
@@ -195,7 +196,8 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 				{"collMod", "coll_0"},
 				{"index", bson.D{{"name", "n_1"}, {"prepareUnique", true}}},
 			})
-			if err := res.Err(); err != nil {
+			err := res.Err()
+			if err != nil {
 				b.Fatalf("Failed to prepareUnique: %v", err)
 			}
 
@@ -206,7 +208,8 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 				{"collMod", "coll_0"},
 				{"index", bson.D{{"name", "n_1"}, {"unique", true}}},
 			})
-			if err := res.Err(); err != nil {
+			err := res.Err()
+			if err != nil {
 				b.Fatalf("Failed to prepareUnique: %v", err)
 			}
 		}
@@ -304,7 +307,8 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 
 	close(documentC)
 
-	if err = cur.Err(); err != nil {
+	err = cur.Err()
+	if err != nil {
 		return totalCopiedBytes, errors.Wrap(err, "cursor")
 	}
 

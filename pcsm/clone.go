@@ -760,10 +760,7 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return nil
 	}
 
-	builtIndexesCap := len(indexes) - len(unfinishedBuilds)
-	if builtIndexesCap < 0 {
-		builtIndexesCap = 0
-	}
+	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds), 0)
 
 	builtIndexes := make([]*topo.IndexSpecification, 0, builtIndexesCap)
 

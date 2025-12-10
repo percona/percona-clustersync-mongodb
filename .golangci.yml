@@ -9,6 +9,7 @@ linters:
     - exhaustruct
     - funlen
     - gocognit
+    - nestif
     - nolintlint
     - varnamelen
     - wsl
@@ -20,6 +21,10 @@ linters:
         - composites
     misspell:
       locale: US
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
   exclusions:
     generated: lax
     presets:

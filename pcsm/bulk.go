@@ -2,7 +2,6 @@ package pcsm
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,13 +66,6 @@ func (o *clientBulkWrite) Empty() bool {
 
 func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
 	totalSize := len(o.writes)
-
-	println("AAAAAAAAAAAAAAA Executing bulk write with", totalSize, "operations")
-
-	for i, write := range o.writes {
-		fmt.Printf(" OPERATION %s.%s, op index %d --->  %v\n",
-			write.Database, write.Collection, i, write.Model)
-	}
 
 	err := o.doWithRetry(ctx, m, o.writes)
 	if err != nil {
@@ -227,7 +219,6 @@ func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 
 	o.writes = append(o.writes, bw)
 }
-
 
 type collectionBulkWrite struct {
 	useSimpleCollation bool

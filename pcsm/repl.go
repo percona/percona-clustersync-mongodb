@@ -409,7 +409,8 @@ func (r *Repl) watchChangeEvents(
 					txn0 = change // process the new transaction
 				}
 
-				if err := cur.Err(); err != nil || cur.ID() == 0 {
+				err := cur.Err()
+				if err != nil || cur.ID() == 0 {
 					return errors.Wrap(err, "cursor")
 				}
 
@@ -428,7 +429,8 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 
-		if err := cur.Err(); err != nil || cur.ID() == 0 {
+		err = cur.Err()
+		if err != nil || cur.ID() == 0 {
 			return errors.Wrap(err, "cursor")
 		}
 
