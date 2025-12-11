@@ -132,7 +132,8 @@ func BenchmarkRead(b *testing.B) {
 		}
 	}
 
-	if err = cur.Err(); err != nil {
+	err = cur.Err()
+	if err != nil {
 		b.Fatal(err)
 	}
 
