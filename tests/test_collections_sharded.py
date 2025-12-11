@@ -88,7 +88,7 @@ def test_create_collection_with_collation_with_shard_key_index_prefix(
 
     t.compare_all_sharded()
 
-        
+
 @pytest.mark.parametrize("phase", [Runner.Phase.CLONE])
 def test_clone_document_sharded(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -98,7 +98,7 @@ def test_clone_document_sharded(t: Testing, phase: Runner.Phase):
 
     t.compare_all_sharded()
 
-    
+
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_shard_key_update_duplicate_key_error(t: Testing, phase: Runner.Phase):
     """
@@ -112,20 +112,27 @@ def test_shard_key_update_duplicate_key_error(t: Testing, phase: Runner.Phase):
     for i in range(1, 10):
         key_id = 100 + i
         coll.insert_one({"key_id": key_id, "name": f"pre_sync_doc_{i}", "value": f"value_{key_id}"})
+
     stop_event = threading.Event()
+
     def perform_shard_key_updates():
         num_updates = 500
         for i in range(1, num_updates + 1):
             if stop_event.is_set():
                 break
+
             key_id = 200 + i
             new_key_id = 5000 + i
             coll.insert_one({"key_id": key_id, "name": f"test_doc_{i}", "value": f"value_{key_id}"})
-            coll.update_one({"key_id": key_id}, {"$set": {"key_id": new_key_id, "shard_key_updated": True}})
+            coll.update_one(
+                {"key_id": key_id}, {"$set": {"key_id": new_key_id, "shard_key_updated": True}}
+            )
             time.sleep(0.05)
+
     update_thread = threading.Thread(target=perform_shard_key_updates)
     update_thread.start()
     time.sleep(3)
+
     with t.run(phase):
         stop_event.set()
         update_thread.join(timeout=5)
