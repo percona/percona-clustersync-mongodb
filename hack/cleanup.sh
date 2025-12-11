@@ -61,16 +61,19 @@ cleanup_env() {
 for env in "${ENVS_TO_CLEAN[@]}"; do
     case $env in
         rs)
-            cleanup_env "rs" "$SCRIPT_DIR/rs/compose.yml"
-            docker volume ls -q | grep -E '^rs[0-9]+' | xargs -r docker volume rm 2>/dev/null || true
+            cleanup_env "rs" "$SCRIPT_DIR/rs/compose.yml" "r1"
+            docker volume ls -q | grep -E '^r1_rs[0-9]+' | xargs -r docker volume rm 2>/dev/null || true
+            docker network ls -q --filter "name=r1_" | xargs -r docker network rm 2>/dev/null || true
             ;;
         sh)
             cleanup_env "sh" "$SCRIPT_DIR/sh/compose.yml" "s1"
             docker volume ls -q | grep -E '^(src-|tgt-|s1_)' | xargs -r docker volume rm 2>/dev/null || true
+            docker network ls -q --filter "name=s1_" | xargs -r docker network rm 2>/dev/null || true
             ;;
         sh-ha)
             cleanup_env "sh-ha" "$SCRIPT_DIR/sh-ha/compose.yml" "s1"
             docker volume ls -q | grep -E '^s1_' | xargs -r docker volume rm 2>/dev/null || true
+            docker network ls -q --filter "name=s1_" | xargs -r docker network rm 2>/dev/null || true
             ;;
     esac
 done
