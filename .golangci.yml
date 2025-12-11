@@ -9,7 +9,6 @@ linters:
     - exhaustruct
     - funlen
     - gocognit
-    - nestif
     - nolintlint
     - varnamelen
     - wsl
