@@ -74,7 +74,7 @@ func UseTargetClientCompressors() []string {
 	allowCompressors := []string{"zstd", "zlib", "snappy"}
 
 	rv := make([]string, 0, min(len(s), len(allowCompressors)))
-	for _, a := range strings.Split(s, ",") {
+	for a := range strings.SplitSeq(s, ",") {
 		a = strings.TrimSpace(a)
 		if slices.Contains(allowCompressors, a) && !slices.Contains(rv, a) {
 			rv = append(rv, a)
@@ -90,7 +90,8 @@ func UseTargetClientCompressors() []string {
 // DefaultMongoDBCliOperationTimeout is used.
 func OperationMongoDBCliTimeout() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("PCSM_MONGODB_CLI_OPERATION_TIMEOUT")); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		d, err := time.ParseDuration(v)
+		if err == nil && d > 0 {
 			return d
 		}
 	}

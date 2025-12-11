@@ -12,6 +12,7 @@ linters:
     - nolintlint
     - varnamelen
     - wsl
+    - wsl_v5
     - funcorder
   settings:
     govet:
@@ -19,6 +20,10 @@ linters:
         - composites
     misspell:
       locale: US
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
   exclusions:
     generated: lax
     presets:
