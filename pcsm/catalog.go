@@ -795,6 +795,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
+			lg := lg.With(log.NS(db, coll))
+
 			for _, index := range collEntry.Indexes {
 				if index.Unsuccessful() {
 					foundUnsuccessfulIdx = true
