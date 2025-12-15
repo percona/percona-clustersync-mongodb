@@ -795,6 +795,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
+			nsLg := lg.With(log.NS(db, coll))
+
 			for _, index := range collEntry.Indexes {
 				if index.Unsuccessful() {
 					foundUnsuccessfulIdx = true
@@ -803,7 +805,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				}
 
 				if index.IsClustered() {
-					lg.Warn("Clustered index with TTL is not supported")
+					nsLg.Warn("Clustered index with TTL is not supported")
 
 					continue
 				}
@@ -811,7 +813,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				// restore properties
 				switch { // unique and prepareUnique are mutually exclusive.
 				case index.Unique != nil && *index.Unique:
-					lg.Info("Convert index to prepareUnique: " + index.Name)
+					nsLg.Info("Convert index to prepareUnique: " + index.Name)
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
@@ -821,7 +823,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 						continue
 					}
 
-					lg.Info("Convert prepareUnique index to unique: " + index.Name)
+					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
@@ -832,7 +834,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					}
 
 				case index.PrepareUnique != nil && *index.PrepareUnique:
-					lg.Info("Convert prepareUnique index to unique: " + index.Name)
+					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
@@ -844,7 +846,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				}
 
 				if index.ExpireAfterSeconds != nil {
-					lg.Info("Modify index expireAfterSeconds: " + index.Name)
+					nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
 
 					err := c.doModifyIndexOption(ctx,
 						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
@@ -857,7 +859,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				}
 
 				if index.Hidden != nil {
-					lg.Info("Modify index hidden: " + index.Name)
+					nsLg.Info("Modify index hidden: " + index.Name)
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
