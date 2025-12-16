@@ -21,8 +21,8 @@ func MakeFilter(include, exclude []string) NSFilter {
 		return AllowAllFilter
 	}
 
-	includeFilter := doMakeFitler(include)
-	excludeFilter := doMakeFitler(exclude)
+	includeFilter := doMakeFilter(include)
+	excludeFilter := doMakeFilter(exclude)
 
 	lg.Infof("Include filter: %v", strings.Join(include, ", "))
 	lg.Infof("Exclude filter: %v", strings.Join(exclude, ", "))
@@ -74,7 +74,7 @@ func (f filterMap) Has(db, coll string) bool {
 	return slices.Contains(list, coll) // only if explcitly listed
 }
 
-func doMakeFitler(filter []string) filterMap {
+func doMakeFilter(filter []string) filterMap {
 	// keys are database names. values are list collections that belong to the db.
 	// if a key contains empty/nil, whole db is included (all its collections).
 	filterMap := make(map[string][]string)
