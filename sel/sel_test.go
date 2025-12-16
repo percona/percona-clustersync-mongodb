@@ -6,7 +6,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/sel"
 )
 
-func TestFilter(t *testing.T) {
+func TestFilter(t *testing.T) { //nolint:maintidx
 	t.Parallel()
 
 	tests := []struct {
@@ -16,6 +16,19 @@ func TestFilter(t *testing.T) {
 		testNamespaces map[string]map[string]bool
 	}{
 		// Core filter modes
+		{
+			name:          "both filters empty - allow all",
+			includeFilter: []string{},
+			excludeFilter: []string{},
+			testNamespaces: map[string]map[string]bool{
+				"any_db": {
+					"any_coll": true,
+				},
+				"another_db": {
+					"some_coll": true,
+				},
+			},
+		},
 		{
 			name: "include only",
 			includeFilter: []string{
@@ -218,6 +231,117 @@ func TestFilter(t *testing.T) {
 				"test_db3": {
 					"test_collection1": false,
 					"test_collection2": false,
+				},
+			},
+		},
+
+		// Edge cases
+		{
+			name:          "both filters nil - allow all",
+			includeFilter: nil,
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"any_db": {
+					"any_coll": true,
+				},
+				"another_db": {
+					"some_coll": true,
+				},
+			},
+		},
+		{
+			name:          "collection name with dots",
+			includeFilter: []string{"mydb.coll.with.dots"},
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"mydb": {
+					"coll.with.dots": true,
+					"coll":           false,
+					"regular_coll":   false,
+				},
+				"coll": {
+					"with": false,
+				},
+			},
+		},
+		{
+			name:          "database wildcard with collection containing dots",
+			includeFilter: []string{"testdb.*"},
+			excludeFilter: []string{"testdb.exclude.this"},
+			testNamespaces: map[string]map[string]bool{
+				"testdb": {
+					"normal_coll":    true,
+					"coll.with.dots": true,
+					"exclude.this":   false,
+				},
+			},
+		},
+		{
+			name:          "case sensitive - uppercase database",
+			includeFilter: []string{"DB.*"},
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"DB": {
+					"coll": true,
+				},
+				"db": {
+					"coll": false,
+				},
+				"Db": {
+					"coll": false,
+				},
+			},
+		},
+		{
+			name:          "case sensitive - uppercase collection",
+			includeFilter: []string{"db.COLLECTION"},
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"db": {
+					"COLLECTION": true,
+					"collection": false,
+					"Collection": false,
+				},
+			},
+		},
+		{
+			name:          "case sensitive - mixed case filters",
+			includeFilter: []string{"TestDB.*", "mydb.MyCollection"},
+			excludeFilter: []string{"TestDB.ExcludeThis"},
+			testNamespaces: map[string]map[string]bool{
+				"TestDB": {
+					"SomeCollection": true,
+					"ExcludeThis":    false,
+				},
+				"testdb": {
+					"SomeCollection": false,
+				},
+				"mydb": {
+					"MyCollection": true,
+					"mycollection": false,
+				},
+			},
+		},
+		{
+			name:          "empty collection name",
+			includeFilter: []string{"db."},
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"db": {
+					"":     true,
+					"coll": false,
+				},
+			},
+		},
+		{
+			name:          "multiple wildcards for same database",
+			includeFilter: []string{"db.*", "db.*", "db.specific"},
+			excludeFilter: nil,
+			testNamespaces: map[string]map[string]bool{
+				"db": {
+					"coll1":    true,
+					"coll2":    true,
+					"specific": true,
 				},
 			},
 		},
