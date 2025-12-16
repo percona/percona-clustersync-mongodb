@@ -285,9 +285,9 @@ func TestFilter(t *testing.T) {
 				"coll_2": false,
 			},
 			"db_3": {
-				"coll_0": true,
+				"coll_0": false,
 				"coll_1": false,
-				"coll_2": true,
+				"coll_2": false,
 			},
 		}
 
