@@ -2,8 +2,8 @@
 
 import pymongo
 
-SRC_URI = "mongodb://adm:pass@src-mongos:27017"
-TGT_URI = "mongodb://adm:pass@tgt-mongos:29017"
+SRC_URI = "mongodb://src-mongos:27017"
+TGT_URI = "mongodb://tgt-mongos:29017"
 
 src = pymongo.MongoClient(SRC_URI)
 tgt = pymongo.MongoClient(TGT_URI)

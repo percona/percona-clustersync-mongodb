@@ -10,7 +10,7 @@ host.docker.internal:2242/metrics
 ## MongoLink CLI
 
 ```shell
-go install . && pml --source="mongodb://adm:pass@rs00:30000" --target="mongodb://adm:pass@rs10:30100" --reset-state --log-level="debug"
+go install . && pml --source="mongodb://rs00:30000" --target="mongodb://rs10:30100" --reset-state --log-level="debug"
 ```
 
 

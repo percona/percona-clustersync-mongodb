@@ -7,7 +7,7 @@ import time
 from bson import ObjectId, BSON
 from datetime import datetime
 
-uri = "mongodb://adm:pass@src-mongos:27017"
+uri = "mongodb://src-mongos:27017"
 # uri="mongodb://inel:m0sl1RoYDXkSLEse@cluster0.vrfly.mongodb.net/"
 
 

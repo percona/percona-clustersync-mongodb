@@ -6,7 +6,7 @@ from datetime import datetime
 import threading
 
 # MongoDB connection
-uri = "mongodb://adm:pass@rs00:30000"
+uri = "mongodb://rs00:30000"
 client = MongoClient(uri)  # Ensure you have a replica set
 
 # Databases and collections

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# poetry run python3 .dev/change_stream.py mongodb://adm:pass@rs00:30000
+# poetry run python3 .dev/change_stream.py mongodb://rs00:30000
 
 import sys
 from signal import SIG_DFL, SIGINT, signal
@@ -7,7 +7,7 @@ from signal import SIG_DFL, SIGINT, signal
 import bson.json_util as json
 import pymongo
 
-MONGODB_URI = "mongodb://adm:pass@rs00:30000"
+MONGODB_URI = "mongodb://rs00:30000"
 
 ignoreCheckpoints = True  # set to False to see all changes, including checkpoints
 
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         del change["wallTime"]
 
         ns = change["ns"]["db"]
-        
+
         if ignoreCheckpoints and ns == "percona_link_mongodb":
             continue
 
