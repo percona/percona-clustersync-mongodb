@@ -3,6 +3,8 @@ package sel
 import (
 	"slices"
 	"strings"
+
+	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
 // NSFilter returns true if a namespace is allowed.
@@ -13,12 +15,17 @@ func AllowAllFilter(string, string) bool {
 }
 
 func MakeFilter(include, exclude []string) NSFilter {
+	lg := log.New("filter")
+
 	if len(include) == 0 && len(exclude) == 0 {
 		return AllowAllFilter
 	}
 
 	includeFilter := doMakeFitler(include)
 	excludeFilter := doMakeFitler(exclude)
+
+	lg.Infof("Include filter: %v", strings.Join(include, ", "))
+	lg.Infof("Exclude filter: %v", strings.Join(exclude, ", "))
 
 	return func(db, coll string) bool {
 		_, dbIncluded := includeFilter[db]
