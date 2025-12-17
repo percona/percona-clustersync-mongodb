@@ -4,7 +4,7 @@ from bson.decimal128 import Decimal128
 import pymongo
 from pymongo import MongoClient
 
-MONGODB_URI = "mongodb://adm:pass@rs00:30000"
+MONGODB_URI = "mongodb://rs00:30000"
 client = MongoClient(MONGODB_URI)
 db = client["stress_test_db"]
 

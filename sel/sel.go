@@ -3,6 +3,8 @@ package sel
 import (
 	"slices"
 	"strings"
+
+	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
 // NSFilter returns true if a namespace is allowed.
@@ -13,47 +15,46 @@ func AllowAllFilter(string, string) bool {
 }
 
 func MakeFilter(include, exclude []string) NSFilter {
+	lg := log.New("filter")
+
 	if len(include) == 0 && len(exclude) == 0 {
 		return AllowAllFilter
 	}
 
-	includeFilter := doMakeFitler(include)
-	excludeFilter := doMakeFitler(exclude)
+	includeFilter := doMakeFilter(include)
+	excludeFilter := doMakeFilter(exclude)
+
+	lg.Infof("Include filter: %v", strings.Join(include, ", "))
+	lg.Infof("Exclude filter: %v", strings.Join(exclude, ", "))
 
 	return func(db, coll string) bool {
 		_, dbIncluded := includeFilter[db]
-		_, dbExcluded := excludeFilter[db]
 
 		nsIncluded := len(includeFilter) > 0 && includeFilter.Has(db, coll)
 		nsExcluded := len(excludeFilter) > 0 && excludeFilter.Has(db, coll)
 
-		if nsIncluded && dbIncluded && !nsExcluded {
-			// If the namespace is included, it is allowed.
-			// Also make sure that the namespace is not excluded,
-			// because exclusion takes precedence.
-			return true
-		}
-
-		if dbIncluded && !nsExcluded {
-			// If the database is included in the filter,
-			// but the namespace is not included, it is not allowed.
-			// Also make sure that the namespace is not excluded,
-			// because exclusion takes precedence.
+		// Exclusion takes precedence - if explicitly excluded, deny immediately.
+		if nsExcluded {
 			return false
 		}
 
-		if nsExcluded && dbExcluded {
-			// If the namespace is excluded, it is not allowed.
+		// If include filter exists, use whitelist logic (deny by default).
+		if len(includeFilter) > 0 {
+			// Allow if namespace is explicitly included.
+			if nsIncluded {
+				return true
+			}
+			// DB is in include filter but collection is not - deny.
+			if dbIncluded {
+				return false
+			}
+			// DB not in include filter at all - deny.
 			return false
 		}
 
-		if dbExcluded {
-			// If the database is included in the filter,
-			// but the namespace is not excluded, it is allowed.
-			return true
-		}
+		// No include filter (exclude-only or no filters).
+		// Allow by default since exclusions are already handled above.
 
-		// If the namespace is not present in either filter, it is allowed by default.
 		return true
 	}
 }
@@ -73,7 +74,7 @@ func (f filterMap) Has(db, coll string) bool {
 	return slices.Contains(list, coll) // only if explcitly listed
 }
 
-func doMakeFitler(filter []string) filterMap {
+func doMakeFilter(filter []string) filterMap {
 	// keys are database names. values are list collections that belong to the db.
 	// if a key contains empty/nil, whole db is included (all its collections).
 	filterMap := make(map[string][]string)

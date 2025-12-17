@@ -618,6 +618,8 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 					continue
 				}
 
+				lg.With(log.NS(db, spec.Name)).Infof("Namespace %q included", db+"."+spec.Name)
+
 				collGrp.Go(func() error {
 					ns := db + "." + spec.Name
 					if spec.Type == topo.TypeView {
