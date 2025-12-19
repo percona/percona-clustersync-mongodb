@@ -7,11 +7,11 @@ import pymongo
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
-SRC_URI = "mongodb://adm:pass@rs00:30000"
-TGT_URI = "mongodb://adm:pass@rs10:30100"
+SRC_URI = "mongodb://rs00:30000"
+TGT_URI = "mongodb://rs10:30100"
 
-SRC_SH_URI = "mongodb://adm:pass@src-mongos:27017"
-TGT_SH_URI = "mongodb://adm:pass@tgt-mongos:29017"
+SRC_SH_URI = "mongodb://src-mongos:27017"
+TGT_SH_URI = "mongodb://tgt-mongos:29017"
 
 src = pymongo.MongoClient(SRC_SH_URI)
 tgt = pymongo.MongoClient(TGT_SH_URI)

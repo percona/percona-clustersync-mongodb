@@ -679,7 +679,8 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		State: status.State,
 	}
 
-	if err := status.Error; err != nil {
+	err := status.Error
+	if err != nil {
 		res.Err = err.Error()
 	}
 

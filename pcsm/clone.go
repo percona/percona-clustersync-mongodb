@@ -618,6 +618,8 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 					continue
 				}
 
+				lg.With(log.NS(db, spec.Name)).Infof("Namespace %q included", db+"."+spec.Name)
+
 				collGrp.Go(func() error {
 					ns := db + "." + spec.Name
 					if spec.Type == topo.TypeView {
@@ -760,10 +762,7 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return nil
 	}
 
-	builtIndexesCap := len(indexes) - len(unfinishedBuilds)
-	if builtIndexesCap < 0 {
-		builtIndexesCap = 0
-	}
+	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds), 0)
 
 	builtIndexes := make([]*topo.IndexSpecification, 0, builtIndexesCap)
 

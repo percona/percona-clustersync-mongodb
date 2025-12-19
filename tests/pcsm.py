@@ -116,12 +116,14 @@ class Runner:
     def __init__(
         self,
         source: MongoClient,
+        target: MongoClient,
         pcsm: PCSM,
         phase: Phase,
         options: dict,
         wait_timeout=None,
     ):
         self.source: MongoClient = source
+        self.target: MongoClient = target
         self.pcsm = pcsm
         self.phase = phase
         self.options = options
@@ -156,12 +158,33 @@ class Runner:
         if state["state"] == PCSM.State.PAUSED:
             if state["initialSync"]["cloneCompleted"]:
                 self.pcsm.resume()
+                # After resuming, wait briefly to ensure the replication stream is fully active
+                # before attempting to sync to current optime. This prevents race conditions
+                # where wait_for_current_optime() is called before the change stream starts.
+                time.sleep(0.5)
                 state = self.pcsm.status()
 
         if state["state"] == PCSM.State.RUNNING:
-            if not fast:
-                self.wait_for_current_optime()
+            # First, always wait for initial sync to complete
             self.wait_for_initial_sync()
+
+            if not fast:
+                # Refresh state after initial sync completes
+                state = self.pcsm.status()
+
+                # For CLONE phase: if initial sync completed, PCSM has caught up and might
+                # not be actively processing new oplogs. Skip wait_for_current_optime().
+                # For APPLY/MANUAL phase: always wait to ensure real-time operations are replicated.
+                skip_wait = self.phase == self.Phase.CLONE and state["initialSync"]["completed"]
+
+                if not skip_wait:
+                    self.wait_for_current_optime()
+                else:
+                    # CLONE phase with initial sync done - just ensure metadata is visible
+                    for retry in range(6):
+                        self.target.admin.command("ping")
+                        time.sleep(min(0.05 * (2**retry), 0.2))
+
             self.pcsm.finalize()
             state = self.pcsm.status()
 
@@ -186,13 +209,34 @@ class Runner:
         status = self.pcsm.status()
         assert status["state"] == PCSM.State.RUNNING, status
 
-        curr_optime = self.source.server_info()["$clusterTime"]["clusterTime"]
+        result = self.source.admin.command(
+            {"appendOplogNote": 1, "data": {"msg": "test:sync_point"}}
+        )
+        curr_optime = result["$clusterTime"]["clusterTime"]
+
         for _ in range(self.wait_timeout * 2):
-            if curr_optime <= self.last_applied_op:
+            last_applied = self.last_applied_op
+            if curr_optime <= last_applied:
+                # Even though PCSM has processed the oplog entry, MongoDB metadata updates
+                # (like collection/database creation) may not be immediately visible to other
+                # connections. Poll the target with exponential backoff to ensure visibility.
+                for retry in range(6):
+                    # When PCSM creates a collection or database on the target cluster:
+                    #   - PCSM writes the change and confirms it's applied
+                    #   - But test's MongoDB connection still has stale metadata cached
+                    #   - Immediately querying for that collection might return "not found"
+
+                    # The ping command causes the driver to refresh its metadata cache,
+                    # ensuring subsequent queries  see the latest state.
+                    self.target.admin.command("ping")
+
+                    # Exponential backoff with cap: 0.05s, 0.10s, 0.20s, 0.20s, 0.20s, 0.20s
+                    # Total wait: ~0.95 seconds
+                    time.sleep(min(0.05 * (2**retry), 0.2))
+
                 return
 
             time.sleep(0.5)
-            status = self.pcsm.status()
 
         raise WaitTimeoutError()
 

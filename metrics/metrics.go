@@ -125,7 +125,7 @@ func AddCopyReadDocumentCount(v int) {
 	copyReadDocumentTotal.Add(float64(v))
 }
 
-// AddCopyReadDocumentCount increments the total count of the inserted documents.
+// AddCopyInsertDocumentCount increments the total count of the inserted documents.
 func AddCopyInsertDocumentCount(v int) {
 	copyInsertDocumentTotal.Add(float64(v))
 }

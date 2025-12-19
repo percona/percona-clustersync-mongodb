@@ -7,7 +7,7 @@ import time
 from bson import ObjectId, BSON
 from datetime import datetime
 
-uri="mongodb://adm:pass@rs00:30000"
+uri="mongodb://rs00:30000"
 # uri="mongodb://inel:m0sl1RoYDXkSLEse@cluster0.vrfly.mongodb.net/"
 
 def log(msg):

@@ -5,7 +5,9 @@ from pcsm import Runner
 from pymongo import MongoClient
 
 
-def perform_with_options(source, pcsm, phase: Runner.Phase, include_ns=None, exclude_ns=None):
+def perform_with_options(
+    source, target, pcsm, phase: Runner.Phase, include_ns=None, exclude_ns=None
+):
     """Perform the PCSM operation with the given options."""
     pcsm_options = {}
     if include_ns:
@@ -13,7 +15,7 @@ def perform_with_options(source, pcsm, phase: Runner.Phase, include_ns=None, exc
     if exclude_ns:
         pcsm_options["exclude_namespaces"] = exclude_ns
 
-    return Runner(source, pcsm, phase, pcsm_options)
+    return Runner(source, target, pcsm, phase, pcsm_options)
 
 
 def check_if_target_is_subset(source: MongoClient, target: MongoClient):
@@ -35,6 +37,7 @@ def check_if_target_is_subset(source: MongoClient, target: MongoClient):
 def test_create_collection_with_include_only(t: testing.Testing, phase: Runner.Phase):
     with perform_with_options(
         t.source,
+        t.target,
         t.pcsm,
         phase,
         include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
@@ -63,7 +66,7 @@ def test_create_collection_with_include_only(t: testing.Testing, phase: Runner.P
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.Phase):
     with perform_with_options(
-        t.source, t.pcsm, phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]
+        t.source, t.target, t.pcsm, phase, exclude_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1"]
     ):
         for db in range(3):
             for coll in range(3):
@@ -87,9 +90,10 @@ def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.P
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_create_collection(t: testing.Testing, phase: Runner.Phase):
+def test_create_collection_with_both_include_exclude(t: testing.Testing, phase: Runner.Phase):
     with perform_with_options(
         t.source,
+        t.target,
         t.pcsm,
         phase,
         include_ns=["db_0.*", "db_1.coll_0", "db_1.coll_1", "db_2.coll_0", "db_2.coll_1"],
@@ -104,18 +108,15 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
         # "db_0.coll_0",
         # "db_0.coll_1",
         # "db_0.coll_2",
-
         # "db_1.coll_0",
         "db_1.coll_1",
         # "db_1.coll_2",
-
         "db_2.coll_0",
         "db_2.coll_1",
         # "db_2.coll_2",
-
-        "db_3.coll_0",
+        # "db_3.coll_0",
         # "db_3.coll_1",
-        "db_3.coll_2",
+        # "db_3.coll_2",
     }
 
     assert expected == set(testing.list_all_namespaces(t.target))

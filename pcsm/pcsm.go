@@ -555,7 +555,7 @@ func (ml *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
-	if ml.state != StatePaused && !(ml.state == StateFailed && options.ResumeFromFailure) {
+	if ml.state != StatePaused && (ml.state != StateFailed || !options.ResumeFromFailure) {
 		return errors.New("cannot resume: not paused or not resuming from failure")
 	}
 

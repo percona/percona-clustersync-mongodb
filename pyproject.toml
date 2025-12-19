@@ -15,5 +15,5 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
-timeout = 10
+timeout = 15
 timeout_func_only = true

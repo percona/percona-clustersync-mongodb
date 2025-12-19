@@ -29,7 +29,7 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 	return ConnectWithOptions(ctx, uri, &ConnectOptions{})
 }
 
-// Connect establishes a connection to a MongoDB instance using the provided URI and options.
+// ConnectWithOptions establishes a connection to a MongoDB instance using the provided URI and options.
 // If the URI is empty, it returns an error.
 func ConnectWithOptions(
 	ctx context.Context,
