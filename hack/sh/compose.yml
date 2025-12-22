@@ -2,7 +2,7 @@ services:
 
   # ----------------- Source -----------------
   src-mongos:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-mongos
     hostname: src-mongos
     ports: ["27017:27017"]
@@ -17,7 +17,7 @@ services:
       ]
 
   src-cfg0:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-cfg0
     hostname: src-cfg0
     ports: ["27000:27000"]
@@ -34,7 +34,7 @@ services:
       ]
 
   src-rs00:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs00
     hostname: src-rs00
     ports: ["30000:30000"]
@@ -51,7 +51,7 @@ services:
       ]
 
   src-rs10:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs10
     hostname: src-rs10
     ports: ["30100:30100"]
@@ -68,7 +68,7 @@ services:
       ]
 
   src-rs20:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs20
     hostname: src-rs20
     ports: ["30200:30200"]
@@ -86,7 +86,7 @@ services:
 
   # ----------------- Target -----------------
   tgt-mongos:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-mongos
     hostname: tgt-mongos
     ports: ["29017:27017"]
@@ -101,7 +101,7 @@ services:
       ]
 
   tgt-cfg0:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-cfg0
     hostname: tgt-cfg0
     ports: ["28000:28000"]
@@ -118,7 +118,7 @@ services:
       ]
 
   tgt-rs00:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs00
     hostname: tgt-rs00
     ports: ["40000:40000"]
@@ -135,7 +135,7 @@ services:
       ]
 
   tgt-rs10:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs10
     hostname: tgt-rs10
     ports: ["40100:40100"]
@@ -152,7 +152,7 @@ services:
       ]
 
   tgt-rs20:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs20
     hostname: tgt-rs20
     ports: ["40200:40200"]
