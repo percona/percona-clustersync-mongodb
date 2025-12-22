@@ -101,12 +101,13 @@ type collectionCatalog struct {
 type indexCatalogEntry struct {
 	*topo.IndexSpecification
 
-	Incomplete bool `bson:"incomplete"`
-	Failed     bool `bson:"failed"`
+	Incomplete   bool `bson:"incomplete"`
+	Failed       bool `bson:"failed"`
+	Inconsistent bool `bson:"inconsistent"`
 }
 
 func (i indexCatalogEntry) Unsuccessful() bool {
-	return i.Failed || i.Incomplete
+	return i.Failed || i.Incomplete || i.Inconsistent
 }
 
 // NewCatalog creates a new Catalog.
@@ -483,7 +484,7 @@ func (c *Catalog) AddIncompleteIndexes(
 			Incomplete:         true,
 		}
 
-		lg.Tracef("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
+		lg.Debugf("Added incomplete index %q for %s.%s to catalog", index.Name, db, coll)
 	}
 
 	c.lock.Lock()
@@ -515,6 +516,37 @@ func (c *Catalog) AddFailedIndexes(
 		}
 
 		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
+	}
+
+	c.lock.Lock()
+	c.addIndexesToCatalog(ctx, db, coll, indexEntries)
+	c.lock.Unlock()
+}
+
+// AddInconsistentIndexes adds indexes in the catalog that are inconsistent across shards on the source cluster.
+// The indexes have set [indexCatalogEntry.Inconsistent] flag.
+func (c *Catalog) AddInconsistentIndexes(
+	ctx context.Context,
+	db string,
+	coll string,
+	indexes []*topo.IndexSpecification,
+) {
+	lg := log.Ctx(ctx)
+
+	if len(indexes) == 0 {
+		lg.Error(nil, "No inconsistent indexes to add")
+
+		return
+	}
+
+	indexEntries := make([]indexCatalogEntry, len(indexes))
+	for i, index := range indexes {
+		indexEntries[i] = indexCatalogEntry{
+			IndexSpecification: index,
+			Inconsistent:       true,
+		}
+
+		lg.Debugf("Added inconsistent index %q for %s.%s to catalog", index.Name, db, coll)
 	}
 
 	c.lock.Lock()
@@ -885,7 +917,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 }
 
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
-// during replication, failed or incomplete.
+// during replication, failed, incomplete, or inconsistent.
 func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 	lg := log.Ctx(ctx)
 	lg.Info("Finalizing unsuccessful indexes")
@@ -895,6 +927,13 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 			for _, index := range collEntry.Indexes {
 				if !index.Unsuccessful() {
 					continue // skip successful indexes
+				}
+
+				if index.Inconsistent {
+					lg.Warnf("Index %s on %s.%s was inconsistent across shards on source, skipping",
+						index.Name, db, coll)
+
+					continue // don't try to recreate inconsistent indexes
 				}
 
 				if index.Incomplete {
