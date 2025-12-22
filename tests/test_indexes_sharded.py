@@ -21,6 +21,8 @@ def test_inconsistent_index(t: Testing, phase: Runner.Phase):
         pass
 
     time.sleep(15)
+
     with t.run(phase):
         pass
+
     t.compare_all_sharded()
