@@ -343,6 +343,11 @@ func main() {
 	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
+	// MongoDB client options (visible per stakeholder decision #3)
+	rootCmd.PersistentFlags().String("mongodb-cli-operation-timeout", "",
+		"Timeout for MongoDB operations (e.g., 30s, 5m)")
+	// NOTE: NOT marking as hidden per stakeholder decision
+
 	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
 
 	startCmd.Flags().Int("port", DefaultServerPort, "Port number")

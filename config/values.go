@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"github.com/spf13/viper"
 )
 
 // UseCollectionBulkWrite determines whether to use the Collection Bulk Write API
@@ -84,17 +85,27 @@ func UseTargetClientCompressors() []string {
 	return rv
 }
 
-// OperationMongoDBCliTimeout returns the effective timeout for MongoDB client operations.
-// If the environment variable `PCSM_MONGODB_CLI_OPERATION_TIMEOUT` is set, it must be a valid
-// time duration string (e.g., "30s", "2m", "1h"). Otherwise, the
-// DefaultMongoDBCliOperationTimeout is used.
-func OperationMongoDBCliTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("PCSM_MONGODB_CLI_OPERATION_TIMEOUT")); v != "" {
-		d, err := time.ParseDuration(v)
+// MongoDBOperationTimeout returns the timeout for MongoDB client operations.
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --mongodb-cli-operation-timeout
+//   - Env var: PCSM_MONGODB_CLI_OPERATION_TIMEOUT
+//   - Default: 5m
+func MongoDBOperationTimeout() time.Duration {
+	timeoutStr := viper.GetString("mongodb-cli-operation-timeout")
+	if timeoutStr != "" {
+		d, err := time.ParseDuration(timeoutStr)
 		if err == nil && d > 0 {
 			return d
 		}
 	}
 
 	return DefaultMongoDBCliOperationTimeout
+}
+
+// OperationMongoDBCliTimeout is an alias for MongoDBOperationTimeout for backward compatibility.
+//
+// Deprecated: Use MongoDBOperationTimeout instead.
+func OperationMongoDBCliTimeout() time.Duration {
+	return MongoDBOperationTimeout()
 }
