@@ -4,7 +4,6 @@ import (
 	"math"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,36 +22,49 @@ func UseCollectionBulkWrite() bool {
 	return viper.GetBool("use-collection-bulk-write")
 }
 
-// CloneNumParallelCollections returns the number of collections cloned in parallel
-// during the clone process. Default is 0.
+// CloneNumParallelCollections returns the number of collections to clone in parallel.
+// Configurable via CLI flag only (no env var support per decision #2).
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --clone-num-parallel-collections
+//   - Default: 0 (auto)
 func CloneNumParallelCollections() int {
-	numColl, _ := strconv.ParseInt(os.Getenv("PCSM_CLONE_NUM_PARALLEL_COLLECTIONS"), 10, 32)
-
-	return int(numColl)
+	return viper.GetInt("clone-num-parallel-collections")
 }
 
-// CloneNumReadWorkers returns the number of read workers used during the clone. Default is 0.
-// Note: Workers are shared across all collections.
+// CloneNumReadWorkers returns the number of read workers.
+// Configurable via CLI flag only (no env var support per decision #2).
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --clone-num-read-workers
+//   - Default: 0 (auto)
 func CloneNumReadWorkers() int {
-	numReadWorker, _ := strconv.ParseInt(os.Getenv("PCSM_CLONE_NUM_READ_WORKERS"), 10, 32)
-
-	return int(numReadWorker)
+	return viper.GetInt("clone-num-read-workers")
 }
 
-// CloneNumInsertWorkers returns the number of insert workers used during the clone. Default is 0.
-// Note: Workers are shared across all collections.
+// CloneNumInsertWorkers returns the number of insert workers.
+// Configurable via CLI flag only (no env var support per decision #2).
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --clone-num-insert-workers
+//   - Default: 0 (auto)
 func CloneNumInsertWorkers() int {
-	numInsertWorker, _ := strconv.ParseInt(os.Getenv("PCSM_CLONE_NUM_INSERT_WORKERS"), 10, 32)
-
-	return int(numInsertWorker)
+	return viper.GetInt("clone-num-insert-workers")
 }
 
-// CloneSegmentSizeBytes returns the segment size in bytes used during the clone.
-// A segment is a range within a collection (by _id) that enables concurrent read/insert
-// operations by splitting the collection into multiple parallelizable units.
-// Zero or less enables auto size (per each collection). Default is [AutoCloneSegmentSize].
+// CloneSegmentSizeBytes returns the segment size in bytes.
+// Configurable via CLI flag only (no env var support per decision #2).
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --clone-segment-size
+//   - Default: AutoCloneSegmentSize (0 = auto)
 func CloneSegmentSizeBytes() int64 {
-	segmentSizeBytes, _ := humanize.ParseBytes(os.Getenv("PCSM_CLONE_SEGMENT_SIZE"))
+	sizeStr := viper.GetString("clone-segment-size")
+	if sizeStr == "" {
+		return AutoCloneSegmentSize
+	}
+
+	segmentSizeBytes, _ := humanize.ParseBytes(sizeStr)
 	if segmentSizeBytes == 0 {
 		return AutoCloneSegmentSize
 	}
@@ -60,9 +72,19 @@ func CloneSegmentSizeBytes() int64 {
 	return int64(min(segmentSizeBytes, math.MaxInt64)) //nolint:gosec
 }
 
-// CloneReadBatchSizeBytes returns the read batch size in bytes used during the clone. Default is 0.
+// CloneReadBatchSizeBytes returns the read batch size in bytes.
+// Configurable via CLI flag only (no env var support per decision #2).
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --clone-read-batch-size
+//   - Default: 0 (uses MaxWriteBatchSizeBytes)
 func CloneReadBatchSizeBytes() int32 {
-	batchSizeBytes, _ := humanize.ParseBytes(os.Getenv("PCSM_CLONE_READ_BATCH_SIZE"))
+	sizeStr := viper.GetString("clone-read-batch-size")
+	if sizeStr == "" {
+		return 0
+	}
+
+	batchSizeBytes, _ := humanize.ParseBytes(sizeStr)
 
 	return int32(min(batchSizeBytes, math.MaxInt32)) //nolint:gosec
 }

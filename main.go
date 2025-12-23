@@ -353,6 +353,25 @@ func main() {
 		"Use collection-level bulk write instead of client bulk write")
 	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
 
+	// Clone tuning options (hidden - for advanced tuning)
+	// NOTE: These are CLI/HTTP-only, NO env var support per stakeholder decision #2
+	rootCmd.PersistentFlags().Int("clone-num-parallel-collections", 0,
+		"Number of collections to clone in parallel (0 = auto)")
+	rootCmd.PersistentFlags().Int("clone-num-read-workers", 0,
+		"Number of read workers during clone (0 = auto)")
+	rootCmd.PersistentFlags().Int("clone-num-insert-workers", 0,
+		"Number of insert workers during clone (0 = auto)")
+	rootCmd.PersistentFlags().String("clone-segment-size", "",
+		"Segment size for clone operations (e.g., 100MB, 1GiB)")
+	rootCmd.PersistentFlags().String("clone-read-batch-size", "",
+		"Read batch size during clone (e.g., 16MiB)")
+
+	rootCmd.PersistentFlags().MarkHidden("clone-num-parallel-collections") //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-num-read-workers")         //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-num-insert-workers")       //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-segment-size")             //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-read-batch-size")          //nolint:errcheck
+
 	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
 
 	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
