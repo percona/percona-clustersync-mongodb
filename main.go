@@ -333,18 +333,16 @@ func main() {
 	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
-	// MongoDB client options (visible per stakeholder decision #3)
+	// MongoDB client timeout (visible: commonly needed for debugging)
 	rootCmd.PersistentFlags().String("mongodb-cli-operation-timeout", "",
 		"Timeout for MongoDB operations (e.g., 30s, 5m)")
-	// NOTE: NOT marking as hidden per stakeholder decision
 
-	// Internal option (hidden, has env var support per decision #5)
+	// Bulk write option (hidden: internal tuning)
 	rootCmd.PersistentFlags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
 	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
 
-	// Clone tuning options (hidden - for advanced tuning)
-	// NOTE: These are CLI/HTTP-only, NO env var support per stakeholder decision #2
+	// Clone tuning options (hidden: advanced tuning, CLI/HTTP only)
 	rootCmd.PersistentFlags().Int("clone-num-parallel-collections", 0,
 		"Number of collections to clone in parallel (0 = auto)")
 	rootCmd.PersistentFlags().Int("clone-num-read-workers", 0,
