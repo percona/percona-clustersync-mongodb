@@ -759,7 +759,7 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return errors.Wrap(err, "list inconsistent indexes")
 	}
 
-	log.Ctx(ctx).Debugf("AAAAAAAAAAAAAAAAA Indexes to create for %q: total=%d, unfinished=%d, inconsistent=%d",
+	log.Ctx(ctx).Debugf("Indexes to create for %q: total=%d, unfinished=%d, inconsistent=%d",
 		ns.String(), len(indexes), len(unfinishedBuilds), len(inconsistentIndexes))
 
 	if len(unfinishedBuilds) == 0 && len(inconsistentIndexes) == 0 {

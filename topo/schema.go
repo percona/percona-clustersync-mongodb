@@ -218,6 +218,10 @@ func ListInconsistentIndexes(
 
 	err = cur.All(ctx, &indexStats)
 	if err != nil {
+		if IsIndexNotFound(err) {
+			return nil, nil
+		}
+
 		return nil, errors.Wrap(err, "cursor: all")
 	}
 
