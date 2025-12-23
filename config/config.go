@@ -65,23 +65,3 @@ func bindEnvVars() {
 	// Bulk write option (hidden, internal use)
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 }
-
-// GetString returns a string configuration value from Viper.
-func GetString(key string) string {
-	return viper.GetString(key)
-}
-
-// GetInt returns an integer configuration value from Viper.
-func GetInt(key string) int {
-	return viper.GetInt(key)
-}
-
-// GetBool returns a boolean configuration value from Viper.
-func GetBool(key string) bool {
-	return viper.GetBool(key)
-}
-
-// IsSet checks if a configuration key has been set.
-func IsSet(key string) bool {
-	return viper.IsSet(key)
-}

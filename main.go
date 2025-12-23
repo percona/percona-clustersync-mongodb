@@ -86,7 +86,7 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port := getPort()
+		port := viper.GetInt("port")
 
 		// Use Viper to get source/target URIs (supports CLI flags and env vars)
 		sourceURI := viper.GetString("source")
@@ -147,9 +147,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort()
-
-		return NewClient(port).Status(cmd.Context())
+		return NewClient(viper.GetInt("port")).Status(cmd.Context())
 	},
 }
 
@@ -158,8 +156,6 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort()
-
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
 		excludeNamespaces, _ := cmd.Flags().GetStringSlice("exclude-namespaces")
@@ -170,7 +166,7 @@ var startCmd = &cobra.Command{
 			ExcludeNamespaces:  excludeNamespaces,
 		}
 
-		return NewClient(port).Start(cmd.Context(), startOptions)
+		return NewClient(viper.GetInt("port")).Start(cmd.Context(), startOptions)
 	},
 }
 
@@ -179,15 +175,13 @@ var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort()
-
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
 		finalizeOptions := finalizeRequest{
 			IgnoreHistoryLost: ignoreHistoryLost,
 		}
 
-		return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
+		return NewClient(viper.GetInt("port")).Finalize(cmd.Context(), finalizeOptions)
 	},
 }
 
@@ -196,9 +190,7 @@ var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort()
-
-		return NewClient(port).Pause(cmd.Context())
+		return NewClient(viper.GetInt("port")).Pause(cmd.Context())
 	},
 }
 
@@ -207,15 +199,13 @@ var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort()
-
 		fromFailure, _ := cmd.Flags().GetBool("from-failure")
 
 		resumeOptions := resumeRequest{
 			FromFailure: fromFailure,
 		}
 
-		return NewClient(port).Resume(cmd.Context(), resumeOptions)
+		return NewClient(viper.GetInt("port")).Resume(cmd.Context(), resumeOptions)
 	},
 }
 
@@ -310,12 +300,6 @@ var resetHeartbeatCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-// getPort returns the port number from Viper configuration.
-// Viper handles precedence: CLI flag > env var (PCSM_PORT) > default.
-func getPort() int {
-	return viper.GetInt("port")
 }
 
 func main() {
