@@ -34,8 +34,26 @@ func Init(cmd *cobra.Command) {
 }
 
 // bindEnvVars binds environment variable names to Viper keys.
-// Only global/server options have env var support.
-// Clone tuning options are intentionally NOT bound (CLI/HTTP only).
+//
+// Configuration Reference:
+//
+//	| Viper Key                      | CLI Flag                          | Env Var                              | Default |
+//	|--------------------------------|-----------------------------------|--------------------------------------|---------|
+//	| source                         | --source                          | PCSM_SOURCE_URI                      | -       |
+//	| target                         | --target                          | PCSM_TARGET_URI                      | -       |
+//	| port                           | --port                            | PCSM_PORT                            | 2242    |
+//	| log-level                      | --log-level                       | PCSM_LOG_LEVEL                       | info    |
+//	| log-json                       | --log-json                        | PCSM_LOG_JSON                        | false   |
+//	| no-color                       | --no-color                        | PCSM_NO_COLOR                        | false   |
+//	| mongodb-cli-operation-timeout  | --mongodb-cli-operation-timeout   | PCSM_MONGODB_CLI_OPERATION_TIMEOUT   | 5m      |
+//	| use-collection-bulk-write      | --use-collection-bulk-write       | PCSM_USE_COLLECTION_BULK_WRITE       | false   |
+//	| clone-num-parallel-collections | --clone-num-parallel-collections  | -                                    | 0       |
+//	| clone-num-read-workers         | --clone-num-read-workers          | -                                    | 0       |
+//	| clone-num-insert-workers       | --clone-num-insert-workers        | -                                    | 0       |
+//	| clone-segment-size             | --clone-segment-size              | -                                    | 0       |
+//	| clone-read-batch-size          | --clone-read-batch-size           | -                                    | 0       |
+//
+// Note: Clone tuning options are CLI/HTTP only (no env var support).
 func bindEnvVars() {
 	// Server connection URIs
 	_ = viper.BindEnv("source", "PCSM_SOURCE_URI")
@@ -44,12 +62,8 @@ func bindEnvVars() {
 	// MongoDB client timeout
 	_ = viper.BindEnv("mongodb-cli-operation-timeout", "PCSM_MONGODB_CLI_OPERATION_TIMEOUT")
 
-	// Bulk write option (internal, has env var support)
+	// Bulk write option (hidden, internal use)
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
-
-	// NOTE: Clone tuning options intentionally NOT bound to env vars.
-	// They are CLI/HTTP-only per stakeholder decision (PCSM-219).
-	// See: comment-decisions.md - Decision #2
 }
 
 // GetString returns a string configuration value from Viper.

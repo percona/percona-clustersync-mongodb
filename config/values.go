@@ -12,52 +12,31 @@ import (
 )
 
 // UseCollectionBulkWrite returns whether to use collection-level bulk write.
-// This is an internal option, not exposed via HTTP API.
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --use-collection-bulk-write (hidden)
-//   - Env var: PCSM_USE_COLLECTION_BULK_WRITE
-//   - Default: false
+// Internal option, not exposed via HTTP API.
 func UseCollectionBulkWrite() bool {
 	return viper.GetBool("use-collection-bulk-write")
 }
 
 // CloneNumParallelCollections returns the number of collections to clone in parallel.
-// Configurable via CLI flag only (no env var support per decision #2).
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --clone-num-parallel-collections
-//   - Default: 0 (auto)
+// Returns 0 for auto-detection.
 func CloneNumParallelCollections() int {
 	return viper.GetInt("clone-num-parallel-collections")
 }
 
 // CloneNumReadWorkers returns the number of read workers.
-// Configurable via CLI flag only (no env var support per decision #2).
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --clone-num-read-workers
-//   - Default: 0 (auto)
+// Returns 0 for auto-detection.
 func CloneNumReadWorkers() int {
 	return viper.GetInt("clone-num-read-workers")
 }
 
 // CloneNumInsertWorkers returns the number of insert workers.
-// Configurable via CLI flag only (no env var support per decision #2).
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --clone-num-insert-workers
-//   - Default: 0 (auto)
+// Returns 0 for auto-detection.
 func CloneNumInsertWorkers() int {
 	return viper.GetInt("clone-num-insert-workers")
 }
 
 // CloneSegmentSizeBytes returns the segment size in bytes.
-// Configurable via CLI flag only (no env var support per decision #2).
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --clone-segment-size
-//   - Default: AutoCloneSegmentSize (0 = auto)
+// Returns 0 (AutoCloneSegmentSize) for auto-detection.
 func CloneSegmentSizeBytes() int64 {
 	sizeStr := viper.GetString("clone-segment-size")
 	if sizeStr == "" {
@@ -73,11 +52,7 @@ func CloneSegmentSizeBytes() int64 {
 }
 
 // CloneReadBatchSizeBytes returns the read batch size in bytes.
-// Configurable via CLI flag only (no env var support per decision #2).
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --clone-read-batch-size
-//   - Default: 0 (uses MaxWriteBatchSizeBytes)
+// Returns 0 to use MaxWriteBatchSizeBytes default.
 func CloneReadBatchSizeBytes() int32 {
 	sizeStr := viper.GetString("clone-read-batch-size")
 	if sizeStr == "" {
@@ -112,11 +87,6 @@ func UseTargetClientCompressors() []string {
 }
 
 // MongoDBOperationTimeout returns the timeout for MongoDB client operations.
-//
-// Configuration sources (in order of precedence):
-//   - CLI flag: --mongodb-cli-operation-timeout
-//   - Env var: PCSM_MONGODB_CLI_OPERATION_TIMEOUT
-//   - Default: 5m
 func MongoDBOperationTimeout() time.Duration {
 	timeoutStr := viper.GetString("mongodb-cli-operation-timeout")
 	if timeoutStr != "" {
