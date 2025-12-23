@@ -289,6 +289,21 @@ type StartOptions struct {
 	IncludeNamespaces []string
 	// ExcludeNamespaces are the namespaces to exclude.
 	ExcludeNamespaces []string
+
+	// Clone tuning options
+	// CloneParallelism is the number of collections to clone in parallel.
+	CloneParallelism int
+	// CloneReadWorkers is the number of read workers during clone.
+	CloneReadWorkers int
+	// CloneInsertWorkers is the number of insert workers during clone.
+	CloneInsertWorkers int
+	// CloneSegmentSizeBytes is the segment size for clone operations in bytes.
+	CloneSegmentSizeBytes int64
+	// CloneReadBatchSizeBytes is the read batch size during clone in bytes.
+	CloneReadBatchSizeBytes int32
+
+	// UseCollectionBulkWrite indicates whether to use collection-level bulk write.
+	UseCollectionBulkWrite bool
 }
 
 // Start starts the replication process with the given options.

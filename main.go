@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
+	"github.com/percona/percona-clustersync-mongodb/validate"
 )
 
 // Constants for server configuration.
@@ -734,6 +736,106 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, res)
 }
 
+// resolveStartOptions resolves the start options from the HTTP request and config.
+// HTTP request values take precedence over CLI flag values.
+func resolveStartOptions(params startRequest) (*pcsm.StartOptions, error) {
+	options := &pcsm.StartOptions{
+		PauseOnInitialSync: params.PauseOnInitialSync,
+		IncludeNamespaces:  params.IncludeNamespaces,
+		ExcludeNamespaces:  params.ExcludeNamespaces,
+	}
+
+	// Clone parallelism: HTTP > CLI > default
+	if params.CloneNumParallelCollections != nil {
+		options.CloneParallelism = *params.CloneNumParallelCollections
+	} else {
+		options.CloneParallelism = config.CloneNumParallelCollections()
+	}
+
+	// Clone read workers: HTTP > CLI > default
+	if params.CloneNumReadWorkers != nil {
+		options.CloneReadWorkers = *params.CloneNumReadWorkers
+	} else {
+		options.CloneReadWorkers = config.CloneNumReadWorkers()
+	}
+
+	// Clone insert workers: HTTP > CLI > default
+	if params.CloneNumInsertWorkers != nil {
+		options.CloneInsertWorkers = *params.CloneNumInsertWorkers
+	} else {
+		options.CloneInsertWorkers = config.CloneNumInsertWorkers()
+	}
+
+	// Clone segment size: HTTP > CLI > default
+	segmentSize, err := resolveCloneSegmentSize(params.CloneSegmentSize)
+	if err != nil {
+		return nil, err
+	}
+	options.CloneSegmentSizeBytes = segmentSize
+
+	// Clone read batch size: HTTP > CLI > default
+	batchSize, err := resolveCloneReadBatchSize(params.CloneReadBatchSize)
+	if err != nil {
+		return nil, err
+	}
+	options.CloneReadBatchSizeBytes = batchSize
+
+	// UseCollectionBulkWrite: internal only, always from config (CLI + env var via Viper)
+	options.UseCollectionBulkWrite = config.UseCollectionBulkWrite()
+
+	return options, nil
+}
+
+// resolveCloneSegmentSize resolves the clone segment size from HTTP or CLI.
+func resolveCloneSegmentSize(value *string) (int64, error) {
+	if value != nil {
+		sizeBytes, err := humanize.ParseBytes(*value)
+		if err != nil {
+			return 0, errors.Wrapf(err, "invalid cloneSegmentSize value: %s", *value)
+		}
+		// Allow 0 (auto) or validate against min/max
+		if sizeBytes > 0 && sizeBytes < config.MinCloneSegmentSizeBytes {
+			return 0, errors.Errorf("cloneSegmentSize must be at least %s, got %s",
+				humanize.Bytes(config.MinCloneSegmentSizeBytes),
+				humanize.Bytes(sizeBytes))
+		}
+		if sizeBytes > config.MaxCloneSegmentSizeBytes {
+			return 0, errors.Errorf("cloneSegmentSize must be at most %s, got %s",
+				humanize.Bytes(config.MaxCloneSegmentSizeBytes),
+				humanize.Bytes(sizeBytes))
+		}
+
+		return int64(min(sizeBytes, math.MaxInt64)), nil //nolint:gosec
+	}
+
+	return config.CloneSegmentSizeBytes(), nil
+}
+
+// resolveCloneReadBatchSize resolves the clone read batch size from HTTP or CLI.
+func resolveCloneReadBatchSize(value *string) (int32, error) {
+	if value != nil {
+		sizeBytes, err := humanize.ParseBytes(*value)
+		if err != nil {
+			return 0, errors.Wrapf(err, "invalid cloneReadBatchSize value: %s", *value)
+		}
+		// Allow 0 (auto) or validate against min/max
+		if sizeBytes > 0 && sizeBytes < uint64(config.MinCloneReadBatchSizeBytes) {
+			return 0, errors.Errorf("cloneReadBatchSize must be at least %s, got %s",
+				humanize.Bytes(uint64(config.MinCloneReadBatchSizeBytes)),
+				humanize.Bytes(sizeBytes))
+		}
+		if sizeBytes > uint64(config.MaxCloneReadBatchSizeBytes) {
+			return 0, errors.Errorf("cloneReadBatchSize must be at most %s, got %s",
+				humanize.Bytes(uint64(config.MaxCloneReadBatchSizeBytes)),
+				humanize.Bytes(sizeBytes))
+		}
+
+		return int32(min(sizeBytes, math.MaxInt32)), nil //nolint:gosec
+	}
+
+	return config.CloneReadBatchSizeBytes(), nil
+}
+
 // handleStart handles the /start endpoint.
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
@@ -777,13 +879,21 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &pcsm.StartOptions{
-		PauseOnInitialSync: params.PauseOnInitialSync,
-		IncludeNamespaces:  params.IncludeNamespaces,
-		ExcludeNamespaces:  params.ExcludeNamespaces,
+	// Validate request
+	if err := params.Validate(); err != nil {
+		writeResponse(w, startResponse{Err: err.Error()})
+
+		return
 	}
 
-	err := s.pcsm.Start(ctx, options)
+	options, err := resolveStartOptions(params)
+	if err != nil {
+		writeResponse(w, startResponse{Err: err.Error()})
+
+		return
+	}
+
+	err = s.pcsm.Start(ctx, options)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -961,6 +1071,25 @@ type startRequest struct {
 	IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
 	// ExcludeNamespaces are the namespaces to exclude from the replication.
 	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
+
+	// Clone tuning options (pointer types to distinguish "not set" from zero value)
+	// CloneNumParallelCollections is the number of collections to clone in parallel.
+	CloneNumParallelCollections *int `json:"cloneNumParallelCollections,omitempty" validate:"omitempty,gte=0,lte=100"`
+	// CloneNumReadWorkers is the number of read workers during clone.
+	CloneNumReadWorkers *int `json:"cloneNumReadWorkers,omitempty" validate:"omitempty,gte=0,lte=1000"`
+	// CloneNumInsertWorkers is the number of insert workers during clone.
+	CloneNumInsertWorkers *int `json:"cloneNumInsertWorkers,omitempty" validate:"omitempty,gte=0,lte=1000"`
+	// CloneSegmentSize is the segment size for clone operations (e.g., "100MB", "1GiB").
+	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty" validate:"omitempty,bytesize"`
+	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
+	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty" validate:"omitempty,bytesize"`
+
+	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
+}
+
+// Validate validates the startRequest.
+func (r *startRequest) Validate() error {
+	return validate.Struct(r)
 }
 
 // startResponse represents the response body for the /start endpoint.
