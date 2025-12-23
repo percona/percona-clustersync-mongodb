@@ -151,6 +151,7 @@ When starting the PCSM server, you can use the following options:
 - `--log-level`: The log level (default: "info")
 - `--log-json`: Output log in JSON format with disabled color
 - `--no-color`: Disable log ASCI color
+- `--mongodb-cli-operation-timeout`: Timeout for MongoDB operations (e.g., `30s`, `5m`)
 
 Example:
 
@@ -160,14 +161,51 @@ bin/pcsm \
     --target <target-mongodb-uri> \
     --port 2242 \
     --log-level debug \
-    --log-json
+    --log-json \
+    --mongodb-cli-operation-timeout 10m
 ```
 
 ## Environment Variables
 
-- `PCSM_SOURCE_URI`: MongoDB connection string for the source cluster.
-- `PCSM_TARGET_URI`: MongoDB connection string for the target cluster.
-- `PCSM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
+The following environment variables are supported:
+
+| Option                    | Env Var                              | Default |
+|---------------------------|--------------------------------------|---------|
+| Source URI                | `PCSM_SOURCE_URI`                    | -       |
+| Target URI                | `PCSM_TARGET_URI`                    | -       |
+| Port                      | `PCSM_PORT`                          | 2242    |
+| Log Level                 | `PCSM_LOG_LEVEL`                     | info    |
+| Log JSON                  | `PCSM_LOG_JSON`                      | false   |
+| No Color                  | `PCSM_NO_COLOR`                      | false   |
+| MongoDB Timeout           | `PCSM_MONGODB_CLI_OPERATION_TIMEOUT` | 5m      |
+| Use Collection Bulk Write | `PCSM_USE_COLLECTION_BULK_WRITE`     | false   |
+
+> **Note**: Clone tuning options (see below) are intentionally NOT supported via environment variables. They are configurable via CLI flags and HTTP request parameters only.
+
+## Clone Tuning Options
+
+Advanced tuning options for the clone process. These are available via CLI flags
+and HTTP request parameters, but NOT via environment variables.
+
+| CLI Flag                           | HTTP Parameter                | Default | Description                              |
+|------------------------------------|-------------------------------|---------|------------------------------------------|
+| `--clone-num-parallel-collections` | `cloneNumParallelCollections` | 2       | Collections to clone in parallel (0-100) |
+| `--clone-num-read-workers`         | `cloneNumReadWorkers`         | auto    | Read workers during clone (0-1000)       |
+| `--clone-num-insert-workers`       | `cloneNumInsertWorkers`       | auto    | Insert workers during clone (0-1000)     |
+| `--clone-segment-size`             | `cloneSegmentSize`            | auto    | Segment size (min ~475MB, max 64GiB)     |
+| `--clone-read-batch-size`          | `cloneReadBatchSize`          | ~47.5MB | Read batch size (16MiB - 2GiB)           |
+
+> **Note**: These CLI flags are hidden from `--help` output. They are intended for advanced tuning only.
+
+Example CLI usage:
+
+```sh
+bin/pcsm \
+    --source <source-mongodb-uri> \
+    --target <target-mongodb-uri> \
+    --clone-num-parallel-collections 8 \
+    --clone-num-read-workers 16
+```
 
 ## Log JSON Fields
 
@@ -206,15 +244,35 @@ Starts the replication process.
 
 #### Request Body
 
-- `includeNamespaces` (optional): List of namespaces to include in the replication.
-- `excludeNamespaces` (optional): List of namespaces to exclude from the replication.
+| Parameter                     | Type     | Description                                     |
+|-------------------------------|----------|-------------------------------------------------|
+| `includeNamespaces`           | string[] | Namespaces to include in replication            |
+| `excludeNamespaces`           | string[] | Namespaces to exclude from replication          |
+| `cloneNumParallelCollections` | int      | Collections to clone in parallel (0-100)        |
+| `cloneNumReadWorkers`         | int      | Read workers during clone (0-1000)              |
+| `cloneNumInsertWorkers`       | int      | Insert workers during clone (0-1000)            |
+| `cloneSegmentSize`            | string   | Segment size (e.g., "500MB", "1GiB")            |
+| `cloneReadBatchSize`          | string   | Read batch size (e.g., "32MiB")                 |
 
-Example:
+> **Note**: HTTP request values take precedence over CLI flag values for clone tuning options.
+
+Example (basic):
 
 ```json
 {
     "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
     "excludeNamespaces": ["dbName.collName"]
+}
+```
+
+Example (with clone tuning):
+
+```json
+{
+    "includeNamespaces": ["mydb.*"],
+    "cloneNumParallelCollections": 8,
+    "cloneNumReadWorkers": 16,
+    "cloneSegmentSize": "500MB"
 }
 ```
 
