@@ -12,11 +12,15 @@ import (
 	"github.com/spf13/viper"
 )
 
-// UseCollectionBulkWrite determines whether to use the Collection Bulk Write API
-// instead of the Client Bulk Write API (introduced in MongoDB v8.0).
-// Enabled when the PCSM_USE_COLLECTION_BULK_WRITE environment variable is set to "1".
+// UseCollectionBulkWrite returns whether to use collection-level bulk write.
+// This is an internal option, not exposed via HTTP API.
+//
+// Configuration sources (in order of precedence):
+//   - CLI flag: --use-collection-bulk-write (hidden)
+//   - Env var: PCSM_USE_COLLECTION_BULK_WRITE
+//   - Default: false
 func UseCollectionBulkWrite() bool {
-	return os.Getenv("PCSM_USE_COLLECTION_BULK_WRITE") == "1"
+	return viper.GetBool("use-collection-bulk-write")
 }
 
 // CloneNumParallelCollections returns the number of collections cloned in parallel

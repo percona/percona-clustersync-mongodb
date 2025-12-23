@@ -348,6 +348,11 @@ func main() {
 		"Timeout for MongoDB operations (e.g., 30s, 5m)")
 	// NOTE: NOT marking as hidden per stakeholder decision
 
+	// Internal option (hidden, has env var support per decision #5)
+	rootCmd.PersistentFlags().Bool("use-collection-bulk-write", false,
+		"Use collection-level bulk write instead of client bulk write")
+	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
+
 	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
 
 	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
