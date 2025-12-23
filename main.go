@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
@@ -61,9 +61,13 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 
 	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
-		logLevelFlag, _ := cmd.PersistentFlags().GetString("log-level")
-		logJSON, _ := cmd.PersistentFlags().GetBool("log-json")
-		logNoColor, _ := cmd.PersistentFlags().GetBool("no-color")
+		// Initialize Viper config binding
+		config.Init(cmd)
+
+		// Get logging configuration from Viper (supports CLI flags and env vars)
+		logLevelFlag := viper.GetString("log-level")
+		logJSON := viper.GetBool("log-json")
+		logNoColor := viper.GetBool("no-color")
 
 		logLevel, err := zerolog.ParseLevel(logLevelFlag)
 		if err != nil {
@@ -81,23 +85,15 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
-		sourceURI, _ := cmd.Flags().GetString("source")
-		if sourceURI == "" {
-			sourceURI = os.Getenv("PCSM_SOURCE_URI")
-		}
+		// Use Viper to get source/target URIs (supports CLI flags and env vars)
+		sourceURI := viper.GetString("source")
 		if sourceURI == "" {
 			return errors.New("required flag --source not set")
 		}
 
-		targetURI, _ := cmd.Flags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
@@ -150,10 +146,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
 		return NewClient(port).Status(cmd.Context())
 	},
@@ -164,10 +157,7 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
@@ -188,10 +178,7 @@ var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
@@ -208,10 +195,7 @@ var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
 		return NewClient(port).Pause(cmd.Context())
 	},
@@ -222,10 +206,7 @@ var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		port := getPort(cmd.Flags())
 
 		fromFailure, _ := cmd.Flags().GetBool("from-failure")
 
@@ -242,10 +223,7 @@ var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset PCSM state (heartbeat and recovery data)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.Flags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
@@ -267,10 +245,7 @@ var resetRecoveryCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset recovery state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.InheritedFlags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
@@ -306,10 +281,7 @@ var resetHeartbeatCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset heartbeat state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.InheritedFlags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
@@ -339,23 +311,21 @@ var resetHeartbeatCmd = &cobra.Command{
 	},
 }
 
-func getPort(flags *pflag.FlagSet) (int, error) {
-	port, _ := flags.GetInt("port")
+func getPort(flags *pflag.FlagSet) int {
+	// First check if the flag was explicitly set on command line
 	if flags.Changed("port") {
-		return port, nil
+		port, _ := flags.GetInt("port")
+
+		return port
 	}
 
-	portVar := os.Getenv("PCSM_PORT")
-	if portVar == "" {
-		return port, nil
+	// Use Viper which handles env vars automatically (PCSM_PORT)
+	port := viper.GetInt("port")
+	if port == 0 {
+		port = DefaultServerPort
 	}
 
-	parsedPort, err := strconv.ParseInt(portVar, 10, 32)
-	if err != nil {
-		return 0, errors.Errorf("invalid environment variable PCSM_PORT='%s'", portVar)
-	}
-
-	return int(parsedPort), nil
+	return port
 }
 
 func main() {
