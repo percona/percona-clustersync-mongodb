@@ -19,7 +19,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
@@ -87,7 +86,7 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		// Use Viper to get source/target URIs (supports CLI flags and env vars)
 		sourceURI := viper.GetString("source")
@@ -148,7 +147,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		return NewClient(port).Status(cmd.Context())
 	},
@@ -159,7 +158,7 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
@@ -180,7 +179,7 @@ var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
@@ -197,7 +196,7 @@ var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		return NewClient(port).Pause(cmd.Context())
 	},
@@ -208,7 +207,7 @@ var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port := getPort(cmd.Flags())
+		port := getPort()
 
 		fromFailure, _ := cmd.Flags().GetBool("from-failure")
 
@@ -313,21 +312,10 @@ var resetHeartbeatCmd = &cobra.Command{
 	},
 }
 
-func getPort(flags *pflag.FlagSet) int {
-	// First check if the flag was explicitly set on command line
-	if flags.Changed("port") {
-		port, _ := flags.GetInt("port")
-
-		return port
-	}
-
-	// Use Viper which handles env vars automatically (PCSM_PORT)
-	port := viper.GetInt("port")
-	if port == 0 {
-		port = DefaultServerPort
-	}
-
-	return port
+// getPort returns the port number from Viper configuration.
+// Viper handles precedence: CLI flag > env var (PCSM_PORT) > default.
+func getPort() int {
+	return viper.GetInt("port")
 }
 
 func main() {
@@ -335,7 +323,7 @@ func main() {
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-	rootCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	rootCmd.PersistentFlags().Int("port", DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
@@ -374,9 +362,6 @@ func main() {
 	rootCmd.PersistentFlags().MarkHidden("clone-segment-size")             //nolint:errcheck
 	rootCmd.PersistentFlags().MarkHidden("clone-read-batch-size")          //nolint:errcheck
 
-	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
-
-	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 	startCmd.Flags().StringSlice("include-namespaces", nil,
@@ -384,12 +369,8 @@ func main() {
 	startCmd.Flags().StringSlice("exclude-namespaces", nil,
 		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
 
-	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
-
-	resumeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
-	finalizeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
 	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
