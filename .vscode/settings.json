@@ -39,5 +39,31 @@
     "tests"
   ],
   "python.testing.pytestEnabled": true,
-  "python.testing.unittestEnabled": false
+  "python.testing.unittestEnabled": false,
+  "cSpell.words": [
+    "bson",
+    "clustersync",
+    "cmdutil",
+    "codegen",
+    "colls",
+    "connstring",
+    "contextcheck",
+    "Debugf",
+    "errgroup",
+    "errorlint",
+    "Infof",
+    "keygen",
+    "mapstructure",
+    "nolint",
+    "opencode",
+    "pcsm",
+    "pipefail",
+    "readconcern",
+    "readpref",
+    "Warnf",
+    "wrapcheck",
+    "Wrapf",
+    "writeconcern",
+    "zerolog"
+  ]
 }

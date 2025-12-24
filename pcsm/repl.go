@@ -36,6 +36,8 @@ type Repl struct {
 	nsFilter sel.NSFilter // Namespace filter
 	catalog  *Catalog     // Catalog for managing collections and indexes
 
+	useCollectionBulkWrite bool // Whether to use collection-level bulk write
+
 	lastReplicatedOpTime bson.Timestamp
 
 	lock sync.Mutex
@@ -84,14 +86,21 @@ func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
-func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Repl {
+// NewRepl creates a new Repl instance.
+func NewRepl(
+	source, target *mongo.Client,
+	catalog *Catalog,
+	nsFilter sel.NSFilter,
+	useCollectionBulkWrite bool,
+) *Repl {
 	return &Repl{
-		source:   source,
-		target:   target,
-		nsFilter: nsFilter,
-		catalog:  catalog,
-		pauseC:   make(chan struct{}),
-		doneSig:  make(chan struct{}),
+		source:                 source,
+		target:                 target,
+		nsFilter:               nsFilter,
+		catalog:                catalog,
+		useCollectionBulkWrite: useCollectionBulkWrite,
+		pauseC:                 make(chan struct{}),
+		doneSig:                make(chan struct{}),
 	}
 }
 
@@ -221,7 +230,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(targetVer).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
+	if topo.Support(targetVer).ClientBulkWrite() && !r.useCollectionBulkWrite {
 		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
 		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd

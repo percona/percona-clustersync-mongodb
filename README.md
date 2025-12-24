@@ -145,13 +145,15 @@ curl http://localhost:2242/status
 
 When starting the PCSM server, you can use the following options:
 
-- `--port`: The port on which the server will listen (default: 2242)
-- `--source`: The MongoDB connection string for the source cluster
-- `--target`: The MongoDB connection string for the target cluster
-- `--log-level`: The log level (default: "info")
-- `--log-json`: Output log in JSON format with disabled color
-- `--no-color`: Disable log ASCI color
-- `--mongodb-cli-operation-timeout`: Timeout for MongoDB operations (e.g., `30s`, `5m`)
+| Option                           | CLI Flag                           | Default | Description                          |
+|----------------------------------|------------------------------------|---------|--------------------------------------|
+| Port                             | `--port`                           | 2242    | Port on which the server listens     |
+| Source URI                       | `--source`                         | -       | MongoDB connection string for source |
+| Target URI                       | `--target`                         | -       | MongoDB connection string for target |
+| Log Level                        | `--log-level`                      | info    | Log level (trace/debug/info/warn/error/fatal/panic) |
+| Log JSON                         | `--log-json`                       | false   | Output log in JSON format            |
+| No Color                         | `--no-color`                       | false   | Disable log ASCII color              |
+| MongoDB Operation Timeout        | `--mongodb-cli-operation-timeout`  | 5m      | Timeout for MongoDB operations       |
 
 Example:
 
@@ -169,16 +171,16 @@ bin/pcsm \
 
 The following environment variables are supported:
 
-| Option                    | Env Var                              | Default |
-|---------------------------|--------------------------------------|---------|
-| Source URI                | `PCSM_SOURCE_URI`                    | -       |
-| Target URI                | `PCSM_TARGET_URI`                    | -       |
-| Port                      | `PCSM_PORT`                          | 2242    |
-| Log Level                 | `PCSM_LOG_LEVEL`                     | info    |
-| Log JSON                  | `PCSM_LOG_JSON`                      | false   |
-| No Color                  | `PCSM_NO_COLOR`                      | false   |
-| MongoDB Timeout           | `PCSM_MONGODB_CLI_OPERATION_TIMEOUT` | 5m      |
-| Use Collection Bulk Write | `PCSM_USE_COLLECTION_BULK_WRITE`     | false   |
+| Option                     | Env Var                              | Default | Description                          |
+|----------------------------|--------------------------------------|---------|--------------------------------------|
+| Source URI                 | `PCSM_SOURCE_URI`                    | -       | MongoDB connection string for source |
+| Target URI                 | `PCSM_TARGET_URI`                    | -       | MongoDB connection string for target |
+| Port                       | `PCSM_PORT`                          | 2242    | Port on which the server listens     |
+| Log Level                  | `PCSM_LOG_LEVEL`                     | info    | Log level                            |
+| Log JSON                   | `PCSM_LOG_JSON`                      | false   | Output log in JSON format            |
+| No Color                   | `PCSM_NO_COLOR`                      | false   | Disable log ASCII color              |
+| MongoDB Operation Timeout  | `PCSM_MONGODB_CLI_OPERATION_TIMEOUT` | 5m      | Timeout for MongoDB operations       |
+| Use Collection Bulk Write  | `PCSM_USE_COLLECTION_BULK_WRITE`     | false   | Use collection-level bulk write (internal) |
 
 > **Note**: Clone tuning options (see below) are intentionally NOT supported via environment variables. They are configurable via CLI flags and HTTP request parameters only.
 
@@ -187,15 +189,16 @@ The following environment variables are supported:
 Advanced tuning options for the clone process. These are available via CLI flags
 and HTTP request parameters, but NOT via environment variables.
 
-| CLI Flag                           | HTTP Parameter                | Default | Description                              |
-|------------------------------------|-------------------------------|---------|------------------------------------------|
-| `--clone-num-parallel-collections` | `cloneNumParallelCollections` | 2       | Collections to clone in parallel (0-100) |
-| `--clone-num-read-workers`         | `cloneNumReadWorkers`         | auto    | Read workers during clone (0-1000)       |
-| `--clone-num-insert-workers`       | `cloneNumInsertWorkers`       | auto    | Insert workers during clone (0-1000)     |
-| `--clone-segment-size`             | `cloneSegmentSize`            | auto    | Segment size (min ~475MB, max 64GiB)     |
-| `--clone-read-batch-size`          | `cloneReadBatchSize`          | ~47.5MB | Read batch size (16MiB - 2GiB)           |
+| CLI Flag                           | HTTP Parameter                | Default  | Range       | Description                        |
+|------------------------------------|-------------------------------|----------|-------------|------------------------------------|
+| `--clone-num-parallel-collections` | `cloneNumParallelCollections` | 2        | 0-100       | Collections to clone in parallel   |
+| `--clone-num-read-workers`         | `cloneNumReadWorkers`         | auto (0) | 0-1000      | Read workers during clone          |
+| `--clone-num-insert-workers`       | `cloneNumInsertWorkers`       | auto (0) | 0-1000      | Insert workers during clone        |
+| `--clone-segment-size`             | `cloneSegmentSize`            | auto     | ~475MB-64GB | Segment size for parallel cloning  |
+| `--clone-read-batch-size`          | `cloneReadBatchSize`          | ~47.5MB  | 16MiB-2GiB  | Read cursor batch size             |
 
 > **Note**: These CLI flags are hidden from `--help` output. They are intended for advanced tuning only.
+> Setting a value to 0 or empty string uses the automatic/default behavior.
 
 Example CLI usage:
 

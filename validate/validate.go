@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 )
@@ -29,6 +30,19 @@ func registerCustomValidators(v *validator.Validate) {
 	_ = v.RegisterValidation("bytesize", validateByteSize)
 	_ = v.RegisterValidation("bytesizemin", validateByteSizeMin)
 	_ = v.RegisterValidation("bytesizemax", validateByteSizeMax)
+	_ = v.RegisterValidation("duration", validateDuration)
+}
+
+// validateDuration validates that a string can be parsed as a time.Duration.
+func validateDuration(fl validator.FieldLevel) bool {
+	s := fl.Field().String()
+	if s == "" {
+		return true
+	}
+
+	_, err := time.ParseDuration(s)
+
+	return err == nil
 }
 
 // registerTagNameFunc uses JSON tag names in error messages.

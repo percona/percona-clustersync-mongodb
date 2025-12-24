@@ -42,6 +42,12 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
+// contextKey is a type for context keys used in this package.
+type contextKey string
+
+// configContextKey is the context key for storing *config.Config.
+const configContextKey contextKey = "config"
+
 var (
 	Version   = "v0.6.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
@@ -61,23 +67,24 @@ var rootCmd = &cobra.Command{
 
 	SilenceUsage: true,
 
-	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
-		// Initialize Viper config binding
-		config.Init(cmd)
-
-		// Get logging configuration from Viper (supports CLI flags and env vars)
-		logLevelFlag := viper.GetString("log-level")
-		logJSON := viper.GetBool("log-json")
-		logNoColor := viper.GetBool("no-color")
-
-		logLevel, err := zerolog.ParseLevel(logLevelFlag)
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		// Load and validate config
+		cfg, err := config.Load(cmd)
 		if err != nil {
-			log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
+			return errors.Wrap(err, "load config")
 		}
 
-		lg := log.InitGlobals(logLevel, logJSON, logNoColor)
+		logLevel, err := zerolog.ParseLevel(cfg.Log.Level)
+		if err != nil {
+			logLevel = zerolog.InfoLevel
+		}
+
+		lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
 		ctx := lg.WithContext(context.Background())
+		ctx = context.WithValue(ctx, configContextKey, cfg)
 		cmd.SetContext(ctx)
+
+		return nil
 	},
 
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -86,21 +93,18 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port := viper.GetInt("port")
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
 
-		// Use Viper to get source/target URIs (supports CLI flags and env vars)
-		sourceURI := viper.GetString("source")
-		if sourceURI == "" {
+		if cfg.Source == "" {
 			return errors.New("required flag --source not set")
 		}
 
-		targetURI := viper.GetString("target")
-		if targetURI == "" {
+		if cfg.Target == "" {
 			return errors.New("required flag --target not set")
 		}
 
-		if ok, _ := cmd.Flags().GetBool("reset-state"); ok {
-			err := resetState(cmd.Context(), targetURI)
+		if cfg.ResetState {
+			err := resetState(cmd.Context(), cfg.Target, cfg)
 			if err != nil {
 				return err
 			}
@@ -108,18 +112,9 @@ var rootCmd = &cobra.Command{
 			log.New("cli").Info("State has been reset")
 		}
 
-		start, _ := cmd.Flags().GetBool("start")
-		pause, _ := cmd.Flags().GetBool("pause-on-initial-sync")
-
 		log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
 
-		return runServer(cmd.Context(), serverOptions{
-			port:      port,
-			sourceURI: sourceURI,
-			targetURI: targetURI,
-			start:     start,
-			pause:     pause,
-		})
+		return runServer(cmd.Context(), cfg)
 	},
 }
 
@@ -214,12 +209,14 @@ var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset PCSM state (heartbeat and recovery data)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
 		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
 
-		err := resetState(cmd.Context(), targetURI)
+		err := resetState(cmd.Context(), targetURI, cfg)
 		if err != nil {
 			return err
 		}
@@ -236,6 +233,8 @@ var resetRecoveryCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset recovery state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
 		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -243,7 +242,7 @@ var resetRecoveryCmd = &cobra.Command{
 
 		ctx := cmd.Context()
 
-		target, err := topo.Connect(ctx, targetURI)
+		target, err := topo.Connect(ctx, targetURI, cfg)
 		if err != nil {
 			return errors.Wrap(err, "connect")
 		}
@@ -272,6 +271,8 @@ var resetHeartbeatCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset heartbeat state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
 		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
@@ -279,7 +280,7 @@ var resetHeartbeatCmd = &cobra.Command{
 
 		ctx := cmd.Context()
 
-		target, err := topo.Connect(ctx, targetURI)
+		target, err := topo.Connect(ctx, targetURI, cfg)
 		if err != nil {
 			return errors.Wrap(err, "connect")
 		}
@@ -375,8 +376,8 @@ func main() {
 	}
 }
 
-func resetState(ctx context.Context, targetURI string) error {
-	target, err := topo.Connect(ctx, targetURI)
+func resetState(ctx context.Context, targetURI string, cfg *config.Config) error {
+	target, err := topo.Connect(ctx, targetURI, cfg)
 	if err != nil {
 		return errors.Wrap(err, "connect")
 	}
@@ -401,27 +402,24 @@ func resetState(ctx context.Context, targetURI string) error {
 	return nil
 }
 
-type serverOptions struct {
-	port      int
-	sourceURI string
-	targetURI string
-	start     bool
-	pause     bool
-}
+func validateConfig(cfg *config.Config) error {
+	port := cfg.Port
+	if port == 0 {
+		port = DefaultServerPort
+	}
 
-func (s serverOptions) validate() error {
-	if s.port <= 1024 || s.port > 65535 {
+	if port <= 1024 || port > 65535 {
 		return errors.New("port value is outside the supported range [1024 - 65535]")
 	}
 
 	switch {
-	case s.sourceURI == "" && s.targetURI == "":
+	case cfg.Source == "" && cfg.Target == "":
 		return errors.New("source URI and target URI are empty")
-	case s.sourceURI == "":
+	case cfg.Source == "":
 		return errors.New("source URI is empty")
-	case s.targetURI == "":
+	case cfg.Target == "":
 		return errors.New("target URI is empty")
-	case s.sourceURI == s.targetURI:
+	case cfg.Source == cfg.Target:
 		return errors.New("source URI and target URI are identical")
 	}
 
@@ -429,8 +427,8 @@ func (s serverOptions) validate() error {
 }
 
 // runServer starts the HTTP server with the provided configuration.
-func runServer(ctx context.Context, options serverOptions) error {
-	err := options.validate()
+func runServer(ctx context.Context, cfg *config.Config) error {
+	err := validateConfig(cfg)
 	if err != nil {
 		return errors.Wrap(err, "validate options")
 	}
@@ -438,14 +436,14 @@ func runServer(ctx context.Context, options serverOptions) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	srv, err := createServer(ctx, options.sourceURI, options.targetURI)
+	srv, err := createServer(ctx, cfg)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
+	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
 		err = srv.pcsm.Start(ctx, &pcsm.StartOptions{
-			PauseOnInitialSync: options.pause,
+			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")
@@ -463,7 +461,12 @@ func runServer(ctx context.Context, options serverOptions) error {
 		os.Exit(0)
 	}()
 
-	addr := fmt.Sprintf("localhost:%d", options.port)
+	port := cfg.Port
+	if port == 0 {
+		port = DefaultServerPort
+	}
+
+	addr := fmt.Sprintf("localhost:%d", port)
 	httpServer := http.Server{
 		Addr:    addr,
 		Handler: srv.Handler(),
@@ -479,6 +482,8 @@ func runServer(ctx context.Context, options serverOptions) error {
 
 // server represents the replication server.
 type server struct {
+	// cfg holds the configuration.
+	cfg *config.Config
 	// sourceCluster is the MongoDB client for the source cluster.
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
@@ -493,10 +498,10 @@ type server struct {
 }
 
 // createServer creates a new server with the given options.
-func createServer(ctx context.Context, sourceURI, targetURI string) (*server, error) {
+func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
-	source, err := topo.Connect(ctx, sourceURI)
+	source, err := topo.Connect(ctx, cfg.Source, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
@@ -517,11 +522,11 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "source version")
 	}
 
-	cs, _ := connstring.Parse(sourceURI)
+	cs, _ := connstring.Parse(cfg.Source)
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
 		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	target, err := topo.ConnectWithOptions(ctx, targetURI, &topo.ConnectOptions{
+	target, err := topo.ConnectWithOptions(ctx, cfg.Target, cfg, &topo.ConnectOptions{
 		Compressors: config.UseTargetClientCompressors(),
 	})
 	if err != nil {
@@ -544,7 +549,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "target version")
 	}
 
-	cs, _ = connstring.Parse(targetURI)
+	cs, _ = connstring.Parse(cfg.Target)
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
@@ -575,6 +580,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	go RunCheckpointing(ctx, target, pcs)
 
 	s := &server{
+		cfg:           cfg,
 		sourceCluster: source,
 		targetCluster: target,
 		pcsm:          pcs,
@@ -701,7 +707,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // resolveStartOptions resolves the start options from the HTTP request and config.
 // HTTP request values take precedence over CLI flag values.
-func resolveStartOptions(params startRequest) (*pcsm.StartOptions, error) {
+func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
 	options := &pcsm.StartOptions{
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
@@ -712,45 +718,45 @@ func resolveStartOptions(params startRequest) (*pcsm.StartOptions, error) {
 	if params.CloneNumParallelCollections != nil {
 		options.CloneParallelism = *params.CloneNumParallelCollections
 	} else {
-		options.CloneParallelism = config.CloneNumParallelCollections()
+		options.CloneParallelism = cfg.Clone.NumParallelCollections
 	}
 
 	// Clone read workers: HTTP > CLI > default
 	if params.CloneNumReadWorkers != nil {
 		options.CloneReadWorkers = *params.CloneNumReadWorkers
 	} else {
-		options.CloneReadWorkers = config.CloneNumReadWorkers()
+		options.CloneReadWorkers = cfg.Clone.NumReadWorkers
 	}
 
 	// Clone insert workers: HTTP > CLI > default
 	if params.CloneNumInsertWorkers != nil {
 		options.CloneInsertWorkers = *params.CloneNumInsertWorkers
 	} else {
-		options.CloneInsertWorkers = config.CloneNumInsertWorkers()
+		options.CloneInsertWorkers = cfg.Clone.NumInsertWorkers
 	}
 
 	// Clone segment size: HTTP > CLI > default
-	segmentSize, err := resolveCloneSegmentSize(params.CloneSegmentSize)
+	segmentSize, err := resolveCloneSegmentSize(cfg, params.CloneSegmentSize)
 	if err != nil {
 		return nil, err
 	}
 	options.CloneSegmentSizeBytes = segmentSize
 
 	// Clone read batch size: HTTP > CLI > default
-	batchSize, err := resolveCloneReadBatchSize(params.CloneReadBatchSize)
+	batchSize, err := resolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
 	if err != nil {
 		return nil, err
 	}
 	options.CloneReadBatchSizeBytes = batchSize
 
 	// UseCollectionBulkWrite: internal only, always from config (CLI + env var via Viper)
-	options.UseCollectionBulkWrite = config.UseCollectionBulkWrite()
+	options.UseCollectionBulkWrite = cfg.UseCollectionBulkWrite
 
 	return options, nil
 }
 
 // resolveCloneSegmentSize resolves the clone segment size from HTTP or CLI.
-func resolveCloneSegmentSize(value *string) (int64, error) {
+func resolveCloneSegmentSize(cfg *config.Config, value *string) (int64, error) {
 	if value != nil {
 		sizeBytes, err := humanize.ParseBytes(*value)
 		if err != nil {
@@ -771,11 +777,12 @@ func resolveCloneSegmentSize(value *string) (int64, error) {
 		return int64(min(sizeBytes, math.MaxInt64)), nil //nolint:gosec
 	}
 
-	return config.CloneSegmentSizeBytes(), nil
+	// Fall back to CLI value
+	return cfg.Clone.SegmentSizeBytes(), nil
 }
 
 // resolveCloneReadBatchSize resolves the clone read batch size from HTTP or CLI.
-func resolveCloneReadBatchSize(value *string) (int32, error) {
+func resolveCloneReadBatchSize(cfg *config.Config, value *string) (int32, error) {
 	if value != nil {
 		sizeBytes, err := humanize.ParseBytes(*value)
 		if err != nil {
@@ -796,7 +803,8 @@ func resolveCloneReadBatchSize(value *string) (int32, error) {
 		return int32(min(sizeBytes, math.MaxInt32)), nil //nolint:gosec
 	}
 
-	return config.CloneReadBatchSizeBytes(), nil
+	// Fall back to CLI value
+	return cfg.Clone.ReadBatchSizeBytes(), nil
 }
 
 // handleStart handles the /start endpoint.
@@ -849,7 +857,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	options, err := resolveStartOptions(params)
+	options, err := resolveStartOptions(s.cfg, params)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 

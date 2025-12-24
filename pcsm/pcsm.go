@@ -167,8 +167,10 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter)
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
+	// Use default options for recovery (clone tuning is less relevant when resuming from checkpoint)
+	defaultOpts := &StartOptions{}
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter, defaultOpts)
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, false)
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -334,8 +336,8 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, options)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, options.UseCollectionBulkWrite)
 	ml.state = StateRunning
 
 	go ml.run()

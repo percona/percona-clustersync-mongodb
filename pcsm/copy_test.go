@@ -93,7 +93,8 @@ func BenchmarkRead(b *testing.B) {
 	ctx := b.Context()
 
 	ns := getNamespace()
-	mc, err := topo.Connect(ctx, getSourceURI())
+	cfg := &config.Config{}
+	mc, err := topo.Connect(ctx, getSourceURI(), cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -147,7 +148,8 @@ func BenchmarkInsert(b *testing.B) {
 	ctx := b.Context()
 
 	ns := getNamespace()
-	mc, err := topo.Connect(ctx, getTargetURI())
+	cfg := &config.Config{}
+	mc, err := topo.Connect(ctx, getTargetURI(), cfg)
 	if err != nil {
 		b.Fatal(err)
 	}

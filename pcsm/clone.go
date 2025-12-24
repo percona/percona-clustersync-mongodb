@@ -28,6 +28,7 @@ type Clone struct {
 	target   *mongo.Client // Target MongoDB client
 	catalog  *Catalog      // Catalog for managing collections and indexes
 	nsFilter sel.NSFilter  // Namespace filter
+	options  *StartOptions // Clone options from StartOptions
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -74,12 +75,19 @@ func (cs *CloneStatus) IsFinished() bool {
 	return !cs.FinishTime.IsZero()
 }
 
-func NewClone(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Clone {
+// NewClone creates a new Clone instance with the given options.
+func NewClone(
+	source, target *mongo.Client,
+	catalog *Catalog,
+	nsFilter sel.NSFilter,
+	opts *StartOptions,
+) *Clone {
 	return &Clone{
 		source:   source,
 		target:   target,
 		catalog:  catalog,
 		nsFilter: nsFilter,
+		options:  opts,
 		doneSig:  make(chan struct{}),
 	}
 }
@@ -292,7 +300,7 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger := log.Ctx(ctx)
 
-	numParallelCollections := config.CloneNumParallelCollections()
+	numParallelCollections := c.options.CloneParallelism
 	if numParallelCollections < 1 {
 		numParallelCollections = config.DefaultCloneNumParallelCollection
 	}
@@ -300,10 +308,10 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
 
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumReadWorkers:     config.CloneNumReadWorkers(),
-		NumInsertWorkers:   config.CloneNumInsertWorkers(),
-		SegmentSizeBytes:   config.CloneSegmentSizeBytes(),
-		ReadBatchSizeBytes: config.CloneReadBatchSizeBytes(),
+		NumReadWorkers:     c.options.CloneReadWorkers,
+		NumInsertWorkers:   c.options.CloneInsertWorkers,
+		SegmentSizeBytes:   c.options.CloneSegmentSizeBytes,
+		ReadBatchSizeBytes: c.options.CloneReadBatchSizeBytes,
 	})
 	defer copyManager.Close()
 

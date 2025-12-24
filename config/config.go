@@ -2,26 +2,23 @@
 package config
 
 import (
+	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/validate"
 )
 
-// Init initializes Viper configuration binding with Cobra command flags.
-// This should be called in PersistentPreRun to ensure all flags are bound before use.
-func Init(cmd *cobra.Command) {
-	// Set environment variable prefix
+// Load initializes Viper and returns a validated Config.
+func Load(cmd *cobra.Command) (*Config, error) {
 	viper.SetEnvPrefix("PCSM")
-
-	// Replace hyphens with underscores for env var lookup
-	// e.g., "log-level" -> "PCSM_LOG_LEVEL"
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-
-	// Automatically read matching env vars
 	viper.AutomaticEnv()
 
-	// Bind CLI flags to Viper
 	if cmd.PersistentFlags() != nil {
 		_ = viper.BindPFlags(cmd.PersistentFlags())
 	}
@@ -29,30 +26,24 @@ func Init(cmd *cobra.Command) {
 		_ = viper.BindPFlags(cmd.Flags())
 	}
 
-	// Bind specific env var names
 	bindEnvVars()
+
+	var cfg Config
+
+	err := viper.Unmarshal(&cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal config")
+	}
+
+	err = validate.Struct(&cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "validate config")
+	}
+
+	return &cfg, nil
 }
 
 // bindEnvVars binds environment variable names to Viper keys.
-//
-// Configuration Reference:
-//
-//	| Viper Key                      | CLI Flag                          | Env Var                              | Default |
-//	|--------------------------------|-----------------------------------|--------------------------------------|---------|
-//	| source                         | --source                          | PCSM_SOURCE_URI                      | -       |
-//	| target                         | --target                          | PCSM_TARGET_URI                      | -       |
-//	| port                           | --port                            | PCSM_PORT                            | 2242    |
-//	| log-level                      | --log-level                       | PCSM_LOG_LEVEL                       | info    |
-//	| log-json                       | --log-json                        | PCSM_LOG_JSON                        | false   |
-//	| no-color                       | --no-color                        | PCSM_NO_COLOR                        | false   |
-//	| mongodb-cli-operation-timeout  | --mongodb-cli-operation-timeout   | PCSM_MONGODB_CLI_OPERATION_TIMEOUT   | 5m      |
-//	| use-collection-bulk-write      | --use-collection-bulk-write       | PCSM_USE_COLLECTION_BULK_WRITE       | false   |
-//	| clone-num-parallel-collections | --clone-num-parallel-collections  | -                                    | 0       |
-//	| clone-num-read-workers         | --clone-num-read-workers          | -                                    | 0       |
-//	| clone-num-insert-workers       | --clone-num-insert-workers        | -                                    | 0       |
-//	| clone-segment-size             | --clone-segment-size              | -                                    | 0       |
-//	| clone-read-batch-size          | --clone-read-batch-size           | -                                    | 0       |
-//
 // Note: Clone tuning options are CLI/HTTP only (no env var support).
 func bindEnvVars() {
 	// Server connection URIs
@@ -64,4 +55,26 @@ func bindEnvVars() {
 
 	// Bulk write option (hidden, internal use)
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
+}
+
+// UseTargetClientCompressors returns a list of enabled compressors (from "zstd", "zlib", "snappy")
+// for the target MongoDB client connection, as specified by the comma-separated environment
+// variable PCSM_DEV_TARGET_CLIENT_COMPRESSORS. If unset or empty, returns nil.
+func UseTargetClientCompressors() []string {
+	s := strings.TrimSpace(os.Getenv("PCSM_DEV_TARGET_CLIENT_COMPRESSORS"))
+	if s == "" {
+		return nil
+	}
+
+	allowCompressors := []string{"zstd", "zlib", "snappy"}
+
+	rv := make([]string, 0, min(len(s), len(allowCompressors)))
+	for a := range strings.SplitSeq(s, ",") {
+		a = strings.TrimSpace(a)
+		if slices.Contains(allowCompressors, a) && !slices.Contains(rv, a) {
+			rv = append(rv, a)
+		}
+	}
+
+	return rv
 }
