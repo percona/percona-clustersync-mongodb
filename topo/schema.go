@@ -209,6 +209,10 @@ func ListInconsistentIndexes(
 		{{"$indexStats", bson.D{}}},
 	})
 	if err != nil {
+		if IsIndexNotFound(err) {
+			return nil, nil
+		}
+
 		return nil, errors.Wrap(err, "$indexStats")
 	}
 
@@ -218,10 +222,6 @@ func ListInconsistentIndexes(
 
 	err = cur.All(ctx, &indexStats)
 	if err != nil {
-		if IsIndexNotFound(err) {
-			return nil, nil
-		}
-
 		return nil, errors.Wrap(err, "cursor: all")
 	}
 
