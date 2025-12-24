@@ -36,9 +36,15 @@ pytest:
 lint:
 	golangci-lint run
 
+pcsm-run: build
+	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state
+
+pcsm-start: build
+	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state --start
+
 # Clean generated files
 clean:
 	rm -rf bin/*
 	go clean -cache -testcache
 
-.PHONY: all build test-build test clean
+.PHONY: all build test-build test pcsm-start clean

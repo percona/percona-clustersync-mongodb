@@ -149,6 +149,12 @@ class Runner:
     def start(self, pause_on_initial_sync=False):
         """Start the PCSM service."""
         self.finalize(fast=True)
+
+        # Wait for PCSM to reach FINALIZED state if it's currently finalizing
+        state = self.pcsm.status()["state"]
+        if state == PCSM.State.FINALIZING:
+            self.wait_for_state(PCSM.State.FINALIZED)
+
         self.pcsm.start(pause_on_initial_sync=pause_on_initial_sync, **self.options)
 
     def finalize(self, *, fast=False):
