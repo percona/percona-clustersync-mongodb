@@ -712,27 +712,31 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
 		ExcludeNamespaces:  params.ExcludeNamespaces,
+		Repl: pcsm.ReplOptions{
+			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
+		},
+		Clone: pcsm.CloneOptions{},
 	}
 
 	// Clone parallelism: HTTP > CLI > default
 	if params.CloneNumParallelCollections != nil {
-		options.CloneParallelism = *params.CloneNumParallelCollections
+		options.Clone.Parallelism = *params.CloneNumParallelCollections
 	} else {
-		options.CloneParallelism = cfg.Clone.NumParallelCollections
+		options.Clone.Parallelism = cfg.Clone.NumParallelCollections
 	}
 
 	// Clone read workers: HTTP > CLI > default
 	if params.CloneNumReadWorkers != nil {
-		options.CloneReadWorkers = *params.CloneNumReadWorkers
+		options.Clone.ReadWorkers = *params.CloneNumReadWorkers
 	} else {
-		options.CloneReadWorkers = cfg.Clone.NumReadWorkers
+		options.Clone.ReadWorkers = cfg.Clone.NumReadWorkers
 	}
 
 	// Clone insert workers: HTTP > CLI > default
 	if params.CloneNumInsertWorkers != nil {
-		options.CloneInsertWorkers = *params.CloneNumInsertWorkers
+		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
 	} else {
-		options.CloneInsertWorkers = cfg.Clone.NumInsertWorkers
+		options.Clone.InsertWorkers = cfg.Clone.NumInsertWorkers
 	}
 
 	// Clone segment size: HTTP > CLI > default
@@ -740,17 +744,14 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 	if err != nil {
 		return nil, err
 	}
-	options.CloneSegmentSizeBytes = segmentSize
+	options.Clone.SegmentSizeBytes = segmentSize
 
 	// Clone read batch size: HTTP > CLI > default
 	batchSize, err := resolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
 	if err != nil {
 		return nil, err
 	}
-	options.CloneReadBatchSizeBytes = batchSize
-
-	// UseCollectionBulkWrite: internal only, always from config (CLI + env var via Viper)
-	options.UseCollectionBulkWrite = cfg.UseCollectionBulkWrite
+	options.Clone.ReadBatchSizeBytes = batchSize
 
 	return options, nil
 }

@@ -22,13 +22,32 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
+// CloneOptions configures the clone behavior.
+type CloneOptions struct {
+	// Parallelism is the number of collections to clone in parallel.
+	// Default: 2 (config.DefaultCloneNumParallelCollection)
+	Parallelism int
+	// ReadWorkers is the number of read workers during clone.
+	// Default: auto (0 = runtime.NumCPU()/4)
+	ReadWorkers int
+	// InsertWorkers is the number of insert workers during clone.
+	// Default: auto (0 = runtime.NumCPU()*2)
+	InsertWorkers int
+	// SegmentSizeBytes is the segment size for clone operations in bytes.
+	// Default: auto (0 = calculated per collection)
+	SegmentSizeBytes int64
+	// ReadBatchSizeBytes is the read batch size during clone in bytes.
+	// Default: ~47.5MB (config.DefaultCloneReadBatchSizeBytes)
+	ReadBatchSizeBytes int32
+}
+
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
 	source   *mongo.Client // Source MongoDB client
 	target   *mongo.Client // Target MongoDB client
 	catalog  *Catalog      // Catalog for managing collections and indexes
 	nsFilter sel.NSFilter  // Namespace filter
-	options  *StartOptions // Clone options from StartOptions
+	options  *CloneOptions // Clone options
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -80,7 +99,7 @@ func NewClone(
 	source, target *mongo.Client,
 	catalog *Catalog,
 	nsFilter sel.NSFilter,
-	opts *StartOptions,
+	opts *CloneOptions,
 ) *Clone {
 	return &Clone{
 		source:   source,
@@ -300,7 +319,7 @@ func (c *Clone) run() error {
 func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger := log.Ctx(ctx)
 
-	numParallelCollections := c.options.CloneParallelism
+	numParallelCollections := c.options.Parallelism
 	if numParallelCollections < 1 {
 		numParallelCollections = config.DefaultCloneNumParallelCollection
 	}
@@ -308,10 +327,10 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
 
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumReadWorkers:     c.options.CloneReadWorkers,
-		NumInsertWorkers:   c.options.CloneInsertWorkers,
-		SegmentSizeBytes:   c.options.CloneSegmentSizeBytes,
-		ReadBatchSizeBytes: c.options.CloneReadBatchSizeBytes,
+		NumReadWorkers:     c.options.ReadWorkers,
+		NumInsertWorkers:   c.options.InsertWorkers,
+		SegmentSizeBytes:   c.options.SegmentSizeBytes,
+		ReadBatchSizeBytes: c.options.ReadBatchSizeBytes,
 	})
 	defer copyManager.Close()
 

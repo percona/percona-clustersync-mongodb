@@ -168,9 +168,8 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
 	// Use default options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	defaultOpts := &StartOptions{}
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter, defaultOpts)
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, false)
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -285,27 +284,17 @@ func (ml *PCSM) resetError() {
 
 // StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
-	// PauseOnInitialSync indicates whether to finalize after the initial sync.
+	// PauseOnInitialSync indicates whether to pause after the initial sync completes.
 	PauseOnInitialSync bool
-	// IncludeNamespaces are the namespaces to include.
+	// IncludeNamespaces are the namespaces to include in replication.
 	IncludeNamespaces []string
-	// ExcludeNamespaces are the namespaces to exclude.
+	// ExcludeNamespaces are the namespaces to exclude from replication.
 	ExcludeNamespaces []string
 
-	// Clone tuning options
-	// CloneParallelism is the number of collections to clone in parallel.
-	CloneParallelism int
-	// CloneReadWorkers is the number of read workers during clone.
-	CloneReadWorkers int
-	// CloneInsertWorkers is the number of insert workers during clone.
-	CloneInsertWorkers int
-	// CloneSegmentSizeBytes is the segment size for clone operations in bytes.
-	CloneSegmentSizeBytes int64
-	// CloneReadBatchSizeBytes is the read batch size during clone in bytes.
-	CloneReadBatchSizeBytes int32
-
-	// UseCollectionBulkWrite indicates whether to use collection-level bulk write.
-	UseCollectionBulkWrite bool
+	// Clone contains clone tuning options.
+	Clone CloneOptions
+	// Repl contains replication behavior options.
+	Repl ReplOptions
 }
 
 // Start starts the replication process with the given options.
@@ -336,8 +325,8 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, options)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, options.UseCollectionBulkWrite)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
 	ml.state = StateRunning
 
 	go ml.run()
