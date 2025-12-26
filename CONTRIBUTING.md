@@ -152,6 +152,17 @@ go test -race -v -run TestSanitizeConnString ./topo
 
 Python E2E tests require MongoDB clusters to be running and PCSM to be available.
 
+#### Requirements
+
+* Python 3.13 or above
+* [Poetry](https://python-poetry.org/docs/#installation) for dependency management
+
+Install the Python dependencies:
+
+```sh
+poetry install
+```
+
 #### 1. Deploy MongoDB clusters and run PCSM
 
 Follow the steps in [Running PCSM locally](#running-pcsm-locally).
