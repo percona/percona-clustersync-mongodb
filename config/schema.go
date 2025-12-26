@@ -10,7 +10,7 @@ import (
 // Config holds all PCSM configuration.
 type Config struct {
 	// Connection
-	Port   int    `mapstructure:"port"   validate:"omitempty,gte=1024,lte=65535"`
+	Port   int    `mapstructure:"port"`
 	Source string `mapstructure:"source"`
 	Target string `mapstructure:"target"`
 
@@ -34,14 +34,14 @@ type Config struct {
 
 // LogConfig holds logging configuration.
 type LogConfig struct {
-	Level   string `mapstructure:"log-level" validate:"omitempty,oneof=trace debug info warn error fatal panic"`
+	Level   string `mapstructure:"log-level"`
 	JSON    bool   `mapstructure:"log-json"`
 	NoColor bool   `mapstructure:"no-color"`
 }
 
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
-	OperationTimeout string `mapstructure:"mongodb-cli-operation-timeout" validate:"omitempty,duration"`
+	OperationTimeout string `mapstructure:"mongodb-cli-operation-timeout"`
 }
 
 // OperationTimeoutDuration returns the parsed timeout or default.
@@ -58,11 +58,11 @@ func (m *MongoDBConfig) OperationTimeoutDuration() time.Duration {
 
 // CloneConfig holds clone tuning configuration.
 type CloneConfig struct {
-	NumParallelCollections int    `mapstructure:"clone-num-parallel-collections" validate:"omitempty,gte=0,lte=100"`
-	NumReadWorkers         int    `mapstructure:"clone-num-read-workers"         validate:"omitempty,gte=0,lte=1000"`
-	NumInsertWorkers       int    `mapstructure:"clone-num-insert-workers"       validate:"omitempty,gte=0,lte=1000"`
-	SegmentSize            string `mapstructure:"clone-segment-size"             validate:"omitempty,bytesize"`
-	ReadBatchSize          string `mapstructure:"clone-read-batch-size"          validate:"omitempty,bytesize"`
+	NumParallelCollections int    `mapstructure:"clone-num-parallel-collections"`
+	NumReadWorkers         int    `mapstructure:"clone-num-read-workers"`
+	NumInsertWorkers       int    `mapstructure:"clone-num-insert-workers"`
+	SegmentSize            string `mapstructure:"clone-segment-size"`
+	ReadBatchSize          string `mapstructure:"clone-read-batch-size"`
 }
 
 // SegmentSizeBytes parses and returns the segment size in bytes.

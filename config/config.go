@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
-	"github.com/percona/percona-clustersync-mongodb/validate"
 )
 
 // Load initializes Viper and returns a validated Config.
@@ -33,11 +32,6 @@ func Load(cmd *cobra.Command) (*Config, error) {
 	err := viper.Unmarshal(&cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "unmarshal config")
-	}
-
-	err = validate.Struct(&cfg)
-	if err != nil {
-		return nil, errors.Wrap(err, "validate config")
 	}
 
 	return &cfg, nil

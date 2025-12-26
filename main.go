@@ -30,7 +30,6 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
-	"github.com/percona/percona-clustersync-mongodb/validate"
 )
 
 // Constants for server configuration.
@@ -851,13 +850,6 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate request
-	if err := params.Validate(); err != nil {
-		writeResponse(w, startResponse{Err: err.Error()})
-
-		return
-	}
-
 	options, err := resolveStartOptions(s.cfg, params)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
@@ -1046,22 +1038,17 @@ type startRequest struct {
 
 	// Clone tuning options (pointer types to distinguish "not set" from zero value)
 	// CloneNumParallelCollections is the number of collections to clone in parallel.
-	CloneNumParallelCollections *int `json:"cloneNumParallelCollections,omitempty" validate:"omitempty,gte=0,lte=100"`
+	CloneNumParallelCollections *int `json:"cloneNumParallelCollections,omitempty"`
 	// CloneNumReadWorkers is the number of read workers during clone.
-	CloneNumReadWorkers *int `json:"cloneNumReadWorkers,omitempty" validate:"omitempty,gte=0,lte=1000"`
+	CloneNumReadWorkers *int `json:"cloneNumReadWorkers,omitempty"`
 	// CloneNumInsertWorkers is the number of insert workers during clone.
-	CloneNumInsertWorkers *int `json:"cloneNumInsertWorkers,omitempty" validate:"omitempty,gte=0,lte=1000"`
+	CloneNumInsertWorkers *int `json:"cloneNumInsertWorkers,omitempty"`
 	// CloneSegmentSize is the segment size for clone operations (e.g., "100MB", "1GiB").
-	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty" validate:"omitempty,bytesize"`
+	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
-	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty" validate:"omitempty,bytesize"`
+	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
 
 	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
-}
-
-// Validate validates the startRequest.
-func (r *startRequest) Validate() error {
-	return validate.Struct(r)
 }
 
 // startResponse represents the response body for the /start endpoint.
