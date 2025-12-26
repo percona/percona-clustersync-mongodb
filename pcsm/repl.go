@@ -28,6 +28,13 @@ var (
 
 const advanceTimePseudoEvent = "@tick"
 
+// ReplOptions configures the replication behavior.
+type ReplOptions struct {
+	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
+	// instead of client bulk write. Default: false (use client bulk write).
+	UseCollectionBulkWrite bool
+}
+
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
 	source *mongo.Client // Source MongoDB client
@@ -35,6 +42,8 @@ type Repl struct {
 
 	nsFilter sel.NSFilter // Namespace filter
 	catalog  *Catalog     // Catalog for managing collections and indexes
+
+	options *ReplOptions // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
 
@@ -84,12 +93,19 @@ func (rs *ReplStatus) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
-func NewRepl(source, target *mongo.Client, catalog *Catalog, nsFilter sel.NSFilter) *Repl {
+// NewRepl creates a new Repl instance.
+func NewRepl(
+	source, target *mongo.Client,
+	catalog *Catalog,
+	nsFilter sel.NSFilter,
+	opts *ReplOptions,
+) *Repl {
 	return &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
 		catalog:  catalog,
+		options:  opts,
 		pauseC:   make(chan struct{}),
 		doneSig:  make(chan struct{}),
 	}
@@ -221,7 +237,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(targetVer).ClientBulkWrite() && !config.UseCollectionBulkWrite() {
+	if topo.Support(targetVer).ClientBulkWrite() && !r.options.UseCollectionBulkWrite {
 		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
 		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd

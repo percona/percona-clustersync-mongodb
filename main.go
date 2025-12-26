@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
@@ -41,6 +41,12 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
+// contextKey is a type for context keys used in this package.
+type contextKey string
+
+// configContextKey is the context key for storing *config.Config.
+const configContextKey contextKey = "config"
+
 var (
 	Version   = "v0.6.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
@@ -60,19 +66,24 @@ var rootCmd = &cobra.Command{
 
 	SilenceUsage: true,
 
-	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
-		logLevelFlag, _ := cmd.PersistentFlags().GetString("log-level")
-		logJSON, _ := cmd.PersistentFlags().GetBool("log-json")
-		logNoColor, _ := cmd.PersistentFlags().GetBool("no-color")
-
-		logLevel, err := zerolog.ParseLevel(logLevelFlag)
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		// Load and validate config
+		cfg, err := config.Load(cmd)
 		if err != nil {
-			log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
+			return errors.Wrap(err, "load config")
 		}
 
-		lg := log.InitGlobals(logLevel, logJSON, logNoColor)
+		logLevel, err := zerolog.ParseLevel(cfg.Log.Level)
+		if err != nil {
+			logLevel = zerolog.InfoLevel
+		}
+
+		lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
 		ctx := lg.WithContext(context.Background())
+		ctx = context.WithValue(ctx, configContextKey, cfg)
 		cmd.SetContext(ctx)
+
+		return nil
 	},
 
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -81,29 +92,18 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
 
-		sourceURI, _ := cmd.Flags().GetString("source")
-		if sourceURI == "" {
-			sourceURI = os.Getenv("PCSM_SOURCE_URI")
-		}
-		if sourceURI == "" {
+		if cfg.Source == "" {
 			return errors.New("required flag --source not set")
 		}
 
-		targetURI, _ := cmd.Flags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
-		if targetURI == "" {
+		if cfg.Target == "" {
 			return errors.New("required flag --target not set")
 		}
 
-		if ok, _ := cmd.Flags().GetBool("reset-state"); ok {
-			err := resetState(cmd.Context(), targetURI)
+		if cfg.ResetState {
+			err := resetState(cmd.Context(), cfg.Target, cfg)
 			if err != nil {
 				return err
 			}
@@ -111,18 +111,9 @@ var rootCmd = &cobra.Command{
 			log.New("cli").Info("State has been reset")
 		}
 
-		start, _ := cmd.Flags().GetBool("start")
-		pause, _ := cmd.Flags().GetBool("pause-on-initial-sync")
-
 		log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
 
-		return runServer(cmd.Context(), serverOptions{
-			port:      port,
-			sourceURI: sourceURI,
-			targetURI: targetURI,
-			start:     start,
-			pause:     pause,
-		})
+		return runServer(cmd.Context(), cfg)
 	},
 }
 
@@ -150,12 +141,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Get the status of the replication process",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
-
-		return NewClient(port).Status(cmd.Context())
+		return NewClient(viper.GetInt("port")).Status(cmd.Context())
 	},
 }
 
@@ -164,11 +150,6 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
-
 		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
 		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
 		excludeNamespaces, _ := cmd.Flags().GetStringSlice("exclude-namespaces")
@@ -179,7 +160,7 @@ var startCmd = &cobra.Command{
 			ExcludeNamespaces:  excludeNamespaces,
 		}
 
-		return NewClient(port).Start(cmd.Context(), startOptions)
+		return NewClient(viper.GetInt("port")).Start(cmd.Context(), startOptions)
 	},
 }
 
@@ -188,18 +169,13 @@ var finalizeCmd = &cobra.Command{
 	Use:   "finalize",
 	Short: "Finalize Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
-
 		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
 
 		finalizeOptions := finalizeRequest{
 			IgnoreHistoryLost: ignoreHistoryLost,
 		}
 
-		return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
+		return NewClient(viper.GetInt("port")).Finalize(cmd.Context(), finalizeOptions)
 	},
 }
 
@@ -208,12 +184,7 @@ var pauseCmd = &cobra.Command{
 	Use:   "pause",
 	Short: "Pause Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
-
-		return NewClient(port).Pause(cmd.Context())
+		return NewClient(viper.GetInt("port")).Pause(cmd.Context())
 	},
 }
 
@@ -222,18 +193,13 @@ var resumeCmd = &cobra.Command{
 	Use:   "resume",
 	Short: "Resume Cluster Replication",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		port, err := getPort(cmd.Flags())
-		if err != nil {
-			return err
-		}
-
 		fromFailure, _ := cmd.Flags().GetBool("from-failure")
 
 		resumeOptions := resumeRequest{
 			FromFailure: fromFailure,
 		}
 
-		return NewClient(port).Resume(cmd.Context(), resumeOptions)
+		return NewClient(viper.GetInt("port")).Resume(cmd.Context(), resumeOptions)
 	},
 }
 
@@ -242,15 +208,14 @@ var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Reset PCSM state (heartbeat and recovery data)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.Flags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
 
-		err := resetState(cmd.Context(), targetURI)
+		err := resetState(cmd.Context(), targetURI, cfg)
 		if err != nil {
 			return err
 		}
@@ -267,17 +232,16 @@ var resetRecoveryCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset recovery state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.InheritedFlags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
 
 		ctx := cmd.Context()
 
-		target, err := topo.Connect(ctx, targetURI)
+		target, err := topo.Connect(ctx, targetURI, cfg)
 		if err != nil {
 			return errors.Wrap(err, "connect")
 		}
@@ -306,17 +270,16 @@ var resetHeartbeatCmd = &cobra.Command{
 	Hidden: true,
 	Short:  "Reset heartbeat state",
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		targetURI, _ := cmd.InheritedFlags().GetString("target")
-		if targetURI == "" {
-			targetURI = os.Getenv("PCSM_TARGET_URI")
-		}
+		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
+
+		targetURI := viper.GetString("target")
 		if targetURI == "" {
 			return errors.New("required flag --target not set")
 		}
 
 		ctx := cmd.Context()
 
-		target, err := topo.Connect(ctx, targetURI)
+		target, err := topo.Connect(ctx, targetURI, cfg)
 		if err != nil {
 			return errors.Wrap(err, "connect")
 		}
@@ -339,31 +302,12 @@ var resetHeartbeatCmd = &cobra.Command{
 	},
 }
 
-func getPort(flags *pflag.FlagSet) (int, error) {
-	port, _ := flags.GetInt("port")
-	if flags.Changed("port") {
-		return port, nil
-	}
-
-	portVar := os.Getenv("PCSM_PORT")
-	if portVar == "" {
-		return port, nil
-	}
-
-	parsedPort, err := strconv.ParseInt(portVar, 10, 32)
-	if err != nil {
-		return 0, errors.Errorf("invalid environment variable PCSM_PORT='%s'", portVar)
-	}
-
-	return int(parsedPort), nil
-}
-
 func main() {
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level")
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-	rootCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	rootCmd.PersistentFlags().Int("port", DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
@@ -373,9 +317,33 @@ func main() {
 	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
-	statusCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	// MongoDB client timeout (visible: commonly needed for debugging)
+	rootCmd.PersistentFlags().String("mongodb-cli-operation-timeout", "",
+		"Timeout for MongoDB operations (e.g., 30s, 5m)")
 
-	startCmd.Flags().Int("port", DefaultServerPort, "Port number")
+	// Bulk write option (hidden: internal tuning)
+	rootCmd.PersistentFlags().Bool("use-collection-bulk-write", false,
+		"Use collection-level bulk write instead of client bulk write")
+	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
+
+	// Clone tuning options (hidden: advanced tuning, CLI/HTTP only)
+	rootCmd.PersistentFlags().Int("clone-num-parallel-collections", 0,
+		"Number of collections to clone in parallel (0 = auto)")
+	rootCmd.PersistentFlags().Int("clone-num-read-workers", 0,
+		"Number of read workers during clone (0 = auto)")
+	rootCmd.PersistentFlags().Int("clone-num-insert-workers", 0,
+		"Number of insert workers during clone (0 = auto)")
+	rootCmd.PersistentFlags().String("clone-segment-size", "",
+		"Segment size for clone operations (e.g., 100MB, 1GiB)")
+	rootCmd.PersistentFlags().String("clone-read-batch-size", "",
+		"Read batch size during clone (e.g., 16MiB)")
+
+	rootCmd.PersistentFlags().MarkHidden("clone-num-parallel-collections") //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-num-read-workers")         //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-num-insert-workers")       //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-segment-size")             //nolint:errcheck
+	rootCmd.PersistentFlags().MarkHidden("clone-read-batch-size")          //nolint:errcheck
+
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 	startCmd.Flags().StringSlice("include-namespaces", nil,
@@ -383,12 +351,8 @@ func main() {
 	startCmd.Flags().StringSlice("exclude-namespaces", nil,
 		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
 
-	pauseCmd.Flags().Int("port", DefaultServerPort, "Port number")
-
-	resumeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
-	finalizeCmd.Flags().Int("port", DefaultServerPort, "Port number")
 	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
 	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
@@ -411,8 +375,8 @@ func main() {
 	}
 }
 
-func resetState(ctx context.Context, targetURI string) error {
-	target, err := topo.Connect(ctx, targetURI)
+func resetState(ctx context.Context, targetURI string, cfg *config.Config) error {
+	target, err := topo.Connect(ctx, targetURI, cfg)
 	if err != nil {
 		return errors.Wrap(err, "connect")
 	}
@@ -437,27 +401,24 @@ func resetState(ctx context.Context, targetURI string) error {
 	return nil
 }
 
-type serverOptions struct {
-	port      int
-	sourceURI string
-	targetURI string
-	start     bool
-	pause     bool
-}
+func validateConfig(cfg *config.Config) error {
+	port := cfg.Port
+	if port == 0 {
+		port = DefaultServerPort
+	}
 
-func (s serverOptions) validate() error {
-	if s.port <= 1024 || s.port > 65535 {
+	if port <= 1024 || port > 65535 {
 		return errors.New("port value is outside the supported range [1024 - 65535]")
 	}
 
 	switch {
-	case s.sourceURI == "" && s.targetURI == "":
+	case cfg.Source == "" && cfg.Target == "":
 		return errors.New("source URI and target URI are empty")
-	case s.sourceURI == "":
+	case cfg.Source == "":
 		return errors.New("source URI is empty")
-	case s.targetURI == "":
+	case cfg.Target == "":
 		return errors.New("target URI is empty")
-	case s.sourceURI == s.targetURI:
+	case cfg.Source == cfg.Target:
 		return errors.New("source URI and target URI are identical")
 	}
 
@@ -465,8 +426,8 @@ func (s serverOptions) validate() error {
 }
 
 // runServer starts the HTTP server with the provided configuration.
-func runServer(ctx context.Context, options serverOptions) error {
-	err := options.validate()
+func runServer(ctx context.Context, cfg *config.Config) error {
+	err := validateConfig(cfg)
 	if err != nil {
 		return errors.Wrap(err, "validate options")
 	}
@@ -474,14 +435,14 @@ func runServer(ctx context.Context, options serverOptions) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	srv, err := createServer(ctx, options.sourceURI, options.targetURI)
+	srv, err := createServer(ctx, cfg)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
 
-	if options.start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
+	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
 		err = srv.pcsm.Start(ctx, &pcsm.StartOptions{
-			PauseOnInitialSync: options.pause,
+			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")
@@ -499,7 +460,12 @@ func runServer(ctx context.Context, options serverOptions) error {
 		os.Exit(0)
 	}()
 
-	addr := fmt.Sprintf("localhost:%d", options.port)
+	port := cfg.Port
+	if port == 0 {
+		port = DefaultServerPort
+	}
+
+	addr := fmt.Sprintf("localhost:%d", port)
 	httpServer := http.Server{
 		Addr:    addr,
 		Handler: srv.Handler(),
@@ -515,6 +481,8 @@ func runServer(ctx context.Context, options serverOptions) error {
 
 // server represents the replication server.
 type server struct {
+	// cfg holds the configuration.
+	cfg *config.Config
 	// sourceCluster is the MongoDB client for the source cluster.
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
@@ -529,10 +497,10 @@ type server struct {
 }
 
 // createServer creates a new server with the given options.
-func createServer(ctx context.Context, sourceURI, targetURI string) (*server, error) {
+func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
-	source, err := topo.Connect(ctx, sourceURI)
+	source, err := topo.Connect(ctx, cfg.Source, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
@@ -553,11 +521,11 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "source version")
 	}
 
-	cs, _ := connstring.Parse(sourceURI)
+	cs, _ := connstring.Parse(cfg.Source)
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
 		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	target, err := topo.ConnectWithOptions(ctx, targetURI, &topo.ConnectOptions{
+	target, err := topo.ConnectWithOptions(ctx, cfg.Target, cfg, &topo.ConnectOptions{
 		Compressors: config.UseTargetClientCompressors(),
 	})
 	if err != nil {
@@ -580,7 +548,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "target version")
 	}
 
-	cs, _ = connstring.Parse(targetURI)
+	cs, _ = connstring.Parse(cfg.Target)
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
@@ -611,6 +579,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 	go RunCheckpointing(ctx, target, pcs)
 
 	s := &server{
+		cfg:           cfg,
 		sourceCluster: source,
 		targetCluster: target,
 		pcsm:          pcs,
@@ -735,6 +704,109 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, res)
 }
 
+// resolveStartOptions resolves the start options from the HTTP request and config.
+// HTTP request values take precedence over CLI flag values.
+func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
+	options := &pcsm.StartOptions{
+		PauseOnInitialSync: params.PauseOnInitialSync,
+		IncludeNamespaces:  params.IncludeNamespaces,
+		ExcludeNamespaces:  params.ExcludeNamespaces,
+		Repl: pcsm.ReplOptions{
+			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
+		},
+		Clone: pcsm.CloneOptions{},
+	}
+
+	// Clone parallelism: HTTP > CLI > default
+	if params.CloneNumParallelCollections != nil {
+		options.Clone.Parallelism = *params.CloneNumParallelCollections
+	} else {
+		options.Clone.Parallelism = cfg.Clone.NumParallelCollections
+	}
+
+	// Clone read workers: HTTP > CLI > default
+	if params.CloneNumReadWorkers != nil {
+		options.Clone.ReadWorkers = *params.CloneNumReadWorkers
+	} else {
+		options.Clone.ReadWorkers = cfg.Clone.NumReadWorkers
+	}
+
+	// Clone insert workers: HTTP > CLI > default
+	if params.CloneNumInsertWorkers != nil {
+		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
+	} else {
+		options.Clone.InsertWorkers = cfg.Clone.NumInsertWorkers
+	}
+
+	// Clone segment size: HTTP > CLI > default
+	segmentSize, err := resolveCloneSegmentSize(cfg, params.CloneSegmentSize)
+	if err != nil {
+		return nil, err
+	}
+	options.Clone.SegmentSizeBytes = segmentSize
+
+	// Clone read batch size: HTTP > CLI > default
+	batchSize, err := resolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
+	if err != nil {
+		return nil, err
+	}
+	options.Clone.ReadBatchSizeBytes = batchSize
+
+	return options, nil
+}
+
+// resolveCloneSegmentSize resolves the clone segment size from HTTP or CLI.
+func resolveCloneSegmentSize(cfg *config.Config, value *string) (int64, error) {
+	if value != nil {
+		sizeBytes, err := humanize.ParseBytes(*value)
+		if err != nil {
+			return 0, errors.Wrapf(err, "invalid cloneSegmentSize value: %s", *value)
+		}
+		// Allow 0 (auto) or validate against min/max
+		if sizeBytes > 0 && sizeBytes < config.MinCloneSegmentSizeBytes {
+			return 0, errors.Errorf("cloneSegmentSize must be at least %s, got %s",
+				humanize.Bytes(config.MinCloneSegmentSizeBytes),
+				humanize.Bytes(sizeBytes))
+		}
+		if sizeBytes > config.MaxCloneSegmentSizeBytes {
+			return 0, errors.Errorf("cloneSegmentSize must be at most %s, got %s",
+				humanize.Bytes(config.MaxCloneSegmentSizeBytes),
+				humanize.Bytes(sizeBytes))
+		}
+
+		return int64(min(sizeBytes, math.MaxInt64)), nil //nolint:gosec
+	}
+
+	// Fall back to CLI value
+	return cfg.Clone.SegmentSizeBytes(), nil
+}
+
+// resolveCloneReadBatchSize resolves the clone read batch size from HTTP or CLI.
+func resolveCloneReadBatchSize(cfg *config.Config, value *string) (int32, error) {
+	if value != nil {
+		sizeBytes, err := humanize.ParseBytes(*value)
+		if err != nil {
+			return 0, errors.Wrapf(err, "invalid cloneReadBatchSize value: %s", *value)
+		}
+		// Allow 0 (auto) or validate against min/max
+		if sizeBytes > 0 && sizeBytes < uint64(config.MinCloneReadBatchSizeBytes) {
+			return 0, errors.Errorf("cloneReadBatchSize must be at least %s, got %s",
+				humanize.Bytes(uint64(config.MinCloneReadBatchSizeBytes)),
+				humanize.Bytes(sizeBytes))
+		}
+		if sizeBytes > uint64(config.MaxCloneReadBatchSizeBytes) {
+			return 0, errors.Errorf("cloneReadBatchSize must be at most %s, got %s",
+				humanize.Bytes(uint64(config.MaxCloneReadBatchSizeBytes)),
+				humanize.Bytes(sizeBytes))
+		}
+
+		return int32(min(sizeBytes, math.MaxInt32)), nil //nolint:gosec
+	}
+
+	// Fall back to CLI value
+	return cfg.Clone.ReadBatchSizeBytes(), nil
+}
+
 // handleStart handles the /start endpoint.
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
@@ -778,13 +850,14 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &pcsm.StartOptions{
-		PauseOnInitialSync: params.PauseOnInitialSync,
-		IncludeNamespaces:  params.IncludeNamespaces,
-		ExcludeNamespaces:  params.ExcludeNamespaces,
+	options, err := resolveStartOptions(s.cfg, params)
+	if err != nil {
+		writeResponse(w, startResponse{Err: err.Error()})
+
+		return
 	}
 
-	err := s.pcsm.Start(ctx, options)
+	err = s.pcsm.Start(ctx, options)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -962,6 +1035,20 @@ type startRequest struct {
 	IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
 	// ExcludeNamespaces are the namespaces to exclude from the replication.
 	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
+
+	// Clone tuning options (pointer types to distinguish "not set" from zero value)
+	// CloneNumParallelCollections is the number of collections to clone in parallel.
+	CloneNumParallelCollections *int `json:"cloneNumParallelCollections,omitempty"`
+	// CloneNumReadWorkers is the number of read workers during clone.
+	CloneNumReadWorkers *int `json:"cloneNumReadWorkers,omitempty"`
+	// CloneNumInsertWorkers is the number of insert workers during clone.
+	CloneNumInsertWorkers *int `json:"cloneNumInsertWorkers,omitempty"`
+	// CloneSegmentSize is the segment size for clone operations (e.g., "100MB", "1GiB").
+	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
+	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
+	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
+
+	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
 }
 
 // startResponse represents the response body for the /start endpoint.

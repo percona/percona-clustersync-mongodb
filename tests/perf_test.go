@@ -27,7 +27,8 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(b.Context(), mongodbURI)
+	cfg := &config.Config{}
+	client, err := topo.Connect(b.Context(), mongodbURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -63,7 +64,8 @@ func BenchmarkReplaceOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(b.Context(), mongodbURI)
+	cfg := &config.Config{}
+	client, err := topo.Connect(b.Context(), mongodbURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -138,14 +140,15 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 	}
 
 	ctx := b.Context()
+	cfg := &config.Config{}
 
-	source, err := topo.Connect(ctx, sourceURI)
+	source, err := topo.Connect(ctx, sourceURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer source.Disconnect(ctx) //nolint:errcheck
 
-	target, err := topo.Connect(ctx, targetURI)
+	target, err := topo.Connect(ctx, targetURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
