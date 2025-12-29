@@ -175,7 +175,7 @@ export TEST_TARGET_URI="mongodb://tgt-mongos:29017"
 export TEST_PCSM_URL="http://localhost:2242"
 ```
 
-You don't have to run PCSM manualy, you can let pytest to automatically manage PCSM process. Just export this:
+You don't have to run PCSM manually, you can let pytest to automatically manage PCSM process. Just export this:
 
 ```sh
 export TEST_PCSM_BIN="./bin/pcsm"
