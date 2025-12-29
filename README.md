@@ -26,9 +26,9 @@ Find the installation instructions in the [official documentation](https://docs.
 
 ## API
 
-This repository contains source code for building binaries. It is not a library and is not intended to be used directly by calling exposed functions, types, etc.
+PCSM is a CLI tool, but also exposes HTTP API as well.
 
-Please use the `pcsm` CLI as the publicly available API. For reference, see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/reference/commands.html).
+For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/plm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
 ## Submit Bug Report / Feature Request
 
