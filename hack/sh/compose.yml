@@ -99,8 +99,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-mongos
     hostname: tgt-mongos
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["29017:27017"]
     volumes: ["./mongo/:/cfg:ro"]
     command:
