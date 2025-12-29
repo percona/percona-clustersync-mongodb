@@ -3,8 +3,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs00
     hostname: rs00
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30000:30000"]
     volumes: ["rs00:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -19,8 +19,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs01
     hostname: rs01
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30001:30001"]
     volumes: ["rs01:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -35,8 +35,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs02
     hostname: rs02
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30002:30002"]
     volumes: ["rs02:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -51,8 +51,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs10
     hostname: rs10
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30100:30100"]
     volumes: ["rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -67,8 +67,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs11
     hostname: rs11
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30101:30101"]
     volumes: ["rs11:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -83,8 +83,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: rs12
     hostname: rs12
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30102:30102"]
     volumes: ["rs12:/data/db", "./mongo/:/cfg:ro"]
     command:
