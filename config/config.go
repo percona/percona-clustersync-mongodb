@@ -2,10 +2,12 @@
 package config
 
 import (
+	"math"
 	"os"
 	"slices"
 	"strings"
 
+	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -45,7 +47,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
 
 	// MongoDB client timeout
-	_ = viper.BindEnv("mongodb-cli-operation-timeout", "PCSM_MONGODB_CLI_OPERATION_TIMEOUT")
+	_ = viper.BindEnv("mongodb-operation-timeout", "PCSM_MONGODB_OPERATION_TIMEOUT")
 
 	// Bulk write option (hidden, internal use)
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
@@ -71,4 +73,70 @@ func UseTargetClientCompressors() []string {
 	}
 
 	return rv
+}
+
+// ResolveCloneSegmentSize resolves the clone segment size from an optional HTTP value
+// or falls back to the CLI config value. Both sources are validated.
+func ResolveCloneSegmentSize(cfg *Config, value *string) (int64, error) {
+	if value != nil {
+		return parseAndValidateCloneSegmentSize(*value)
+	}
+
+	// Fall back to CLI config value and validate it
+	sizeBytes := cfg.Clone.SegmentSizeBytes()
+
+	err := ValidateCloneSegmentSize(uint64(max(sizeBytes, 0))) //nolint:gosec
+	if err != nil {
+		return 0, errors.Wrap(err, "config clone-segment-size")
+	}
+
+	return sizeBytes, nil
+}
+
+// ResolveCloneReadBatchSize resolves the clone read batch size from an optional HTTP value
+// or falls back to the CLI config value. Both sources are validated.
+func ResolveCloneReadBatchSize(cfg *Config, value *string) (int32, error) {
+	if value != nil {
+		return parseAndValidateCloneReadBatchSize(*value)
+	}
+
+	// Fall back to CLI config value and validate it
+	sizeBytes := cfg.Clone.ReadBatchSizeBytes()
+
+	err := ValidateCloneReadBatchSize(uint64(max(sizeBytes, 0))) //nolint:gosec
+	if err != nil {
+		return 0, errors.Wrap(err, "config clone-read-batch-size")
+	}
+
+	return sizeBytes, nil
+}
+
+// parseAndValidateCloneSegmentSize parses a byte size string and validates it.
+func parseAndValidateCloneSegmentSize(value string) (int64, error) {
+	sizeBytes, err := humanize.ParseBytes(value)
+	if err != nil {
+		return 0, errors.Wrapf(err, "invalid cloneSegmentSize value: %s", value)
+	}
+
+	err = ValidateCloneSegmentSize(sizeBytes)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(min(sizeBytes, math.MaxInt64)), nil //nolint:gosec
+}
+
+// parseAndValidateCloneReadBatchSize parses a byte size string and validates it.
+func parseAndValidateCloneReadBatchSize(value string) (int32, error) {
+	sizeBytes, err := humanize.ParseBytes(value)
+	if err != nil {
+		return 0, errors.Wrapf(err, "invalid cloneReadBatchSize value: %s", value)
+	}
+
+	err = ValidateCloneReadBatchSize(sizeBytes)
+	if err != nil {
+		return 0, err
+	}
+
+	return int32(min(sizeBytes, math.MaxInt32)), nil //nolint:gosec
 }

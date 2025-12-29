@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,7 +33,6 @@ import (
 
 // Constants for server configuration.
 const (
-	DefaultServerPort       = 2242
 	ServerReadTimeout       = 30 * time.Second
 	ServerReadHeaderTimeout = 3 * time.Second
 	MaxRequestSize          = humanize.MiByte
@@ -307,7 +305,7 @@ func main() {
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-	rootCmd.PersistentFlags().Int("port", DefaultServerPort, "Port number")
+	rootCmd.PersistentFlags().Int("port", config.DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
@@ -318,7 +316,7 @@ func main() {
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	// MongoDB client timeout (visible: commonly needed for debugging)
-	rootCmd.PersistentFlags().String("mongodb-cli-operation-timeout", "",
+	rootCmd.PersistentFlags().String("mongodb-operation-timeout", "",
 		"Timeout for MongoDB operations (e.g., 30s, 5m)")
 
 	// Bulk write option (hidden: internal tuning)
@@ -401,33 +399,9 @@ func resetState(ctx context.Context, targetURI string, cfg *config.Config) error
 	return nil
 }
 
-func validateConfig(cfg *config.Config) error {
-	port := cfg.Port
-	if port == 0 {
-		port = DefaultServerPort
-	}
-
-	if port <= 1024 || port > 65535 {
-		return errors.New("port value is outside the supported range [1024 - 65535]")
-	}
-
-	switch {
-	case cfg.Source == "" && cfg.Target == "":
-		return errors.New("source URI and target URI are empty")
-	case cfg.Source == "":
-		return errors.New("source URI is empty")
-	case cfg.Target == "":
-		return errors.New("target URI is empty")
-	case cfg.Source == cfg.Target:
-		return errors.New("source URI and target URI are identical")
-	}
-
-	return nil
-}
-
 // runServer starts the HTTP server with the provided configuration.
 func runServer(ctx context.Context, cfg *config.Config) error {
-	err := validateConfig(cfg)
+	err := config.Validate(cfg)
 	if err != nil {
 		return errors.Wrap(err, "validate options")
 	}
@@ -462,7 +436,7 @@ func runServer(ctx context.Context, cfg *config.Config) error {
 
 	port := cfg.Port
 	if port == 0 {
-		port = DefaultServerPort
+		port = config.DefaultServerPort
 	}
 
 	addr := fmt.Sprintf("localhost:%d", port)
@@ -479,10 +453,10 @@ func runServer(ctx context.Context, cfg *config.Config) error {
 	return httpServer.ListenAndServe() //nolint:wrapcheck
 }
 
-// server represents the replication server.
-type server struct {
-	// cfg holds the configuration.
-	cfg *config.Config
+// Server represents the replication Server.
+type Server struct {
+	// Cfg holds the configuration.
+	Cfg *config.Config
 	// sourceCluster is the MongoDB client for the source cluster.
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
@@ -497,7 +471,7 @@ type server struct {
 }
 
 // createServer creates a new server with the given options.
-func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
+func createServer(ctx context.Context, cfg *config.Config) (*Server, error) {
 	lg := log.Ctx(ctx)
 
 	source, err := topo.Connect(ctx, cfg.Source, cfg)
@@ -578,8 +552,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 
 	go RunCheckpointing(ctx, target, pcs)
 
-	s := &server{
-		cfg:           cfg,
+	s := &Server{
+		Cfg:           cfg,
 		sourceCluster: source,
 		targetCluster: target,
 		pcsm:          pcs,
@@ -591,7 +565,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 }
 
 // Close stops heartbeat and closes the server connections.
-func (s *server) Close(ctx context.Context) error {
+func (s *Server) Close(ctx context.Context) error {
 	err0 := s.stopHeartbeat(ctx)
 	err1 := s.sourceCluster.Disconnect(ctx)
 	err2 := s.targetCluster.Disconnect(ctx)
@@ -600,15 +574,15 @@ func (s *server) Close(ctx context.Context) error {
 }
 
 // Handler returns the HTTP handler for the server.
-func (s *server) Handler() http.Handler {
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/status", s.handleStatus)
-	mux.HandleFunc("/start", s.handleStart)
-	mux.HandleFunc("/finalize", s.handleFinalize)
-	mux.HandleFunc("/pause", s.handlePause)
-	mux.HandleFunc("/resume", s.handleResume)
-	mux.Handle("/metrics", s.handleMetrics())
+	mux.HandleFunc("/status", s.HandleStatus)
+	mux.HandleFunc("/start", s.HandleStart)
+	mux.HandleFunc("/finalize", s.HandleFinalize)
+	mux.HandleFunc("/pause", s.HandlePause)
+	mux.HandleFunc("/resume", s.HandleResume)
+	mux.Handle("/metrics", s.HandleMetrics())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" {
@@ -620,8 +594,8 @@ func (s *server) Handler() http.Handler {
 	})
 }
 
-// handleStatus handles the /status endpoint.
-func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
+// HandleStatus handles the /status endpoint.
+func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -717,98 +691,42 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		Clone: pcsm.CloneOptions{},
 	}
 
-	// Clone parallelism: HTTP > CLI > default
+	// HTTP params > CLI > default
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
 	} else {
 		options.Clone.Parallelism = cfg.Clone.NumParallelCollections
 	}
 
-	// Clone read workers: HTTP > CLI > default
 	if params.CloneNumReadWorkers != nil {
 		options.Clone.ReadWorkers = *params.CloneNumReadWorkers
 	} else {
 		options.Clone.ReadWorkers = cfg.Clone.NumReadWorkers
 	}
 
-	// Clone insert workers: HTTP > CLI > default
 	if params.CloneNumInsertWorkers != nil {
 		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
 	} else {
 		options.Clone.InsertWorkers = cfg.Clone.NumInsertWorkers
 	}
 
-	// Clone segment size: HTTP > CLI > default
-	segmentSize, err := resolveCloneSegmentSize(cfg, params.CloneSegmentSize)
+	segmentSize, err := config.ResolveCloneSegmentSize(cfg, params.CloneSegmentSize)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "resolve clone segment size")
 	}
 	options.Clone.SegmentSizeBytes = segmentSize
 
-	// Clone read batch size: HTTP > CLI > default
-	batchSize, err := resolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
+	batchSize, err := config.ResolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "resolve clone read batch size")
 	}
 	options.Clone.ReadBatchSizeBytes = batchSize
 
 	return options, nil
 }
 
-// resolveCloneSegmentSize resolves the clone segment size from HTTP or CLI.
-func resolveCloneSegmentSize(cfg *config.Config, value *string) (int64, error) {
-	if value != nil {
-		sizeBytes, err := humanize.ParseBytes(*value)
-		if err != nil {
-			return 0, errors.Wrapf(err, "invalid cloneSegmentSize value: %s", *value)
-		}
-		// Allow 0 (auto) or validate against min/max
-		if sizeBytes > 0 && sizeBytes < config.MinCloneSegmentSizeBytes {
-			return 0, errors.Errorf("cloneSegmentSize must be at least %s, got %s",
-				humanize.Bytes(config.MinCloneSegmentSizeBytes),
-				humanize.Bytes(sizeBytes))
-		}
-		if sizeBytes > config.MaxCloneSegmentSizeBytes {
-			return 0, errors.Errorf("cloneSegmentSize must be at most %s, got %s",
-				humanize.Bytes(config.MaxCloneSegmentSizeBytes),
-				humanize.Bytes(sizeBytes))
-		}
-
-		return int64(min(sizeBytes, math.MaxInt64)), nil //nolint:gosec
-	}
-
-	// Fall back to CLI value
-	return cfg.Clone.SegmentSizeBytes(), nil
-}
-
-// resolveCloneReadBatchSize resolves the clone read batch size from HTTP or CLI.
-func resolveCloneReadBatchSize(cfg *config.Config, value *string) (int32, error) {
-	if value != nil {
-		sizeBytes, err := humanize.ParseBytes(*value)
-		if err != nil {
-			return 0, errors.Wrapf(err, "invalid cloneReadBatchSize value: %s", *value)
-		}
-		// Allow 0 (auto) or validate against min/max
-		if sizeBytes > 0 && sizeBytes < uint64(config.MinCloneReadBatchSizeBytes) {
-			return 0, errors.Errorf("cloneReadBatchSize must be at least %s, got %s",
-				humanize.Bytes(uint64(config.MinCloneReadBatchSizeBytes)),
-				humanize.Bytes(sizeBytes))
-		}
-		if sizeBytes > uint64(config.MaxCloneReadBatchSizeBytes) {
-			return 0, errors.Errorf("cloneReadBatchSize must be at most %s, got %s",
-				humanize.Bytes(uint64(config.MaxCloneReadBatchSizeBytes)),
-				humanize.Bytes(sizeBytes))
-		}
-
-		return int32(min(sizeBytes, math.MaxInt32)), nil //nolint:gosec
-	}
-
-	// Fall back to CLI value
-	return cfg.Clone.ReadBatchSizeBytes(), nil
-}
-
-// handleStart handles the /start endpoint.
-func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
+// HandleStart handles the /start endpoint.
+func (s *Server) HandleStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -850,7 +768,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options, err := resolveStartOptions(s.cfg, params)
+	options, err := resolveStartOptions(s.Cfg, params)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -867,8 +785,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, startResponse{Ok: true})
 }
 
-// handleFinalize handles the /finalize endpoint.
-func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
+// HandleFinalize handles the /finalize endpoint.
+func (s *Server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -924,8 +842,8 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, finalizeResponse{Ok: true})
 }
 
-// handlePause handles the /pause endpoint.
-func (s *server) handlePause(w http.ResponseWriter, r *http.Request) {
+// HandlePause handles the /pause endpoint.
+func (s *Server) HandlePause(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -955,8 +873,8 @@ func (s *server) handlePause(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, pauseResponse{Ok: true})
 }
 
-// handleResume handles the /resume endpoint.
-func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
+// HandleResume handles the /resume endpoint.
+func (s *Server) HandleResume(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -1012,7 +930,7 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, resumeResponse{Ok: true})
 }
 
-func (s *server) handleMetrics() http.Handler {
+func (s *Server) HandleMetrics() http.Handler {
 	return promhttp.HandlerFor(s.promRegistry, promhttp.HandlerOpts{})
 }
 

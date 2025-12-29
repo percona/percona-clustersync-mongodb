@@ -167,7 +167,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
-	// Use default options for recovery (clone tuning is less relevant when resuming from checkpoint)
+	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
 	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
 	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
 
@@ -286,9 +286,9 @@ func (ml *PCSM) resetError() {
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to pause after the initial sync completes.
 	PauseOnInitialSync bool
-	// IncludeNamespaces are the namespaces to include in replication.
+	// IncludeNamespaces are the namespaces to include.
 	IncludeNamespaces []string
-	// ExcludeNamespaces are the namespaces to exclude from replication.
+	// ExcludeNamespaces are the namespaces to exclude.
 	ExcludeNamespaces []string
 
 	// Clone contains clone tuning options.

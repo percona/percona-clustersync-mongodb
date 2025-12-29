@@ -27,8 +27,7 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	cfg := &config.Config{}
-	client, err := topo.Connect(b.Context(), mongodbURI, cfg)
+	client, err := topo.Connect(b.Context(), mongodbURI, &config.Config{})
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}

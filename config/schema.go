@@ -41,7 +41,7 @@ type LogConfig struct {
 
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
-	OperationTimeout string `mapstructure:"mongodb-cli-operation-timeout"`
+	OperationTimeout string `mapstructure:"mongodb-operation-timeout"`
 }
 
 // OperationTimeoutDuration returns the parsed timeout or default.
@@ -53,7 +53,7 @@ func (m *MongoDBConfig) OperationTimeoutDuration() time.Duration {
 		}
 	}
 
-	return DefaultMongoDBCliOperationTimeout
+	return DefaultMongoDBOperationTimeout
 }
 
 // CloneConfig holds clone tuning configuration.
