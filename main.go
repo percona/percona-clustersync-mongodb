@@ -158,6 +158,28 @@ var startCmd = &cobra.Command{
 			ExcludeNamespaces:  excludeNamespaces,
 		}
 
+		// Read clone tuning flags (only set in request if explicitly provided)
+		if cmd.Flags().Changed("clone-num-parallel-collections") {
+			v, _ := cmd.Flags().GetInt("clone-num-parallel-collections")
+			startOptions.CloneNumParallelCollections = &v
+		}
+		if cmd.Flags().Changed("clone-num-read-workers") {
+			v, _ := cmd.Flags().GetInt("clone-num-read-workers")
+			startOptions.CloneNumReadWorkers = &v
+		}
+		if cmd.Flags().Changed("clone-num-insert-workers") {
+			v, _ := cmd.Flags().GetInt("clone-num-insert-workers")
+			startOptions.CloneNumInsertWorkers = &v
+		}
+		if cmd.Flags().Changed("clone-segment-size") {
+			v, _ := cmd.Flags().GetString("clone-segment-size")
+			startOptions.CloneSegmentSize = &v
+		}
+		if cmd.Flags().Changed("clone-read-batch-size") {
+			v, _ := cmd.Flags().GetString("clone-read-batch-size")
+			startOptions.CloneReadBatchSize = &v
+		}
+
 		return NewClient(viper.GetInt("port")).Start(cmd.Context(), startOptions)
 	},
 }
@@ -324,30 +346,24 @@ func main() {
 		"Use collection-level bulk write instead of client bulk write")
 	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
 
-	// Clone tuning options (hidden: advanced tuning, CLI/HTTP only)
-	rootCmd.PersistentFlags().Int("clone-num-parallel-collections", 0,
-		"Number of collections to clone in parallel (0 = auto)")
-	rootCmd.PersistentFlags().Int("clone-num-read-workers", 0,
-		"Number of read workers during clone (0 = auto)")
-	rootCmd.PersistentFlags().Int("clone-num-insert-workers", 0,
-		"Number of insert workers during clone (0 = auto)")
-	rootCmd.PersistentFlags().String("clone-segment-size", "",
-		"Segment size for clone operations (e.g., 100MB, 1GiB)")
-	rootCmd.PersistentFlags().String("clone-read-batch-size", "",
-		"Read batch size during clone (e.g., 16MiB)")
-
-	rootCmd.PersistentFlags().MarkHidden("clone-num-parallel-collections") //nolint:errcheck
-	rootCmd.PersistentFlags().MarkHidden("clone-num-read-workers")         //nolint:errcheck
-	rootCmd.PersistentFlags().MarkHidden("clone-num-insert-workers")       //nolint:errcheck
-	rootCmd.PersistentFlags().MarkHidden("clone-segment-size")             //nolint:errcheck
-	rootCmd.PersistentFlags().MarkHidden("clone-read-batch-size")          //nolint:errcheck
-
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 	startCmd.Flags().StringSlice("include-namespaces", nil,
 		"Namespaces to include in the replication (e.g. db1.collection1,db2.collection2)")
 	startCmd.Flags().StringSlice("exclude-namespaces", nil,
 		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
+
+	// Clone tuning options (per-operation, passed via CLI or HTTP request)
+	startCmd.Flags().Int("clone-num-parallel-collections", 0,
+		"Number of collections to clone in parallel (0 = auto)")
+	startCmd.Flags().Int("clone-num-read-workers", 0,
+		"Number of read workers during clone (0 = auto)")
+	startCmd.Flags().Int("clone-num-insert-workers", 0,
+		"Number of insert workers during clone (0 = auto)")
+	startCmd.Flags().String("clone-segment-size", "",
+		"Segment size for clone operations (e.g., 100MB, 1GiB)")
+	startCmd.Flags().String("clone-read-batch-size", "",
+		"Read batch size during clone (e.g., 16MiB)")
 
 	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
@@ -679,7 +695,7 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveStartOptions resolves the start options from the HTTP request and config.
-// HTTP request values take precedence over CLI flag values.
+// Clone tuning options come exclusively from HTTP params (0/empty = auto).
 func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
 	options := &pcsm.StartOptions{
 		PauseOnInitialSync: params.PauseOnInitialSync,
@@ -691,36 +707,32 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		Clone: pcsm.CloneOptions{},
 	}
 
-	// HTTP params > CLI > default
+	// Clone options come exclusively from HTTP params (0/nil = auto)
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
-	} else {
-		options.Clone.Parallelism = cfg.Clone.NumParallelCollections
 	}
-
 	if params.CloneNumReadWorkers != nil {
 		options.Clone.ReadWorkers = *params.CloneNumReadWorkers
-	} else {
-		options.Clone.ReadWorkers = cfg.Clone.NumReadWorkers
 	}
-
 	if params.CloneNumInsertWorkers != nil {
 		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
-	} else {
-		options.Clone.InsertWorkers = cfg.Clone.NumInsertWorkers
 	}
 
-	segmentSize, err := config.ResolveCloneSegmentSize(cfg, params.CloneSegmentSize)
-	if err != nil {
-		return nil, errors.Wrap(err, "resolve clone segment size")
+	if params.CloneSegmentSize != nil {
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(*params.CloneSegmentSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone segment size")
+		}
+		options.Clone.SegmentSizeBytes = segmentSize
 	}
-	options.Clone.SegmentSizeBytes = segmentSize
 
-	batchSize, err := config.ResolveCloneReadBatchSize(cfg, params.CloneReadBatchSize)
-	if err != nil {
-		return nil, errors.Wrap(err, "resolve clone read batch size")
+	if params.CloneReadBatchSize != nil {
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(*params.CloneReadBatchSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone read batch size")
+		}
+		options.Clone.ReadBatchSizeBytes = batchSize
 	}
-	options.Clone.ReadBatchSizeBytes = batchSize
 
 	return options, nil
 }

@@ -11,91 +11,58 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 )
 
-func TestResolveCloneSegmentSize(t *testing.T) {
+func TestParseAndValidateCloneSegmentSize(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
-		cfg     *config.Config
-		value   *string
+		value   string
 		want    int64
 		wantErr string
 	}{
 		{
-			name:    "nil value - falls back to config default (empty)",
-			cfg:     &config.Config{},
-			value:   nil,
-			want:    config.AutoCloneSegmentSize,
-			wantErr: "",
+			name:  "valid size 500MB (above minimum)",
+			value: "500MB",
+			want:  500 * humanize.MByte,
 		},
 		{
-			name: "nil value - falls back to config value",
-			cfg: &config.Config{
-				Clone: config.CloneConfig{
-					SegmentSize: "1GiB",
-				},
-			},
-			value:   nil,
-			want:    humanize.GiByte,
-			wantErr: "",
+			name:  "valid size 1GiB",
+			value: "1GiB",
+			want:  humanize.GiByte,
 		},
 		{
-			name:    "valid size 500MB (above minimum)",
-			cfg:     &config.Config{},
-			value:   toPtr("500MB"),
-			want:    500 * humanize.MByte,
-			wantErr: "",
-		},
-		{
-			name:    "valid size 1GiB",
-			cfg:     &config.Config{},
-			value:   toPtr("1GiB"),
-			want:    humanize.GiByte,
-			wantErr: "",
-		},
-		{
-			name:    "zero value (auto)",
-			cfg:     &config.Config{},
-			value:   toPtr("0"),
-			want:    0,
-			wantErr: "",
+			name:  "zero value (auto)",
+			value: "0",
+			want:  0,
 		},
 		{
 			name:    "below minimum (100MB)",
-			cfg:     &config.Config{},
-			value:   toPtr("100MB"),
+			value:   "100MB",
 			wantErr: "cloneSegmentSize must be at least",
 		},
 		{
 			name:    "above maximum",
-			cfg:     &config.Config{},
-			value:   toPtr("100GiB"),
+			value:   "100GiB",
 			wantErr: "cloneSegmentSize must be at most",
 		},
 		{
-			name:    "at minimum boundary (using exact bytes)",
-			cfg:     &config.Config{},
-			value:   toPtr(fmt.Sprintf("%dB", config.MinCloneSegmentSizeBytes)),
-			want:    int64(config.MinCloneSegmentSizeBytes),
-			wantErr: "",
+			name:  "at minimum boundary (using exact bytes)",
+			value: fmt.Sprintf("%dB", config.MinCloneSegmentSizeBytes),
+			want:  int64(config.MinCloneSegmentSizeBytes),
 		},
 		{
-			name:    "at maximum boundary",
-			cfg:     &config.Config{},
-			value:   toPtr("64GiB"),
-			want:    int64(config.MaxCloneSegmentSizeBytes),
-			wantErr: "",
+			name:  "at maximum boundary",
+			value: "64GiB",
+			want:  int64(config.MaxCloneSegmentSizeBytes),
 		},
 		{
 			name:    "invalid format",
-			cfg:     &config.Config{},
-			value:   toPtr("abc"),
+			value:   "abc",
 			wantErr: "invalid cloneSegmentSize value",
 		},
 		{
 			name:    "empty string",
-			cfg:     &config.Config{},
-			value:   toPtr(""),
+			value:   "",
 			wantErr: "invalid cloneSegmentSize value",
 		},
 	}
@@ -104,7 +71,7 @@ func TestResolveCloneSegmentSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := config.ResolveCloneSegmentSize(tt.cfg, tt.value)
+			got, err := config.ParseAndValidateCloneSegmentSize(tt.value)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -117,78 +84,48 @@ func TestResolveCloneSegmentSize(t *testing.T) {
 	}
 }
 
-func TestResolveCloneReadBatchSize(t *testing.T) {
+func TestParseAndValidateCloneReadBatchSize(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
-		cfg     *config.Config
-		value   *string
+		value   string
 		want    int32
 		wantErr string
 	}{
 		{
-			name:    "nil value - falls back to config default (empty)",
-			cfg:     &config.Config{},
-			value:   nil,
-			want:    0,
-			wantErr: "",
+			name:  "valid size 16MiB",
+			value: "16MiB",
+			want:  16 * humanize.MiByte,
 		},
 		{
-			name: "nil value - falls back to config value",
-			cfg: &config.Config{
-				Clone: config.CloneConfig{
-					ReadBatchSize: "32MiB",
-				},
-			},
-			value:   nil,
-			want:    32 * humanize.MiByte,
-			wantErr: "",
+			name:  "valid size 48MB",
+			value: "48MB",
+			want:  48 * humanize.MByte,
 		},
 		{
-			name:    "valid size 16MiB",
-			cfg:     &config.Config{},
-			value:   toPtr("16MiB"),
-			want:    16 * humanize.MiByte,
-			wantErr: "",
-		},
-		{
-			name:    "valid size 48MB",
-			cfg:     &config.Config{},
-			value:   toPtr("48MB"),
-			want:    48 * humanize.MByte,
-			wantErr: "",
-		},
-		{
-			name:    "zero value (auto)",
-			cfg:     &config.Config{},
-			value:   toPtr("0"),
-			want:    0,
-			wantErr: "",
+			name:  "zero value (auto)",
+			value: "0",
+			want:  0,
 		},
 		{
 			name:    "below minimum",
-			cfg:     &config.Config{},
-			value:   toPtr("1KB"),
+			value:   "1KB",
 			wantErr: "cloneReadBatchSize must be at least",
 		},
 		{
-			name:    "at minimum boundary (using exact bytes)",
-			cfg:     &config.Config{},
-			value:   toPtr(fmt.Sprintf("%dB", config.MinCloneReadBatchSizeBytes)),
-			want:    config.MinCloneReadBatchSizeBytes,
-			wantErr: "",
+			name:  "at minimum boundary (using exact bytes)",
+			value: fmt.Sprintf("%dB", config.MinCloneReadBatchSizeBytes),
+			want:  config.MinCloneReadBatchSizeBytes,
 		},
 		{
 			name:    "invalid format",
-			cfg:     &config.Config{},
-			value:   toPtr("xyz"),
+			value:   "xyz",
 			wantErr: "invalid cloneReadBatchSize value",
 		},
 		{
 			name:    "empty string",
-			cfg:     &config.Config{},
-			value:   toPtr(""),
+			value:   "",
 			wantErr: "invalid cloneReadBatchSize value",
 		},
 	}
@@ -197,7 +134,7 @@ func TestResolveCloneReadBatchSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := config.ResolveCloneReadBatchSize(tt.cfg, tt.value)
+			got, err := config.ParseAndValidateCloneReadBatchSize(tt.value)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -290,5 +227,3 @@ func TestUseTargetClientCompressors(t *testing.T) {
 		})
 	}
 }
-
-func toPtr(s string) *string { return &s }

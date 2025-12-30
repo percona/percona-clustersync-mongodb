@@ -233,6 +233,68 @@ func TestStartCommand(t *testing.T) {
 				"excludeNamespaces":  []any{"db2.*"},
 			},
 		},
+		// Clone tuning flags
+		{
+			name:         "clone-num-parallel-collections",
+			args:         []string{"start", "--clone-num-parallel-collections=8"},
+			expectedBody: map[string]any{"cloneNumParallelCollections": float64(8)},
+		},
+		{
+			name:         "clone-num-read-workers",
+			args:         []string{"start", "--clone-num-read-workers=16"},
+			expectedBody: map[string]any{"cloneNumReadWorkers": float64(16)},
+		},
+		{
+			name:         "clone-num-insert-workers",
+			args:         []string{"start", "--clone-num-insert-workers=4"},
+			expectedBody: map[string]any{"cloneNumInsertWorkers": float64(4)},
+		},
+		{
+			name:         "clone-segment-size",
+			args:         []string{"start", "--clone-segment-size=500MB"},
+			expectedBody: map[string]any{"cloneSegmentSize": "500MB"},
+		},
+		{
+			name:         "clone-read-batch-size",
+			args:         []string{"start", "--clone-read-batch-size=32MiB"},
+			expectedBody: map[string]any{"cloneReadBatchSize": "32MiB"},
+		},
+		{
+			name: "all clone flags combined",
+			args: []string{
+				"start",
+				"--clone-num-parallel-collections=8",
+				"--clone-num-read-workers=16",
+				"--clone-num-insert-workers=4",
+				"--clone-segment-size=1GiB",
+				"--clone-read-batch-size=48MB",
+			},
+			expectedBody: map[string]any{
+				"cloneNumParallelCollections": float64(8),
+				"cloneNumReadWorkers":         float64(16),
+				"cloneNumInsertWorkers":       float64(4),
+				"cloneSegmentSize":            "1GiB",
+				"cloneReadBatchSize":          "48MB",
+			},
+		},
+		{
+			name: "all flags including clone options",
+			args: []string{
+				"start",
+				"--pause-on-initial-sync",
+				"--include-namespaces=db1.coll1",
+				"--exclude-namespaces=db2.*",
+				"--clone-num-parallel-collections=4",
+				"--clone-segment-size=2GiB",
+			},
+			expectedBody: map[string]any{
+				"pauseOnInitialSync":          true,
+				"includeNamespaces":           []any{"db1.coll1"},
+				"excludeNamespaces":           []any{"db2.*"},
+				"cloneNumParallelCollections": float64(4),
+				"cloneSegmentSize":            "2GiB",
+			},
+		},
 	}
 
 	for _, tt := range tests {
