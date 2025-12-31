@@ -612,9 +612,9 @@ func parseChangeEvent(data bson.Raw, change *ChangeEvent) error {
 		change.Event = e
 
 	case ReshardCollection:
-		return errors.ErrUnsupported
+		return errors.New("reshardCollection operation is not supported")
 	case RefineCollectionShardKey:
-		return errors.ErrUnsupported
+		return errors.New("refineCollectionShardKey operation is not supported")
 
 	case Invalidate:
 		return ErrInvalidateEvent

@@ -780,7 +780,16 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return errors.Wrap(err, "list in-progress index builds")
 	}
 
-	if len(unfinishedBuilds) == 0 {
+	inconsistentIndexes, err := topo.ListInconsistentIndexes(ctx,
+		c.source, ns.Database, ns.Collection)
+	if err != nil {
+		return errors.Wrap(err, "list inconsistent indexes")
+	}
+
+	log.Ctx(ctx).Debugf("Indexes to create for %q: total=%d, unfinished=%d, inconsistent=%d",
+		ns.String(), len(indexes), len(unfinishedBuilds), len(inconsistentIndexes))
+
+	if len(unfinishedBuilds) == 0 && len(inconsistentIndexes) == 0 {
 		err = c.catalog.CreateIndexes(ctx, ns.Database, ns.Collection, indexes)
 		if err != nil {
 			return errors.Wrap(err, "create indexes")
@@ -789,16 +798,19 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		return nil
 	}
 
-	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds), 0)
+	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds)-len(inconsistentIndexes), 0)
 
 	builtIndexes := make([]*topo.IndexSpecification, 0, builtIndexesCap)
-
 	incompleteIndexes := make([]*topo.IndexSpecification, 0, len(unfinishedBuilds))
+	inconsistentIdxSpecs := make([]*topo.IndexSpecification, 0, len(inconsistentIndexes))
 
 	for _, index := range indexes {
-		if slices.Contains(unfinishedBuilds, index.Name) {
+		switch {
+		case slices.Contains(unfinishedBuilds, index.Name):
 			incompleteIndexes = append(incompleteIndexes, index)
-		} else {
+		case slices.Contains(inconsistentIndexes, index.Name):
+			inconsistentIdxSpecs = append(inconsistentIdxSpecs, index)
+		default:
 			builtIndexes = append(builtIndexes, index)
 		}
 	}
@@ -810,7 +822,13 @@ func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
 		}
 	}
 
-	c.catalog.AddIncompleteIndexes(ctx, ns.Database, ns.Collection, incompleteIndexes)
+	if len(incompleteIndexes) != 0 {
+		c.catalog.AddIncompleteIndexes(ctx, ns.Database, ns.Collection, incompleteIndexes)
+	}
+
+	if len(inconsistentIdxSpecs) != 0 {
+		c.catalog.AddInconsistentIndexes(ctx, ns.Database, ns.Collection, inconsistentIdxSpecs)
+	}
 
 	return nil
 }
