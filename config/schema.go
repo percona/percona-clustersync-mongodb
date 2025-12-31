@@ -31,18 +31,6 @@ type LogConfig struct {
 
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
-	OperationTimeout  string   `mapstructure:"mongodb-operation-timeout"`
-	TargetCompressors []string `mapstructure:"dev-target-client-compressors"`
-}
-
-// OperationTimeoutDuration returns the parsed timeout or default.
-func (m *MongoDBConfig) OperationTimeoutDuration() time.Duration {
-	if m.OperationTimeout != "" {
-		d, err := time.ParseDuration(m.OperationTimeout)
-		if err == nil && d > 0 {
-			return d
-		}
-	}
-
-	return DefaultMongoDBOperationTimeout
+	OperationTimeout  time.Duration `mapstructure:"mongodb-operation-timeout"`
+	TargetCompressors []string      `mapstructure:"dev-target-client-compressors"`
 }

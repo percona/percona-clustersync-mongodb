@@ -340,7 +340,7 @@ func main() {
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	// MongoDB client timeout (visible: commonly needed for debugging)
-	rootCmd.PersistentFlags().String("mongodb-operation-timeout", "",
+	rootCmd.PersistentFlags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
 		"Timeout for MongoDB operations (e.g., 30s, 5m)")
 
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "")

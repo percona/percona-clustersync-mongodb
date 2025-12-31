@@ -31,10 +31,12 @@ func Load(cmd *cobra.Command) (*Config, error) {
 
 	var cfg Config
 
-	err := viper.Unmarshal(
-		&cfg,
-		viper.DecodeHook(mapstructure.StringToSliceHookFunc(",")),
-	)
+	err := viper.Unmarshal(&cfg, viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		),
+	))
 	if err != nil {
 		return nil, errors.Wrap(err, "unmarshal config")
 	}
