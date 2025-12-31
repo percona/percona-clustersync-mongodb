@@ -6,21 +6,17 @@ import (
 
 // Config holds all PCSM configuration.
 type Config struct {
-	// Connection
 	Port   int    `mapstructure:"port"`
 	Source string `mapstructure:"source"`
 	Target string `mapstructure:"target"`
 
-	// Logging (squash keeps flat keys)
 	Log LogConfig `mapstructure:",squash"`
 
-	// MongoDB client options
 	MongoDB MongoDBConfig `mapstructure:",squash"`
 
-	// Internal options
 	UseCollectionBulkWrite bool `mapstructure:"use-collection-bulk-write"`
 
-	// Hidden startup flags
+	// hidden startup flags
 	Start              bool `mapstructure:"start"`
 	ResetState         bool `mapstructure:"reset-state"`
 	PauseOnInitialSync bool `mapstructure:"pause-on-initial-sync"`
@@ -35,7 +31,8 @@ type LogConfig struct {
 
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
-	OperationTimeout string `mapstructure:"mongodb-operation-timeout"`
+	OperationTimeout  string   `mapstructure:"mongodb-operation-timeout"`
+	TargetCompressors []string `mapstructure:"dev-target-client-compressors"`
 }
 
 // OperationTimeoutDuration returns the parsed timeout or default.

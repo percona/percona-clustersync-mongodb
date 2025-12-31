@@ -19,24 +19,8 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
-type ConnectOptions struct {
-	Compressors []string
-}
-
 // Connect establishes a connection to a MongoDB instance using the provided URI.
-// If the URI is empty, it returns an error.
 func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client, error) {
-	return ConnectWithOptions(ctx, uri, cfg, &ConnectOptions{})
-}
-
-// ConnectWithOptions establishes a connection to a MongoDB instance using the provided URI and options.
-// If the URI is empty, it returns an error.
-func ConnectWithOptions(
-	ctx context.Context,
-	uri string,
-	cfg *config.Config,
-	connOpts *ConnectOptions,
-) (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("invalid MongoDB URI")
 	}
@@ -61,8 +45,8 @@ func ConnectWithOptions(
 		SetWriteConcern(writeconcern.Majority()).
 		SetTimeout(cfg.MongoDB.OperationTimeoutDuration())
 
-	if connOpts != nil && connOpts.Compressors != nil {
-		opts.SetCompressors(connOpts.Compressors)
+	if uri == cfg.Target && len(cfg.MongoDB.TargetCompressors) > 0 {
+		opts.SetCompressors(cfg.MongoDB.TargetCompressors)
 	}
 
 	if config.MongoLogEnabled {
