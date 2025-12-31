@@ -42,14 +42,17 @@ func Load(cmd *cobra.Command) (*Config, error) {
 // bindEnvVars binds environment variable names to Viper keys.
 // Note: Clone tuning options are CLI/HTTP only (no env var support).
 func bindEnvVars() {
-	// Server connection URIs
+	_ = viper.BindEnv("port", "PCSM_PORT")
+
 	_ = viper.BindEnv("source", "PCSM_SOURCE_URI")
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
 
-	// MongoDB client timeout
+	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
+	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
+	_ = viper.BindEnv("no-color", "PCSM_NO_COLOR")
+
 	_ = viper.BindEnv("mongodb-operation-timeout", "PCSM_MONGODB_OPERATION_TIMEOUT")
 
-	// Bulk write option (hidden, internal use)
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 }
 

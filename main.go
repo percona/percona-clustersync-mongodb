@@ -330,24 +330,22 @@ func main() {
 	rootCmd.PersistentFlags().Int("port", config.DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	rootCmd.Flags().Bool("start", false, "Start Cluster Replication immediately")
-	rootCmd.Flags().Bool("reset-state", false, "Reset stored PCSM state")
-	rootCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
-	rootCmd.Flags().MarkHidden("start")                 //nolint:errcheck
-	rootCmd.Flags().MarkHidden("reset-state")           //nolint:errcheck
+	rootCmd.Flags().Bool("start", false, "")
+	rootCmd.Flags().MarkHidden("start") //nolint:errcheck
+
+	rootCmd.Flags().Bool("reset-state", false, "")
+	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
+
+	rootCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	// MongoDB client timeout (visible: commonly needed for debugging)
 	rootCmd.PersistentFlags().String("mongodb-operation-timeout", "",
 		"Timeout for MongoDB operations (e.g., 30s, 5m)")
 
-	// Bulk write option (hidden: internal tuning)
-	rootCmd.PersistentFlags().Bool("use-collection-bulk-write", false,
-		"Use collection-level bulk write instead of client bulk write")
-	rootCmd.PersistentFlags().MarkHidden("use-collection-bulk-write") //nolint:errcheck
-
-	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+	startCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
+
 	startCmd.Flags().StringSlice("include-namespaces", nil,
 		"Namespaces to include in the replication (e.g. db1.collection1,db2.collection2)")
 	startCmd.Flags().StringSlice("exclude-namespaces", nil,
@@ -360,14 +358,15 @@ func main() {
 		"Number of read workers during clone (0 = auto)")
 	startCmd.Flags().Int("clone-num-insert-workers", 0,
 		"Number of insert workers during clone (0 = auto)")
-	startCmd.Flags().String("clone-segment-size", "",
-		"Segment size for clone operations (e.g., 100MB, 1GiB)")
-	startCmd.Flags().String("clone-read-batch-size", "",
-		"Read batch size during clone (e.g., 16MiB)")
+	startCmd.Flags().String("clone-segment-size", "", "")
+	startCmd.Flags().MarkHidden("clone-segment-size") //nolint:errcheck
+
+	startCmd.Flags().String("clone-read-batch-size", "", "")
+	startCmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
 
 	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
 
-	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
+	finalizeCmd.Flags().Bool("ignore-history-lost", false, "")
 	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
