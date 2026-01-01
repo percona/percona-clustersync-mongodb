@@ -18,6 +18,7 @@ jobs:
 
     env:
       MONGO_VERSION: ${{ matrix.mongo_version }}
+      PYTEST_TIMEOUT: 60
 
     steps:
       - name: Checkout code
@@ -78,6 +79,7 @@ jobs:
 
     env:
       MONGO_VERSION: ${{ matrix.mongo_version }}
+      PYTEST_TIMEOUT: 60
 
     steps:
       - name: Checkout code
