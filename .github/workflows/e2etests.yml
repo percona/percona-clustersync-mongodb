@@ -75,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mongo_version: ["6.0", "7.0", "8.0"]
+        mongo_version: ["8.0"] # when in matrix sharded tests are failing due to PCSM-255
 
     env:
       MONGO_VERSION: ${{ matrix.mongo_version }}
