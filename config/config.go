@@ -43,6 +43,10 @@ func Load(cmd *cobra.Command) (*Config, error) {
 
 	cfg.MongoDB.TargetCompressors = filterCompressors(cfg.MongoDB.TargetCompressors)
 
+	if viper.GetBool("no-color") {
+		cfg.Log.NoColor = true
+	}
+
 	return &cfg, nil
 }
 
@@ -54,7 +58,7 @@ func bindEnvVars() {
 
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
-	_ = viper.BindEnv("log-no-color", "PCSM_LOG_NO_COLOR")
+	_ = viper.BindEnv("log-no-color", "PCSM_LOG_NO_COLOR", "PCSM_NO_COLOR")
 
 	_ = viper.BindEnv("mongodb-operation-timeout", "PCSM_MONGODB_OPERATION_TIMEOUT")
 

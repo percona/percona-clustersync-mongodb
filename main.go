@@ -327,6 +327,9 @@ func main() {
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("log-no-color", false, "Disable log color")
 
+	rootCmd.PersistentFlags().Bool("no-color", false, "")
+	rootCmd.PersistentFlags().MarkDeprecated("no-color", "use --log-no-color instead") //nolint:errcheck
+
 	rootCmd.PersistentFlags().Int("port", config.DefaultServerPort, "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
