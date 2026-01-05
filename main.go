@@ -692,7 +692,7 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveStartOptions resolves the start options from the HTTP request and config.
-// Clone tuning options come exclusively from HTTP params (0/empty = auto).
+// Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
 func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
 	options := &pcsm.StartOptions{
 		PauseOnInitialSync: params.PauseOnInitialSync,
@@ -701,30 +701,45 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		Repl: pcsm.ReplOptions{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
 		},
-		Clone: pcsm.CloneOptions{},
+		Clone: pcsm.CloneOptions{
+			Parallelism:   cfg.Clone.NumParallelCollections,
+			ReadWorkers:   cfg.Clone.NumReadWorkers,
+			InsertWorkers: cfg.Clone.NumInsertWorkers,
+		},
 	}
 
-	// Clone options come exclusively from HTTP params (0/nil = auto)
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
 	}
+
 	if params.CloneNumReadWorkers != nil {
 		options.Clone.ReadWorkers = *params.CloneNumReadWorkers
 	}
+
 	if params.CloneNumInsertWorkers != nil {
 		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
 	}
 
+	segmentSizeStr := cfg.Clone.SegmentSize
 	if params.CloneSegmentSize != nil {
-		segmentSize, err := config.ParseAndValidateCloneSegmentSize(*params.CloneSegmentSize)
+		segmentSizeStr = *params.CloneSegmentSize
+	}
+
+	if segmentSizeStr != "" {
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(segmentSizeStr)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone segment size")
 		}
 		options.Clone.SegmentSizeBytes = segmentSize
 	}
 
+	readBatchSizeStr := cfg.Clone.ReadBatchSize
 	if params.CloneReadBatchSize != nil {
-		batchSize, err := config.ParseAndValidateCloneReadBatchSize(*params.CloneReadBatchSize)
+		readBatchSizeStr = *params.CloneReadBatchSize
+	}
+
+	if readBatchSizeStr != "" {
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(readBatchSizeStr)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone read batch size")
 		}
