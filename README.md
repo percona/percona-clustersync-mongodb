@@ -150,7 +150,7 @@ When starting the PCSM server, you can use the following options:
 - `--target`: The MongoDB connection string for the target cluster
 - `--log-level`: The log level (default: "info")
 - `--log-json`: Output log in JSON format with disabled color
-- `--no-color`: Disable log ASCI color
+- `--log-no-color`: Disable log ASCI color
 
 Example:
 
@@ -213,7 +213,11 @@ Example:
 
 ```json
 {
-    "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
+    "includeNamespaces": [
+        "dbName.*",
+        "anotherDB.collName1",
+        "anotherDB.collName2"
+    ],
     "excludeNamespaces": ["dbName.collName"]
 }
 ```
@@ -302,7 +306,6 @@ The /status endpoint provides the current state of the PCSM replication process,
 - `lastReplicatedOpTime`: the last replicated operation time
 - `lastReplicatedOpTime.ts`: op time timestamp
 - `lastReplicatedOpTime.isoDate`: op time ts in human-readable form
-
 
 - `initialSync.completed`: indicates if the initial sync is completed.
 - `initialSync.lagTimeSeconds`: the lag time in logical seconds until the initial sync completed.

@@ -54,7 +54,7 @@ func bindEnvVars() {
 
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
-	_ = viper.BindEnv("no-color", "PCSM_NO_COLOR")
+	_ = viper.BindEnv("log-no-color", "PCSM_LOG_NO_COLOR")
 
 	_ = viper.BindEnv("mongodb-operation-timeout", "PCSM_MONGODB_OPERATION_TIMEOUT")
 

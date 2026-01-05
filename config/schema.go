@@ -28,7 +28,7 @@ type Config struct {
 type LogConfig struct {
 	Level   string `mapstructure:"log-level"`
 	JSON    bool   `mapstructure:"log-json"`
-	NoColor bool   `mapstructure:"no-color"`
+	NoColor bool   `mapstructure:"log-no-color"`
 }
 
 // MongoDBConfig holds MongoDB client configuration.
