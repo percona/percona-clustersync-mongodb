@@ -81,5 +81,5 @@ Participate in monthly SWAG raffles, get early access to new product features, a
 
 You can reach us:
 
-- on [Forums](https://forums.percona.com/c/mongodb/mongodb-general-discussion/33)
+- on [Forums](https://forums.percona.com/)
 - or [Professional Support](https://www.percona.com/about/contact)
