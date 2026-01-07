@@ -92,12 +92,9 @@ var rootCmd = &cobra.Command{
 
 		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
 
-		if cfg.Source == "" {
-			return errors.New("required flag --source not set")
-		}
-
-		if cfg.Target == "" {
-			return errors.New("required flag --target not set")
+		err := config.Validate(cfg)
+		if err != nil {
+			return errors.Wrap(err, "validate config")
 		}
 
 		if cfg.ResetState {
@@ -418,12 +415,7 @@ func resetState(ctx context.Context, targetURI string, cfg *config.Config) error
 }
 
 // runServer starts the HTTP server with the provided configuration.
-func runServer(ctx context.Context, cfg *config.Config) error {
-	err := config.Validate(cfg)
-	if err != nil {
-		return errors.Wrap(err, "validate options")
-	}
-
+func runServer(_ context.Context, cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
