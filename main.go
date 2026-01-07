@@ -197,25 +197,24 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				ExcludeNamespaces:  excludeNamespaces,
 			}
 
-			// Read clone tuning flags (only set in request if explicitly provided)
-			if cmd.Flags().Changed("clone-num-parallel-collections") {
-				v, _ := cmd.Flags().GetInt("clone-num-parallel-collections")
+			if cfg.Clone.NumParallelCollections != 0 {
+				v := cfg.Clone.NumParallelCollections
 				startOptions.CloneNumParallelCollections = &v
 			}
-			if cmd.Flags().Changed("clone-num-read-workers") {
-				v, _ := cmd.Flags().GetInt("clone-num-read-workers")
+			if cfg.Clone.NumReadWorkers != 0 {
+				v := cfg.Clone.NumReadWorkers
 				startOptions.CloneNumReadWorkers = &v
 			}
-			if cmd.Flags().Changed("clone-num-insert-workers") {
-				v, _ := cmd.Flags().GetInt("clone-num-insert-workers")
+			if cfg.Clone.NumInsertWorkers != 0 {
+				v := cfg.Clone.NumInsertWorkers
 				startOptions.CloneNumInsertWorkers = &v
 			}
-			if cmd.Flags().Changed("clone-segment-size") {
-				v, _ := cmd.Flags().GetString("clone-segment-size")
+			if cfg.Clone.SegmentSize != "" {
+				v := cfg.Clone.SegmentSize
 				startOptions.CloneSegmentSize = &v
 			}
-			if cmd.Flags().Changed("clone-read-batch-size") {
-				v, _ := cmd.Flags().GetString("clone-read-batch-size")
+			if cfg.Clone.ReadBatchSize != "" {
+				v := cfg.Clone.ReadBatchSize
 				startOptions.CloneReadBatchSize = &v
 			}
 
@@ -231,7 +230,6 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringSlice("exclude-namespaces", nil,
 		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
 
-	// Clone tuning options (per-operation, passed via CLI or HTTP request)
 	cmd.Flags().Int("clone-num-parallel-collections", 0,
 		"Number of collections to clone in parallel (0 = auto)")
 	cmd.Flags().Int("clone-num-read-workers", 0,
@@ -293,7 +291,7 @@ func newResumeCmd(cfg *config.Config) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Bool("from-failure", false, "Reuse from failure")
+	cmd.Flags().Bool("from-failure", false, "Resume from failure")
 
 	return cmd
 }
@@ -307,11 +305,6 @@ func newResetCmd(cfg *config.Config) *cobra.Command {
 			err := cmd.Root().PersistentPreRunE(cmd, args)
 			if err != nil {
 				return errors.Wrap(err, "root pre-run")
-			}
-
-			if cmd.Flags().Changed("target") {
-				target, _ := cmd.Flags().GetString("target")
-				cfg.Target = target
 			}
 
 			if cfg.Target == "" {
