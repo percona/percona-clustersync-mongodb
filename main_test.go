@@ -534,6 +534,68 @@ func TestPortConfiguration(t *testing.T) {
 	})
 }
 
+func TestStartConfigPrecedence(t *testing.T) {
+	t.Parallel()
+
+	t.Run("flag takes precedence over env var for clone-num-parallel-collections", func(t *testing.T) {
+		t.Parallel()
+
+		response := standardResponse{Ok: true}
+		server, captured, mu := mockPCSMServer(t, response)
+		defer server.Close()
+
+		port := extractPort(server.URL)
+
+		_, stderr, err := runPCSM(t,
+			[]string{"--port", port, "start", "--clone-num-parallel-collections=8"},
+			map[string]string{
+				"PCSM_CLONE_NUM_PARALLEL_COLLECTIONS": "2",
+			})
+		require.NoError(t, err, "stderr: %s", stderr)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		assert.Equal(t, http.MethodPost, captured.Method)
+		assert.Equal(t, "/start", captured.Path)
+
+		var actualBody map[string]any
+		err = json.Unmarshal(captured.Body, &actualBody)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 8, actualBody["cloneNumParallelCollections"])
+	})
+
+	t.Run("env var is used when flag not provided", func(t *testing.T) {
+		t.Parallel()
+
+		response := standardResponse{Ok: true}
+		server, captured, mu := mockPCSMServer(t, response)
+		defer server.Close()
+
+		port := extractPort(server.URL)
+
+		_, stderr, err := runPCSM(t,
+			[]string{"--port", port, "start"},
+			map[string]string{
+				"PCSM_CLONE_NUM_PARALLEL_COLLECTIONS": "4",
+			})
+		require.NoError(t, err, "stderr: %s", stderr)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		assert.Equal(t, http.MethodPost, captured.Method)
+		assert.Equal(t, "/start", captured.Path)
+
+		var actualBody map[string]any
+		err = json.Unmarshal(captured.Body, &actualBody)
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 4, actualBody["cloneNumParallelCollections"])
+	})
+}
+
 func TestConnectionRefused(t *testing.T) {
 	t.Parallel()
 
