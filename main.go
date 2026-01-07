@@ -471,10 +471,9 @@ func runServer(ctx context.Context, cfg *config.Config) error {
 	return httpServer.ListenAndServe() //nolint:wrapcheck
 }
 
-// Server represents the replication Server.
-type Server struct {
-	// Cfg holds the configuration.
-	Cfg *config.Config
+type server struct {
+	// cfg holds the configuration.
+	cfg *config.Config
 	// sourceCluster is the MongoDB client for the source cluster.
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
@@ -489,7 +488,7 @@ type Server struct {
 }
 
 // createServer creates a new server with the given options.
-func createServer(ctx context.Context, cfg *config.Config) (*Server, error) {
+func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
 	source, err := topo.Connect(ctx, cfg.Source, cfg)
@@ -568,8 +567,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	go RunCheckpointing(ctx, target, pcs)
 
-	s := &Server{
-		Cfg:           cfg,
+	s := &server{
+		cfg:           cfg,
 		sourceCluster: source,
 		targetCluster: target,
 		pcsm:          pcs,
@@ -581,7 +580,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*Server, error) {
 }
 
 // Close stops heartbeat and closes the server connections.
-func (s *Server) Close(ctx context.Context) error {
+func (s *server) Close(ctx context.Context) error {
 	err0 := s.stopHeartbeat(ctx)
 	err1 := s.sourceCluster.Disconnect(ctx)
 	err2 := s.targetCluster.Disconnect(ctx)
@@ -590,7 +589,7 @@ func (s *Server) Close(ctx context.Context) error {
 }
 
 // Handler returns the HTTP handler for the server.
-func (s *Server) Handler() http.Handler {
+func (s *server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/status", s.HandleStatus)
@@ -611,7 +610,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // HandleStatus handles the /status endpoint.
-func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -753,7 +752,7 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 }
 
 // HandleStart handles the /start endpoint.
-func (s *Server) HandleStart(w http.ResponseWriter, r *http.Request) {
+func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -795,7 +794,7 @@ func (s *Server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options, err := resolveStartOptions(s.Cfg, params)
+	options, err := resolveStartOptions(s.cfg, params)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
@@ -813,7 +812,7 @@ func (s *Server) HandleStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleFinalize handles the /finalize endpoint.
-func (s *Server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
+func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -870,7 +869,7 @@ func (s *Server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandlePause handles the /pause endpoint.
-func (s *Server) HandlePause(w http.ResponseWriter, r *http.Request) {
+func (s *server) HandlePause(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -901,7 +900,7 @@ func (s *Server) HandlePause(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleResume handles the /resume endpoint.
-func (s *Server) HandleResume(w http.ResponseWriter, r *http.Request) {
+func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ServerResponseTimeout)
 	defer cancel()
 
@@ -957,7 +956,7 @@ func (s *Server) HandleResume(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, resumeResponse{Ok: true})
 }
 
-func (s *Server) HandleMetrics() http.Handler {
+func (s *server) HandleMetrics() http.Handler {
 	return promhttp.HandlerFor(s.promRegistry, promhttp.HandlerOpts{})
 }
 
