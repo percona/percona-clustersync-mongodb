@@ -18,7 +18,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
@@ -39,12 +38,6 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
-// contextKey is a type for context keys used in this package.
-type contextKey string
-
-// configContextKey is the context key for storing *config.Config.
-const configContextKey contextKey = "config"
-
 var (
 	Version   = "v0.6.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
@@ -57,269 +50,70 @@ func buildVersion() string {
 	return Version + " " + GitCommit + " " + BuildTime
 }
 
-//nolint:gochecknoglobals
-var rootCmd = &cobra.Command{
-	Use:   "pcsm",
-	Short: "Percona ClusterSync for MongoDB replication tool",
-
-	SilenceUsage: true,
-
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		// Load and validate config
-		cfg, err := config.Load(cmd)
-		if err != nil {
-			return errors.Wrap(err, "load config")
-		}
-
-		logLevel, err := zerolog.ParseLevel(cfg.Log.Level)
-		if err != nil {
-			logLevel = zerolog.InfoLevel
-		}
-
-		lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
-		ctx := lg.WithContext(context.Background())
-		ctx = context.WithValue(ctx, configContextKey, cfg)
-		cmd.SetContext(ctx)
-
-		return nil
-	},
-
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		// Check if this is the root command being executed without a subcommand
-		if cmd.CalledAs() != "pcsm" || cmd.ArgsLenAtDash() != -1 {
-			return nil
-		}
-
-		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
-
-		err := config.Validate(cfg)
-		if err != nil {
-			return errors.Wrap(err, "validate config")
-		}
-
-		if cfg.ResetState {
-			err := resetState(cmd.Context(), cfg.Target, cfg)
-			if err != nil {
-				return err
-			}
-
-			log.New("cli").Info("State has been reset")
-		}
-
-		log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
-
-		return runServer(cmd.Context(), cfg)
-	},
-}
-
-//nolint:gochecknoglobals
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version",
-	Run: func(cmd *cobra.Command, _ []string) {
-		info := fmt.Sprintf("Version:   %s\nPlatform:  %s\nGitCommit: "+
-			"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
-			Version,
-			Platform,
-			GitCommit,
-			GitBranch,
-			BuildTime,
-			runtime.Version(),
-		)
-
-		cmd.Println(info)
-	},
-}
-
-//nolint:gochecknoglobals
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Get the status of the replication process",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		return NewClient(viper.GetInt("port")).Status(cmd.Context())
-	},
-}
-
-//nolint:gochecknoglobals
-var startCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start Cluster Replication",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
-		includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
-		excludeNamespaces, _ := cmd.Flags().GetStringSlice("exclude-namespaces")
-
-		startOptions := startRequest{
-			PauseOnInitialSync: pauseOnInitialSync,
-			IncludeNamespaces:  includeNamespaces,
-			ExcludeNamespaces:  excludeNamespaces,
-		}
-
-		// Read clone tuning flags (only set in request if explicitly provided)
-		if cmd.Flags().Changed("clone-num-parallel-collections") {
-			v, _ := cmd.Flags().GetInt("clone-num-parallel-collections")
-			startOptions.CloneNumParallelCollections = &v
-		}
-		if cmd.Flags().Changed("clone-num-read-workers") {
-			v, _ := cmd.Flags().GetInt("clone-num-read-workers")
-			startOptions.CloneNumReadWorkers = &v
-		}
-		if cmd.Flags().Changed("clone-num-insert-workers") {
-			v, _ := cmd.Flags().GetInt("clone-num-insert-workers")
-			startOptions.CloneNumInsertWorkers = &v
-		}
-		if cmd.Flags().Changed("clone-segment-size") {
-			v, _ := cmd.Flags().GetString("clone-segment-size")
-			startOptions.CloneSegmentSize = &v
-		}
-		if cmd.Flags().Changed("clone-read-batch-size") {
-			v, _ := cmd.Flags().GetString("clone-read-batch-size")
-			startOptions.CloneReadBatchSize = &v
-		}
-
-		return NewClient(viper.GetInt("port")).Start(cmd.Context(), startOptions)
-	},
-}
-
-//nolint:gochecknoglobals
-var finalizeCmd = &cobra.Command{
-	Use:   "finalize",
-	Short: "Finalize Cluster Replication",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
-
-		finalizeOptions := finalizeRequest{
-			IgnoreHistoryLost: ignoreHistoryLost,
-		}
-
-		return NewClient(viper.GetInt("port")).Finalize(cmd.Context(), finalizeOptions)
-	},
-}
-
-//nolint:gochecknoglobals
-var pauseCmd = &cobra.Command{
-	Use:   "pause",
-	Short: "Pause Cluster Replication",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		return NewClient(viper.GetInt("port")).Pause(cmd.Context())
-	},
-}
-
-//nolint:gochecknoglobals
-var resumeCmd = &cobra.Command{
-	Use:   "resume",
-	Short: "Resume Cluster Replication",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		fromFailure, _ := cmd.Flags().GetBool("from-failure")
-
-		resumeOptions := resumeRequest{
-			FromFailure: fromFailure,
-		}
-
-		return NewClient(viper.GetInt("port")).Resume(cmd.Context(), resumeOptions)
-	},
-}
-
-//nolint:gochecknoglobals
-var resetCmd = &cobra.Command{
-	Use:   "reset",
-	Short: "Reset PCSM state (heartbeat and recovery data)",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
-
-		targetURI := viper.GetString("target")
-		if targetURI == "" {
-			return errors.New("required flag --target not set")
-		}
-
-		err := resetState(cmd.Context(), targetURI, cfg)
-		if err != nil {
-			return err
-		}
-
-		log.New("cli").Info("OK: reset all")
-
-		return nil
-	},
-}
-
-//nolint:gochecknoglobals
-var resetRecoveryCmd = &cobra.Command{
-	Use:    "recovery",
-	Hidden: true,
-	Short:  "Reset recovery state",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
-
-		targetURI := viper.GetString("target")
-		if targetURI == "" {
-			return errors.New("required flag --target not set")
-		}
-
-		ctx := cmd.Context()
-
-		target, err := topo.Connect(ctx, targetURI, cfg)
-		if err != nil {
-			return errors.Wrap(err, "connect")
-		}
-
-		defer func() {
-			err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
-			if err != nil {
-				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
-			}
-		}()
-
-		err = DeleteRecoveryData(ctx, target)
-		if err != nil {
-			return err
-		}
-
-		log.New("cli").Info("OK: reset recovery")
-
-		return nil
-	},
-}
-
-//nolint:gochecknoglobals
-var resetHeartbeatCmd = &cobra.Command{
-	Use:    "heartbeat",
-	Hidden: true,
-	Short:  "Reset heartbeat state",
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg := cmd.Context().Value(configContextKey).(*config.Config) //nolint:forcetypeassert
-
-		targetURI := viper.GetString("target")
-		if targetURI == "" {
-			return errors.New("required flag --target not set")
-		}
-
-		ctx := cmd.Context()
-
-		target, err := topo.Connect(ctx, targetURI, cfg)
-		if err != nil {
-			return errors.Wrap(err, "connect")
-		}
-
-		defer func() {
-			err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
-			if err != nil {
-				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
-			}
-		}()
-
-		err = DeleteHeartbeat(ctx, target)
-		if err != nil {
-			return err
-		}
-
-		log.New("cli").Info("OK: reset heartbeat")
-
-		return nil
-	},
-}
-
 func main() {
+	cfg := &config.Config{}
+	rootCmd := newRootCmd(cfg)
+
+	err := rootCmd.Execute()
+	if err != nil {
+		zerolog.Ctx(context.Background()).Fatal().Err(err).Msg("")
+	}
+}
+
+func newRootCmd(cfg *config.Config) *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "pcsm",
+		Short: "Percona ClusterSync for MongoDB replication tool",
+
+		SilenceUsage: true,
+
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			loadedCfg, err := config.Load(cmd)
+			if err != nil {
+				return errors.Wrap(err, "load config")
+			}
+
+			*cfg = *loadedCfg
+
+			logLevel, err := zerolog.ParseLevel(cfg.Log.Level)
+			if err != nil {
+				logLevel = zerolog.InfoLevel
+			}
+
+			lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
+			ctx := lg.WithContext(context.Background())
+			cmd.SetContext(ctx)
+
+			return nil
+		},
+
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Check if this is the root command being executed without a subcommand
+			if cmd.CalledAs() != "pcsm" || cmd.ArgsLenAtDash() != -1 {
+				return nil
+			}
+
+			err := config.Validate(cfg)
+			if err != nil {
+				return errors.Wrap(err, "validate config")
+			}
+
+			if cfg.ResetState {
+				err := resetState(cmd.Context(), cfg)
+				if err != nil {
+					return err
+				}
+
+				log.New("cli").Info("State has been reset")
+			}
+
+			log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
+
+			return runServer(cmd.Context(), cfg)
+		},
+	}
+
+	// Persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level")
 	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
 	rootCmd.PersistentFlags().Bool("log-no-color", false, "Disable log color")
@@ -328,6 +122,12 @@ func main() {
 	rootCmd.PersistentFlags().MarkDeprecated("no-color", "use --log-no-color instead") //nolint:errcheck
 
 	rootCmd.PersistentFlags().Int("port", config.DefaultServerPort, "Port number")
+
+	// MongoDB client timeout (visible: commonly needed for debugging)
+	rootCmd.PersistentFlags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
+		"Timeout for MongoDB operations (e.g., 30s, 5m)")
+
+	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().Bool("start", false, "")
@@ -339,57 +139,275 @@ func main() {
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
-	// MongoDB client timeout (visible: commonly needed for debugging)
-	rootCmd.PersistentFlags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
-		"Timeout for MongoDB operations (e.g., 30s, 5m)")
-
-	startCmd.Flags().Bool("pause-on-initial-sync", false, "")
-	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
-
-	startCmd.Flags().StringSlice("include-namespaces", nil,
-		"Namespaces to include in the replication (e.g. db1.collection1,db2.collection2)")
-	startCmd.Flags().StringSlice("exclude-namespaces", nil,
-		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
-
-	// Clone tuning options (per-operation, passed via CLI or HTTP request)
-	startCmd.Flags().Int("clone-num-parallel-collections", 0,
-		"Number of collections to clone in parallel (0 = auto)")
-	startCmd.Flags().Int("clone-num-read-workers", 0,
-		"Number of read workers during clone (0 = auto)")
-	startCmd.Flags().Int("clone-num-insert-workers", 0,
-		"Number of insert workers during clone (0 = auto)")
-	startCmd.Flags().String("clone-segment-size", "", "")
-	startCmd.Flags().MarkHidden("clone-segment-size") //nolint:errcheck
-
-	startCmd.Flags().String("clone-read-batch-size", "", "")
-	startCmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
-
-	resumeCmd.Flags().Bool("from-failure", false, "Reuse from failure")
-
-	finalizeCmd.Flags().Bool("ignore-history-lost", false, "")
-	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
-
-	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
-
-	resetCmd.AddCommand(resetRecoveryCmd, resetHeartbeatCmd)
 	rootCmd.AddCommand(
-		versionCmd,
-		statusCmd,
-		startCmd,
-		finalizeCmd,
-		pauseCmd,
-		resumeCmd,
-		resetCmd,
+		newVersionCmd(),
+		newStatusCmd(cfg),
+		newStartCmd(cfg),
+		newFinalizeCmd(cfg),
+		newPauseCmd(cfg),
+		newResumeCmd(cfg),
+		newResetCmd(cfg),
 	)
 
-	err := rootCmd.Execute()
-	if err != nil {
-		zerolog.Ctx(context.Background()).Fatal().Err(err).Msg("")
+	return rootCmd
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
+		Run: func(cmd *cobra.Command, _ []string) {
+			info := fmt.Sprintf("Version:   %s\nPlatform:  %s\nGitCommit: "+
+				"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
+				Version,
+				Platform,
+				GitCommit,
+				GitBranch,
+				BuildTime,
+				runtime.Version(),
+			)
+
+			cmd.Println(info)
+		},
 	}
 }
 
-func resetState(ctx context.Context, targetURI string, cfg *config.Config) error {
-	target, err := topo.Connect(ctx, targetURI, cfg)
+func newStatusCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Get the status of the replication process",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(cfg.Port).Status(cmd.Context())
+		},
+	}
+}
+
+func newStartCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start Cluster Replication",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
+			includeNamespaces, _ := cmd.Flags().GetStringSlice("include-namespaces")
+			excludeNamespaces, _ := cmd.Flags().GetStringSlice("exclude-namespaces")
+
+			startOptions := startRequest{
+				PauseOnInitialSync: pauseOnInitialSync,
+				IncludeNamespaces:  includeNamespaces,
+				ExcludeNamespaces:  excludeNamespaces,
+			}
+
+			// Read clone tuning flags (only set in request if explicitly provided)
+			if cmd.Flags().Changed("clone-num-parallel-collections") {
+				v, _ := cmd.Flags().GetInt("clone-num-parallel-collections")
+				startOptions.CloneNumParallelCollections = &v
+			}
+			if cmd.Flags().Changed("clone-num-read-workers") {
+				v, _ := cmd.Flags().GetInt("clone-num-read-workers")
+				startOptions.CloneNumReadWorkers = &v
+			}
+			if cmd.Flags().Changed("clone-num-insert-workers") {
+				v, _ := cmd.Flags().GetInt("clone-num-insert-workers")
+				startOptions.CloneNumInsertWorkers = &v
+			}
+			if cmd.Flags().Changed("clone-segment-size") {
+				v, _ := cmd.Flags().GetString("clone-segment-size")
+				startOptions.CloneSegmentSize = &v
+			}
+			if cmd.Flags().Changed("clone-read-batch-size") {
+				v, _ := cmd.Flags().GetString("clone-read-batch-size")
+				startOptions.CloneReadBatchSize = &v
+			}
+
+			return NewClient(cfg.Port).Start(cmd.Context(), startOptions)
+		},
+	}
+
+	cmd.Flags().Bool("pause-on-initial-sync", false, "")
+	cmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
+
+	cmd.Flags().StringSlice("include-namespaces", nil,
+		"Namespaces to include in the replication (e.g. db1.collection1,db2.collection2)")
+	cmd.Flags().StringSlice("exclude-namespaces", nil,
+		"Namespaces to exclude from the replication (e.g. db3.collection3,db4.*)")
+
+	// Clone tuning options (per-operation, passed via CLI or HTTP request)
+	cmd.Flags().Int("clone-num-parallel-collections", 0,
+		"Number of collections to clone in parallel (0 = auto)")
+	cmd.Flags().Int("clone-num-read-workers", 0,
+		"Number of read workers during clone (0 = auto)")
+	cmd.Flags().Int("clone-num-insert-workers", 0,
+		"Number of insert workers during clone (0 = auto)")
+	cmd.Flags().String("clone-segment-size", "", "")
+	cmd.Flags().MarkHidden("clone-segment-size") //nolint:errcheck
+
+	cmd.Flags().String("clone-read-batch-size", "", "")
+	cmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
+
+	return cmd
+}
+
+func newFinalizeCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "finalize",
+		Short: "Finalize Cluster Replication",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
+
+			finalizeOptions := finalizeRequest{
+				IgnoreHistoryLost: ignoreHistoryLost,
+			}
+
+			return NewClient(cfg.Port).Finalize(cmd.Context(), finalizeOptions)
+		},
+	}
+
+	cmd.Flags().Bool("ignore-history-lost", false, "")
+	cmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
+
+	return cmd
+}
+
+func newPauseCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "pause",
+		Short: "Pause Cluster Replication",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return NewClient(cfg.Port).Pause(cmd.Context())
+		},
+	}
+}
+
+func newResumeCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "resume",
+		Short: "Resume Cluster Replication",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			fromFailure, _ := cmd.Flags().GetBool("from-failure")
+
+			resumeOptions := resumeRequest{
+				FromFailure: fromFailure,
+			}
+
+			return NewClient(cfg.Port).Resume(cmd.Context(), resumeOptions)
+		},
+	}
+
+	cmd.Flags().Bool("from-failure", false, "Reuse from failure")
+
+	return cmd
+}
+
+func newResetCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Reset PCSM state (heartbeat and recovery data)",
+		// Reset command has an override for the --target flag
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			err := cmd.Root().PersistentPreRunE(cmd, args)
+			if err != nil {
+				return errors.Wrap(err, "root pre-run")
+			}
+
+			if cmd.Flags().Changed("target") {
+				target, _ := cmd.Flags().GetString("target")
+				cfg.Target = target
+			}
+
+			if cfg.Target == "" {
+				return errors.New("required flag --target not set")
+			}
+
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			err := resetState(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK: reset all")
+
+			return nil
+		},
+	}
+
+	cmd.PersistentFlags().String("target", "", "MongoDB connection string for the target")
+
+	cmd.AddCommand(
+		newResetRecoveryCmd(cfg),
+		newResetHeartbeatCmd(cfg),
+	)
+
+	return cmd
+}
+
+func newResetRecoveryCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:    "recovery",
+		Hidden: true,
+		Short:  "Reset recovery state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+
+			target, err := topo.Connect(ctx, cfg.Target, cfg)
+			if err != nil {
+				return errors.Wrap(err, "connect")
+			}
+
+			defer func() {
+				err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+				if err != nil {
+					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+				}
+			}()
+
+			err = DeleteRecoveryData(ctx, target)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK: reset recovery")
+
+			return nil
+		},
+	}
+}
+
+func newResetHeartbeatCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:    "heartbeat",
+		Hidden: true,
+		Short:  "Reset heartbeat state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+
+			target, err := topo.Connect(ctx, cfg.Target, cfg)
+			if err != nil {
+				return errors.Wrap(err, "connect")
+			}
+
+			defer func() {
+				err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+				if err != nil {
+					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+				}
+			}()
+
+			err = DeleteHeartbeat(ctx, target)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK: reset heartbeat")
+
+			return nil
+		},
+	}
+}
+
+func resetState(ctx context.Context, cfg *config.Config) error {
+	target, err := topo.Connect(ctx, cfg.Target, cfg)
 	if err != nil {
 		return errors.Wrap(err, "connect")
 	}
