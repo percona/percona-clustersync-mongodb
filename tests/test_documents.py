@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import os
 from datetime import datetime
 
 import pymongo
@@ -227,6 +228,10 @@ def test_update_one_multiple_arrays(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+@pytest.mark.skipif(
+    os.environ.get("MONGO_VERSION", "").startswith("6."),
+    reason="PCSM-239: $slice on numeric-key paths not supported on MongoDB 6.0",
+)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
     t.source["db_1"]["coll_1"].insert_one(
