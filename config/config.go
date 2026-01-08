@@ -11,11 +11,11 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
 // Config holds all PCSM configuration.
@@ -116,7 +116,7 @@ func WarnDeprecatedEnvVars(ctx context.Context) {
 
 	for old, replacement := range deprecated {
 		if _, ok := os.LookupEnv(old); ok {
-			zerolog.Ctx(ctx).Warn().Msgf(
+			log.Ctx(ctx).Warnf(
 				"Environment variable %s is deprecated; use %s instead",
 				old, replacement,
 			)
