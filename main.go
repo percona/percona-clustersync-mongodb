@@ -84,6 +84,8 @@ func newRootCmd(cfg *config.Config) *cobra.Command {
 			ctx := lg.WithContext(context.Background())
 			cmd.SetContext(ctx)
 
+			config.WarnDeprecatedEnvVars(ctx)
+
 			return nil
 		},
 

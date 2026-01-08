@@ -2,13 +2,16 @@
 package config
 
 import (
+	"context"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -104,6 +107,23 @@ func Load(cmd *cobra.Command) (*Config, error) {
 	return &cfg, nil
 }
 
+// WarnDeprecatedEnvVars logs warnings for any deprecated environment variables that are set.
+// Expects the logger to be initialized.
+func WarnDeprecatedEnvVars(ctx context.Context) {
+	deprecated := map[string]string{
+		"PLM_MONGODB_CLI_OPERATION_TIMEOUT": "PCSM_MONGODB_OPERATION_TIMEOUT",
+	}
+
+	for old, replacement := range deprecated {
+		if _, ok := os.LookupEnv(old); ok {
+			zerolog.Ctx(ctx).Warn().Msgf(
+				"Environment variable %s is deprecated; use %s instead",
+				old, replacement,
+			)
+		}
+	}
+}
+
 func bindEnvVars() {
 	_ = viper.BindEnv("port", "PCSM_PORT")
 
@@ -114,7 +134,10 @@ func bindEnvVars() {
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
 	_ = viper.BindEnv("log-no-color", "PCSM_LOG_NO_COLOR", "PCSM_NO_COLOR")
 
-	_ = viper.BindEnv("mongodb-operation-timeout", "PCSM_MONGODB_OPERATION_TIMEOUT")
+	_ = viper.BindEnv("mongodb-operation-timeout",
+		"PCSM_MONGODB_OPERATION_TIMEOUT",
+		"PLM_MONGODB_CLI_OPERATION_TIMEOUT", // deprecated
+	)
 
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 
