@@ -110,6 +110,7 @@ func Load(cmd *cobra.Command, cfg *Config) error {
 func WarnDeprecatedEnvVars(ctx context.Context) {
 	deprecated := map[string]string{
 		"PLM_MONGODB_CLI_OPERATION_TIMEOUT": "PCSM_MONGODB_OPERATION_TIMEOUT",
+		"PCSM_NO_COLOR":                     "PCSM_LOG_NO_COLOR",
 	}
 
 	for old, replacement := range deprecated {
@@ -130,7 +131,10 @@ func bindEnvVars() {
 
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
-	_ = viper.BindEnv("log-no-color", "PCSM_LOG_NO_COLOR", "PCSM_NO_COLOR")
+	_ = viper.BindEnv("log-no-color",
+		"PCSM_LOG_NO_COLOR",
+		"PCSM_NO_COLOR", // deprecated
+	)
 
 	_ = viper.BindEnv("mongodb-operation-timeout",
 		"PCSM_MONGODB_OPERATION_TIMEOUT",
