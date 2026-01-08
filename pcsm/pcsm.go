@@ -167,8 +167,9 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	catalog := NewCatalog(ml.target)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter)
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
+	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
+	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -283,12 +284,17 @@ func (ml *PCSM) resetError() {
 
 // StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
-	// PauseOnInitialSync indicates whether to finalize after the initial sync.
+	// PauseOnInitialSync indicates whether to pause after the initial sync completes.
 	PauseOnInitialSync bool
 	// IncludeNamespaces are the namespaces to include.
 	IncludeNamespaces []string
 	// ExcludeNamespaces are the namespaces to exclude.
 	ExcludeNamespaces []string
+
+	// Clone contains clone tuning options.
+	Clone CloneOptions
+	// Repl contains replication behavior options.
+	Repl ReplOptions
 }
 
 // Start starts the replication process with the given options.
@@ -319,8 +325,8 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
+	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
 	ml.state = StateRunning
 
 	go ml.run()
