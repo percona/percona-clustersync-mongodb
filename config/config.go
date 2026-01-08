@@ -70,8 +70,8 @@ type CloneConfig struct {
 	ReadBatchSize string `mapstructure:"clone-read-batch-size"`
 }
 
-// Load initializes Viper and returns a validated Config.
-func Load(cmd *cobra.Command) (*Config, error) {
+// Load initializes Viper and populates the provided Config.
+func Load(cmd *cobra.Command, cfg *Config) error {
 	viper.SetEnvPrefix("PCSM")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
@@ -86,16 +86,14 @@ func Load(cmd *cobra.Command) (*Config, error) {
 
 	bindEnvVars()
 
-	var cfg Config
-
-	err := viper.Unmarshal(&cfg, viper.DecodeHook(
+	err := viper.Unmarshal(cfg, viper.DecodeHook(
 		mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToSliceHookFunc(","),
 		),
 	))
 	if err != nil {
-		return nil, errors.Wrap(err, "unmarshal config")
+		return errors.Wrap(err, "unmarshal config")
 	}
 
 	cfg.MongoDB.TargetCompressors = filterCompressors(cfg.MongoDB.TargetCompressors)
@@ -104,7 +102,7 @@ func Load(cmd *cobra.Command) (*Config, error) {
 		cfg.Log.NoColor = true
 	}
 
-	return &cfg, nil
+	return nil
 }
 
 // WarnDeprecatedEnvVars logs warnings for any deprecated environment variables that are set.

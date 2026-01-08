@@ -51,8 +51,7 @@ func buildVersion() string {
 }
 
 func main() {
-	cfg := &config.Config{}
-	rootCmd := newRootCmd(cfg)
+	rootCmd := newRootCmd()
 
 	err := rootCmd.Execute()
 	if err != nil {
@@ -60,7 +59,9 @@ func main() {
 	}
 }
 
-func newRootCmd(cfg *config.Config) *cobra.Command {
+func newRootCmd() *cobra.Command {
+	cfg := &config.Config{}
+
 	rootCmd := &cobra.Command{
 		Use:   "pcsm",
 		Short: "Percona ClusterSync for MongoDB replication tool",
@@ -68,12 +69,10 @@ func newRootCmd(cfg *config.Config) *cobra.Command {
 		SilenceUsage: true,
 
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			loadedCfg, err := config.Load(cmd)
+			err := config.Load(cmd, cfg)
 			if err != nil {
 				return errors.Wrap(err, "load config")
 			}
-
-			*cfg = *loadedCfg
 
 			logLevel, err := zerolog.ParseLevel(cfg.Log.Level)
 			if err != nil {
