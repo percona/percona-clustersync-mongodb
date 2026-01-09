@@ -16,9 +16,9 @@ func TestCollStats_DecodeFromFloat64(t *testing.T) {
 	t.Parallel()
 
 	input := bson.M{
-		"count":      0.0,
-		"size":       73179136.0,
-		"avgObjSize": 0.0,
+		"count":      0.1,
+		"size":       73179136.2,
+		"avgObjSize": 0.3,
 	}
 
 	data, err := bson.Marshal(input)
