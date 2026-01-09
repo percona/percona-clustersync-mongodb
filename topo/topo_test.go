@@ -6,8 +6,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+func TestCollStats_DecodeFromFloat64(t *testing.T) {
+	t.Parallel()
+
+	input := bson.M{
+		"count":      0.0,
+		"size":       73179136.0,
+		"avgObjSize": 0.0,
+	}
+
+	data, err := bson.Marshal(input)
+	require.NoError(t, err)
+
+	var stats CollStats
+	err = bson.Unmarshal(data, &stats)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(0), stats.Count)
+	assert.Equal(t, int64(73179136), stats.Size)
+	assert.Equal(t, int64(0), stats.AvgObjSize)
+}
 
 func TestRunWithRetry_NonTransientError(t *testing.T) {
 	t.Parallel()
