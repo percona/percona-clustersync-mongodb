@@ -127,11 +127,11 @@ type DBStats struct {
 // CollStats represents the result of the [GetCollStats].
 type CollStats struct {
 	// Count is the number of documents in the collection.
-	Count int64 `bson:"count"`
+	Count int64 `bson:"count,truncate"`
 	// Size is the total size of the collection.
-	Size int64 `bson:"size"`
+	Size int64 `bson:"size,truncate"`
 	// AvgObjSize is the average size of documents in the collection.
-	AvgObjSize int64 `bson:"avgObjSize"`
+	AvgObjSize int64 `bson:"avgObjSize,truncate"`
 }
 
 // SayHello runs the db.hello() command and returns the [Hello].
