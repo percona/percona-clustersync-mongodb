@@ -135,6 +135,7 @@ func runPCSM(t *testing.T, args []string, env map[string]string) (string, string
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return stdout.String(), stderr.String(), errCommandTimeout
 	}
@@ -142,20 +143,17 @@ func runPCSM(t *testing.T, args []string, env map[string]string) (string, string
 	return stdout.String(), stderr.String(), err
 }
 
-type standardResponse struct {
-	Ok bool `json:"ok"`
-}
-
-type statusResponseMock struct {
+type mockResponse struct {
 	Ok             bool   `json:"ok"`
-	State          string `json:"state"`
-	LagTimeSeconds int64  `json:"lagTimeSeconds"`
+	Error          string `json:"error,omitempty"`
+	State          string `json:"state,omitempty"`
+	LagTimeSeconds int64  `json:"lagTimeSeconds,omitempty"`
 }
 
 func TestStatusCommand(t *testing.T) {
 	t.Parallel()
 
-	response := statusResponseMock{
+	response := mockResponse{
 		Ok:             true,
 		State:          "running",
 		LagTimeSeconds: 5,
@@ -179,6 +177,141 @@ func TestStatusCommand(t *testing.T) {
 
 	assert.Contains(t, stdout, `"ok": true`)
 	assert.Contains(t, stdout, `"state": "running"`)
+}
+
+func TestStatusCommandStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		response         mockResponse
+		expectedInOutput []string
+	}{
+		{
+			name: "idle state",
+			response: mockResponse{
+				Ok:    true,
+				State: "idle",
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "idle"`},
+		},
+		{
+			name: "running state with lag",
+			response: mockResponse{
+				Ok:             true,
+				State:          "running",
+				LagTimeSeconds: 10,
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "running"`, `"lagTimeSeconds": 10`},
+		},
+		{
+			name: "paused state",
+			response: mockResponse{
+				Ok:    true,
+				State: "paused",
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "paused"`},
+		},
+		{
+			name: "failed state with error",
+			response: mockResponse{
+				Ok:    true,
+				State: "failed",
+				Error: "replication error occurred",
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "failed"`, `"error": "replication error occurred"`},
+		},
+		{
+			name: "finalizing state",
+			response: mockResponse{
+				Ok:    true,
+				State: "finalizing",
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "finalizing"`},
+		},
+		{
+			name: "finalized state",
+			response: mockResponse{
+				Ok:    true,
+				State: "finalized",
+			},
+			expectedInOutput: []string{`"ok": true`, `"state": "finalized"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, captured, mu := mockPCSMServer(t, tt.response)
+			defer server.Close()
+
+			port := extractPort(server.URL)
+
+			stdout, stderr, err := runPCSM(t, []string{"--port", port, "status"}, nil)
+
+			require.NoError(t, err, "stderr: %s", stderr)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			assert.Equal(t, http.MethodGet, captured.Method)
+			assert.Equal(t, "/status", captured.Path)
+
+			for _, expected := range tt.expectedInOutput {
+				assert.Contains(t, stdout, expected)
+			}
+		})
+	}
+}
+
+func TestStartCommandErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		response       mockResponse
+		expectedOutput string
+	}{
+		{
+			name:           "error when already running",
+			response:       mockResponse{Ok: false, Error: "already running"},
+			expectedOutput: "already running",
+		},
+		{
+			name:           "error when in failed state",
+			response:       mockResponse{Ok: false, Error: "already running"},
+			expectedOutput: "already running",
+		},
+		{
+			name:           "error when paused",
+			response:       mockResponse{Ok: false, Error: "paused"},
+			expectedOutput: "paused",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, captured, mu := mockPCSMServer(t, tt.response)
+			defer server.Close()
+
+			port := extractPort(server.URL)
+
+			stdout, stderr, err := runPCSM(t, []string{"--port", port, "start"}, nil)
+
+			require.NoError(t, err, "stderr: %s", stderr)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			assert.Equal(t, http.MethodPost, captured.Method)
+			assert.Equal(t, "/start", captured.Path)
+			assert.Contains(t, stdout, `"ok": false`)
+			assert.Contains(t, stdout, tt.expectedOutput)
+		})
+	}
 }
 
 func TestStartCommand(t *testing.T) {
@@ -301,7 +434,7 @@ func TestStartCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			response := standardResponse{Ok: true}
+			response := mockResponse{Ok: true}
 			server, captured, mu := mockPCSMServer(t, response)
 			defer server.Close()
 
@@ -358,7 +491,7 @@ func TestFinalizeCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			response := standardResponse{Ok: true}
+			response := mockResponse{Ok: true}
 			server, captured, mu := mockPCSMServer(t, response)
 			defer server.Close()
 
@@ -392,7 +525,7 @@ func TestFinalizeCommand(t *testing.T) {
 func TestPauseCommand(t *testing.T) {
 	t.Parallel()
 
-	response := standardResponse{Ok: true}
+	response := mockResponse{Ok: true}
 	server, captured, mu := mockPCSMServer(t, response)
 	defer server.Close()
 
@@ -408,6 +541,55 @@ func TestPauseCommand(t *testing.T) {
 	assert.Equal(t, "/pause", captured.Path)
 	// Pause sends nil body, which becomes empty string
 	assert.Empty(t, captured.Body)
+}
+
+func TestPauseCommandErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		response       mockResponse
+		expectedOutput string
+	}{
+		{
+			name:           "pause fails when not running",
+			response:       mockResponse{Ok: false, Error: "cannot pause: Change Replication is not runnning"},
+			expectedOutput: "cannot pause",
+		},
+		{
+			name:           "pause fails when already paused",
+			response:       mockResponse{Ok: false, Error: "cannot pause: Change Replication is not runnning"},
+			expectedOutput: "cannot pause",
+		},
+		{
+			name:           "pause fails in idle state",
+			response:       mockResponse{Ok: false, Error: "cannot pause: Change Replication is not runnning"},
+			expectedOutput: "cannot pause",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, captured, mu := mockPCSMServer(t, tt.response)
+			defer server.Close()
+
+			port := extractPort(server.URL)
+
+			stdout, stderr, err := runPCSM(t, []string{"--port", port, "pause"}, nil)
+
+			require.NoError(t, err, "stderr: %s", stderr)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			assert.Equal(t, http.MethodPost, captured.Method)
+			assert.Equal(t, "/pause", captured.Path)
+			assert.Contains(t, stdout, `"ok": false`)
+			assert.Contains(t, stdout, tt.expectedOutput)
+		})
+	}
 }
 
 func TestResumeCommand(t *testing.T) {
@@ -434,7 +616,7 @@ func TestResumeCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			response := standardResponse{Ok: true}
+			response := mockResponse{Ok: true}
 			server, captured, mu := mockPCSMServer(t, response)
 			defer server.Close()
 
@@ -465,13 +647,67 @@ func TestResumeCommand(t *testing.T) {
 	}
 }
 
+func TestResumeCommandErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		args           []string
+		response       mockResponse
+		expectedOutput string
+	}{
+		{
+			name:           "resume fails in failed state without --from-failure",
+			args:           []string{"resume"},
+			response:       mockResponse{Ok: false, Error: "cannot resume: not paused"},
+			expectedOutput: "cannot resume",
+		},
+		{
+			name:           "resume fails when replication not started",
+			args:           []string{"resume"},
+			response:       mockResponse{Ok: false, Error: "cannot resume: replication is not started"},
+			expectedOutput: "cannot resume",
+		},
+		{
+			name:           "resume fails when not paused and using --from-failure",
+			args:           []string{"resume", "--from-failure"},
+			response:       mockResponse{Ok: false, Error: "cannot resume: replication is not paused"},
+			expectedOutput: "cannot resume",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server, captured, mu := mockPCSMServer(t, tt.response)
+			defer server.Close()
+
+			port := extractPort(server.URL)
+			args := append([]string{"--port", port}, tt.args...)
+
+			stdout, stderr, err := runPCSM(t, args, nil)
+
+			require.NoError(t, err, "stderr: %s", stderr)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			assert.Equal(t, http.MethodPost, captured.Method)
+			assert.Equal(t, "/resume", captured.Path)
+			assert.Contains(t, stdout, `"ok": false`)
+			assert.Contains(t, stdout, tt.expectedOutput)
+		})
+	}
+}
+
 func TestPortConfiguration(t *testing.T) {
 	t.Parallel()
 
 	t.Run("port via flag", func(t *testing.T) {
 		t.Parallel()
 
-		response := statusResponseMock{Ok: true, State: "idle"}
+		response := mockResponse{Ok: true, State: "idle"}
 		server, captured, mu := mockPCSMServer(t, response)
 		defer server.Close()
 
@@ -489,7 +725,7 @@ func TestPortConfiguration(t *testing.T) {
 	t.Run("port via PCSM_PORT env var", func(t *testing.T) {
 		t.Parallel()
 
-		response := statusResponseMock{Ok: true, State: "idle"}
+		response := mockResponse{Ok: true, State: "idle"}
 		server, captured, mu := mockPCSMServer(t, response)
 		defer server.Close()
 
@@ -510,12 +746,12 @@ func TestPortConfiguration(t *testing.T) {
 		t.Parallel()
 
 		// Create two servers - one for env var (wrong), one for flag (correct)
-		wrongResponse := statusResponseMock{Ok: false, State: "wrong"}
+		wrongResponse := mockResponse{Ok: false, State: "wrong"}
 		wrongServer, _, _ := mockPCSMServer(t, wrongResponse)
 		defer wrongServer.Close()
 		wrongPort := extractPort(wrongServer.URL)
 
-		correctResponse := statusResponseMock{Ok: true, State: "correct"}
+		correctResponse := mockResponse{Ok: true, State: "correct"}
 		correctServer, captured, mu := mockPCSMServer(t, correctResponse)
 		defer correctServer.Close()
 		correctPort := extractPort(correctServer.URL)
@@ -540,7 +776,7 @@ func TestStartConfigPrecedence(t *testing.T) {
 	t.Run("flag takes precedence over env var for clone-num-parallel-collections", func(t *testing.T) {
 		t.Parallel()
 
-		response := standardResponse{Ok: true}
+		response := mockResponse{Ok: true}
 		server, captured, mu := mockPCSMServer(t, response)
 		defer server.Close()
 
@@ -569,7 +805,7 @@ func TestStartConfigPrecedence(t *testing.T) {
 	t.Run("env var is used when flag not provided", func(t *testing.T) {
 		t.Parallel()
 
-		response := standardResponse{Ok: true}
+		response := mockResponse{Ok: true}
 		server, captured, mu := mockPCSMServer(t, response)
 		defer server.Close()
 
