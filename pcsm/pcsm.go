@@ -538,7 +538,7 @@ func (ml *PCSM) doPause(ctx context.Context) error {
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsRunning() {
-		return errors.New("cannot pause: Change Replication is not runnning")
+		return errors.New("cannot pause: Change Replication is not running")
 	}
 
 	err := ml.repl.Pause(ctx)
