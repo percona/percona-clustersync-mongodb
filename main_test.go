@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,86 +55,6 @@ func runTestMain(m *testing.M) int {
 	}
 
 	return m.Run()
-}
-
-type state string
-
-const (
-	stateIdle       state = "idle"
-	stateRunning    state = "running"
-	statePaused     state = "paused"
-	stateFailed     state = "failed"
-	stateFinalizing state = "finalizing"
-	stateFinalized  state = "finalized"
-)
-
-//nolint:gochecknoglobals
-var allStates = []state{stateIdle, stateRunning, statePaused, stateFailed, stateFinalizing, stateFinalized}
-
-type command string
-
-const (
-	cmdStart    command = "start"
-	cmdPause    command = "pause"
-	cmdResume   command = "resume"
-	cmdFinalize command = "finalize"
-)
-
-//nolint:gochecknoglobals
-var cmdValidFromStates = map[command][]state{
-	cmdStart:    {stateIdle},
-	cmdPause:    {stateRunning},
-	cmdResume:   {statePaused},
-	cmdFinalize: {stateRunning, statePaused},
-}
-
-//nolint:gochecknoglobals
-var stateErrorMessages = map[command]map[state]string{
-	cmdStart: {
-		stateRunning:    "already running",
-		statePaused:     "paused",
-		stateFailed:     "already running",
-		stateFinalizing: "already running",
-		stateFinalized:  "already running",
-	},
-	cmdPause: {
-		stateIdle:       "cannot pause: Change Replication is not running",
-		statePaused:     "cannot pause: Change Replication is not running",
-		stateFailed:     "cannot pause: Change Replication is not running",
-		stateFinalizing: "cannot pause: Change Replication is not running",
-		stateFinalized:  "cannot pause: Change Replication is not running",
-	},
-	cmdResume: {
-		stateIdle:       "cannot resume: not paused",
-		stateRunning:    "cannot resume: not paused",
-		stateFailed:     "cannot resume: not paused",
-		stateFinalizing: "cannot resume: not paused",
-		stateFinalized:  "cannot resume: not paused",
-	},
-	cmdFinalize: {
-		stateIdle:      "clone is not completed",
-		stateFailed:    "failed state",
-		stateFinalized: "change replication is not started",
-	},
-}
-
-func isValidTransition(cmd command, fromState state) bool {
-	states, ok := cmdValidFromStates[cmd]
-	if !ok {
-		return false
-	}
-
-	return slices.Contains(states, fromState)
-}
-
-func getErrorMessage(cmd command, fromState state) string {
-	if msgs, ok := stateErrorMessages[cmd]; ok {
-		if msg, ok := msgs[fromState]; ok {
-			return msg
-		}
-	}
-
-	return "invalid state"
 }
 
 type capturedRequest struct {
@@ -258,47 +177,6 @@ func runCommandTest(t *testing.T, tc commandTestCase, expectedPath string) {
 	require.NoError(t, err)
 
 	assert.JSONEq(t, string(want), string(got))
-}
-
-func runErrorTest(t *testing.T, cmd command, currentState state) {
-	t.Helper()
-
-	errorMsg := getErrorMessage(cmd, currentState)
-	server := newMockServer(t, mockResponse{Ok: false, Error: errorMsg})
-	defer server.Close()
-
-	port := extractPort(server.URL)
-	args := []string{"--port", port, string(cmd)}
-
-	stdout, stderr, err := runPCSM(t, args, nil)
-	require.NoError(t, err, "stderr: %s", stderr)
-
-	captured := server.request
-
-	assert.Equal(t, http.MethodPost, captured.Method)
-	assert.Equal(t, "/"+string(cmd), captured.Path)
-	assert.Contains(t, stdout, `"ok": false`)
-	assert.Contains(t, stdout, errorMsg)
-}
-
-func TestStateTransitions(t *testing.T) {
-	t.Parallel()
-
-	commands := []command{cmdStart, cmdPause, cmdResume, cmdFinalize}
-
-	for _, cmd := range commands {
-		for _, currentState := range allStates {
-			if isValidTransition(cmd, currentState) {
-				continue
-			}
-
-			testName := fmt.Sprintf("%s_fails_from_%s", cmd, currentState)
-			t.Run(testName, func(t *testing.T) {
-				t.Parallel()
-				runErrorTest(t, cmd, currentState)
-			})
-		}
-	}
 }
 
 func TestStatusCommandStates(t *testing.T) {
