@@ -56,30 +56,9 @@ We encourage contributions and are always looking for new members who are as ded
 
 The [Contributing Guide](CONTRIBUTING.md) contains the guidelines for contributing.
 
-## Join Percona Squad!
-
-Participate in monthly SWAG raffles, get early access to new product features, and invite-only "ask me anything" sessions with database performance experts. Interested? Fill in the form at [squad.percona.com/mongodb](https://squad.percona.com/mongodb)
-
-```
-                    %                        _____
-                   %%%                      |  __ \
-                 ###%%%%%%%%%%%%*           | |__) |__ _ __ ___ ___  _ __   __ _
-                ###  ##%%      %%%%         |  ___/ _ \ '__/ __/ _ \| '_ \ / _` |
-              ####     ##%       %%%%       | |  |  __/ | | (_| (_) | | | | (_| |
-             ###        ####      %%%       |_|   \___|_|  \___\___/|_| |_|\__,_|
-           ,((###         ###     %%%         _____                       _
-          (((( (###        ####  %%%%        / ____|                     | |
-         (((     ((#         ######         | (___   __ _ _   _  __ _  __| |
-       ((((       (((#        ####           \___ \ / _` | | | |/ _` |/ _` |
-      /((          ,(((        *###          ____) | (_| | |_| | (_| | (_| |
-    ////             (((         ####       |_____/ \__, |\__,_|\__,_|\__,_|
-   ///                ((((        ####                 | |
- /////////////(((((((((((((((((########                |_|
-```
-
 ## Contact
 
 You can reach us:
 
-- on [Forums](https://forums.percona.com/)
-- or [Professional Support](https://www.percona.com/about/contact)
+- on [Percona ClusterSync for MongoDB Community Forum](https://forums.percona.com/c/mongodb/percona-clustersync-mongodb-pcsm/87)
+- or [Contact Form](https://www.percona.com/about/contact)
