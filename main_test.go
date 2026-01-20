@@ -146,7 +146,8 @@ type commandTestCase struct {
 	expectedBody map[string]any
 }
 
-func runCommandTest(t *testing.T, tc commandTestCase, expectedPath string) {
+// testCommandHTTPRequest tests that a command creates the expected HTTP request.
+func testCommandHTTPRequest(t *testing.T, tc commandTestCase, expectedPath string) {
 	t.Helper()
 
 	server := newMockServer(t, mockResponse{Ok: true})
@@ -158,14 +159,12 @@ func runCommandTest(t *testing.T, tc commandTestCase, expectedPath string) {
 	_, stderr, err := runPCSM(t, args, nil)
 	require.NoError(t, err, "stderr: %s", stderr)
 
-	capturedRequest := server.request
-
-	assert.Equal(t, http.MethodPost, capturedRequest.Method)
-	assert.Equal(t, expectedPath, capturedRequest.Path)
+	assert.Equal(t, http.MethodPost, server.request.Method)
+	assert.Equal(t, expectedPath, server.request.Path)
 
 	var capturedBody map[string]any
-	if len(capturedRequest.Body) > 0 {
-		require.NoError(t, json.Unmarshal(capturedRequest.Body, &capturedBody))
+	if len(server.request.Body) > 0 {
+		require.NoError(t, json.Unmarshal(server.request.Body, &capturedBody))
 	} else {
 		capturedBody = map[string]any{}
 	}
@@ -356,7 +355,7 @@ func TestStartCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			runCommandTest(t, tt, "/start")
+			testCommandHTTPRequest(t, tt, "/start")
 		})
 	}
 }
@@ -380,7 +379,7 @@ func TestFinalizeCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			runCommandTest(t, tt, "/finalize")
+			testCommandHTTPRequest(t, tt, "/finalize")
 		})
 	}
 }
@@ -404,7 +403,7 @@ func TestResumeCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			runCommandTest(t, tt, "/resume")
+			testCommandHTTPRequest(t, tt, "/resume")
 		})
 	}
 }
@@ -412,18 +411,20 @@ func TestResumeCommand(t *testing.T) {
 func TestPauseCommand(t *testing.T) {
 	t.Parallel()
 
-	server := newMockServer(t, mockResponse{Ok: true})
-	defer server.Close()
+	tests := []commandTestCase{
+		{
+			name:         "pause sends empty body",
+			args:         []string{"pause"},
+			expectedBody: map[string]any{},
+		},
+	}
 
-	port := extractPort(server.URL)
-	_, stderr, err := runPCSM(t, []string{"--port", port, "pause"}, nil)
-	require.NoError(t, err, "stderr: %s", stderr)
-
-	captured := server.request
-
-	assert.Equal(t, http.MethodPost, captured.Method)
-	assert.Equal(t, "/pause", captured.Path)
-	assert.Empty(t, captured.Body)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			testCommandHTTPRequest(t, tt, "/pause")
+		})
+	}
 }
 
 func TestResumeFromFailure(t *testing.T) {
@@ -587,9 +588,5 @@ func TestConnectionRefused(t *testing.T) {
 	_, stderr, err := runPCSM(t, []string{"--port", "59999", "status"}, nil)
 
 	require.Error(t, err)
-	assert.True(t,
-		strings.Contains(stderr, "connection refused") ||
-			strings.Contains(stderr, "connect:") ||
-			strings.Contains(stderr, "dial"),
-		"expected connection error, got: %s", stderr)
+	assert.Contains(t, stderr, "connection refused", "expected connection error, got: %s", stderr)
 }
