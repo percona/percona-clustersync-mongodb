@@ -22,8 +22,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-cfg0
     hostname: src-cfg0
-    mem_limit: 512m
-    memswap_limit: 512m
+    mem_limit: 1g
+    memswap_limit: 1g
     ports: ["27000:27000"]
     volumes: ["src-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -116,8 +116,8 @@ services:
     image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-cfg0
     hostname: tgt-cfg0
-    mem_limit: 512m
-    memswap_limit: 512m
+    mem_limit: 1g
+    memswap_limit: 1g
     ports: ["28000:28000"]
     volumes: ["tgt-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:

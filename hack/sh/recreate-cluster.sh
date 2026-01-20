@@ -9,6 +9,18 @@
 set -euo pipefail
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 
+# Get MongoDB version from container image, prints warning if not found
+get_mongo_version() {
+    local container=$1
+    local version
+    version=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://')
+    if [[ -z "$version" ]]; then
+        echo "  Warning: Could not detect MongoDB version from $container. Set MONGO_VERSION env var if needed." >&2
+        return
+    fi
+    echo "$version"
+}
+
 SOURCE=false
 TARGET=false
 
@@ -33,10 +45,20 @@ fi
 
 if $SOURCE; then
     echo "Recreating sh source cluster..."
-    echo "  Stopping containers..."
+    # Detect MongoDB version from running container before stopping
+    if [[ -z "${MONGO_VERSION:-}" ]]; then
+        MONGO_VERSION=$(get_mongo_version src-rs00)
+    fi
+    if [[ -n "${MONGO_VERSION:-}" ]]; then
+        export MONGO_VERSION
+        echo "  Using MongoDB version: $MONGO_VERSION"
+    fi
+    echo "  Stopping and removing containers..."
+    docker compose -f "$SCRIPT_DIR/compose.yml" stop src-mongos src-cfg0 src-rs00 src-rs10 src-rs20 2>/dev/null || true
     docker rm -f src-mongos src-cfg0 src-rs00 src-rs10 src-rs20 2>/dev/null || true
+    sleep 1
     echo "  Removing volumes..."
-    docker volume rm src-cfg0 src-rs00 src-rs10 src-rs20 2>/dev/null || true
+    docker volume rm sh_src-cfg0 sh_src-rs00 sh_src-rs10 sh_src-rs20 2>/dev/null || true
     echo "  Starting containers..."
     docker compose -f "$SCRIPT_DIR/compose.yml" up -d src-cfg0 src-rs00 src-rs10 src-rs20
     echo "  Waiting for MongoDB..."
@@ -58,10 +80,20 @@ fi
 
 if $TARGET; then
     echo "Recreating sh target cluster..."
-    echo "  Stopping containers..."
+    # Detect MongoDB version from running container before stopping
+    if [[ -z "${MONGO_VERSION:-}" ]]; then
+        MONGO_VERSION=$(get_mongo_version tgt-rs00)
+    fi
+    if [[ -n "${MONGO_VERSION:-}" ]]; then
+        export MONGO_VERSION
+        echo "  Using MongoDB version: $MONGO_VERSION"
+    fi
+    echo "  Stopping and removing containers..."
+    docker compose -f "$SCRIPT_DIR/compose.yml" stop tgt-mongos tgt-cfg0 tgt-rs00 tgt-rs10 tgt-rs20 2>/dev/null || true
     docker rm -f tgt-mongos tgt-cfg0 tgt-rs00 tgt-rs10 tgt-rs20 2>/dev/null || true
+    sleep 1
     echo "  Removing volumes..."
-    docker volume rm tgt-cfg0 tgt-rs00 tgt-rs10 tgt-rs20 2>/dev/null || true
+    docker volume rm sh_tgt-cfg0 sh_tgt-rs00 sh_tgt-rs10 sh_tgt-rs20 2>/dev/null || true
     echo "  Starting containers..."
     docker compose -f "$SCRIPT_DIR/compose.yml" up -d tgt-cfg0 tgt-rs00 tgt-rs10 tgt-rs20
     echo "  Waiting for MongoDB..."

@@ -8,6 +8,7 @@ reproducible document generation. Docker-friendly with throttled inserts.
 Usage:
     python hack/loader.py --size 10 --uri "mongodb://localhost:27017"
     python hack/loader.py -s 5 -u "mongodb://localhost:27017" --databases 3 --collections-per-db 5 --drop
+    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded
 """
 
 import argparse
@@ -18,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import pymongo
+import pymongo.errors
 from bson import ObjectId
 
 # Constants for deterministic generation
@@ -36,14 +38,11 @@ def parse_args():
 Examples:
     python hack/loader.py --size 10 --uri "mongodb://src-mongos:27017"
     python hack/loader.py -s 5 -u "mongodb://src-mongos:27017" --databases 3 --collections-per-db 5 --drop
+    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded --databases 2 --collections-per-db 3
         """,
     )
-    parser.add_argument(
-        "-s", "--size", type=float, required=True, help="Size in GB to load"
-    )
-    parser.add_argument(
-        "-u", "--uri", type=str, required=True, help="MongoDB connection string"
-    )
+    parser.add_argument("-s", "--size", type=float, required=True, help="Size in GB to load")
+    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
     parser.add_argument(
         "--databases",
         type=int,
@@ -70,6 +69,11 @@ Examples:
         action="store_true",
         help="Drop existing collections before loading",
     )
+    parser.add_argument(
+        "--sharded",
+        action="store_true",
+        help="Create sharded collections (requires connection to mongos)",
+    )
     return parser.parse_args()
 
 
@@ -94,11 +98,13 @@ def calculate_parameters(size_gb: float, num_databases: int, collections_per_db:
             # Add remainder to the last collection
             if idx == total_collections - 1:
                 count += remainder
-            work_items.append({
-                "db_name": db_name,
-                "collection_name": collection_name,
-                "num_docs": count,
-            })
+            work_items.append(
+                {
+                    "db_name": db_name,
+                    "collection_name": collection_name,
+                    "num_docs": count,
+                }
+            )
             idx += 1
 
     return {
@@ -215,6 +221,34 @@ def drop_collections(client: pymongo.MongoClient, num_databases: int, collection
                 print(f"  Dropped: {db_name}.{collection_name}")
 
 
+def setup_sharded_collections(
+    client: pymongo.MongoClient, num_databases: int, collections_per_db: int
+):
+    """Enable sharding and create sharded collections."""
+    admin = client.admin
+    for db_idx in range(num_databases):
+        db_name = f"db_{db_idx}"
+        # Enable sharding on the database
+        try:
+            admin.command("enableSharding", db_name)
+            print(f"  Enabled sharding: {db_name}")
+        except pymongo.errors.OperationFailure as e:
+            # Database may already be sharded
+            if "already enabled" not in str(e).lower():
+                raise
+
+        for coll_idx in range(collections_per_db):
+            collection_name = f"collection_{coll_idx}"
+            namespace = f"{db_name}.{collection_name}"
+            try:
+                admin.command("shardCollection", namespace, key={"_id": "hashed"})
+                print(f"  Sharded: {namespace}")
+            except pymongo.errors.OperationFailure as e:
+                # Collection may already be sharded
+                if "already sharded" not in str(e).lower():
+                    raise
+
+
 def get_db_stats(client: pymongo.MongoClient, db_name: str) -> dict:
     """Get database statistics for verification."""
     db = client[db_name]
@@ -238,7 +272,7 @@ def get_all_db_stats(client: pymongo.MongoClient, num_databases: int) -> list:
     return stats
 
 
-def format_bytes(size_bytes: int) -> str:
+def format_bytes(size_bytes: float) -> str:
     """Format bytes to human readable string."""
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size_bytes < 1024:
@@ -269,6 +303,7 @@ def main():
     print(f"Doc size:           {DOC_SIZE_BYTES:,} bytes")
     print(f"Workers:            {args.workers}")
     print(f"Batch size:         {args.batch_size}")
+    print(f"Sharded:            {args.sharded}")
     print()
 
     # Connect to MongoDB
@@ -283,6 +318,12 @@ def main():
     if args.drop:
         print("Dropping existing collections...")
         drop_collections(client, params["num_databases"], params["collections_per_db"])
+        print()
+
+    # Setup sharded collections if requested
+    if args.sharded:
+        print("Setting up sharded collections...")
+        setup_sharded_collections(client, params["num_databases"], params["collections_per_db"])
         print()
 
     # Prepare work items with cumulative index for determinism
