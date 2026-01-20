@@ -115,5 +115,5 @@ done
 msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
 if [[ "${MONGO_VERSION:-8.0}" == 8.* ]]; then
-    msh "src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
+    msh "tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 fi
