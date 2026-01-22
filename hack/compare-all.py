@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
+"""
+Compare all databases and collections between source and target MongoDB clusters.
+
+Compares databases, collections, indexes, collection options, document counts,
+and content hashes to verify data consistency between clusters.
+
+Usage:
+    python hack/compare-all.py
+
+Environment variables:
+    SRC_URI  MongoDB connection string for source (default: mongodb://src-mongos:27017)
+    TGT_URI  MongoDB connection string for target (default: mongodb://tgt-mongos:29017)
+"""
+
 import hashlib
+import os
 
 import bson
 
@@ -7,14 +22,11 @@ import pymongo
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
 
-SRC_URI = "mongodb://rs00:30000"
-TGT_URI = "mongodb://rs10:30100"
+SRC_URI = os.environ.get("SRC_URI", "mongodb://src-mongos:27017")
+TGT_URI = os.environ.get("TGT_URI", "mongodb://tgt-mongos:29017")
 
-SRC_SH_URI = "mongodb://src-mongos:27017"
-TGT_SH_URI = "mongodb://tgt-mongos:29017"
-
-src = pymongo.MongoClient(SRC_SH_URI)
-tgt = pymongo.MongoClient(TGT_SH_URI)
+src = pymongo.MongoClient(SRC_URI)
+tgt = pymongo.MongoClient(TGT_URI)
 
 
 def list_databases(client: MongoClient):
