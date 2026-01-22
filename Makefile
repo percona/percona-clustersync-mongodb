@@ -47,4 +47,12 @@ clean:
 	rm -rf bin/*
 	go clean -cache -testcache
 
-.PHONY: all build test-build test pcsm-start clean
+# Start Prometheus + Grafana metrics stack (Grafana: http://localhost:3000, Prometheus: http://localhost:9090)
+metrics-up:
+	docker compose -f hack/metrics/docker-compose.yml up -d
+
+# Stop metrics stack
+metrics-down:
+	docker compose -f hack/metrics/docker-compose.yml down
+
+.PHONY: all build test-build test pcsm-start clean metrics-up metrics-down metrics-logs
