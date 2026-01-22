@@ -108,6 +108,7 @@ func Init(reg prometheus.Registerer) {
 		copyReadBatchDurationSeconds,
 		copyInsertBatchDurationSeconds,
 
+		eventsReadTotal,
 		eventsAppliedTotal,
 		lagTimeSeconds,
 		intialSyncLagTimeSeconds,
