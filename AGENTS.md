@@ -107,3 +107,27 @@ These checks must be the final tasks before considering work complete.
 | `log/`    | Logging utilities                |
 | `util/`   | Context helpers                  |
 | `tests/`  | Python E2E tests                 |
+
+## CLI Architecture (Server + Client)
+
+PCSM uses a single binary that operates in two modes:
+
+### Server Mode (Root Command)
+
+Running `pcsm --source <uri> --target <uri>` starts a **long-running server process**:
+
+1. Connects to source and target MongoDB clusters
+2. Creates `pcsm.PCSM` instance with real MongoDB clients
+3. Starts HTTP server on `localhost:<port>` (default 27018)
+4. Exposes REST endpoints: `/status`, `/start`, `/pause`, `/resume`, `/finalize`
+
+The server holds MongoDB connections and manages the replication state machine.
+
+### Client Mode (Subcommands)
+
+Running `pcsm start`, `pcsm pause`, etc. operates as an **HTTP client**:
+
+1. Creates `PCSMClient` with just the port number
+2. Constructs HTTP request with JSON body
+3. Sends request to the already-running server
+4. Prints JSON response to stdout
