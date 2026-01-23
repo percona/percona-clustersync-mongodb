@@ -204,14 +204,14 @@ func BenchmarkInsert(b *testing.B) {
 	file.Close()
 
 	concurrency := getNumInsertWorker()
-	docC := make(chan task, concurrency)
+	docCh := make(chan task, concurrency)
 	grp, grpCtx := errgroup.WithContext(ctx)
 
 	for range concurrency {
 		grp.Go(func() error {
 			mcoll := mc.Database(ns.Database).Collection(ns.Collection)
 
-			for t := range docC {
+			for t := range docCh {
 				_, err = mcoll.InsertMany(grpCtx, t.docs, insertOptions)
 				if err != nil {
 					if mongo.IsDuplicateKeyError(err) {
@@ -230,11 +230,11 @@ func BenchmarkInsert(b *testing.B) {
 
 	var next *list.Element
 	for el := all.Front(); el != nil; el = next {
-		docC <- el.Value.(task) //nolint:forcetypeassert
+		docCh <- el.Value.(task) //nolint:forcetypeassert
 		next = el.Next()
 		all.Remove(el)
 	}
-	close(docC)
+	close(docCh)
 
 	err = grp.Wait()
 	if err != nil {
