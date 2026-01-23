@@ -265,7 +265,7 @@ func (cm *CopyManager) copyCollection(
 		close(insertResults)       // exit
 	}()
 
-	// spawn readSegment in loop until the collection is exhausted or canceled.
+	// Dispatches read workers for each segment.
 	go func() {
 		var segmentID uint32
 
@@ -304,6 +304,7 @@ func (cm *CopyManager) copyCollection(
 
 			pendingSegments.Add(1)
 
+			// Launch a read worker for the segment.
 			go func() {
 				defer func() {
 					<-cm.readLimit
