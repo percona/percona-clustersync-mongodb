@@ -488,10 +488,10 @@ func (c *Clone) doCollectionClone(
 
 	lastLogAt = time.Now() // init
 
-	updateC := copyManager.Do(nsCtx, ns, spec)
+	progressUpdates := copyManager.Do(nsCtx, ns, spec)
 
-	for update := range updateC {
-		err := update.Err
+	for progressUpdate := range progressUpdates {
+		err := progressUpdate.Err
 		if err != nil {
 			switch {
 			case topo.IsCollectionDropped(err):
@@ -524,8 +524,8 @@ func (c *Clone) doCollectionClone(
 
 			default:
 				updateLog := lg.With(
-					log.Size(update.SizeBytes),
-					log.Count(int64(update.Count)),
+					log.Size(progressUpdate.SizeBytes),
+					log.Count(int64(progressUpdate.Count)),
 					log.Elapsed(time.Since(lastLogAt)))
 
 				if errors.Is(err, context.Canceled) {
@@ -538,12 +538,12 @@ func (c *Clone) doCollectionClone(
 			}
 		}
 
-		totalCopiedCount += int64(update.Count)
-		totalCopiedSizeBytes += update.SizeBytes
-		c.copiedSize.Add(update.SizeBytes)
+		totalCopiedCount += int64(progressUpdate.Count)
+		totalCopiedSizeBytes += progressUpdate.SizeBytes
+		c.copiedSize.Add(progressUpdate.SizeBytes)
 
-		copiedCountSinceLastLog += int64(update.Count)
-		copiedSizeBytesSinceLastLog += update.SizeBytes
+		copiedCountSinceLastLog += int64(progressUpdate.Count)
+		copiedSizeBytesSinceLastLog += progressUpdate.SizeBytes
 
 		if copiedSizeBytesSinceLastLog >= humanize.GByte {
 			now := time.Now()

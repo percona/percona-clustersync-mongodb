@@ -48,9 +48,9 @@ type CopyManager struct {
 // including its type and options, required during the clone operation.
 type CopyGetCollSpecFunc func(ctx context.Context) (*topo.CollectionSpecification, error)
 
-// CopyUpdate represents the result of a clone operation update, including any error,
+// CopyProgressUpdate represents the result of a clone operation update, including any error,
 // the size of data transferred in bytes, and the number of documents processed.
-type CopyUpdate struct {
+type CopyProgressUpdate struct {
 	// Err is the error encountered during the operation, if any.
 	Err error
 	// SizeBytes is the size of documents inserted in bytes.
@@ -167,21 +167,21 @@ func (cm *CopyManager) Do(
 	ctx context.Context,
 	namespace Namespace,
 	spec *topo.CollectionSpecification,
-) <-chan CopyUpdate {
-	updateC := make(chan CopyUpdate, cm.options.NumInsertWorkers)
+) <-chan CopyProgressUpdate {
+	progressUpdates := make(chan CopyProgressUpdate)
 
 	cm.collGroup.Add(1)
 	go func() {
-		defer func() { close(updateC); cm.collGroup.Done() }()
+		defer func() { close(progressUpdates); cm.collGroup.Done() }()
 
 		lg := log.New("copy").With(log.NS(namespace.Database, namespace.Collection))
-		err := cm.copyCollection(lg.WithContext(ctx), namespace, spec, updateC)
+		err := cm.copyCollection(lg.WithContext(ctx), namespace, spec, progressUpdates)
 		if err != nil {
-			updateC <- CopyUpdate{Err: err}
+			progressUpdates <- CopyProgressUpdate{Err: err}
 		}
 	}()
 
-	return updateC
+	return progressUpdates
 }
 
 type (
@@ -193,7 +193,7 @@ func (cm *CopyManager) copyCollection(
 	ctx context.Context,
 	namespace Namespace,
 	spec *topo.CollectionSpecification,
-	updateC chan<- CopyUpdate,
+	progressUpdates chan<- CopyProgressUpdate,
 ) error {
 	switch spec.Type {
 	case topo.TypeTimeseries:
@@ -292,9 +292,9 @@ func (cm *CopyManager) copyCollection(
 				case errors.Is(err, errEOC):
 					pendingSegments.Wait() // wait all readers finish
 				case errors.Is(err, context.Canceled):
-					return // read stopped. updateC could be already closed
+					return // read stopped. progress channel could be already closed
 				default:
-					updateC <- CopyUpdate{Err: errors.Wrap(err, "next segment")}
+					progressUpdates <- CopyProgressUpdate{Err: errors.Wrap(err, "next segment")}
 				}
 
 				stopCollectionRead()
@@ -318,7 +318,7 @@ func (cm *CopyManager) copyCollection(
 
 				err = cm.readSegment(ctx, readResultC, cursor, nextID)
 				if err != nil {
-					updateC <- CopyUpdate{Err: errors.Wrap(err, "read worker")}
+					progressUpdates <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
 
 					stopCollectionRead()
 				}
@@ -358,7 +358,7 @@ func (cm *CopyManager) copyCollection(
 	for insertResult := range insertResultC {
 		pendingInserts.Done()
 
-		updateC <- CopyUpdate{
+		progressUpdates <- CopyProgressUpdate{
 			Err:       insertResult.Err,
 			SizeBytes: uint64(insertResult.SizeBytes), //nolint:gosec
 			Count:     insertResult.Count,
