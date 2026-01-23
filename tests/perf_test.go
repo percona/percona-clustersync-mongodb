@@ -244,10 +244,10 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 
 	totalCopiedBytes := int64(0)
 	documentC := make(chan bson.Raw, maxWriteCount)
-	doneSig := make(chan error)
+	done := make(chan error)
 
 	go func() {
-		defer close(doneSig)
+		defer close(done)
 
 		// b.Logf("avg_doc_size=%d max_read_count=%d max_write_size=%d max_write_count=%d",
 		// 	averageDocumentSize, maxReadCount, maxWriteSize, maxWriteCount)
@@ -263,7 +263,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 			if len(batch)+1 > cap(batch) || batchSize+docSize > maxWriteSize {
 				_, err := targetCollection.InsertMany(ctx, batch, insertOptions)
 				if err != nil {
-					doneSig <- err
+					done <- err
 
 					return
 				}
@@ -285,7 +285,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 		if len(batch) != 0 {
 			_, err := targetCollection.InsertMany(ctx, batch, insertOptions)
 			if err != nil {
-				doneSig <- err
+				done <- err
 
 				return
 			}
@@ -314,7 +314,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 		return totalCopiedBytes, errors.Wrap(err, "cursor")
 	}
 
-	err = <-doneSig
+	err = <-done
 
 	return totalCopiedBytes, errors.Wrap(err, "insert documents")
 }

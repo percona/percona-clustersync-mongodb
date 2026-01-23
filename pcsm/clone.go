@@ -52,7 +52,7 @@ type Clone struct {
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
-	doneSig chan struct{}
+	done chan struct{}
 
 	sizeMap    sizeMap
 	totalSize  uint64        // Estimated total bytes to be cloned
@@ -107,7 +107,7 @@ func NewClone(
 		catalog:  catalog,
 		nsFilter: nsFilter,
 		options:  opts,
-		doneSig:  make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -196,7 +196,7 @@ func (c *Clone) Done() <-chan struct{} {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	return c.doneSig
+	return c.done
 }
 
 // Start starts the cloning process.
@@ -233,9 +233,9 @@ func (c *Clone) Start(context.Context) error {
 		}
 
 		select {
-		case <-c.doneSig:
+		case <-c.done:
 		default:
-			close(c.doneSig)
+			close(c.done)
 		}
 
 		c.finishTime = time.Now()

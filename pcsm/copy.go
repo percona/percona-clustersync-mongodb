@@ -206,7 +206,7 @@ func (cm *CopyManager) copyCollection(
 
 	var nextSegment nextSegmentFunc
 
-	readResultC := make(chan readBatchResult)
+	readBatchResults := make(chan readBatchResult)
 
 	var batchID atomic.Uint32
 	var nextID nextBatchIDFunc = func() uint32 { return batchID.Add(1) }
@@ -242,7 +242,7 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
-		go segmenter.handleNanIDDoc(readResultC, nextID)
+		go segmenter.handleNanIDDoc(readBatchResults, nextID)
 	}
 
 	collectionReadCtx, stopCollectionRead := context.WithCancel(ctx)
@@ -250,7 +250,7 @@ func (cm *CopyManager) copyCollection(
 	// pendingSegments tracks in-progress read segments
 	pendingSegments := &sync.WaitGroup{}
 
-	allBatchesSent := make(chan struct{}) // closes when all batches are sent to inserters
+	batchesDone := make(chan struct{}) // closes when all batches are sent to inserters
 
 	// pendingInserts tracks in-progress insert batches
 	pendingInserts := &sync.WaitGroup{}
@@ -259,8 +259,8 @@ func (cm *CopyManager) copyCollection(
 	go func() { // cleanup
 		<-collectionReadCtx.Done() // EOC or read error
 		pendingSegments.Wait()     // all segments is read (EOS)
-		close(readResultC)         // no more read batches: release send inserts routine
-		<-allBatchesSent           // wait until no more new batches for inserters
+		close(readBatchResults)    // no more read batches: release send inserts routine
+		<-batchesDone              // wait until no more new batches for inserters
 		pendingInserts.Wait()      // all batches inserted
 		close(insertResultC)       // exit
 	}()
@@ -316,7 +316,7 @@ func (cm *CopyManager) copyCollection(
 					}
 				}()
 
-				err = cm.readSegment(ctx, readResultC, cursor, nextID)
+				err = cm.readSegment(ctx, readBatchResults, cursor, nextID)
 				if err != nil {
 					progressUpdates <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
 
@@ -333,10 +333,10 @@ func (cm *CopyManager) copyCollection(
 	// receives readBatchResult from read workers and sends them to insert workers.
 	// For capped collections, inserting is serialized by waiting for each batch's insertion.
 	go func() {
-		defer close(allBatchesSent) // notify: no more new batches for inserters
+		defer close(batchesDone) // notify: no more new batches for inserters
 
 		// collect batches from read workers
-		for readResult := range readResultC {
+		for readResult := range readBatchResults {
 			// send the batch to an insert worker
 			pendingInserts.Add(1)
 
@@ -381,7 +381,7 @@ type readBatchResult struct {
 // Metrics are collected for performance monitoring.
 func (cm *CopyManager) readSegment(
 	ctx context.Context,
-	resultC chan<- readBatchResult,
+	readBatchResults chan<- readBatchResult,
 	cur *mongo.Cursor,
 	nextID nextBatchIDFunc,
 ) error {
@@ -407,7 +407,7 @@ func (cm *CopyManager) readSegment(
 			metrics.AddCopyReadDocumentCount(len(documents))
 			metrics.SetCopyReadBatchDurationSeconds(elapsed)
 
-			resultC <- readBatchResult{
+			readBatchResults <- readBatchResult{
 				ID:        batchID,
 				Documents: documents,
 				SizeBytes: sizeBytes,
@@ -453,7 +453,7 @@ func (cm *CopyManager) readSegment(
 	metrics.AddCopyReadDocumentCount(len(documents))
 	metrics.SetCopyReadBatchDurationSeconds(elapsed)
 
-	resultC <- readBatchResult{
+	readBatchResults <- readBatchResult{
 		ID:        batchID,
 		Documents: documents,
 		SizeBytes: sizeBytes,

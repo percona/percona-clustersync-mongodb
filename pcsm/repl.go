@@ -58,7 +58,7 @@ type Repl struct {
 
 	pausing bool
 	pauseC  chan struct{}
-	doneSig chan struct{}
+	done    chan struct{}
 
 	bulkWrite      bulkWrite
 	bulkToken      bson.Raw
@@ -107,7 +107,7 @@ func NewRepl(
 		catalog:  catalog,
 		options:  opts,
 		pauseC:   make(chan struct{}),
-		doneSig:  make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -216,7 +216,7 @@ func (r *Repl) Done() <-chan struct{} {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	return r.doneSig
+	return r.done
 }
 
 // Start begins the replication process from the specified start timestamp.
@@ -279,13 +279,13 @@ func (r *Repl) Pause(context.Context) error {
 
 func (r *Repl) doPause() {
 	r.pausing = true
-	doneSig := r.doneSig
+	done := r.done
 
 	go func() {
 		log.New("repl").Debug("Change Replication is pausing")
 
 		r.pauseC <- struct{}{}
-		<-doneSig
+		<-done
 
 		r.lock.Lock()
 		r.pauseTime = time.Now()
@@ -333,7 +333,7 @@ func (r *Repl) Resume(context.Context) error {
 	}
 
 	r.pauseTime = time.Time{}
-	r.doneSig = make(chan struct{})
+	r.done = make(chan struct{})
 
 	go r.run(options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
@@ -463,7 +463,7 @@ func (r *Repl) watchChangeEvents(
 }
 
 func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
-	defer close(r.doneSig)
+	defer close(r.done)
 
 	ctx := context.Background()
 	changeC := make(chan *ChangeEvent, config.ReplQueueSize)
