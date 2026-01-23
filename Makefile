@@ -55,4 +55,4 @@ metrics-up:
 metrics-down:
 	docker compose -f hack/metrics/docker-compose.yml down
 
-.PHONY: all build test-build test pcsm-start clean metrics-up metrics-down metrics-logs
+.PHONY: all build test-build test pcsm-start clean metrics-up metrics-down
