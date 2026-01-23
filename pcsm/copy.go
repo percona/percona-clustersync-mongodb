@@ -69,14 +69,14 @@ type CopyManagerOptions struct {
 	// min: 1; default: [runtime.NumCPU] * 4.
 	NumInsertWorkers int
 	// SegmentSizeBytes is the logical segment size in bytes for splitting collections.
-	// min: 192MB [config.MinCloneSegmentSizeBytes].
-	// min: 64GiB [config.MaxCloneSegmentSizeBytes].
+	// min: [config.MinCloneSegmentSizeBytes].
+	// min: [config.MaxCloneSegmentSizeBytes].
 	// default: auto (per collection) [config.AutoCloneSegmentSize].
 	SegmentSizeBytes int64
 	// ReadBatchSizeBytes is the maximum read batch size in bytes.
-	// min: 16MiB [config.MinCloneReadBatchSizeBytes].
-	// max: 2GiB [config.MaxCloneReadBatchSizeBytes].
-	// default: 96MB [config.DefaultCloneReadBatchSizeBytes].
+	// min: [config.MinCloneReadBatchSizeBytes].
+	// max: [config.MaxCloneReadBatchSizeBytes].
+	// default: config.DefaultCloneReadBatchSizeBytes].
 	ReadBatchSizeBytes int32
 }
 
