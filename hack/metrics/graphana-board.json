@@ -18,13 +18,13 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 81,
+  "id": null,
   "links": [],
   "panels": [
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "description": "",
       "fieldConfig": {
@@ -107,27 +107,43 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_link_mongodb_events_applied_total[10s])",
+          "expr": "rate(percona_clustersync_mongodb_events_read_total[10s])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Events Processed",
+          "legendFormat": "Events Read",
           "range": true,
           "refId": "A",
           "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "rate(percona_clustersync_mongodb_events_applied_total[10s])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Events Applied",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
         }
       ],
-      "title": "Events Processed Rate",
+      "title": "Events Rate",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -209,17 +225,29 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_link_mongodb_lag_time_seconds",
+          "expr": "percona_clustersync_mongodb_lag_time_seconds",
           "instant": false,
           "legendFormat": "Lag Time",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_initial_sync_lag_time_seconds",
+          "instant": false,
+          "legendFormat": "Initial Sync Lag Time",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Target Lag Time",
+      "title": "Lag Time",
       "type": "timeseries"
     },
     {
@@ -238,7 +266,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -320,11 +348,11 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_link_mongodb_copy_insert_size_bytes_total / 1024 / 1024",
+          "expr": "percona_clustersync_mongodb_copy_insert_size_bytes_total / 1024 / 1024",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
@@ -336,10 +364,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_link_mongodb_estimated_total_size_bytes  / 1024 / 1024",
+          "expr": "percona_clustersync_mongodb_estimated_total_size_bytes / 1024 / 1024",
           "hide": false,
           "instant": false,
           "legendFormat": "Estimated Total Size",
@@ -353,7 +381,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -437,11 +465,11 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "pcsm-prometheus"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_link_mongodb_copy_insert_size_bytes_total[10s]) / (1024 * 1024)",
+          "expr": "rate(percona_clustersync_mongodb_copy_insert_size_bytes_total[10s]) / (1024 * 1024)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -454,11 +482,11 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "pcsm-prometheus"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_link_mongodb_copy_read_size_bytes_total[10s]) / (1024 * 1024)",
+          "expr": "rate(percona_clustersync_mongodb_copy_read_size_bytes_total[10s]) / (1024 * 1024)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -469,8 +497,252 @@
           "useBackend": false
         }
       ],
-      "title": "Megabytes read/write rate",
+      "title": "Megabytes Read/Write Rate",
       "transparent": true,
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_copy_insert_document_total",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Inserted Documents",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_copy_read_document_total",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Read Documents",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        }
+      ],
+      "title": "Documents Copied",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_copy_read_batch_duration_seconds",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Read Batch Duration",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_copy_insert_batch_duration_seconds",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Insert Batch Duration",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        }
+      ],
+      "title": "Batch Duration",
       "type": "timeseries"
     },
     {
@@ -479,7 +751,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 25
       },
       "id": 7,
       "panels": [],
@@ -489,7 +761,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -544,38 +816,13 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "percona-mongolink"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 18
+        "y": 26
       },
       "id": 8,
       "options": {
@@ -596,13 +843,13 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "rate(round(go_goroutines{node_name=\"PLM\"}[1m]))",
+          "expr": "go_goroutines",
           "instant": false,
-          "legendFormat": "{{node_name}}",
+          "legendFormat": "Goroutines",
           "range": true,
           "refId": "A"
         }
@@ -613,7 +860,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -668,38 +915,13 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "percona-mongolink"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 18
+        "y": 26
       },
       "id": 9,
       "options": {
@@ -720,13 +942,13 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "rate(round(go_threads{node_name=\"PLM\"}[1m]))",
+          "expr": "go_threads",
           "instant": false,
-          "legendFormat": "{{node_name}}",
+          "legendFormat": "Threads",
           "range": true,
           "refId": "A"
         }
@@ -737,7 +959,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PA58DA793C7250F1B"
+        "uid": "pcsm-prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -793,38 +1015,13 @@
           },
           "unit": "decmbytes"
         },
-        "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "percona-mongolink"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 18
+        "y": 26
       },
       "id": 10,
       "options": {
@@ -845,13 +1042,13 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PA58DA793C7250F1B"
+            "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "go_memstats_alloc_bytes{node_name=\"PLM\"} / 1024 / 1024",
+          "expr": "go_memstats_alloc_bytes / 1024 / 1024",
           "instant": false,
-          "legendFormat": "{{node_name}}",
+          "legendFormat": "Allocated Memory",
           "range": true,
           "refId": "A"
         }
@@ -873,7 +1070,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Percona Link MongoDB",
+  "title": "Percona ClusterSync MongoDB",
   "uid": "aegcuit193shse",
-  "version": 4
+  "version": 5
 }

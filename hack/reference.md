@@ -7,7 +7,7 @@ host.docker.internal:2242/metrics
 ```
 
 
-## MongoLink CLI
+## PCSM CLI
 
 ```shell
 go install . && pcsm --source="mongodb://rs00:30000" --target="mongodb://rs10:30100" --reset-state --log-level="debug"
