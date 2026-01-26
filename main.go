@@ -438,9 +438,14 @@ func runServer(_ context.Context, cfg *config.Config) error {
 	}
 
 	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
-		err = srv.pcsm.Start(ctx, &pcsm.StartOptions{
+		startOpts, err := resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
+		if err != nil {
+			return err
+		}
+
+		err = srv.pcsm.Start(ctx, startOpts)
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")
 		}
