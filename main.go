@@ -710,13 +710,10 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, res)
 }
 
-// resolveStartOptions resolves the start options from the HTTP request and config.
-// Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
-func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
-	options := &pcsm.StartOptions{
-		PauseOnInitialSync: params.PauseOnInitialSync,
-		IncludeNamespaces:  params.IncludeNamespaces,
-		ExcludeNamespaces:  params.ExcludeNamespaces,
+// buildStartOptions builds StartOptions from config, validating clone size options.
+func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
+	startOpts := &pcsm.StartOptions{
+		PauseOnInitialSync: cfg.PauseOnInitialSync,
 		Repl: pcsm.ReplOptions{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
 		},
@@ -726,6 +723,39 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 			InsertWorkers: cfg.Clone.NumInsertWorkers,
 		},
 	}
+
+	if cfg.Clone.SegmentSize != "" {
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(cfg.Clone.SegmentSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone segment size")
+		}
+		startOpts.Clone.SegmentSizeBytes = segmentSize
+	}
+
+	if cfg.Clone.ReadBatchSize != "" {
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(cfg.Clone.ReadBatchSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone read batch size")
+		}
+		startOpts.Clone.ReadBatchSizeBytes = batchSize
+	}
+
+	return startOpts, nil
+}
+
+// resolveStartOptions resolves the start options from the HTTP request and config.
+// Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
+func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
+	// Start with config-based options
+	options, err := buildStartOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// HTTP params override config values
+	options.PauseOnInitialSync = params.PauseOnInitialSync
+	options.IncludeNamespaces = params.IncludeNamespaces
+	options.ExcludeNamespaces = params.ExcludeNamespaces
 
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
@@ -739,26 +769,17 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
 	}
 
-	segmentSizeStr := cfg.Clone.SegmentSize
+	// HTTP params override config for size values (need to re-validate)
 	if params.CloneSegmentSize != nil {
-		segmentSizeStr = *params.CloneSegmentSize
-	}
-
-	if segmentSizeStr != "" {
-		segmentSize, err := config.ParseAndValidateCloneSegmentSize(segmentSizeStr)
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(*params.CloneSegmentSize)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone segment size")
 		}
 		options.Clone.SegmentSizeBytes = segmentSize
 	}
 
-	readBatchSizeStr := cfg.Clone.ReadBatchSize
 	if params.CloneReadBatchSize != nil {
-		readBatchSizeStr = *params.CloneReadBatchSize
-	}
-
-	if readBatchSizeStr != "" {
-		batchSize, err := config.ParseAndValidateCloneReadBatchSize(readBatchSizeStr)
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(*params.CloneReadBatchSize)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone read batch size")
 		}
