@@ -187,66 +187,111 @@ func (cm *CopyManager) Start(
 	return progressUpdateCh
 }
 
-type (
-	nextSegmentFunc func(context.Context) (*mongo.Cursor, error)
-	nextBatchIDFunc func() uint32
-)
+// runReadDispatcher manages segment distribution to read workers.
+// It acquires read semaphore slots, fetches segment cursors, and spawns
+// read worker goroutines. For capped collections, it processes segments
+// sequentially to maintain document order.
+func (cm *CopyManager) runReadDispatcher(
+	session *collectionCopySession,
+	nextSegment nextSegmentFunc,
+	progressUpdateCh chan<- CopyProgressUpdate,
+) {
+	for {
+		select {
+		case <-session.ctx.Done():
+			return
 
-// collectionCopySession holds the channels and synchronization primitives
-// for copying a single collection. One session is created per collection
-// and disposed when the copy completes.
-type collectionCopySession struct {
-	ns       Namespace
-	isCapped bool
+		case cm.readSem <- struct{}{}:
+		}
 
-	readBatchCh      chan readBatch
-	allBatchesSentCh chan struct{}
+		segmentID := session.nextSegmentID()
+		ctx := log.New(fmt.Sprintf("copy:w:r:%d", segmentID)).
+			With(log.NS(session.ns.Database, session.ns.Collection)).
+			WithContext(session.ctx)
 
-	activeSegmentsWg *sync.WaitGroup
-	activeInsertsWg  *sync.WaitGroup
+		cursor, err := nextSegment(ctx)
+		if err != nil {
+			<-cm.readSem
 
-	batchID   atomic.Uint32 // unique batch ID generator
-	segmentID atomic.Uint32 // unique segment ID generator
+			switch {
+			case errors.Is(err, errEOC):
+				session.activeSegmentsWg.Wait() // wait all readers finish
+			case errors.Is(err, context.Canceled):
+				return // read stopped. progress channel could be already closed
+			default:
+				progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "next segment")}
+			}
 
-	// Lifecycle
-	ctx    context.Context //nolint:containedctx // ctx is needed for session lifecycle management
-	cancel context.CancelFunc
-}
+			session.cancel()
 
-func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) *collectionCopySession {
-	sessionCtx, cancel := context.WithCancel(ctx)
+			return
+		}
 
-	return &collectionCopySession{
-		ns:               ns,
-		isCapped:         isCapped,
-		readBatchCh:      make(chan readBatch),
-		allBatchesSentCh: make(chan struct{}),
-		activeSegmentsWg: &sync.WaitGroup{},
-		activeInsertsWg:  &sync.WaitGroup{},
-		ctx:              sessionCtx,
-		cancel:           cancel,
+		session.activeSegmentsWg.Add(1)
+
+		// Read worker for this segment.
+		// Reads documents from the segment cursor and sends batches to the insert queue.
+		go func() {
+			defer func() {
+				<-cm.readSem
+				session.activeSegmentsWg.Done()
+
+				err := util.CtxWithTimeout(context.Background(),
+					config.CloseCursorTimeout, cursor.Close)
+				if err != nil {
+					log.Ctx(ctx).Error(err, "Close cursor")
+				}
+			}()
+
+			err = session.readSegment(ctx, cursor)
+			if err != nil {
+				progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
+
+				session.cancel()
+			}
+		}()
+
+		if session.isCapped {
+			// For capped collections, wait for each segment to complete
+			// before starting the next to maintain order.
+			session.activeSegmentsWg.Wait()
+		}
 	}
 }
 
-// nextBatchID returns the next unique batch ID for this session.
-func (s *collectionCopySession) nextBatchID() uint32 {
-	return s.batchID.Add(1)
-}
+// runInsertDispatcher receives read batches and dispatches them to the insert worker pool.
+// For capped collections, it waits for each insert to complete before processing the next
+// batch to maintain document order.
+func (cm *CopyManager) runInsertDispatcher(
+	session *collectionCopySession,
+	progressUpdateCh chan<- CopyProgressUpdate,
+) {
+	defer close(session.allBatchesSentCh)
 
-// nextSegmentID returns the next unique segment ID for this session.
-func (s *collectionCopySession) nextSegmentID() uint32 {
-	return s.segmentID.Add(1)
-}
+	for batch := range session.readBatchCh {
+		session.activeInsertsWg.Add(1)
 
-// waitAndCleanup coordinates the orderly shutdown of the copy session.
-// It waits for all read workers to finish, closes channels, and ensures
-// all insert operations complete before returning.
-func (s *collectionCopySession) waitAndCleanup() {
-	<-s.ctx.Done()
-	s.activeSegmentsWg.Wait()
-	close(s.readBatchCh)
-	<-s.allBatchesSentCh
-	s.activeInsertsWg.Wait()
+		cm.insertTaskCh <- insertTask{
+			Namespace: session.ns,
+			ID:        batch.ID,
+			SizeBytes: batch.SizeBytes,
+			Documents: batch.Documents,
+			OnDone: func(result insertResult) {
+				progressUpdateCh <- CopyProgressUpdate{
+					Err:       result.Err,
+					SizeBytes: uint64(result.SizeBytes), //nolint:gosec
+					Count:     result.Count,
+				}
+				session.activeInsertsWg.Done()
+			},
+		}
+
+		if session.isCapped {
+			// For capped collections, wait for each insert to complete
+			// before reading the next batch to maintain order.
+			session.activeInsertsWg.Wait()
+		}
+	}
 }
 
 func (cm *CopyManager) copyCollection(
@@ -302,224 +347,16 @@ func (cm *CopyManager) copyCollection(
 		go segmenter.handleNanIDDoc(session.readBatchCh, session.nextBatchID)
 	}
 
-	// Read dispatcher.
-	go func() {
-		for {
-			select {
-			case <-session.ctx.Done():
-				return
-
-			case cm.readSem <- struct{}{}:
-			}
-
-			segmentID := session.nextSegmentID()
-			ctx := log.New(fmt.Sprintf("copy:w:r:%d", segmentID)).
-				With(log.NS(session.ns.Database, session.ns.Collection)).
-				WithContext(session.ctx)
-
-			cursor, err := nextSegment(ctx)
-			if err != nil {
-				<-cm.readSem
-
-				switch {
-				case errors.Is(err, errEOC):
-					session.activeSegmentsWg.Wait() // wait all readers finish
-				case errors.Is(err, context.Canceled):
-					return // read stopped. progress channel could be already closed
-				default:
-					progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "next segment")}
-				}
-
-				session.cancel()
-
-				return
-			}
-
-			session.activeSegmentsWg.Add(1)
-
-			// Read worker for this segment.
-			// Reads documents from the segment cursor and sends batches to the insert queue.
-			go func() {
-				defer func() {
-					<-cm.readSem
-					session.activeSegmentsWg.Done()
-
-					err := util.CtxWithTimeout(context.Background(),
-						config.CloseCursorTimeout, cursor.Close)
-					if err != nil {
-						log.Ctx(ctx).Error(err, "Close cursor")
-					}
-				}()
-
-				err = cm.readSegment(ctx, session.readBatchCh, cursor, session.nextBatchID)
-				if err != nil {
-					progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
-
-					session.cancel()
-				}
-			}()
-
-			if session.isCapped {
-				// For capped collections, wait for each segment to complete
-				// before starting the next to maintain order.
-				session.activeSegmentsWg.Wait()
-			}
-		}
-	}()
-
-	// Insert dispatcher.
-	go func() {
-		defer close(session.allBatchesSentCh)
-
-		for batch := range session.readBatchCh {
-			session.activeInsertsWg.Add(1)
-
-			cm.insertTaskCh <- insertTask{
-				Namespace: session.ns,
-				ID:        batch.ID,
-				SizeBytes: batch.SizeBytes,
-				Documents: batch.Documents,
-				OnDone: func(result insertResult) {
-					progressUpdateCh <- CopyProgressUpdate{
-						Err:       result.Err,
-						SizeBytes: uint64(result.SizeBytes), //nolint:gosec
-						Count:     result.Count,
-					}
-					session.activeInsertsWg.Done()
-				},
-			}
-
-			if session.isCapped {
-				// For capped collections, wait for each insert to complete
-				// before reading the next batch to maintain order.
-				session.activeInsertsWg.Wait()
-			}
-		}
-	}()
+	go cm.runReadDispatcher(session, nextSegment, progressUpdateCh)
+	go cm.runInsertDispatcher(session, progressUpdateCh)
 
 	session.waitAndCleanup()
 
 	return nil
 }
 
-// readBatch represents a batch of documents read from a segment.
-type readBatch struct {
-	ID        uint32
-	Documents []any
-	SizeBytes int
-}
-
-// readSegment reads documents from a segment cursor and sends readBatch to the result
-// channel. It batches documents until the configured maximum batch size is reached or the cursor is
-// exhausted. Each batch includes the documents, their total size, and a unique batch ID.
-// Returns when the segment ends or yields nothing. Does not close the resultC channel.
-// Metrics are collected for performance monitoring.
-func (cm *CopyManager) readSegment(
-	ctx context.Context,
-	readBatchCh chan<- readBatch,
-	cur *mongo.Cursor,
-	nextID nextBatchIDFunc,
-) error {
-	zl := log.Ctx(ctx).Unwrap()
-	batchID := nextID()
-	documents := make([]any, 0, config.MaxInsertBatchSize)
-	sizeBytes := 0
-	lastSentAt := time.Now()
-
-	for cur.Next(ctx) {
-		if sizeBytes+len(cur.Current) > config.MaxWriteBatchSizeBytes ||
-			len(documents) == config.MaxInsertBatchSize {
-			elapsed := time.Since(lastSentAt)
-
-			zl.Trace().
-				Uint32("id", batchID).
-				Int("count", len(documents)).
-				Int("size_bytes", sizeBytes).
-				Dur("elapsed", elapsed.Round(time.Millisecond)).
-				Msgf("read batch %d", batchID)
-
-			metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
-			metrics.AddCopyReadDocumentCount(len(documents))
-			metrics.SetCopyReadBatchDurationSeconds(elapsed)
-
-			readBatchCh <- readBatch{
-				ID:        batchID,
-				Documents: documents,
-				SizeBytes: sizeBytes,
-			}
-
-			batchID = nextID()
-			documents = make([]any, 0, config.MaxInsertBatchSize)
-			sizeBytes = 0
-			lastSentAt = time.Now()
-		}
-
-		documents = append(documents, cur.Current)
-		sizeBytes += len(cur.Current)
-	}
-
-	err := cur.Err()
-	if err != nil {
-		zl.Trace().
-			Err(err).
-			Uint32("id", batchID).
-			Int("count", len(documents)).
-			Int("size_bytes", sizeBytes).
-			Dur("elapsed", time.Since(lastSentAt).Round(time.Millisecond)).
-			Msgf("read batch %d", batchID)
-
-		return errors.Wrap(err, "getMore")
-	}
-
-	if len(documents) == 0 {
-		return nil
-	}
-
-	elapsed := time.Since(lastSentAt)
-
-	zl.Trace().
-		Uint32("id", batchID).
-		Int("count", len(documents)).
-		Int("size_bytes", sizeBytes).
-		Dur("elapsed", elapsed.Round(time.Millisecond)).
-		Msgf("read batch %d", batchID)
-
-	metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
-	metrics.AddCopyReadDocumentCount(len(documents))
-	metrics.SetCopyReadBatchDurationSeconds(elapsed)
-
-	readBatchCh <- readBatch{
-		ID:        batchID,
-		Documents: documents,
-		SizeBytes: sizeBytes,
-	}
-
-	return nil
-}
-
-type insertTask struct {
-	Namespace Namespace
-	ID        uint32
-	Documents []any
-	SizeBytes int
-
-	// Results chan<- insertResult
-	OnDone func(insertResult)
-}
-
-type insertResult struct {
-	ID        uint32
-	SizeBytes int
-	Count     int
-	Err       error
-}
-
-//nolint:gochecknoglobals
-var insertOptions = options.InsertMany().SetOrdered(false).SetBypassDocumentValidation(true)
-
 // insertBatch inserts a batch of documents into the target collection.
 // It handles duplicate key errors gracefully, counting only successfully inserted documents.
-// Metrics are collected for monitoring insert performance.
 // The result of the insertion is sent back via the OnDone callback.
 func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 	zl := log.Ctx(ctx).Unwrap()
@@ -584,6 +421,178 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 		Count:     count,
 	})
 }
+
+type (
+	nextSegmentFunc func(context.Context) (*mongo.Cursor, error)
+	nextBatchIDFunc func() uint32
+)
+
+// collectionCopySession holds the channels and synchronization primitives
+// for copying a single collection. One session is created per collection
+// and disposed when the copy completes.
+type collectionCopySession struct {
+	ns       Namespace
+	isCapped bool
+
+	readBatchCh      chan readBatch
+	allBatchesSentCh chan struct{}
+
+	activeSegmentsWg *sync.WaitGroup
+	activeInsertsWg  *sync.WaitGroup
+
+	batchID   atomic.Uint32 // unique batch ID generator
+	segmentID atomic.Uint32 // unique segment ID generator
+
+	// Lifecycle
+	ctx    context.Context //nolint:containedctx // ctx is needed for session lifecycle management
+	cancel context.CancelFunc
+}
+
+func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) *collectionCopySession {
+	sessionCtx, cancel := context.WithCancel(ctx)
+
+	return &collectionCopySession{
+		ns:               ns,
+		isCapped:         isCapped,
+		readBatchCh:      make(chan readBatch),
+		allBatchesSentCh: make(chan struct{}),
+		activeSegmentsWg: &sync.WaitGroup{},
+		activeInsertsWg:  &sync.WaitGroup{},
+		ctx:              sessionCtx,
+		cancel:           cancel,
+	}
+}
+
+// nextBatchID returns the next unique batch ID for this session.
+func (s *collectionCopySession) nextBatchID() uint32 {
+	return s.batchID.Add(1)
+}
+
+// nextSegmentID returns the next unique segment ID for this session.
+func (s *collectionCopySession) nextSegmentID() uint32 {
+	return s.segmentID.Add(1)
+}
+
+// waitAndCleanup coordinates the orderly shutdown of the copy session.
+// It waits for all read workers to finish, closes channels, and ensures
+// all insert operations complete before returning.
+func (s *collectionCopySession) waitAndCleanup() {
+	<-s.ctx.Done()
+	s.activeSegmentsWg.Wait()
+	close(s.readBatchCh)
+	<-s.allBatchesSentCh
+	s.activeInsertsWg.Wait()
+}
+
+// readSegment reads documents from a segment cursor and sends batches to the session's
+// readBatchCh. It batches documents until the configured maximum batch size is reached
+// or the cursor is exhausted.
+//
+//	Returns when the segment ends or yields nothing.
+func (s *collectionCopySession) readSegment(ctx context.Context, cur *mongo.Cursor) error {
+	zl := log.Ctx(ctx).Unwrap()
+	batchID := s.nextBatchID()
+	documents := make([]any, 0, config.MaxInsertBatchSize)
+	sizeBytes := 0
+	lastSentAt := time.Now()
+
+	for cur.Next(ctx) {
+		if sizeBytes+len(cur.Current) > config.MaxWriteBatchSizeBytes ||
+			len(documents) == config.MaxInsertBatchSize {
+			elapsed := time.Since(lastSentAt)
+
+			zl.Trace().
+				Uint32("id", batchID).
+				Int("count", len(documents)).
+				Int("size_bytes", sizeBytes).
+				Dur("elapsed", elapsed.Round(time.Millisecond)).
+				Msgf("read batch %d", batchID)
+
+			metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
+			metrics.AddCopyReadDocumentCount(len(documents))
+			metrics.SetCopyReadBatchDurationSeconds(elapsed)
+
+			s.readBatchCh <- readBatch{
+				ID:        batchID,
+				Documents: documents,
+				SizeBytes: sizeBytes,
+			}
+
+			batchID = s.nextBatchID()
+			documents = make([]any, 0, config.MaxInsertBatchSize)
+			sizeBytes = 0
+			lastSentAt = time.Now()
+		}
+
+		documents = append(documents, cur.Current)
+		sizeBytes += len(cur.Current)
+	}
+
+	err := cur.Err()
+	if err != nil {
+		zl.Trace().
+			Err(err).
+			Uint32("id", batchID).
+			Int("count", len(documents)).
+			Int("size_bytes", sizeBytes).
+			Dur("elapsed", time.Since(lastSentAt).Round(time.Millisecond)).
+			Msgf("read batch %d", batchID)
+
+		return errors.Wrap(err, "getMore")
+	}
+
+	if len(documents) == 0 {
+		return nil
+	}
+
+	elapsed := time.Since(lastSentAt)
+
+	zl.Trace().
+		Uint32("id", batchID).
+		Int("count", len(documents)).
+		Int("size_bytes", sizeBytes).
+		Dur("elapsed", elapsed.Round(time.Millisecond)).
+		Msgf("read batch %d", batchID)
+
+	metrics.AddCopyReadSize(uint64(sizeBytes)) //nolint:gosec
+	metrics.AddCopyReadDocumentCount(len(documents))
+	metrics.SetCopyReadBatchDurationSeconds(elapsed)
+
+	s.readBatchCh <- readBatch{
+		ID:        batchID,
+		Documents: documents,
+		SizeBytes: sizeBytes,
+	}
+
+	return nil
+}
+
+// readBatch represents a batch of documents read from a segment.
+type readBatch struct {
+	ID        uint32
+	Documents []any
+	SizeBytes int
+}
+
+type insertTask struct {
+	Namespace Namespace
+	ID        uint32
+	Documents []any
+	SizeBytes int
+
+	// Results chan<- insertResult
+	OnDone func(insertResult)
+}
+
+type insertResult struct {
+	ID        uint32
+	SizeBytes int
+	Count     int
+	Err       error
+}
+
+//nolint:gochecknoglobals
+var insertOptions = options.InsertMany().SetOrdered(false).SetBypassDocumentValidation(true)
 
 // Segmenter splits a MongoDB collection into logical segments based on _id ranges.
 // It enables concurrent reads over non-overlapping segments by tracking min and max keys.
