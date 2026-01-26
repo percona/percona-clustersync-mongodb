@@ -172,7 +172,10 @@ func (cm *CopyManager) Start(
 
 	cm.collectionsWg.Add(1)
 	go func() {
-		defer func() { close(progressUpdateCh); cm.collectionsWg.Done() }()
+		defer func() {
+			close(progressUpdateCh)
+			cm.collectionsWg.Done()
+		}()
 
 		lg := log.New("copy").With(log.NS(namespace.Database, namespace.Collection))
 		err := cm.copyCollection(lg.WithContext(ctx), namespace, spec, progressUpdateCh)
@@ -197,7 +200,6 @@ type collectionCopySession struct {
 	isCapped bool
 
 	readBatchCh      chan readBatch
-	insertResultCh   chan insertResult
 	allBatchesSentCh chan struct{}
 
 	activeSegmentsWg *sync.WaitGroup
@@ -218,7 +220,6 @@ func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) 
 		ns:               ns,
 		isCapped:         isCapped,
 		readBatchCh:      make(chan readBatch),
-		insertResultCh:   make(chan insertResult),
 		allBatchesSentCh: make(chan struct{}),
 		activeSegmentsWg: &sync.WaitGroup{},
 		activeInsertsWg:  &sync.WaitGroup{},
@@ -246,7 +247,6 @@ func (s *collectionCopySession) waitAndCleanup() {
 	close(s.readBatchCh)
 	<-s.allBatchesSentCh
 	s.activeInsertsWg.Wait()
-	close(s.insertResultCh)
 }
 
 func (cm *CopyManager) copyCollection(
@@ -301,8 +301,6 @@ func (cm *CopyManager) copyCollection(
 
 		go segmenter.handleNanIDDoc(session.readBatchCh, session.nextBatchID)
 	}
-
-	go session.waitAndCleanup()
 
 	// Read dispatcher.
 	go func() {
@@ -382,7 +380,12 @@ func (cm *CopyManager) copyCollection(
 				SizeBytes: batch.SizeBytes,
 				Documents: batch.Documents,
 				OnDone: func(result insertResult) {
-					session.insertResultCh <- result
+					progressUpdateCh <- CopyProgressUpdate{
+						Err:       result.Err,
+						SizeBytes: uint64(result.SizeBytes), //nolint:gosec
+						Count:     result.Count,
+					}
+					session.activeInsertsWg.Done()
 				},
 			}
 
@@ -394,15 +397,7 @@ func (cm *CopyManager) copyCollection(
 		}
 	}()
 
-	for result := range session.insertResultCh {
-		progressUpdateCh <- CopyProgressUpdate{
-			Err:       result.Err,
-			SizeBytes: uint64(result.SizeBytes), //nolint:gosec
-			Count:     result.Count,
-		}
-
-		session.activeInsertsWg.Done()
-	}
+	session.waitAndCleanup()
 
 	return nil
 }
