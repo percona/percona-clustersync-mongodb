@@ -158,12 +158,12 @@ func (cm *CopyManager) Close() {
 	cm.close()
 }
 
-// Do starts a clone operation for the specified namespace.
+// Start begins a copy operation for the specified namespace.
 // It launches asynchronous workers to read from the source collection and insert into the target
 // collection.
-// The provided getSpec function retrieves the collection specification needed before cloning.
-// It returns a channel of CopyUpdate values that report progress or errors from the operation.
-func (cm *CopyManager) Do(
+// It returns a channel of CopyProgressUpdate values that report progress or errors from the
+// operation.
+func (cm *CopyManager) Start(
 	ctx context.Context,
 	namespace Namespace,
 	spec *topo.CollectionSpecification,
@@ -189,6 +189,53 @@ type (
 	nextBatchIDFunc func() uint32
 )
 
+// collectionCopySession holds the channels and synchronization primitives
+// for copying a single collection. One session is created per collection
+// and disposed when the copy completes.
+type collectionCopySession struct {
+	ns       Namespace
+	isCapped bool
+
+	readBatchCh      chan readBatch
+	insertResultCh   chan insertResult
+	allBatchesSentCh chan struct{}
+
+	activeSegmentsWg *sync.WaitGroup
+	activeInsertsWg  *sync.WaitGroup
+
+	// Lifecycle
+	ctx    context.Context //nolint:containedctx // ctx is needed for session lifecycle management
+	cancel context.CancelFunc
+}
+
+func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) *collectionCopySession {
+	sessionCtx, cancel := context.WithCancel(ctx)
+
+	return &collectionCopySession{
+		ns:               ns,
+		isCapped:         isCapped,
+		readBatchCh:      make(chan readBatch),
+		insertResultCh:   make(chan insertResult),
+		allBatchesSentCh: make(chan struct{}),
+		activeSegmentsWg: &sync.WaitGroup{},
+		activeInsertsWg:  &sync.WaitGroup{},
+		ctx:              sessionCtx,
+		cancel:           cancel,
+	}
+}
+
+// waitAndCleanup coordinates the orderly shutdown of the copy session.
+// It waits for all read workers to finish, closes channels, and ensures
+// all insert operations complete before returning.
+func (s *collectionCopySession) waitAndCleanup() {
+	<-s.ctx.Done()
+	s.activeSegmentsWg.Wait()
+	close(s.readBatchCh)
+	<-s.allBatchesSentCh
+	s.activeInsertsWg.Wait()
+	close(s.insertResultCh)
+}
+
 func (cm *CopyManager) copyCollection(
 	ctx context.Context,
 	namespace Namespace,
@@ -204,12 +251,11 @@ func (cm *CopyManager) copyCollection(
 
 	isCapped, _ := spec.Options.Lookup("capped").BooleanOK()
 
+	session := newCollectionCopySession(ctx, namespace, isCapped)
+
 	var nextSegment nextSegmentFunc
-
-	readBatchCh := make(chan readBatch)
-
 	var batchID atomic.Uint32
-	var nextID nextBatchIDFunc = func() uint32 { return batchID.Add(1) }
+	nextID := func() uint32 { return batchID.Add(1) }
 
 	if isCapped { //nolint:nestif
 		segmenter, err := NewCappedSegmenter(ctx,
@@ -242,39 +288,19 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
-		go segmenter.handleNanIDDoc(readBatchCh, nextID)
+		go segmenter.handleNanIDDoc(session.readBatchCh, nextID)
 	}
 
-	collectionReadCtx, stopCollectionRead := context.WithCancel(ctx)
+	// Cleanup coordinator goroutine
+	go session.waitAndCleanup()
 
-	// activeSegmentsWg tracks in-progress read segments
-	activeSegmentsWg := &sync.WaitGroup{}
-
-	batchesSentCh := make(chan struct{}) // closes when all batches are sent to inserters
-
-	// activeInsertsWg tracks in-progress insert batches
-	activeInsertsWg := &sync.WaitGroup{}
-
-	insertResultCh := make(chan insertResult)
-
-	go func() { // cleanup
-		<-collectionReadCtx.Done() // EOC or read error
-		activeSegmentsWg.Wait()    // all segments is read (EOS)
-		close(readBatchCh)         // no more read batches: release send inserts routine
-		<-batchesSentCh            // wait until no more new batches for inserters
-		activeInsertsWg.Wait()     // all batches inserted
-		close(insertResultCh)      // exit
-	}()
-
-	// Dispatches read workers for each segment.
+	// Segment dispatcher goroutine
 	go func() {
 		var segmentID uint32
 
-		readStopped := collectionReadCtx.Done()
-
 		for {
 			select {
-			case <-readStopped: // when a worker fails
+			case <-session.ctx.Done():
 				return
 
 			case cm.readSem <- struct{}{}:
@@ -282,8 +308,8 @@ func (cm *CopyManager) copyCollection(
 			}
 
 			ctx := log.New(fmt.Sprintf("copy:w:r:%d", segmentID)).
-				With(log.NS(namespace.Database, namespace.Collection)).
-				WithContext(collectionReadCtx)
+				With(log.NS(session.ns.Database, session.ns.Collection)).
+				WithContext(session.ctx)
 
 			cursor, err := nextSegment(ctx)
 			if err != nil {
@@ -291,25 +317,25 @@ func (cm *CopyManager) copyCollection(
 
 				switch {
 				case errors.Is(err, errEOC):
-					activeSegmentsWg.Wait() // wait all readers finish
+					session.activeSegmentsWg.Wait() // wait all readers finish
 				case errors.Is(err, context.Canceled):
 					return // read stopped. progress channel could be already closed
 				default:
 					progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "next segment")}
 				}
 
-				stopCollectionRead()
+				session.cancel()
 
 				return
 			}
 
-			activeSegmentsWg.Add(1)
+			session.activeSegmentsWg.Add(1)
 
-			// Launch a read worker for the segment.
+			// Read worker goroutine
 			go func() {
 				defer func() {
 					<-cm.readSem
-					activeSegmentsWg.Done()
+					session.activeSegmentsWg.Done()
 
 					err := util.CtxWithTimeout(context.Background(),
 						config.CloseCursorTimeout, cursor.Close)
@@ -318,54 +344,51 @@ func (cm *CopyManager) copyCollection(
 					}
 				}()
 
-				err = cm.readSegment(ctx, readBatchCh, cursor, nextID)
+				err = cm.readSegment(ctx, session.readBatchCh, cursor, nextID)
 				if err != nil {
 					progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
 
-					stopCollectionRead()
+					session.cancel()
 				}
 			}()
 
-			if isCapped {
-				activeSegmentsWg.Wait()
+			if session.isCapped {
+				session.activeSegmentsWg.Wait()
 			}
 		}
 	}()
 
-	// receives readBatch from read workers and sends them to insert workers.
-	// For capped collections, inserting is serialized by waiting for each batch's insertion.
+	// Batch dispatcher goroutine
 	go func() {
-		defer close(batchesSentCh) // notify: no more new batches for inserters
+		defer close(session.allBatchesSentCh)
 
-		// collect batches from read workers
-		for readBatch := range readBatchCh {
-			// send the batch to an insert worker
-			activeInsertsWg.Add(1)
+		for batch := range session.readBatchCh {
+			session.activeInsertsWg.Add(1)
 
 			cm.insertTaskCh <- insertTask{
-				Namespace: namespace,
-				ID:        readBatch.ID,
-				SizeBytes: readBatch.SizeBytes,
-				Documents: readBatch.Documents,
+				Namespace: session.ns,
+				ID:        batch.ID,
+				SizeBytes: batch.SizeBytes,
+				Documents: batch.Documents,
 				OnDone: func(result insertResult) {
-					insertResultCh <- result
+					session.insertResultCh <- result
 				},
 			}
 
-			if isCapped {
-				activeInsertsWg.Wait() // insert next batch after the current is inserted
+			if session.isCapped {
+				session.activeInsertsWg.Wait()
 			}
 		}
 	}()
 
-	// collect results from insert workers. notify caller
-	for insertResult := range insertResultCh {
-		activeInsertsWg.Done()
+	// Result collector (runs on calling goroutine)
+	for result := range session.insertResultCh {
+		session.activeInsertsWg.Done()
 
 		progressUpdateCh <- CopyProgressUpdate{
-			Err:       insertResult.Err,
-			SizeBytes: uint64(insertResult.SizeBytes), //nolint:gosec
-			Count:     insertResult.Count,
+			Err:       result.Err,
+			SizeBytes: uint64(result.SizeBytes), //nolint:gosec
+			Count:     result.Count,
 		}
 	}
 

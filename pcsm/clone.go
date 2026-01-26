@@ -488,7 +488,7 @@ func (c *Clone) doCollectionClone(
 
 	lastLogAt = time.Now() // init
 
-	progressUpdateCh := copyManager.Do(nsCtx, ns, spec)
+	progressUpdateCh := copyManager.Start(nsCtx, ns, spec)
 
 	for progressUpdate := range progressUpdateCh {
 		err := progressUpdate.Err
