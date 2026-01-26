@@ -203,6 +203,9 @@ type collectionCopySession struct {
 	activeSegmentsWg *sync.WaitGroup
 	activeInsertsWg  *sync.WaitGroup
 
+	batchID   atomic.Uint32 // unique batch ID generator
+	segmentID atomic.Uint32 // unique segment ID generator
+
 	// Lifecycle
 	ctx    context.Context //nolint:containedctx // ctx is needed for session lifecycle management
 	cancel context.CancelFunc
@@ -222,6 +225,16 @@ func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) 
 		ctx:              sessionCtx,
 		cancel:           cancel,
 	}
+}
+
+// nextBatchID returns the next unique batch ID for this session.
+func (s *collectionCopySession) nextBatchID() uint32 {
+	return s.batchID.Add(1)
+}
+
+// nextSegmentID returns the next unique segment ID for this session.
+func (s *collectionCopySession) nextSegmentID() uint32 {
+	return s.segmentID.Add(1)
 }
 
 // waitAndCleanup coordinates the orderly shutdown of the copy session.
@@ -254,8 +267,6 @@ func (cm *CopyManager) copyCollection(
 	session := newCollectionCopySession(ctx, namespace, isCapped)
 
 	var nextSegment nextSegmentFunc
-	var batchID atomic.Uint32
-	nextID := func() uint32 { return batchID.Add(1) }
 
 	if isCapped { //nolint:nestif
 		segmenter, err := NewCappedSegmenter(ctx,
@@ -288,25 +299,22 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
-		go segmenter.handleNanIDDoc(session.readBatchCh, nextID)
+		go segmenter.handleNanIDDoc(session.readBatchCh, session.nextBatchID)
 	}
 
-	// Cleanup coordinator goroutine
 	go session.waitAndCleanup()
 
-	// Segment dispatcher goroutine
+	// Read dispatcher.
 	go func() {
-		var segmentID uint32
-
 		for {
 			select {
 			case <-session.ctx.Done():
 				return
 
 			case cm.readSem <- struct{}{}:
-				segmentID++
 			}
 
+			segmentID := session.nextSegmentID()
 			ctx := log.New(fmt.Sprintf("copy:w:r:%d", segmentID)).
 				With(log.NS(session.ns.Database, session.ns.Collection)).
 				WithContext(session.ctx)
@@ -331,7 +339,8 @@ func (cm *CopyManager) copyCollection(
 
 			session.activeSegmentsWg.Add(1)
 
-			// Read worker goroutine
+			// Read worker for this segment.
+			// Reads documents from the segment cursor and sends batches to the insert queue.
 			go func() {
 				defer func() {
 					<-cm.readSem
@@ -344,7 +353,7 @@ func (cm *CopyManager) copyCollection(
 					}
 				}()
 
-				err = cm.readSegment(ctx, session.readBatchCh, cursor, nextID)
+				err = cm.readSegment(ctx, session.readBatchCh, cursor, session.nextBatchID)
 				if err != nil {
 					progressUpdateCh <- CopyProgressUpdate{Err: errors.Wrap(err, "read worker")}
 
@@ -353,12 +362,14 @@ func (cm *CopyManager) copyCollection(
 			}()
 
 			if session.isCapped {
+				// For capped collections, wait for each segment to complete
+				// before starting the next to maintain order.
 				session.activeSegmentsWg.Wait()
 			}
 		}
 	}()
 
-	// Batch dispatcher goroutine
+	// Insert dispatcher.
 	go func() {
 		defer close(session.allBatchesSentCh)
 
@@ -376,20 +387,21 @@ func (cm *CopyManager) copyCollection(
 			}
 
 			if session.isCapped {
+				// For capped collections, wait for each insert to complete
+				// before reading the next batch to maintain order.
 				session.activeInsertsWg.Wait()
 			}
 		}
 	}()
 
-	// Result collector (runs on calling goroutine)
 	for result := range session.insertResultCh {
-		session.activeInsertsWg.Done()
-
 		progressUpdateCh <- CopyProgressUpdate{
 			Err:       result.Err,
 			SizeBytes: uint64(result.SizeBytes), //nolint:gosec
 			Count:     result.Count,
 		}
+
+		session.activeInsertsWg.Done()
 	}
 
 	return nil
