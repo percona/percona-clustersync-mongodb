@@ -38,10 +38,10 @@ type CopyManager struct {
 	target  *mongo.Client      // target MongoDB client
 	options CopyManagerOptions // user-defined options for the clone process
 
-	insertTaskCh chan insertTask // channel for insert batch tasks
-	close        func()          // function to stop workers and clean up resources
-	collGroup    sync.WaitGroup  // tracks active collections being processed
-	readSem      chan struct{}   // semaphore to limit concurrent read workers
+	insertTaskCh  chan insertTask // channel for insert batch tasks
+	close         func()          // function to stop workers and clean up resources
+	collectionsWg sync.WaitGroup  // tracks active collections being processed
+	readSem       chan struct{}   // semaphore to limit concurrent read workers
 }
 
 // CopyGetCollSpecFunc defines a function type that retrieves a collection's specification,
@@ -143,7 +143,7 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 	cm.close = func() {
 		once.Do(func() {
 			cancelInsert()
-			cm.collGroup.Wait()
+			cm.collectionsWg.Wait()
 			close(cm.readSem)
 			close(cm.insertTaskCh)
 		})
@@ -170,9 +170,9 @@ func (cm *CopyManager) Do(
 ) <-chan CopyProgressUpdate {
 	progressUpdateCh := make(chan CopyProgressUpdate)
 
-	cm.collGroup.Add(1)
+	cm.collectionsWg.Add(1)
 	go func() {
-		defer func() { close(progressUpdateCh); cm.collGroup.Done() }()
+		defer func() { close(progressUpdateCh); cm.collectionsWg.Done() }()
 
 		lg := log.New("copy").With(log.NS(namespace.Database, namespace.Collection))
 		err := cm.copyCollection(lg.WithContext(ctx), namespace, spec, progressUpdateCh)
@@ -247,21 +247,22 @@ func (cm *CopyManager) copyCollection(
 
 	collectionReadCtx, stopCollectionRead := context.WithCancel(ctx)
 
-	// pendingSegments tracks in-progress read segments
-	pendingSegments := &sync.WaitGroup{}
+	// activeSegmentsWg tracks in-progress read segments
+	activeSegmentsWg := &sync.WaitGroup{}
 
-	batchsSentCh := make(chan struct{}) // closes when all batches are sent to inserters
+	batchesSentCh := make(chan struct{}) // closes when all batches are sent to inserters
 
-	// pendingInserts tracks in-progress insert batches
-	pendingInserts := &sync.WaitGroup{}
+	// activeInsertsWg tracks in-progress insert batches
+	activeInsertsWg := &sync.WaitGroup{}
+
 	insertResultCh := make(chan insertResult)
 
 	go func() { // cleanup
 		<-collectionReadCtx.Done() // EOC or read error
-		pendingSegments.Wait()     // all segments is read (EOS)
+		activeSegmentsWg.Wait()    // all segments is read (EOS)
 		close(readBatchCh)         // no more read batches: release send inserts routine
-		<-batchsSentCh             // wait until no more new batches for inserters
-		pendingInserts.Wait()      // all batches inserted
+		<-batchesSentCh            // wait until no more new batches for inserters
+		activeInsertsWg.Wait()     // all batches inserted
 		close(insertResultCh)      // exit
 	}()
 
@@ -290,7 +291,7 @@ func (cm *CopyManager) copyCollection(
 
 				switch {
 				case errors.Is(err, errEOC):
-					pendingSegments.Wait() // wait all readers finish
+					activeSegmentsWg.Wait() // wait all readers finish
 				case errors.Is(err, context.Canceled):
 					return // read stopped. progress channel could be already closed
 				default:
@@ -302,13 +303,13 @@ func (cm *CopyManager) copyCollection(
 				return
 			}
 
-			pendingSegments.Add(1)
+			activeSegmentsWg.Add(1)
 
 			// Launch a read worker for the segment.
 			go func() {
 				defer func() {
 					<-cm.readSem
-					pendingSegments.Done()
+					activeSegmentsWg.Done()
 
 					err := util.CtxWithTimeout(context.Background(),
 						config.CloseCursorTimeout, cursor.Close)
@@ -326,7 +327,7 @@ func (cm *CopyManager) copyCollection(
 			}()
 
 			if isCapped {
-				pendingSegments.Wait()
+				activeSegmentsWg.Wait()
 			}
 		}
 	}()
@@ -334,12 +335,12 @@ func (cm *CopyManager) copyCollection(
 	// receives readBatch from read workers and sends them to insert workers.
 	// For capped collections, inserting is serialized by waiting for each batch's insertion.
 	go func() {
-		defer close(batchsSentCh) // notify: no more new batches for inserters
+		defer close(batchesSentCh) // notify: no more new batches for inserters
 
 		// collect batches from read workers
 		for readBatch := range readBatchCh {
 			// send the batch to an insert worker
-			pendingInserts.Add(1)
+			activeInsertsWg.Add(1)
 
 			cm.insertTaskCh <- insertTask{
 				Namespace: namespace,
@@ -352,14 +353,14 @@ func (cm *CopyManager) copyCollection(
 			}
 
 			if isCapped {
-				pendingInserts.Wait() // insert next batch after the current is inserted
+				activeInsertsWg.Wait() // insert next batch after the current is inserted
 			}
 		}
 	}()
 
 	// collect results from insert workers. notify caller
 	for insertResult := range insertResultCh {
-		pendingInserts.Done()
+		activeInsertsWg.Done()
 
 		progressUpdateCh <- CopyProgressUpdate{
 			Err:       insertResult.Err,
