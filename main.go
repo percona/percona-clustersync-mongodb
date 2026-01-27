@@ -252,9 +252,7 @@ func newFinalizeCmd(cfg *config.Config) *cobra.Command {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			finalizeOptions := finalizeRequest{}
-
-			return NewClient(cfg.Port).Finalize(cmd.Context(), finalizeOptions)
+			return NewClient(cfg.Port).Finalize(cmd.Context())
 		},
 	}
 
@@ -834,28 +832,6 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var params finalizeRequest
-
-	if r.ContentLength != 0 {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusInternalServerError),
-				http.StatusInternalServerError)
-
-			return
-		}
-
-		err = json.Unmarshal(data, &params)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusBadRequest),
-				http.StatusBadRequest)
-
-			return
-		}
-	}
-
 	err := s.pcsm.Finalize(ctx)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
@@ -999,9 +975,6 @@ type startResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
-// finalizeRequest represents the request body for the /finalize endpoint.
-type finalizeRequest struct{}
-
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
 	// Ok indicates if the operation was successful.
@@ -1101,8 +1074,8 @@ func (c PCSMClient) Start(ctx context.Context, req startRequest) error {
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c PCSMClient) Finalize(ctx context.Context, req finalizeRequest) error {
-	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
+func (c PCSMClient) Finalize(ctx context.Context) error {
+	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", nil)
 }
 
 // Pause sends a request to pause the cluster replication.
