@@ -9,6 +9,16 @@ Usage:
     python hack/loader.py --size 10 --uri "mongodb://localhost:27017"
     python hack/loader.py -s 5 -u "mongodb://localhost:27017" --databases 3 --collections-per-db 5 --drop
     python hack/loader.py -s 5 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded
+
+Options:
+    -s, --size              Size in GB to load (required)
+    -u, --uri               MongoDB connection string (required)
+    --databases             Number of databases (default: 1)
+    --collections-per-db    Collections per database (default: 1)
+    --workers               Number of parallel workers (default: 4)
+    --batch-size            Documents per insert batch (default: 200)
+    --drop                  Drop collections before loading (default: false)
+    --sharded               Create sharded collections (default: false)
 """
 
 import argparse
