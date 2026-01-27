@@ -647,7 +647,7 @@ func (ml *PCSM) Finalize(ctx context.Context) error {
 	ml.state = StateFinalizing
 
 	go func() {
-		err := ml.catalog.Finalize(ctx)
+		err := ml.catalog.Finalize(ml.lifecycleCtx)
 		if err != nil {
 			ml.setFailed(errors.Wrap(err, "finalization"))
 
