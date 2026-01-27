@@ -276,12 +276,8 @@ func (cm *CopyManager) runInsertDispatcher(
 			ID:        batch.ID,
 			SizeBytes: batch.SizeBytes,
 			Documents: batch.Documents,
-			OnDone: func(result insertResult) {
-				progressUpdateCh <- CopyProgressUpdate{
-					Err:       result.Err,
-					SizeBytes: uint64(result.SizeBytes), //nolint:gosec
-					Count:     result.Count,
-				}
+			OnDone: func(update CopyProgressUpdate) {
+				progressUpdateCh <- update
 				session.activeInsertsWg.Done()
 			},
 		}
@@ -376,16 +372,14 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 	if err != nil {
 		var bulkError mongo.BulkWriteException
 		if !errors.As(err, &bulkError) || bulkError.WriteConcernError != nil {
-			// task.Results <- insertResult{ID: task.ID, Err: err}
-			task.OnDone(insertResult{ID: task.ID, Err: err})
+			task.OnDone(CopyProgressUpdate{Err: err})
 
 			return
 		}
 
 		for _, e := range bulkError.WriteErrors {
 			if !mongo.IsDuplicateKeyError(e) {
-				// task.Results <- insertResult{ID: task.ID, Err: err}
-				task.OnDone(insertResult{ID: task.ID, Err: err})
+				task.OnDone(CopyProgressUpdate{Err: err})
 
 				return
 			}
@@ -415,9 +409,8 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 	metrics.AddCopyInsertDocumentCount(len(task.Documents))
 	metrics.SetCopyInsertBatchDurationSeconds(elapsed)
 
-	task.OnDone(insertResult{
-		ID:        task.ID,
-		SizeBytes: task.SizeBytes,
+	task.OnDone(CopyProgressUpdate{
+		SizeBytes: uint64(task.SizeBytes), //nolint:gosec
 		Count:     count,
 	})
 }
@@ -573,21 +566,14 @@ type readBatch struct {
 	SizeBytes int
 }
 
+// insertTask represents a batch of documents to be inserted into the target collection.
 type insertTask struct {
 	Namespace Namespace
 	ID        uint32
 	Documents []any
 	SizeBytes int
 
-	// Results chan<- insertResult
-	OnDone func(insertResult)
-}
-
-type insertResult struct {
-	ID        uint32
-	SizeBytes int
-	Count     int
-	Err       error
+	OnDone func(CopyProgressUpdate)
 }
 
 //nolint:gochecknoglobals
