@@ -80,7 +80,7 @@ type CopyManagerOptions struct {
 	ReadBatchSizeBytes int32
 }
 
-func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
+func NewCopyManager(ctx context.Context, source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
 	if options.NumReadWorkers < 1 {
 		options.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
 	}
@@ -114,7 +114,7 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 	lg.Debugf("ReadBatchSizeBytes: %d (%s)", options.ReadBatchSizeBytes,
 		humanize.Bytes(uint64(options.ReadBatchSizeBytes))) //nolint:gosec
 
-	insertCtx, cancelInsert := context.WithCancel(context.Background())
+	insertCtx, cancelInsert := context.WithCancel(ctx)
 
 	cm := &CopyManager{
 		source:  source,
@@ -309,7 +309,7 @@ func (cm *CopyManager) copyCollection(
 					<-cm.readLimit
 					pendingSegments.Done()
 
-					err := util.CtxWithTimeout(context.Background(),
+					err := util.CtxWithTimeout(ctx,
 						config.CloseCursorTimeout, cursor.Close)
 					if err != nil {
 						log.Ctx(ctx).Error(err, "Close cursor")
