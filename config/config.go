@@ -28,8 +28,6 @@ type Config struct {
 
 	MongoDB MongoDBConfig `mapstructure:",squash"`
 
-	UseCollectionBulkWrite bool `mapstructure:"use-collection-bulk-write"`
-
 	Clone CloneConfig `mapstructure:",squash"`
 
 	// hidden startup flags
@@ -140,8 +138,6 @@ func bindEnvVars() {
 		"PCSM_MONGODB_OPERATION_TIMEOUT",
 		"PLM_MONGODB_CLI_OPERATION_TIMEOUT", // deprecated
 	)
-
-	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 
 	_ = viper.BindEnv("dev-target-client-compressors", "PCSM_DEV_TARGET_CLIENT_COMPRESSORS")
 

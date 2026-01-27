@@ -252,18 +252,11 @@ func newFinalizeCmd(cfg *config.Config) *cobra.Command {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
-
-			finalizeOptions := finalizeRequest{
-				IgnoreHistoryLost: ignoreHistoryLost,
-			}
+			finalizeOptions := finalizeRequest{}
 
 			return NewClient(cfg.Port).Finalize(cmd.Context(), finalizeOptions)
 		},
 	}
-
-	cmd.Flags().Bool("ignore-history-lost", false, "")
-	cmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	return cmd
 }
@@ -712,9 +705,6 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
 		ExcludeNamespaces:  params.ExcludeNamespaces,
-		Repl: pcsm.ReplOptions{
-			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
-		},
 		Clone: pcsm.CloneOptions{
 			Parallelism:   cfg.Clone.NumParallelCollections,
 			ReadWorkers:   cfg.Clone.NumReadWorkers,
@@ -866,11 +856,7 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options := &pcsm.FinalizeOptions{
-		IgnoreHistoryLost: params.IgnoreHistoryLost,
-	}
-
-	err := s.pcsm.Finalize(ctx, *options)
+	err := s.pcsm.Finalize(ctx)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -1003,8 +989,6 @@ type startRequest struct {
 	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
 	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
-
-	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
 }
 
 // startResponse represents the response body for the /start endpoint.
@@ -1016,11 +1000,7 @@ type startResponse struct {
 }
 
 // finalizeRequest represents the request body for the /finalize endpoint.
-type finalizeRequest struct {
-	// IgnoreHistoryLost indicates whether the operation can ignore the ChangeStreamHistoryLost
-	// error.
-	IgnoreHistoryLost bool `json:"ignoreHistoryLost,omitempty"`
-}
+type finalizeRequest struct{}
 
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
