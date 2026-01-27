@@ -131,3 +131,10 @@ Running `pcsm start`, `pcsm pause`, etc. operates as an **HTTP client**:
 2. Constructs HTTP request with JSON body
 3. Sends request to the already-running server
 4. Prints JSON response to stdout
+
+## External References
+
+| Project              | Repository                                               | Documentation                                               |
+| -------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| PCSM Docs            | <https://github.com/percona/pcsm-docs>                   | <https://docs.percona.com/percona-clustersync-for-mongodb/> |
+| PSMDB Testing (QA)   | <https://github.com/Percona-QA/psmdb-testing>            | -                                                           |
