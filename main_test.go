@@ -458,15 +458,14 @@ func TestResumeFromFailure(t *testing.T) {
 		defer server.Close()
 
 		port := extractPort(server.URL)
-		stdout, stderr, err := runPCSM(t, []string{"--port", port, "resume"}, nil)
-		require.NoError(t, err, "stderr: %s", stderr)
+		_, stderr, err := runPCSM(t, []string{"--port", port, "resume"}, nil)
+		require.Error(t, err)
 
 		captured := server.request
 
 		assert.Equal(t, http.MethodPost, captured.Method)
 		assert.Equal(t, "/resume", captured.Path)
-		assert.Contains(t, stdout, `"ok": false`)
-		assert.Contains(t, stdout, "cannot resume")
+		assert.Contains(t, stderr, "cannot resume")
 	})
 }
 

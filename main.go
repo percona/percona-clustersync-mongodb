@@ -212,10 +212,18 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				startOptions.CloneNumInsertWorkers = &v
 			}
 			if cfg.Clone.SegmentSize != "" {
+				_, err := config.ParseAndValidateCloneSegmentSize(cfg.Clone.SegmentSize)
+				if err != nil {
+					return errors.Wrap(err, "invalid clone segment size")
+				}
 				v := cfg.Clone.SegmentSize
 				startOptions.CloneSegmentSize = &v
 			}
 			if cfg.Clone.ReadBatchSize != "" {
+				_, err := config.ParseAndValidateCloneReadBatchSize(cfg.Clone.ReadBatchSize)
+				if err != nil {
+					return errors.Wrap(err, "invalid clone read batch size")
+				}
 				v := cfg.Clone.ReadBatchSize
 				startOptions.CloneReadBatchSize = &v
 			}
@@ -1033,6 +1041,13 @@ type startRequest struct {
 	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
 }
 
+// clientResponse is implemented by all API response types to allow
+// doClientRequest to extract errors uniformly.
+type clientResponse interface {
+	IsOk() bool
+	GetError() string
+}
+
 // startResponse represents the response body for the /start endpoint.
 type startResponse struct {
 	// Ok indicates if the operation was successful.
@@ -1040,6 +1055,9 @@ type startResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r startResponse) IsOk() bool       { return r.Ok }
+func (r startResponse) GetError() string { return r.Err }
 
 // finalizeRequest represents the request body for the /finalize endpoint.
 type finalizeRequest struct {
@@ -1055,6 +1073,9 @@ type finalizeResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r finalizeResponse) IsOk() bool       { return r.Ok }
+func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
@@ -1083,6 +1104,9 @@ type statusResponse struct {
 	// InitialSync contains the initial sync status details.
 	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
 }
+
+func (r statusResponse) IsOk() bool       { return r.Ok }
+func (r statusResponse) GetError() string { return r.Err }
 
 type lastReplicatedOpTime struct {
 	TS      string `json:"ts"`
@@ -1113,6 +1137,9 @@ type pauseResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
+func (r pauseResponse) IsOk() bool       { return r.Ok }
+func (r pauseResponse) GetError() string { return r.Err }
+
 // resumeRequest represents the request body for the /resume endpoint.
 type resumeRequest struct {
 	// FromFailure indicates whether to resume from a failed state.
@@ -1127,6 +1154,9 @@ type resumeResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r resumeResponse) IsOk() bool       { return r.Ok }
+func (r resumeResponse) GetError() string { return r.Err }
 
 type PCSMClient struct {
 	port int
@@ -1161,7 +1191,7 @@ func (c PCSMClient) Resume(ctx context.Context, req resumeRequest) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 
-func doClientRequest[T any](ctx context.Context, port int, method, path string, body any) error {
+func doClientRequest[T clientResponse](ctx context.Context, port int, method, path string, body any) error {
 	url := fmt.Sprintf("http://localhost:%d/%s", port, path)
 
 	bodyData := []byte("")
@@ -1191,6 +1221,10 @@ func doClientRequest[T any](ctx context.Context, port int, method, path string, 
 	err = json.NewDecoder(res.Body).Decode(&resp)
 	if err != nil {
 		return errors.Wrap(err, "decode response")
+	}
+
+	if !resp.IsOk() {
+		return errors.New(resp.GetError())
 	}
 
 	j := json.NewEncoder(os.Stdout)
