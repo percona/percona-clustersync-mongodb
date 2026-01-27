@@ -13,11 +13,26 @@ make pytest      # Run Python E2E tests
 make clean       # Remove binaries and caches
 ```
 
+Start local MongoDB clusters for testing:
+
+```bash
+./hack/rs/run.sh     # Start replica set clusters (rs0, rs1)
+./hack/sh/run.sh     # Start sharded clusters
+```
+
 Single test:
 
 - `go test -race -run TestName ./package`
+- `poetry run pytest tests/test_file.py::test_name`
+- manually execute binary from `./bin` for cases not covered by tests
 
-- poetry run pytest tests/test_file.py::test_name
+Cleanup test environments:
+
+```bash
+./hack/cleanup.sh       # Clean all environments (rs, sh, sh-ha)
+./hack/cleanup.sh rs    # Clean replica sets only
+./hack/cleanup.sh sh    # Clean sharded cluster only
+```
 
 ## Project-Specific Patterns
 
@@ -134,7 +149,7 @@ Running `pcsm start`, `pcsm pause`, etc. operates as an **HTTP client**:
 
 ## External References
 
-| Project              | Repository                                               | Documentation                                               |
-| -------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
-| PCSM Docs            | <https://github.com/percona/pcsm-docs>                   | <https://docs.percona.com/percona-clustersync-for-mongodb/> |
-| PSMDB Testing (QA)   | <https://github.com/Percona-QA/psmdb-testing>            | -                                                           |
+| Project            | Repository                                    | Documentation                                               |
+| ------------------ | --------------------------------------------- | ----------------------------------------------------------- |
+| PCSM Docs          | <https://github.com/percona/pcsm-docs>        | <https://docs.percona.com/percona-clustersync-for-mongodb/> |
+| PSMDB Testing (QA) | <https://github.com/Percona-QA/psmdb-testing> | -                                                           |
