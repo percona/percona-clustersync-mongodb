@@ -344,7 +344,7 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
-		go segmenter.handleNanIDDoc(session.readBatchCh, session.nextBatchID)
+		go segmenter.handleNanIDDoc(session)
 	}
 
 	go cm.runReadDispatcher(session, nextSegment, progressUpdateCh)
@@ -424,7 +424,6 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 type (
 	nextSegmentFunc func(context.Context) (*mongo.Cursor, error)
-	nextBatchIDFunc func() uint32
 )
 
 // collectionCopySession holds the channels and synchronization primitives
@@ -820,15 +819,14 @@ func (seg *Segmenter) findSegmentMaxKey(
 
 // handleNanIDDoc sends a document with NaN _id to the readBatchCh channel if it exists.
 func (seg *Segmenter) handleNanIDDoc(
-	readBatchCh chan<- readBatch,
-	nextID nextBatchIDFunc,
+	session *collectionCopySession,
 ) {
 	if len(seg.nanDoc) == 0 {
 		return
 	}
 
-	readBatchCh <- readBatch{
-		ID:        nextID(),
+	session.readBatchCh <- readBatch{
+		ID:        session.nextBatchID(),
 		Documents: []any{seg.nanDoc},
 		SizeBytes: len(seg.nanDoc),
 	}
