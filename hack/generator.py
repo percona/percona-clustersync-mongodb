@@ -8,13 +8,14 @@ Useful for measuring PCSM replication performance.
 
 Usage:
     python hack/generator.py -r 100 -u "mongodb://localhost:27017"
-    python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 120 --databases 2 --collections-per-db 3
+    python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 120 --doc-size 10240
     python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded --drop
 
 Options:
     -r, --rate              Target inserts per second (required)
     -u, --uri               MongoDB connection string (required)
     -d, --duration          Duration in seconds (default: 60)
+    --doc-size              Target document size in bytes (default: 5120)
     --databases             Number of databases (default: 1)
     --collections-per-db    Collections per database (default: 1)
     --seed                  Random seed for determinism (default: 42)
@@ -37,10 +38,10 @@ from bson import ObjectId
 
 # Constants for deterministic generation
 DEFAULT_SEED = 42
-DOC_SIZE_BYTES = 5120  # 5KB per document
+DEFAULT_DOC_SIZE = 5120  # 5KB per document
+BASE_DOC_SIZE = 520  # Approximate size of document without padding
 FIXED_TIMESTAMP = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 STATUSES = ["active", "pending", "archived"]
-PADDING_SIZE = 4600  # Adjusted to reach ~5KB total doc size
 STATS_INTERVAL = 5  # Print stats every N seconds
 NUM_WORKERS = 4  # Fixed number of parallel write workers
 
@@ -81,6 +82,12 @@ Examples:
         help="Duration in seconds (default: 60)",
     )
     parser.add_argument(
+        "--doc-size",
+        type=int,
+        default=DEFAULT_DOC_SIZE,
+        help=f"Target document size in bytes (default: {DEFAULT_DOC_SIZE})",
+    )
+    parser.add_argument(
         "--databases",
         type=int,
         default=1,
@@ -119,7 +126,7 @@ def generate_tags(idx: int, seed: int) -> list:
     return rng_local.sample(all_tags, num_tags)
 
 
-def generate_document(idx: int, seed: int) -> dict:
+def generate_document(idx: int, seed: int, padding_size: int) -> dict:
     """Generate a single deterministic document."""
     return {
         "_id": ObjectId(),
@@ -135,7 +142,7 @@ def generate_document(idx: int, seed: int) -> dict:
             "version": 1,
             "seed": seed,
         },
-        "payload": "x" * PADDING_SIZE,
+        "payload": "x" * padding_size,
     }
 
 
@@ -198,6 +205,7 @@ def worker_write(
     worker_rate: int,
     duration: int,
     seed: int,
+    padding_size: int,
     worker_id: int,
     shared_counter: dict,
     counter_lock: threading.Lock,
@@ -247,7 +255,7 @@ def worker_write(
             # Generate and insert batch
             docs = []
             for _ in range(batch_size):
-                docs.append(generate_document(doc_idx_offset + doc_idx, seed))
+                docs.append(generate_document(doc_idx_offset + doc_idx, seed, padding_size))
                 doc_idx += 1
 
             collection.insert_many(docs, ordered=False)
@@ -279,6 +287,7 @@ def run_writer(
     rate: int,
     duration: int,
     seed: int,
+    padding_size: int,
 ) -> dict:
     """Run the continuous insert stream with parallel workers."""
     global shutdown_requested
@@ -306,6 +315,7 @@ def run_writer(
                 worker_rate,
                 duration,
                 seed,
+                padding_size,
                 worker_id,
                 shared_counter,
                 counter_lock,
@@ -370,6 +380,14 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    # Validate document size
+    if args.doc_size < BASE_DOC_SIZE:
+        print(f"ERROR: --doc-size must be at least {BASE_DOC_SIZE} bytes")
+        sys.exit(1)
+
+    # Calculate padding size to reach target document size
+    padding_size = args.doc_size - BASE_DOC_SIZE
+
     # Set global seed for reproducibility
     random.seed(args.seed)
 
@@ -382,6 +400,7 @@ def main():
     print(f"Target rate:        {args.rate} ops/sec")
     print(f"URI:                {args.uri}")
     print(f"Duration:           {args.duration} seconds")
+    print(f"Document size:      {args.doc_size} bytes")
     print(f"Databases:          {args.databases}")
     print(f"Collections per DB: {args.collections_per_db}")
     print(f"Total collections:  {total_collections}")
@@ -415,7 +434,7 @@ def main():
 
     # Run the writer
     print("Writing...")
-    result = run_writer(args.uri, collection_names, args.rate, args.duration, args.seed)
+    result = run_writer(args.uri, collection_names, args.rate, args.duration, args.seed, padding_size)
 
     # Print summary
     print()
