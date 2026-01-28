@@ -236,7 +236,7 @@ func (cm *CopyManager) runReadDispatcher(
 				<-cm.readSem
 				session.activeSegmentsWg.Done()
 
-				err := util.CtxWithTimeout(context.Background(),
+				err := util.CtxWithTimeout(ctx,
 					config.CloseCursorTimeout, cursor.Close)
 				if err != nil {
 					log.Ctx(ctx).Error(err, "Close cursor")
