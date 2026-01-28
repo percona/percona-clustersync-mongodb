@@ -52,7 +52,7 @@ type Clone struct {
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
-	doneSig chan struct{}
+	doneCh chan struct{}
 
 	sizeMap    sizeMap
 	totalSize  uint64        // Estimated total bytes to be cloned
@@ -107,7 +107,7 @@ func NewClone(
 		catalog:  catalog,
 		nsFilter: nsFilter,
 		options:  opts,
-		doneSig:  make(chan struct{}),
+		doneCh:   make(chan struct{}),
 	}
 }
 
@@ -196,7 +196,7 @@ func (c *Clone) Done() <-chan struct{} {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	return c.doneSig
+	return c.doneCh
 }
 
 // Start starts the cloning process.
@@ -233,9 +233,9 @@ func (c *Clone) Start(context.Context) error {
 		}
 
 		select {
-		case <-c.doneSig:
+		case <-c.doneCh:
 		default:
-			close(c.doneSig)
+			close(c.doneCh)
 		}
 
 		c.finishTime = time.Now()
@@ -488,10 +488,10 @@ func (c *Clone) doCollectionClone(
 
 	lastLogAt = time.Now() // init
 
-	updateC := copyManager.Do(nsCtx, ns, spec)
+	progressUpdateCh := copyManager.Start(nsCtx, ns, spec)
 
-	for update := range updateC {
-		err := update.Err
+	for progressUpdate := range progressUpdateCh {
+		err := progressUpdate.Err
 		if err != nil {
 			switch {
 			case topo.IsCollectionDropped(err):
@@ -524,8 +524,8 @@ func (c *Clone) doCollectionClone(
 
 			default:
 				updateLog := lg.With(
-					log.Size(update.SizeBytes),
-					log.Count(int64(update.Count)),
+					log.Size(progressUpdate.SizeBytes),
+					log.Count(int64(progressUpdate.Count)),
 					log.Elapsed(time.Since(lastLogAt)))
 
 				if errors.Is(err, context.Canceled) {
@@ -538,12 +538,12 @@ func (c *Clone) doCollectionClone(
 			}
 		}
 
-		totalCopiedCount += int64(update.Count)
-		totalCopiedSizeBytes += update.SizeBytes
-		c.copiedSize.Add(update.SizeBytes)
+		totalCopiedCount += int64(progressUpdate.Count)
+		totalCopiedSizeBytes += progressUpdate.SizeBytes
+		c.copiedSize.Add(progressUpdate.SizeBytes)
 
-		copiedCountSinceLastLog += int64(update.Count)
-		copiedSizeBytesSinceLastLog += update.SizeBytes
+		copiedCountSinceLastLog += int64(progressUpdate.Count)
+		copiedSizeBytesSinceLastLog += progressUpdate.SizeBytes
 
 		if copiedSizeBytesSinceLastLog >= humanize.GByte {
 			now := time.Now()
