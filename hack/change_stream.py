@@ -1,33 +1,65 @@
 #!/usr/bin/env python3
-# poetry run python3 .dev/change_stream.py mongodb://rs00:30000
+"""
+PCSM Change Stream Watcher
 
-import sys
+Watches MongoDB change stream and prints events in a compact JSON format.
+Useful for debugging and monitoring replication.
+
+Usage:
+    python hack/change_stream.py -u "mongodb://localhost:27017"
+    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+
+Options:
+    -u, --uri               MongoDB connection string (required)
+    --show-checkpoints      Include PCSM checkpoint events (default: hidden)
+"""
+
+import argparse
 from signal import SIG_DFL, SIGINT, signal
 
 import bson.json_util as json
 import pymongo
 
-MONGODB_URI = "mongodb://rs00:30000"
 
-ignoreCheckpoints = True  # set to False to see all changes, including checkpoints
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="PCSM Change Stream Watcher",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python hack/change_stream.py -u "mongodb://localhost:27017"
+    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+        """,
+    )
+    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
+    parser.add_argument(
+        "--show-checkpoints",
+        action="store_true",
+        help="Include PCSM checkpoint events (default: hidden)",
+    )
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
     signal(SIGINT, SIG_DFL)
 
-    if len(sys.argv) > 1:
-        url = sys.argv[1]
-        print(f"Using MongoDB URI: {url}")
-    else:
-        url = MONGODB_URI
+    args = parse_args()
 
-    m = pymongo.MongoClient(url)
+    print()
+    print("PCSM Change Stream Watcher")
+    print("=" * 45)
+    print(f"URI:                {args.uri}")
+    print(f"Show checkpoints:   {args.show_checkpoints}")
+    print()
+
+    m = pymongo.MongoClient(args.uri)
     for change in m.watch(show_expanded_events=True):
         del change["_id"]
         del change["wallTime"]
 
         ns = change["ns"]["db"]
 
-        if ignoreCheckpoints and ns == "percona_link_mongodb":
+        if not args.show_checkpoints and ns == "percona_clustersync_mongodb":
             continue
 
         if coll := change["ns"].get("coll"):

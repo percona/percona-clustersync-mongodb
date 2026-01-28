@@ -1,8 +1,8 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-import threading
+
+from testing import Testing
 
 from pcsm import Runner
-from testing import Testing
 
 
 def test_shard_collection_in_tx(t: Testing):

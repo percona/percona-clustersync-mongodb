@@ -1,8 +1,9 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 def test_simple(t: Testing):

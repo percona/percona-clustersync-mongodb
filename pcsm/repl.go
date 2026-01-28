@@ -368,6 +368,9 @@ func (r *Repl) watchChangeEvents(
 		}
 
 		for cur.TryNext(ctx) {
+			r.eventsRead.Add(1)
+			metrics.IncEventsRead()
+
 			change := &ChangeEvent{}
 			err := parseChangeEvent(cur.Current, change)
 			if err != nil {
@@ -384,6 +387,9 @@ func (r *Repl) watchChangeEvents(
 			txn0 := change // the first transaction operation
 			for txn0 != nil {
 				for cur.TryNext(ctx) {
+					r.eventsRead.Add(1)
+					metrics.IncEventsRead()
+
 					change = &ChangeEvent{}
 					err := parseChangeEvent(cur.Current, change)
 					if err != nil {
@@ -498,9 +504,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 			continue
 		}
-
-		r.eventsRead.Add(1)
-		metrics.IncEventsRead()
 
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.bulkWrite.Empty() {

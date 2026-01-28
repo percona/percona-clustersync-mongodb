@@ -4,8 +4,9 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
