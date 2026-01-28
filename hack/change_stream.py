@@ -31,9 +31,7 @@ Examples:
     python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
         """,
     )
-    parser.add_argument(
-        "-u", "--uri", type=str, required=True, help="MongoDB connection string"
-    )
+    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
     parser.add_argument(
         "--show-checkpoints",
         action="store_true",

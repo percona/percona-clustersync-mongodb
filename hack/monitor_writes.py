@@ -68,7 +68,7 @@ def main():
 
             # Clear line and print in place
             sys.stdout.write(
-                f"\rWrites/sec: {total} (insert: {inserts}, update: {updates}, delete: {deletes})    "
+                f"\rWrites/sec: {total} (ins: {inserts}, upd: {updates}, del: {deletes})    "
             )
             sys.stdout.flush()
 

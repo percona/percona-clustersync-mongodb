@@ -10,7 +10,7 @@ Usage:
     python hack/generator.py -r 100 -u "mongodb://localhost:27017"
     python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 120 --doc-size 10240
     python hack/generator.py -r 1000 -u "mongodb://localhost:27017" --txn-percent 20 --txn-size 5
-    python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded --drop
+    python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
 
 Options:
     -r, --rate              Target inserts per second (required)
@@ -33,7 +33,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pymongo
 import pymongo.errors
@@ -43,7 +43,7 @@ from bson import ObjectId
 DEFAULT_SEED = 42
 DEFAULT_DOC_SIZE = 5120  # 5KB per document
 BASE_DOC_SIZE = 520  # Approximate size of document without padding
-FIXED_TIMESTAMP = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+FIXED_TIMESTAMP = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
 STATUSES = ["active", "pending", "archived"]
 STATS_INTERVAL = 5  # Print stats every N seconds
 NUM_WORKERS = 4  # Fixed number of parallel write workers
@@ -67,16 +67,12 @@ def parse_args():
         epilog="""
 Examples:
     python hack/writer.py --rate 100 --uri "mongodb://localhost:27017"
-    python hack/writer.py -r 500 -u "mongodb://localhost:27017" -d 60 --databases 2 --collections-per-db 3
-    python hack/writer.py -r 1000 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded --drop
+    python hack/writer.py -r 500 -u "mongodb://localhost:27017" -d 60
+    python hack/writer.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
         """,
     )
-    parser.add_argument(
-        "-r", "--rate", type=int, required=True, help="Target inserts per second"
-    )
-    parser.add_argument(
-        "-u", "--uri", type=str, required=True, help="MongoDB connection string"
-    )
+    parser.add_argument("-r", "--rate", type=int, required=True, help="Target inserts per second")
+    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
     parser.add_argument(
         "-d",
         "--duration",
@@ -161,9 +157,7 @@ def generate_document(idx: int, seed: int, padding_size: int) -> dict:
     }
 
 
-def drop_collections(
-    client: pymongo.MongoClient, num_databases: int, collections_per_db: int
-):
+def drop_collections(client: pymongo.MongoClient, num_databases: int, collections_per_db: int):
     """Drop existing collections across all databases."""
     for db_idx in range(num_databases):
         db_name = f"db_{db_idx}"
@@ -318,11 +312,21 @@ def worker_write(
                     time.sleep(sleep_time)
 
     except Exception as e:
-        return {"inserted": local_inserted, "transactions": txn_count, "batches": batch_count, "error": str(e)}
+        return {
+            "inserted": local_inserted,
+            "transactions": txn_count,
+            "batches": batch_count,
+            "error": str(e),
+        }
     finally:
         client.close()
 
-    return {"inserted": local_inserted, "transactions": txn_count, "batches": batch_count, "error": None}
+    return {
+        "inserted": local_inserted,
+        "transactions": txn_count,
+        "batches": batch_count,
+        "error": None,
+    }
 
 
 def run_writer(
@@ -374,7 +378,6 @@ def run_writer(
         last_stats_time = start_time
         last_stats_count = 0
         last_txns = 0
-        last_batches = 0
 
         while True:
             # Check if all futures are done
@@ -418,7 +421,6 @@ def run_writer(
                 last_stats_time = current_time
                 last_stats_count = current_total
                 last_txns = current_txns
-                last_batches = current_batches
 
         # Collect results
         total_inserted = 0
@@ -537,7 +539,7 @@ def main():
     print(f"Duration:           {result['duration']:.1f} seconds")
     print(f"Total inserted:     {result['total_inserted']:,}")
     if args.txn_percent > 0:
-        txn_rate = result['transactions'] / result['duration'] if result['duration'] > 0 else 0
+        txn_rate = result["transactions"] / result["duration"] if result["duration"] > 0 else 0
         print(f"Transactions:       {result['transactions']:,} ({txn_rate:.1f}/sec)")
         print(f"Batches:            {result['batches']:,}")
     print(f"Actual rate:        {result['actual_rate']:.1f} ops/sec")

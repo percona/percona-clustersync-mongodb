@@ -7,8 +7,8 @@ reproducible document generation. Docker-friendly with throttled inserts.
 
 Usage:
     python hack/loader.py --size 10 --uri "mongodb://localhost:27017"
-    python hack/loader.py -s 5 -u "mongodb://localhost:27017" --databases 3 --collections-per-db 5 --drop
-    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded
+    python hack/loader.py -s 5 -u "mongodb://localhost:27017" --drop
+    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded
 
 Options:
     -s, --size              Size in GB to load (required)
@@ -26,7 +26,7 @@ import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pymongo
 import pymongo.errors
@@ -35,7 +35,7 @@ from bson import ObjectId
 # Constants for deterministic generation
 SEED = 42
 DOC_SIZE_BYTES = 5120  # 5KB per document
-FIXED_TIMESTAMP = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+FIXED_TIMESTAMP = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
 STATUSES = ["active", "pending", "archived"]
 PADDING_SIZE = 4600  # Adjusted to reach ~5KB total doc size
 
@@ -47,8 +47,8 @@ def parse_args():
         epilog="""
 Examples:
     python hack/loader.py --size 10 --uri "mongodb://src-mongos:27017"
-    python hack/loader.py -s 5 -u "mongodb://src-mongos:27017" --databases 3 --collections-per-db 5 --drop
-    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded --databases 2 --collections-per-db 3
+    python hack/loader.py -s 5 -u "mongodb://src-mongos:27017" --drop
+    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded
         """,
     )
     parser.add_argument("-s", "--size", type=float, required=True, help="Size in GB to load")
