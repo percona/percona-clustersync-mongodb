@@ -1,4 +1,4 @@
-name: code
+name: Go-code
 
 on: [pull_request]
 

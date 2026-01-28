@@ -66,9 +66,9 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python hack/writer.py --rate 100 --uri "mongodb://localhost:27017"
-    python hack/writer.py -r 500 -u "mongodb://localhost:27017" -d 60
-    python hack/writer.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
+    python hack/generator.py --rate 100 --uri "mongodb://localhost:27017"
+    python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 60
+    python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
         """,
     )
     parser.add_argument("-r", "--rate", type=int, required=True, help="Target inserts per second")
