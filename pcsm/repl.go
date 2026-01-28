@@ -48,8 +48,8 @@ type Repl struct {
 	pauseTime time.Time
 
 	pausing bool
-	pauseC  chan struct{}
-	doneSig chan struct{}
+	pauseCh chan struct{}
+	doneCh  chan struct{}
 
 	bulkWrite      bulkWrite
 	bulkToken      bson.Raw
@@ -95,8 +95,8 @@ func NewRepl(
 		target:   target,
 		nsFilter: nsFilter,
 		catalog:  catalog,
-		pauseC:   make(chan struct{}),
-		doneSig:  make(chan struct{}),
+		pauseCh:  make(chan struct{}),
+		doneCh:   make(chan struct{}),
 	}
 }
 
@@ -205,7 +205,7 @@ func (r *Repl) Done() <-chan struct{} {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	return r.doneSig
+	return r.doneCh
 }
 
 // Start begins the replication process from the specified start timestamp.
@@ -268,13 +268,13 @@ func (r *Repl) Pause(_ context.Context) error {
 
 func (r *Repl) doPause() {
 	r.pausing = true
-	doneSig := r.doneSig
+	doneCh := r.doneCh
 
 	go func() {
 		log.New("repl").Debug("Change Replication is pausing")
 
-		r.pauseC <- struct{}{}
-		<-doneSig
+		r.pauseCh <- struct{}{}
+		<-doneCh
 
 		r.lock.Lock()
 		r.pauseTime = time.Now()
@@ -322,7 +322,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 	}
 
 	r.pauseTime = time.Time{}
-	r.doneSig = make(chan struct{})
+	r.doneCh = make(chan struct{})
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
@@ -335,7 +335,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
 	streamOptions *options.ChangeStreamOptionsBuilder,
-	changeC chan<- *ChangeEvent,
+	changeCh chan<- *ChangeEvent,
 ) error {
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
@@ -375,7 +375,7 @@ func (r *Repl) watchChangeEvents(
 			}
 
 			if !change.IsTransaction() {
-				changeC <- change
+				changeCh <- change
 				lastEventTS = change.ClusterTime
 
 				continue
@@ -397,15 +397,15 @@ func (r *Repl) watchChangeEvents(
 					}
 
 					// send the entire transaction for replication
-					changeC <- txn0
+					changeCh <- txn0
 					for _, txn := range txnOps {
-						changeC <- txn
+						changeCh <- txn
 					}
 					clear(txnOps)
 					txnOps = txnOps[:0]
 
 					if !change.IsTransaction() {
-						changeC <- change
+						changeCh <- change
 						txn0 = nil // no more transaction
 
 						break // return to non-transactional processing
@@ -424,9 +424,9 @@ func (r *Repl) watchChangeEvents(
 				}
 
 				// no event available. the entire transaction is received
-				changeC <- txn0
+				changeCh <- txn0
 				for _, txn := range txnOps {
-					changeC <- txn
+					changeCh <- txn
 				}
 				clear(txnOps)
 				txnOps = txnOps[:0]
@@ -441,7 +441,7 @@ func (r *Repl) watchChangeEvents(
 
 		// no event available yet. progress pcsm time
 		if sourceTS.After(lastEventTS) {
-			changeC <- &ChangeEvent{
+			changeCh <- &ChangeEvent{
 				EventHeader: EventHeader{
 					OperationType: advanceTimePseudoEvent,
 					ClusterTime:   sourceTS,
@@ -452,22 +452,22 @@ func (r *Repl) watchChangeEvents(
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
-	defer close(r.doneSig)
+	defer close(r.doneCh)
 
-	changeC := make(chan *ChangeEvent, config.ReplQueueSize)
+	changeChh := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
-		defer close(changeC)
+		defer close(changeChh)
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
 		go func() {
-			<-r.pauseC
+			<-r.pauseCh
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeC)
+		err := r.watchChangeEvents(ctx, opts, changeChh)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
@@ -482,7 +482,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 	lg := log.New("repl")
 
-	for change := range changeC {
+	for change := range changeChh {
 		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkWrite.Empty() {
 			if !r.doBulkOps(ctx) {
 				return

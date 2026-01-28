@@ -36,9 +36,10 @@ def cleanup_numerous_databases(source: pymongo.MongoClient, target: pymongo.Mong
 def test_slow_clone_2gb(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
         for _ in range(5):
-            t.source["db_0"]["coll_0"].insert_many(
-                ({"s": random.randbytes(1024)} for _ in range(420000)),
-            )
+            for _ in range(42):  # 42 batches x 10,000 = 420,000 docs
+                t.source["db_0"]["coll_0"].insert_many(
+                    [{"s": random.randbytes(1024)} for _ in range(10000)],
+                )
 
     try:
         t.compare_all(sort=[("_id", 1)])
@@ -53,12 +54,13 @@ def test_slow_clone_2gb(t: Testing):
 def test_slow_clone_2gb_two_namespace(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
         for _ in range(5):
-            t.source["db_0"]["coll_0"].insert_many(
-                ({"s": random.randbytes(1024)} for _ in range(210000)),
-            )
-            t.source["db_0"]["coll_1"].insert_many(
-                ({"s": random.randbytes(1024)} for _ in range(210000)),
-            )
+            for _ in range(21):  # 21 batches x 10,000 = 210,000 docs
+                t.source["db_0"]["coll_0"].insert_many(
+                    [{"s": random.randbytes(1024)} for _ in range(10000)],
+                )
+                t.source["db_0"]["coll_1"].insert_many(
+                    [{"s": random.randbytes(1024)} for _ in range(10000)],
+                )
 
     try:
         t.compare_all(sort=[("_id", pymongo.ASCENDING)])
@@ -74,9 +76,10 @@ def test_slow_clone_2gb_vary_id(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
         id_gen = vary_id_gen()
         for _ in range(5):
-            t.source["db_0"]["coll_0"].insert_many(
-                ({"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(420000)),
-            )
+            for _ in range(42):  # 42 batches x 10,000 = 420,000 docs
+                t.source["db_0"]["coll_0"].insert_many(
+                    [{"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(10000)],
+                )
 
     try:
         t.compare_all(sort=[("_id", pymongo.ASCENDING)])
@@ -93,9 +96,10 @@ def test_slow_clone_2gb_capped(t: Testing):
 
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
         for _ in range(5):
-            t.source["db_0"]["coll_0"].insert_many(
-                ({"s": random.randbytes(1024)} for _ in range(420000))
-            )
+            for _ in range(42):  # 42 batches x 10,000 = 420,000 docs
+                t.source["db_0"]["coll_0"].insert_many(
+                    [{"s": random.randbytes(1024)} for _ in range(10000)],
+                )
 
     try:
         t.compare_all(sort=[("$natural", pymongo.ASCENDING)])  # must keep source order
@@ -113,9 +117,10 @@ def test_slow_clone_2gb_capped_vary_id(t: Testing):
     with t.run(phase=Runner.Phase.CLONE, wait_timeout=300):
         id_gen = vary_id_gen()
         for _ in range(5):
-            t.source["db_0"]["coll_0"].insert_many(
-                ({"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(420000)),
-            )
+            for _ in range(42):  # 42 batches x 10,000 = 420,000 docs
+                t.source["db_0"]["coll_0"].insert_many(
+                    [{"_id": next(id_gen), "s": random.randbytes(1024)} for _ in range(10000)],
+                )
 
     try:
         t.compare_all(sort=[("$natural", pymongo.ASCENDING)])  # must keep source order

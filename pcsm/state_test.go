@@ -110,8 +110,8 @@ func TestPause_StateValidation(t *testing.T) {
 
 			if tt.setupRepl {
 				p.repl = &Repl{
-					pauseC:  make(chan struct{}),
-					doneSig: make(chan struct{}),
+					pauseCh: make(chan struct{}),
+					doneCh:  make(chan struct{}),
 				}
 			}
 
@@ -182,8 +182,8 @@ func TestResume_StateValidation(t *testing.T) {
 
 			if tt.initialState == StatePaused || tt.initialState == StateFailed {
 				p.repl = &Repl{
-					pauseC:  make(chan struct{}),
-					doneSig: make(chan struct{}),
+					pauseCh: make(chan struct{}),
+					doneCh:  make(chan struct{}),
 				}
 			}
 
@@ -204,8 +204,8 @@ func TestResumeFromPaused_FailsWhenReplNotStarted(t *testing.T) {
 		state:          StatePaused,
 		onStateChanged: func(State) {},
 		repl: &Repl{
-			pauseC:  make(chan struct{}),
-			doneSig: make(chan struct{}),
+			pauseCh: make(chan struct{}),
+			doneCh:  make(chan struct{}),
 		},
 	}
 
@@ -224,8 +224,8 @@ func TestResumeFromFailed_FailsWhenReplNotPaused(t *testing.T) {
 		state:          StateFailed,
 		onStateChanged: func(State) {},
 		repl: &Repl{
-			pauseC:    make(chan struct{}),
-			doneSig:   make(chan struct{}),
+			pauseCh:   make(chan struct{}),
+			doneCh:    make(chan struct{}),
 			startTime: time.Now(),
 		},
 	}
