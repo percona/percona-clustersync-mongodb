@@ -111,7 +111,7 @@ func newRootCmd() *cobra.Command {
 
 			log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
 
-			return runServer(cmd.Context(), cfg)
+			return runServer(cfg)
 		},
 	}
 
@@ -252,18 +252,9 @@ func newFinalizeCmd(cfg *config.Config) *cobra.Command {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
-
-			finalizeOptions := finalizeRequest{
-				IgnoreHistoryLost: ignoreHistoryLost,
-			}
-
-			return NewClient(cfg.Port).Finalize(cmd.Context(), finalizeOptions)
+			return NewClient(cfg.Port).Finalize(cmd.Context())
 		},
 	}
-
-	cmd.Flags().Bool("ignore-history-lost", false, "")
-	cmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	return cmd
 }
@@ -428,7 +419,7 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 }
 
 // runServer starts the HTTP server with the provided configuration.
-func runServer(_ context.Context, cfg *config.Config) error {
+func runServer(cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
@@ -554,7 +545,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	pcs := pcsm.New(source, target)
+	pcs := pcsm.New(ctx, source, target)
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {
@@ -712,9 +703,6 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		PauseOnInitialSync: params.PauseOnInitialSync,
 		IncludeNamespaces:  params.IncludeNamespaces,
 		ExcludeNamespaces:  params.ExcludeNamespaces,
-		Repl: pcsm.ReplOptions{
-			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
-		},
 		Clone: pcsm.CloneOptions{
 			Parallelism:   cfg.Clone.NumParallelCollections,
 			ReadWorkers:   cfg.Clone.NumReadWorkers,
@@ -844,33 +832,7 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var params finalizeRequest
-
-	if r.ContentLength != 0 {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusInternalServerError),
-				http.StatusInternalServerError)
-
-			return
-		}
-
-		err = json.Unmarshal(data, &params)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusBadRequest),
-				http.StatusBadRequest)
-
-			return
-		}
-	}
-
-	options := &pcsm.FinalizeOptions{
-		IgnoreHistoryLost: params.IgnoreHistoryLost,
-	}
-
-	err := s.pcsm.Finalize(ctx, *options)
+	err := s.pcsm.Finalize(ctx)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -1003,8 +965,6 @@ type startRequest struct {
 	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
 	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
-
-	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
 }
 
 // startResponse represents the response body for the /start endpoint.
@@ -1013,13 +973,6 @@ type startResponse struct {
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
-}
-
-// finalizeRequest represents the request body for the /finalize endpoint.
-type finalizeRequest struct {
-	// IgnoreHistoryLost indicates whether the operation can ignore the ChangeStreamHistoryLost
-	// error.
-	IgnoreHistoryLost bool `json:"ignoreHistoryLost,omitempty"`
 }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
@@ -1121,8 +1074,8 @@ func (c PCSMClient) Start(ctx context.Context, req startRequest) error {
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c PCSMClient) Finalize(ctx context.Context, req finalizeRequest) error {
-	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
+func (c PCSMClient) Finalize(ctx context.Context) error {
+	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", nil)
 }
 
 // Pause sends a request to pause the cluster replication.
