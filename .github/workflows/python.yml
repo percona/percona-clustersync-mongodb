@@ -1,4 +1,6 @@
 name: Python-code
+permissions:
+  contents: read
 
 on: [pull_request]
 
