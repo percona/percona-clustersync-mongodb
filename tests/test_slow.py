@@ -7,15 +7,16 @@ import bson
 import pymongo
 import pytest
 import testing
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 def vary_id_gen():
     for i in range(1_000_000):
         for j in range(1000):
             yield bson.ObjectId()
-            yield f"{i}:{j+1}"
+            yield f"{i}:{j + 1}"
             yield i * 1000 + (j + 2)
             yield bson.Timestamp(i, j + 3)
             yield {"i": i, "j": j + 4}

@@ -36,6 +36,14 @@ pytest:
 lint:
 	golangci-lint run
 
+lint-py:
+	poetry run ruff check tests/ hack/
+	poetry run ruff format --check tests/ hack/
+
+fmt-py:
+	poetry run ruff check --fix tests/ hack/
+	poetry run ruff format tests/ hack/
+
 pcsm-run: build
 	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state
 
@@ -55,4 +63,4 @@ metrics-up:
 metrics-down:
 	docker compose -f hack/metrics/docker-compose.yml down
 
-.PHONY: all build test-build test pcsm-start clean metrics-up metrics-down
+.PHONY: all build test-build test pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down

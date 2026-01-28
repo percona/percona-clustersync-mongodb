@@ -1,8 +1,9 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
 import testing
-from pcsm import Runner
 from pymongo import MongoClient
+
+from pcsm import Runner
 
 
 def perform_with_options(

@@ -1,11 +1,11 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 import time
-from datetime import datetime
 
 import pytest
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -98,6 +98,7 @@ def test_clone_document_sharded(t: Testing, phase: Runner.Phase):
 
     t.compare_all_sharded()
 
+
 @pytest.mark.parametrize("phase", [Runner.Phase.CLONE])
 def test_clone_document_sharded_with_varying_sizes(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -113,6 +114,7 @@ def test_clone_document_sharded_with_varying_sizes(t: Testing, phase: Runner.Pha
         ]
         t.source["db_1"]["coll_1"].insert_many(docs)
     t.compare_all_sharded()
+
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_shard_key_update_duplicate_key_error(t: Testing, phase: Runner.Phase):
