@@ -9,6 +9,7 @@ Useful for measuring PCSM replication performance.
 Usage:
     python hack/generator.py -r 100 -u "mongodb://localhost:27017"
     python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 120 --doc-size 10240
+    python hack/generator.py -r 1000 -u "mongodb://localhost:27017" --txn-percent 20 --txn-size 5
     python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --databases 2 --collections-per-db 3 --sharded --drop
 
 Options:
@@ -16,6 +17,8 @@ Options:
     -u, --uri               MongoDB connection string (required)
     -d, --duration          Duration in seconds (default: 60)
     --doc-size              Target document size in bytes (default: 5120)
+    --txn-percent           Percentage of operations within transactions (0-100, default: 0)
+    --txn-size              Number of operations per transaction (default: 5)
     --databases             Number of databases (default: 1)
     --collections-per-db    Collections per database (default: 1)
     --seed                  Random seed for determinism (default: 42)
@@ -86,6 +89,18 @@ Examples:
         type=int,
         default=DEFAULT_DOC_SIZE,
         help=f"Target document size in bytes (default: {DEFAULT_DOC_SIZE})",
+    )
+    parser.add_argument(
+        "--txn-percent",
+        type=int,
+        default=0,
+        help="Percentage of operations within transactions (0-100, default: 0)",
+    )
+    parser.add_argument(
+        "--txn-size",
+        type=int,
+        default=5,
+        help="Number of operations per transaction (default: 5)",
     )
     parser.add_argument(
         "--databases",
@@ -206,6 +221,8 @@ def worker_write(
     duration: int,
     seed: int,
     padding_size: int,
+    txn_percent: int,
+    txn_size: int,
     worker_id: int,
     shared_counter: dict,
     counter_lock: threading.Lock,
@@ -224,6 +241,9 @@ def worker_write(
 
     total_collections = len(collections)
     local_inserted = 0
+    txn_count = 0
+    batch_count = 0
+    ops_in_cycle = 0  # tracks position in 100-op cycle for txn_percent
     # Use worker_id to offset document indices for determinism
     doc_idx_offset = worker_id * 1_000_000_000  # Large offset per worker
     doc_idx = 0
@@ -252,33 +272,57 @@ def worker_write(
             coll_idx = local_inserted % total_collections
             _, _, collection = collections[coll_idx]
 
-            # Generate and insert batch
-            docs = []
-            for _ in range(batch_size):
-                docs.append(generate_document(doc_idx_offset + doc_idx, seed, padding_size))
-                doc_idx += 1
+            # Determine if this batch should be transactional
+            use_txn = txn_percent > 0 and (ops_in_cycle % 100) < txn_percent
 
-            collection.insert_many(docs, ordered=False)
-            local_inserted += len(docs)
+            if use_txn:
+                # Transaction: insert txn_size docs individually within transaction
+                with client.start_session() as session:
+                    with session.start_transaction():
+                        for _ in range(txn_size):
+                            doc = generate_document(doc_idx_offset + doc_idx, seed, padding_size)
+                            doc_idx += 1
+                            collection.insert_one(doc, session=session)
 
-            # Update shared counter for stats
-            with counter_lock:
-                shared_counter["total"] += len(docs)
+                local_inserted += txn_size
+                ops_in_cycle = (ops_in_cycle + txn_size) % 100
+                txn_count += 1
 
-            # Rate limiting with drift compensation
-            # Only sleep if we're ahead of schedule (negative drift means we're ahead)
-            if drift < 0:
-                # We're ahead, sleep to match target rate
-                sleep_time = batch_size * time_per_doc
-                time.sleep(sleep_time)
-            # If drift > 0, we're behind - skip sleep to catch up
+                with counter_lock:
+                    shared_counter["total"] += txn_size
+                    shared_counter["txns"] += 1
+
+                # Rate limiting for transaction
+                if drift < 0:
+                    sleep_time = txn_size * time_per_doc
+                    time.sleep(sleep_time)
+            else:
+                # Regular batch insert
+                docs = []
+                for _ in range(batch_size):
+                    docs.append(generate_document(doc_idx_offset + doc_idx, seed, padding_size))
+                    doc_idx += 1
+
+                collection.insert_many(docs, ordered=False)
+                local_inserted += len(docs)
+                ops_in_cycle = (ops_in_cycle + len(docs)) % 100
+                batch_count += 1
+
+                with counter_lock:
+                    shared_counter["total"] += len(docs)
+                    shared_counter["batches"] += 1
+
+                # Rate limiting with drift compensation
+                if drift < 0:
+                    sleep_time = batch_size * time_per_doc
+                    time.sleep(sleep_time)
 
     except Exception as e:
-        return {"inserted": local_inserted, "error": str(e)}
+        return {"inserted": local_inserted, "transactions": txn_count, "batches": batch_count, "error": str(e)}
     finally:
         client.close()
 
-    return {"inserted": local_inserted, "error": None}
+    return {"inserted": local_inserted, "transactions": txn_count, "batches": batch_count, "error": None}
 
 
 def run_writer(
@@ -288,12 +332,14 @@ def run_writer(
     duration: int,
     seed: int,
     padding_size: int,
+    txn_percent: int,
+    txn_size: int,
 ) -> dict:
     """Run the continuous insert stream with parallel workers."""
     global shutdown_requested
 
     # Shared counter for stats reporting
-    shared_counter = {"total": 0}
+    shared_counter = {"total": 0, "txns": 0, "batches": 0}
     counter_lock = threading.Lock()
 
     # Calculate per-worker rate
@@ -316,6 +362,8 @@ def run_writer(
                 duration,
                 seed,
                 padding_size,
+                txn_percent,
+                txn_size,
                 worker_id,
                 shared_counter,
                 counter_lock,
@@ -325,6 +373,8 @@ def run_writer(
         # Main thread: print stats while workers are running
         last_stats_time = start_time
         last_stats_count = 0
+        last_txns = 0
+        last_batches = 0
 
         while True:
             # Check if all futures are done
@@ -338,26 +388,48 @@ def run_writer(
             if current_time - last_stats_time >= STATS_INTERVAL:
                 with counter_lock:
                     current_total = shared_counter["total"]
+                    current_txns = shared_counter["txns"]
+                    current_batches = shared_counter["batches"]
 
                 elapsed_since_start = current_time - start_time
+                interval_duration = current_time - last_stats_time
                 interval_count = current_total - last_stats_count
-                interval_rate = interval_count / (current_time - last_stats_time)
+                interval_rate = interval_count / interval_duration
                 overall_rate = current_total / elapsed_since_start
 
-                print(
-                    f"  [{int(elapsed_since_start)}s] "
-                    f"inserted: {current_total:,}  "
-                    f"rate: {interval_rate:.0f}/s (avg: {overall_rate:.0f}/s)"
-                )
+                # Calculate transaction rate
+                interval_txns = current_txns - last_txns
+                txn_rate = interval_txns / interval_duration
+
+                if txn_percent > 0:
+                    print(
+                        f"  [{int(elapsed_since_start)}s] "
+                        f"inserted: {current_total:,}  "
+                        f"rate: {interval_rate:.0f}/s (avg: {overall_rate:.0f}/s)  "
+                        f"txn: {current_txns} ({txn_rate:.0f}/s) batch: {current_batches}"
+                    )
+                else:
+                    print(
+                        f"  [{int(elapsed_since_start)}s] "
+                        f"inserted: {current_total:,}  "
+                        f"rate: {interval_rate:.0f}/s (avg: {overall_rate:.0f}/s)"
+                    )
+
                 last_stats_time = current_time
                 last_stats_count = current_total
+                last_txns = current_txns
+                last_batches = current_batches
 
         # Collect results
         total_inserted = 0
+        total_transactions = 0
+        total_batches = 0
         errors = []
         for future in as_completed(futures):
             result = future.result()
             total_inserted += result["inserted"]
+            total_transactions += result["transactions"]
+            total_batches += result["batches"]
             if result["error"]:
                 errors.append(result["error"])
 
@@ -368,6 +440,8 @@ def run_writer(
     actual_duration = time.monotonic() - start_time
     return {
         "total_inserted": total_inserted,
+        "transactions": total_transactions,
+        "batches": total_batches,
         "duration": actual_duration,
         "actual_rate": total_inserted / actual_duration if actual_duration > 0 else 0,
     }
@@ -383,6 +457,15 @@ def main():
     # Validate document size
     if args.doc_size < BASE_DOC_SIZE:
         print(f"ERROR: --doc-size must be at least {BASE_DOC_SIZE} bytes")
+        sys.exit(1)
+
+    # Validate transaction parameters
+    if args.txn_percent < 0 or args.txn_percent > 100:
+        print("ERROR: --txn-percent must be between 0 and 100")
+        sys.exit(1)
+
+    if args.txn_size < 1:
+        print("ERROR: --txn-size must be at least 1")
         sys.exit(1)
 
     # Calculate padding size to reach target document size
@@ -401,6 +484,8 @@ def main():
     print(f"URI:                {args.uri}")
     print(f"Duration:           {args.duration} seconds")
     print(f"Document size:      {args.doc_size} bytes")
+    print(f"Txn percent:        {args.txn_percent}%")
+    print(f"Txn size:           {args.txn_size} ops")
     print(f"Databases:          {args.databases}")
     print(f"Collections per DB: {args.collections_per_db}")
     print(f"Total collections:  {total_collections}")
@@ -434,7 +519,16 @@ def main():
 
     # Run the writer
     print("Writing...")
-    result = run_writer(args.uri, collection_names, args.rate, args.duration, args.seed, padding_size)
+    result = run_writer(
+        args.uri,
+        collection_names,
+        args.rate,
+        args.duration,
+        args.seed,
+        padding_size,
+        args.txn_percent,
+        args.txn_size,
+    )
 
     # Print summary
     print()
@@ -442,6 +536,10 @@ def main():
     print("=" * 45)
     print(f"Duration:           {result['duration']:.1f} seconds")
     print(f"Total inserted:     {result['total_inserted']:,}")
+    if args.txn_percent > 0:
+        txn_rate = result['transactions'] / result['duration'] if result['duration'] > 0 else 0
+        print(f"Transactions:       {result['transactions']:,} ({txn_rate:.1f}/sec)")
+        print(f"Batches:            {result['batches']:,}")
     print(f"Actual rate:        {result['actual_rate']:.1f} ops/sec")
     print(f"Target rate:        {args.rate} ops/sec")
     print()
