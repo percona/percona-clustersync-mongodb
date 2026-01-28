@@ -2,9 +2,10 @@
 import hashlib
 
 import bson
-from pcsm import PCSM, Runner
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
+
+from pcsm import PCSM, Runner
 
 
 class Testing:
@@ -34,7 +35,7 @@ class Testing:
                 compare_namespace(self.source, self.target, db, coll, sort)
 
     def compare_all_sharded(self, sort=None):
-        """Compare all databases and collections between source and target MongoDB, including sharding and shard key."""
+        """Compare all databases and collections between source and target MongoDB."""
         source_dbs = set(list_databases(self.source))
         target_dbs = set(list_databases(self.target))
         assert source_dbs == target_dbs, f"{source_dbs} != {target_dbs}"
@@ -55,17 +56,17 @@ class Testing:
 
                 source_sharded = source_config is not None and source_config.get("key") is not None
                 target_sharded = target_config is not None and target_config.get("key") is not None
-                assert (
-                    source_sharded == target_sharded
-                ), f"{db}.{coll}: sharded={source_sharded} != {target_sharded}"
+                assert source_sharded == target_sharded, (
+                    f"{db}.{coll}: sharded={source_sharded} != {target_sharded}"
+                )
 
                 if source_sharded:
-                    assert (
-                        source_config["key"] == target_config["key"]
-                    ), f"{db}.{coll}: shard key {source_config['key']} != {target_config['key']}"
-                    assert source_config.get("unique", False) == target_config.get(
-                        "unique", False
-                    ), f"{db}.{coll}: unique {source_config.get('unique', False)} != {target_config.get('unique', False)}"
+                    assert source_config["key"] == target_config["key"], (
+                        f"{db}.{coll}: shard key {source_config['key']} != {target_config['key']}"
+                    )
+                    src_unique = source_config.get("unique", False)
+                    tgt_unique = target_config.get("unique", False)
+                    assert src_unique == tgt_unique, f"{db}.{coll}: unique mismatch"
 
                 compare_namespace(self.source, self.target, db, coll, sort)
 

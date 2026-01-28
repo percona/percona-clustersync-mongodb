@@ -17,7 +17,6 @@ import hashlib
 import os
 
 import bson
-
 import pymongo
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection

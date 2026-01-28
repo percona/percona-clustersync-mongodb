@@ -1,14 +1,15 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import random
+import time
 from datetime import datetime
 
-import time
 import pytest
 import testing
-from pcsm import PCSM, Runner
+from bson.decimal128 import Decimal128
 from pymongo import MongoClient
 from testing import Testing
-from bson.decimal128 import Decimal128
+
+from pcsm import PCSM, Runner
 
 
 def ensure_collection(source: MongoClient, db: str, coll: str, **kwargs):
