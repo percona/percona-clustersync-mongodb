@@ -80,7 +80,13 @@ func newRootCmd() *cobra.Command {
 				logLevel = zerolog.InfoLevel
 			}
 
-			lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
+			logOutput := os.Stdout
+			// subcommands log to stderr
+			if cmd.HasParent() {
+				logOutput = os.Stderr
+			}
+
+			lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor, logOutput)
 			ctx := lg.WithContext(context.Background())
 			cmd.SetContext(ctx)
 
@@ -90,11 +96,6 @@ func newRootCmd() *cobra.Command {
 		},
 
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Check if this is the root command being executed without a subcommand
-			if cmd.CalledAs() != "pcsm" || cmd.ArgsLenAtDash() != -1 {
-				return nil
-			}
-
 			err := config.Validate(cfg)
 			if err != nil {
 				return errors.Wrap(err, "validate config")

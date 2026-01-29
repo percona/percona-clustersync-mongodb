@@ -20,16 +20,18 @@ Start local MongoDB clusters for testing:
 ./hack/sh/run.sh     # Start sharded clusters
 ```
 
+**IMPORTANT**: Before running E2E tests or testing any PCSM binary functionality manually, you MUST start the MongoDB containers using the scripts above. The binary requires running source and target MongoDB clusters to function.
+
 Single test:
 
 - `go test -race -run TestName ./package`
-- `poetry run pytest tests/test_file.py::test_name`
-- manually execute binary from `./bin` for cases not covered by tests
+- `poetry run pytest tests/test_file.py::test_name` (requires MongoDB containers running)
+- manually execute binary from `./bin` for cases not covered by tests (requires MongoDB containers running)
 
 Cleanup test environments:
 
 ```bash
-./hack/cleanup.sh       # Clean all environments (rs, sh, sh-ha)
+./hack/cleanup.sh       # Clean all environments (rs, sh)
 ./hack/cleanup.sh rs    # Clean replica sets only
 ./hack/cleanup.sh sh    # Clean sharded cluster only
 ```
