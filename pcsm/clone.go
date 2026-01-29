@@ -200,7 +200,7 @@ func (c *Clone) Done() <-chan struct{} {
 }
 
 // Start starts the cloning process.
-func (c *Clone) Start(context.Context) error {
+func (c *Clone) Start(ctx context.Context) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -223,7 +223,7 @@ func (c *Clone) Start(context.Context) error {
 	c.startTime = time.Now()
 
 	go func() {
-		err := c.run()
+		err := c.run(ctx)
 
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -257,10 +257,7 @@ func (c *Clone) Start(context.Context) error {
 	return nil
 }
 
-func (c *Clone) run() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func (c *Clone) run(ctx context.Context) error {
 	lg := log.New("clone")
 	ctx = lg.WithContext(ctx)
 
@@ -326,7 +323,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
 
-	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
+	copyManager := NewCopyManager(ctx, c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     c.options.ReadWorkers,
 		NumInsertWorkers:   c.options.InsertWorkers,
 		SegmentSizeBytes:   c.options.SegmentSizeBytes,
@@ -407,9 +404,6 @@ func (c *Clone) doCollectionClone(
 ) error {
 	copyLogger := log.Ctx(ctx)
 
-	nsCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
 
 	var startedAt time.Time
@@ -488,7 +482,7 @@ func (c *Clone) doCollectionClone(
 
 	lastLogAt = time.Now() // init
 
-	progressUpdateCh := copyManager.Start(nsCtx, ns, spec)
+	progressUpdateCh := copyManager.Start(ctx, ns, spec)
 
 	for progressUpdate := range progressUpdateCh {
 		err := progressUpdate.Err

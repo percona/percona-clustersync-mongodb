@@ -198,7 +198,7 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 	}
 
 	defer func() {
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		err := util.CtxWithTimeout(ctx, config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
 		}
@@ -249,7 +249,7 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 	}
 
 	defer func() {
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		err := util.CtxWithTimeout(ctx, config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
 		}

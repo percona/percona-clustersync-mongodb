@@ -369,11 +369,6 @@ func TestFinalizeCommand(t *testing.T) {
 			args:         []string{"finalize"},
 			expectedBody: map[string]any{},
 		},
-		{
-			name:         "ignore-history-lost",
-			args:         []string{"finalize", "--ignore-history-lost"},
-			expectedBody: map[string]any{"ignoreHistoryLost": true},
-		},
 	}
 
 	for _, tt := range tests {

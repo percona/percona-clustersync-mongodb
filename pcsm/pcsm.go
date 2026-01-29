@@ -72,6 +72,8 @@ type Status struct {
 
 // PCSM manages the replication process.
 type PCSM struct {
+	lifecycleCtx context.Context //nolint:containedctx // Lifecycle context for background operations
+
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
@@ -95,8 +97,9 @@ type PCSM struct {
 }
 
 // New creates a new PCSM.
-func New(source, target *mongo.Client) *PCSM {
+func New(lifecycleCtx context.Context, source, target *mongo.Client) *PCSM {
 	return &PCSM{
+		lifecycleCtx:   lifecycleCtx,
 		source:         source,
 		target:         target,
 		state:          StateIdle,
@@ -116,7 +119,7 @@ type checkpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (ml *PCSM) Checkpoint(context.Context) ([]byte, error) {
+func (ml *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -169,7 +172,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	catalog := NewCatalog(ml.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
 	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
+	repl := NewRepl(ml.source, ml.target, catalog, nsFilter)
 
 	if cp.Catalog != nil {
 		err = catalog.Recover(cp.Catalog)
@@ -186,7 +189,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.Repl != nil {
-		err = repl.Recover(cp.Repl)
+		err = repl.Recover(ctx, cp.Repl)
 		if err != nil {
 			return errors.Wrap(err, "recover repl")
 		}
@@ -293,12 +296,10 @@ type StartOptions struct {
 
 	// Clone contains clone tuning options.
 	Clone CloneOptions
-	// Repl contains replication behavior options.
-	Repl ReplOptions
 }
 
 // Start starts the replication process with the given options.
-func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
+func (ml *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
@@ -326,10 +327,10 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
 	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
+	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter)
 	ml.state = StateRunning
 
-	go ml.run()
+	go ml.run(ml.lifecycleCtx)
 
 	return nil
 }
@@ -346,8 +347,8 @@ func (ml *PCSM) setFailed(err error) {
 }
 
 // run executes the cluster replication.
-func (ml *PCSM) run() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (ml *PCSM) run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	lg := log.New("pcsm")
@@ -577,7 +578,7 @@ func (ml *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	return nil
 }
 
-func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
+func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error { //nolint:unparam
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsStarted() && !fromFailure {
@@ -591,27 +592,21 @@ func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
 	ml.state = StateRunning
 	ml.resetError()
 
-	go ml.run()
+	go ml.run(ml.lifecycleCtx)
 	go ml.onStateChanged(StateRunning)
 
 	return nil
 }
 
-type FinalizeOptions struct {
-	IgnoreHistoryLost bool
-}
-
 // Finalize finalizes the replication process.
-func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
+func (ml *PCSM) Finalize(ctx context.Context) error {
 	status := ml.Status(ctx)
 
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
 	if status.State == StateFailed {
-		if !options.IgnoreHistoryLost || !errors.Is(status.Repl.Err, ErrOplogHistoryLost) {
-			return errors.Wrap(status.Error, "failed state")
-		}
+		return errors.Wrap(status.Error, "failed state")
 	}
 
 	if !status.Clone.IsFinished() {
@@ -652,7 +647,7 @@ func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
 	ml.state = StateFinalizing
 
 	go func() {
-		err := ml.catalog.Finalize(context.Background())
+		err := ml.catalog.Finalize(ml.lifecycleCtx)
 		if err != nil {
 			ml.setFailed(errors.Wrap(err, "finalization"))
 

@@ -28,13 +28,6 @@ var (
 
 const advanceTimePseudoEvent = "@tick"
 
-// ReplOptions configures the replication behavior.
-type ReplOptions struct {
-	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
-	// instead of client bulk write. Default: false (use client bulk write).
-	UseCollectionBulkWrite bool
-}
-
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
 	source *mongo.Client // Source MongoDB client
@@ -42,8 +35,6 @@ type Repl struct {
 
 	nsFilter sel.NSFilter // Namespace filter
 	catalog  *Catalog     // Catalog for managing collections and indexes
-
-	options *ReplOptions // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
 
@@ -98,14 +89,12 @@ func NewRepl(
 	source, target *mongo.Client,
 	catalog *Catalog,
 	nsFilter sel.NSFilter,
-	opts *ReplOptions,
 ) *Repl {
 	return &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
 		catalog:  catalog,
-		options:  opts,
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
@@ -147,7 +136,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	return cp
 }
 
-func (r *Repl) Recover(cp *replCheckpoint) error {
+func (r *Repl) Recover(ctx context.Context, cp *replCheckpoint) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -170,7 +159,7 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
-	targetVer, err := topo.Version(context.Background(), r.target)
+	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "major version")
 	}
@@ -237,7 +226,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(targetVer).ClientBulkWrite() && !r.options.UseCollectionBulkWrite {
+	if topo.Support(targetVer).ClientBulkWrite() {
 		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
 	} else {
 		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
@@ -245,7 +234,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
-	go r.run(options.ChangeStream().SetStartAtOperationTime(&startAt))
+	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
 	r.startTime = time.Now()
 
@@ -256,7 +245,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 }
 
 // Pause pauses the change replication.
-func (r *Repl) Pause(context.Context) error {
+func (r *Repl) Pause(_ context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -310,7 +299,7 @@ func (r *Repl) setFailed(err error, msg string) {
 	r.doPause()
 }
 
-func (r *Repl) Resume(context.Context) error {
+func (r *Repl) Resume(ctx context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -335,7 +324,7 @@ func (r *Repl) Resume(context.Context) error {
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
 
-	go r.run(options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
+	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
 	log.New("repl").With(log.OpTime(r.lastReplicatedOpTime.T, r.lastReplicatedOpTime.I)).
 		Info("Change Replication resumed")
@@ -468,10 +457,9 @@ func (r *Repl) watchChangeEvents(
 	}
 }
 
-func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
+func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	defer close(r.doneCh)
 
-	ctx := context.Background()
 	changeChh := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
