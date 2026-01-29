@@ -80,7 +80,13 @@ func newRootCmd() *cobra.Command {
 				logLevel = zerolog.InfoLevel
 			}
 
-			lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor)
+			logOutput := os.Stdout
+			// subcommands log to stderr
+			if cmd.HasParent() {
+				logOutput = os.Stderr
+			}
+
+			lg := log.InitGlobals(logLevel, cfg.Log.JSON, cfg.Log.NoColor, logOutput)
 			ctx := lg.WithContext(context.Background())
 			cmd.SetContext(ctx)
 
@@ -90,11 +96,6 @@ func newRootCmd() *cobra.Command {
 		},
 
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Check if this is the root command being executed without a subcommand
-			if cmd.CalledAs() != "pcsm" || cmd.ArgsLenAtDash() != -1 {
-				return nil
-			}
-
 			err := config.Validate(cfg)
 			if err != nil {
 				return errors.Wrap(err, "validate config")
@@ -212,10 +213,18 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				startOptions.CloneNumInsertWorkers = &v
 			}
 			if cfg.Clone.SegmentSize != "" {
+				_, err := config.ParseAndValidateCloneSegmentSize(cfg.Clone.SegmentSize)
+				if err != nil {
+					return errors.Wrap(err, "invalid clone segment size")
+				}
 				v := cfg.Clone.SegmentSize
 				startOptions.CloneSegmentSize = &v
 			}
 			if cfg.Clone.ReadBatchSize != "" {
+				_, err := config.ParseAndValidateCloneReadBatchSize(cfg.Clone.ReadBatchSize)
+				if err != nil {
+					return errors.Wrap(err, "invalid clone read batch size")
+				}
 				v := cfg.Clone.ReadBatchSize
 				startOptions.CloneReadBatchSize = &v
 			}
@@ -438,9 +447,14 @@ func runServer(_ context.Context, cfg *config.Config) error {
 	}
 
 	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
-		err = srv.pcsm.Start(ctx, &pcsm.StartOptions{
+		startOpts, err := resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
+		if err != nil {
+			return err
+		}
+
+		err = srv.pcsm.Start(ctx, startOpts)
 		if err != nil {
 			log.New("cli").Error(err, "Failed to start Cluster Replication")
 		}
@@ -705,13 +719,10 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, res)
 }
 
-// resolveStartOptions resolves the start options from the HTTP request and config.
-// Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
-func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
-	options := &pcsm.StartOptions{
-		PauseOnInitialSync: params.PauseOnInitialSync,
-		IncludeNamespaces:  params.IncludeNamespaces,
-		ExcludeNamespaces:  params.ExcludeNamespaces,
+// buildStartOptions builds StartOptions from config, validating clone size options.
+func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
+	startOpts := &pcsm.StartOptions{
+		PauseOnInitialSync: cfg.PauseOnInitialSync,
 		Repl: pcsm.ReplOptions{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
 		},
@@ -721,6 +732,39 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 			InsertWorkers: cfg.Clone.NumInsertWorkers,
 		},
 	}
+
+	if cfg.Clone.SegmentSize != "" {
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(cfg.Clone.SegmentSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone segment size")
+		}
+		startOpts.Clone.SegmentSizeBytes = segmentSize
+	}
+
+	if cfg.Clone.ReadBatchSize != "" {
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(cfg.Clone.ReadBatchSize)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid clone read batch size")
+		}
+		startOpts.Clone.ReadBatchSizeBytes = batchSize
+	}
+
+	return startOpts, nil
+}
+
+// resolveStartOptions resolves the start options from the HTTP request and config.
+// Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
+func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
+	// Start with config-based options
+	options, err := buildStartOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// HTTP params override config values
+	options.PauseOnInitialSync = params.PauseOnInitialSync
+	options.IncludeNamespaces = params.IncludeNamespaces
+	options.ExcludeNamespaces = params.ExcludeNamespaces
 
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
@@ -734,26 +778,17 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Clone.InsertWorkers = *params.CloneNumInsertWorkers
 	}
 
-	segmentSizeStr := cfg.Clone.SegmentSize
+	// HTTP params override config for size values (need to re-validate)
 	if params.CloneSegmentSize != nil {
-		segmentSizeStr = *params.CloneSegmentSize
-	}
-
-	if segmentSizeStr != "" {
-		segmentSize, err := config.ParseAndValidateCloneSegmentSize(segmentSizeStr)
+		segmentSize, err := config.ParseAndValidateCloneSegmentSize(*params.CloneSegmentSize)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone segment size")
 		}
 		options.Clone.SegmentSizeBytes = segmentSize
 	}
 
-	readBatchSizeStr := cfg.Clone.ReadBatchSize
 	if params.CloneReadBatchSize != nil {
-		readBatchSizeStr = *params.CloneReadBatchSize
-	}
-
-	if readBatchSizeStr != "" {
-		batchSize, err := config.ParseAndValidateCloneReadBatchSize(readBatchSizeStr)
+		batchSize, err := config.ParseAndValidateCloneReadBatchSize(*params.CloneReadBatchSize)
 		if err != nil {
 			return nil, errors.Wrap(err, "invalid clone read batch size")
 		}
@@ -1007,6 +1042,13 @@ type startRequest struct {
 	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
 }
 
+// clientResponse is implemented by all API response types to allow
+// doClientRequest to extract errors uniformly.
+type clientResponse interface {
+	IsOk() bool
+	GetError() string
+}
+
 // startResponse represents the response body for the /start endpoint.
 type startResponse struct {
 	// Ok indicates if the operation was successful.
@@ -1014,6 +1056,9 @@ type startResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r startResponse) IsOk() bool       { return r.Ok }
+func (r startResponse) GetError() string { return r.Err }
 
 // finalizeRequest represents the request body for the /finalize endpoint.
 type finalizeRequest struct {
@@ -1029,6 +1074,9 @@ type finalizeResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r finalizeResponse) IsOk() bool       { return r.Ok }
+func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
@@ -1057,6 +1105,9 @@ type statusResponse struct {
 	// InitialSync contains the initial sync status details.
 	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
 }
+
+func (r statusResponse) IsOk() bool       { return r.Ok }
+func (r statusResponse) GetError() string { return r.Err }
 
 type lastReplicatedOpTime struct {
 	TS      string `json:"ts"`
@@ -1087,6 +1138,9 @@ type pauseResponse struct {
 	Err string `json:"error,omitempty"`
 }
 
+func (r pauseResponse) IsOk() bool       { return r.Ok }
+func (r pauseResponse) GetError() string { return r.Err }
+
 // resumeRequest represents the request body for the /resume endpoint.
 type resumeRequest struct {
 	// FromFailure indicates whether to resume from a failed state.
@@ -1101,6 +1155,9 @@ type resumeResponse struct {
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
 }
+
+func (r resumeResponse) IsOk() bool       { return r.Ok }
+func (r resumeResponse) GetError() string { return r.Err }
 
 type PCSMClient struct {
 	port int
@@ -1135,7 +1192,7 @@ func (c PCSMClient) Resume(ctx context.Context, req resumeRequest) error {
 	return doClientRequest[resumeResponse](ctx, c.port, http.MethodPost, "resume", req)
 }
 
-func doClientRequest[T any](ctx context.Context, port int, method, path string, body any) error {
+func doClientRequest[T clientResponse](ctx context.Context, port int, method, path string, body any) error {
 	url := fmt.Sprintf("http://localhost:%d/%s", port, path)
 
 	bodyData := []byte("")
@@ -1165,6 +1222,10 @@ func doClientRequest[T any](ctx context.Context, port int, method, path string, 
 	err = json.NewDecoder(res.Body).Decode(&resp)
 	if err != nil {
 		return errors.Wrap(err, "decode response")
+	}
+
+	if !resp.IsOk() {
+		return errors.New(resp.GetError())
 	}
 
 	j := json.NewEncoder(os.Stdout)
