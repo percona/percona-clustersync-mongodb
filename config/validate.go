@@ -43,14 +43,14 @@ func ValidateCloneSegmentSize(sizeBytes uint64) error {
 
 	if sizeBytes < MinCloneSegmentSizeBytes {
 		return errors.Errorf("cloneSegmentSize must be at least %s, got %s",
-			humanize.Bytes(MinCloneSegmentSizeBytes),
-			humanize.Bytes(sizeBytes))
+			humanize.IBytes(MinCloneSegmentSizeBytes),
+			humanize.IBytes(sizeBytes))
 	}
 
 	if sizeBytes > MaxCloneSegmentSizeBytes {
 		return errors.Errorf("cloneSegmentSize must be at most %s, got %s",
-			humanize.Bytes(MaxCloneSegmentSizeBytes),
-			humanize.Bytes(sizeBytes))
+			humanize.IBytes(MaxCloneSegmentSizeBytes),
+			humanize.IBytes(sizeBytes))
 	}
 
 	return nil
@@ -65,14 +65,14 @@ func ValidateCloneReadBatchSize(sizeBytes uint64) error {
 
 	if sizeBytes < uint64(MinCloneReadBatchSizeBytes) {
 		return errors.Errorf("cloneReadBatchSize must be at least %s, got %s",
-			humanize.Bytes(uint64(MinCloneReadBatchSizeBytes)),
-			humanize.Bytes(sizeBytes))
+			humanize.IBytes(uint64(MinCloneReadBatchSizeBytes)),
+			humanize.IBytes(sizeBytes))
 	}
 
 	if sizeBytes > uint64(MaxCloneReadBatchSizeBytes) {
 		return errors.Errorf("cloneReadBatchSize must be at most %s, got %s",
-			humanize.Bytes(uint64(MaxCloneReadBatchSizeBytes)),
-			humanize.Bytes(sizeBytes))
+			humanize.IBytes(uint64(MaxCloneReadBatchSizeBytes)),
+			humanize.IBytes(sizeBytes))
 	}
 
 	return nil
