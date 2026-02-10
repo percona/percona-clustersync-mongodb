@@ -28,6 +28,8 @@ Install Python dependencies:
 poetry install
 ```
 
+If `poetry run` fails with a "bad interpreter" error (e.g. after a Python version change), use the virtualenv directly: `.venv/bin/pytest` instead of `poetry run pytest`.
+
 ### Environment Variables
 
 | Variable        | Default | Description                                            |
@@ -44,6 +46,8 @@ poetry install
 | -------- | ---------------------------- | ---------------------------- |
 | Sharded  | `mongodb://src-mongos:27017` | `mongodb://tgt-mongos:29017` |
 | RS       | `mongodb://rs00:30000`       | `mongodb://rs10:30100`       |
+
+**IMPORTANT**: Use these URIs exactly as shown. Do NOT append query parameters like `?replicaSet=rs0` or `?directConnection=true` — PCSM rejects `directConnection` and discovers topology automatically.
 
 ### Health Verification
 
@@ -96,6 +100,8 @@ Cleanup test environments:
 ./hack/cleanup.sh rs    # Clean replica sets only
 ./hack/cleanup.sh sh    # Clean sharded cluster only
 ```
+
+**IMPORTANT**: Always run `./hack/cleanup.sh` (no arguments) before switching between RS and sharded topologies. Both topologies bind overlapping ports (e.g. 30000), so leftover containers from one topology will cause "port already allocated" errors when starting the other. If cleanup doesn't resolve port conflicts, check for orphaned containers with `docker ps -a`.
 
 ## Project-Specific Patterns
 
@@ -357,6 +363,7 @@ For RS topology, substitute the URIs:
 ```bash
 export TEST_SOURCE_URI="mongodb://rs00:30000"
 export TEST_TARGET_URI="mongodb://rs10:30100"
+# TEST_PCSM_URL and TEST_PCSM_BIN remain the same as sharded
 ```
 
 Run tests including slow tests (disabled by default):
