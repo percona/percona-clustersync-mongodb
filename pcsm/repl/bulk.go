@@ -57,24 +57,24 @@ func newClientBulkWrite(size int, useSimpleCollation bool) *clientBulkWrite {
 	}
 }
 
-func (o *clientBulkWrite) Full() bool {
-	return len(o.writes) == cap(o.writes)
+func (cbw *clientBulkWrite) Full() bool {
+	return len(cbw.writes) == cap(cbw.writes)
 }
 
-func (o *clientBulkWrite) Empty() bool {
-	return len(o.writes) == 0
+func (cbw *clientBulkWrite) Empty() bool {
+	return len(cbw.writes) == 0
 }
 
-func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
-	totalSize := len(o.writes)
+func (cbw *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
+	totalSize := len(cbw.writes)
 
-	err := o.doWithRetry(ctx, m, o.writes)
+	err := cbw.doWithRetry(ctx, m, cbw.writes)
 	if err != nil {
 		return 0, err // nolint:wrapcheck
 	}
 
-	clear(o.writes)
-	o.writes = o.writes[:0]
+	clear(cbw.writes)
+	cbw.writes = cbw.writes[:0]
 
 	return totalSize, nil
 }
@@ -83,7 +83,7 @@ func (o *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) 
 // In ordered mode, when an error occurs at index N, operations 0..N-1 are applied,
 // operation N fails, and N+1..end are never executed. This function handles operation N
 // and retries the remaining operations recursively.
-func (o *clientBulkWrite) doWithRetry(
+func (cbw *clientBulkWrite) doWithRetry(
 	ctx context.Context,
 	m *mongo.Client,
 	bulkWrites []mongo.ClientBulkWrite,
@@ -105,7 +105,7 @@ func (o *clientBulkWrite) doWithRetry(
 	}
 
 	// Try to handle duplicate key error with fallback
-	idx, replacement := o.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
+	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
 	if replacement == nil {
 		return err //nolint:wrapcheck
 	}
@@ -120,12 +120,12 @@ func (o *clientBulkWrite) doWithRetry(
 
 	// Retry remaining operations (from index+1 onwards)
 	// These operations were never executed due to ordered semantics
-	return o.doWithRetry(ctx, m, bulkWrites[idx+1:])
+	return cbw.doWithRetry(ctx, m, bulkWrites[idx+1:])
 }
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
 // operation and returns the index and replacement document. Returns -1, nil if not applicable.
-func (o *clientBulkWrite) extractDuplicateKeyReplacement(
+func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	bulkErr error,
 	writes []mongo.ClientBulkWrite,
 ) (int, any) {
@@ -156,14 +156,14 @@ func (o *clientBulkWrite) extractDuplicateKeyReplacement(
 	return minIdx, replaceModel.Replacement
 }
 
-func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+func (cbw *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
 		Upsert:      &yes,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
@@ -173,16 +173,16 @@ func (o *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 		Model:      m,
 	}
 
-	o.writes = append(o.writes, bw)
+	cbw.writes = append(cbw.writes, bw)
 }
 
-func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (cbw *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	m := &mongo.ClientUpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
@@ -192,16 +192,16 @@ func (o *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 		Model:      m,
 	}
 
-	o.writes = append(o.writes, bw)
+	cbw.writes = append(cbw.writes, bw)
 }
 
-func (o *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+func (cbw *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
@@ -211,15 +211,15 @@ func (o *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 		Model:      m,
 	}
 
-	o.writes = append(o.writes, bw)
+	cbw.writes = append(cbw.writes, bw)
 }
 
-func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+func (cbw *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	m := &mongo.ClientDeleteOneModel{
 		Filter: event.DocumentKey,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
@@ -229,7 +229,7 @@ func (o *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 		Model:      m,
 	}
 
-	o.writes = append(o.writes, bw)
+	cbw.writes = append(cbw.writes, bw)
 }
 
 type collectionBulkWrite struct {
@@ -247,21 +247,21 @@ func newCollectionBulkWrite(size int, nonDefaultCollationSupport bool) *collecti
 	}
 }
 
-func (o *collectionBulkWrite) Full() bool {
-	return o.count == o.max
+func (cbw *collectionBulkWrite) Full() bool {
+	return cbw.count == cbw.max
 }
 
-func (o *collectionBulkWrite) Empty() bool {
-	return o.count == 0
+func (cbw *collectionBulkWrite) Empty() bool {
+	return cbw.count == 0
 }
 
-func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
+func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
 	var total atomic.Int64
 
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.SetLimit(runtime.NumCPU())
 
-	for ns, ops := range o.writes {
+	for ns, ops := range cbw.writes {
 		namespace, err := catalog.ParseNamespace(ns)
 		if err != nil {
 			return 0, errors.Wrapf(err, "parse namespace %q", namespace)
@@ -270,7 +270,7 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 		grp.Go(func() error {
 			mcoll := m.Database(namespace.Database).Collection(namespace.Collection)
 
-			err := o.doWithRetry(grpCtx, mcoll, namespace, ops)
+			err := cbw.doWithRetry(grpCtx, mcoll, namespace, ops)
 			if err != nil {
 				return err // nolint:wrapcheck
 			}
@@ -286,8 +286,8 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 		return 0, err // nolint:wrapcheck
 	}
 
-	clear(o.writes)
-	o.count = 0
+	clear(cbw.writes)
+	cbw.count = 0
 
 	return int(total.Load()), nil
 }
@@ -296,7 +296,7 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 // In ordered mode, when an error occurs at index N, operations 0..N-1 are applied,
 // operation N fails, and N+1..end are never executed. This function handles operation N
 // and retries the remaining operations recursively.
-func (o *collectionBulkWrite) doWithRetry(
+func (cbw *collectionBulkWrite) doWithRetry(
 	ctx context.Context,
 	coll *mongo.Collection,
 	namespace Namespace,
@@ -319,7 +319,7 @@ func (o *collectionBulkWrite) doWithRetry(
 	}
 
 	// Try to handle duplicate key error with fallback
-	idx, replacement := o.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
+	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
 	if replacement == nil {
 		return err //nolint:wrapcheck
 	}
@@ -331,12 +331,12 @@ func (o *collectionBulkWrite) doWithRetry(
 
 	// Retry remaining operations (from index+1 onwards)
 	// These operations were never executed due to ordered semantics
-	return o.doWithRetry(ctx, coll, namespace, bulkWrites[idx+1:])
+	return cbw.doWithRetry(ctx, coll, namespace, bulkWrites[idx+1:])
 }
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
 // operation and returns the index and replacement document. Returns -1, nil if not applicable.
-func (o *collectionBulkWrite) extractDuplicateKeyReplacement(
+func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	bulkErr error,
 	ops []mongo.WriteModel,
 ) (int, any) {
@@ -358,7 +358,7 @@ func (o *collectionBulkWrite) extractDuplicateKeyReplacement(
 	return firstErr.Index, replaceModel.Replacement
 }
 
-func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+func (cbw *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	missingShardKeys := bson.D{}
 
 	if ns.Sharded && ns.ShardKey != nil {
@@ -381,57 +381,57 @@ func (o *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 		Upsert:      &yes,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns.String()] = append(o.writes[ns.String()], m)
+	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 
-	o.count++
+	cbw.count++
 }
 
-func (o *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (cbw *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns.String()] = append(o.writes[ns.String()], m)
+	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 
-	o.count++
+	cbw.count++
 }
 
-func (o *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+func (cbw *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns.String()] = append(o.writes[ns.String()], m)
+	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 
-	o.count++
+	cbw.count++
 }
 
-func (o *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+func (cbw *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
 	m := &mongo.DeleteOneModel{
 		Filter: event.DocumentKey,
 	}
 
-	if ns.Sharded && o.useSimpleCollation {
+	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
-	o.writes[ns.String()] = append(o.writes[ns.String()], m)
+	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 
-	o.count++
+	cbw.count++
 }
 
 // handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
