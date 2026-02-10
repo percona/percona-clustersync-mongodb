@@ -28,6 +28,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
@@ -724,7 +725,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 	startOpts := &pcsm.StartOptions{
 		PauseOnInitialSync: cfg.PauseOnInitialSync,
-		Repl: pcsm.ReplOptions{
+		Repl: repl.Options{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
 		},
 		Clone: clone.Options{

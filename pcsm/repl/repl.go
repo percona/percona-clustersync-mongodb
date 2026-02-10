@@ -1,4 +1,4 @@
-package pcsm
+package repl
 
 import (
 	"context"
@@ -29,8 +29,8 @@ var (
 
 const advanceTimePseudoEvent = "@tick"
 
-// ReplOptions configures the replication behavior.
-type ReplOptions struct {
+// Options configures the replication behavior.
+type Options struct {
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
@@ -44,7 +44,7 @@ type Repl struct {
 	nsFilter sel.NSFilter     // Namespace filter
 	catalog  *catalog.Catalog // Catalog for managing collections and indexes
 
-	options *ReplOptions // Replication options
+	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
 
@@ -67,8 +67,8 @@ type Repl struct {
 	lastBulkDoneAt time.Time
 }
 
-// ReplStatus represents the status of change replication.
-type ReplStatus struct {
+// Status represents the status of change replication.
+type Status struct {
 	StartTime time.Time
 	PauseTime time.Time
 
@@ -80,17 +80,17 @@ type ReplStatus struct {
 }
 
 //go:inline
-func (rs *ReplStatus) IsStarted() bool {
+func (rs *Status) IsStarted() bool {
 	return !rs.StartTime.IsZero()
 }
 
 //go:inline
-func (rs *ReplStatus) IsRunning() bool {
+func (rs *Status) IsRunning() bool {
 	return rs.IsStarted() && !rs.IsPaused()
 }
 
 //go:inline
-func (rs *ReplStatus) IsPaused() bool {
+func (rs *Status) IsPaused() bool {
 	return !rs.PauseTime.IsZero()
 }
 
@@ -99,7 +99,7 @@ func NewRepl(
 	source, target *mongo.Client,
 	cat *catalog.Catalog,
 	nsFilter sel.NSFilter,
-	opts *ReplOptions,
+	opts *Options,
 ) *Repl {
 	return &Repl{
 		source:   source,
@@ -112,7 +112,8 @@ func NewRepl(
 	}
 }
 
-type replCheckpoint struct {
+// Checkpoint represents the checkpoint state for replication recovery.
+type Checkpoint struct {
 	StartTime            time.Time      `bson:"startTime,omitempty"`
 	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
 	EventsRead           int64          `bson:"eventsRead,omitempty"`
@@ -122,7 +123,7 @@ type replCheckpoint struct {
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
 
-func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
+func (r *Repl) Checkpoint() *Checkpoint {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -130,7 +131,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 		return nil
 	}
 
-	cp := &replCheckpoint{
+	cp := &Checkpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
 		EventsRead:           r.eventsApplied,
@@ -148,7 +149,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	return cp
 }
 
-func (r *Repl) Recover(cp *replCheckpoint) error {
+func (r *Repl) Recover(cp *Checkpoint) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -190,11 +191,11 @@ func (r *Repl) Recover(cp *replCheckpoint) error {
 }
 
 // Status returns the current replication status.
-func (r *Repl) Status() ReplStatus {
+func (r *Repl) Status() Status {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	return ReplStatus{
+	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        r.eventsApplied,
@@ -206,7 +207,8 @@ func (r *Repl) Status() ReplStatus {
 	}
 }
 
-func (r *Repl) resetError() {
+// ResetError clears any error stored in the Repl instance.
+func (r *Repl) ResetError() {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 

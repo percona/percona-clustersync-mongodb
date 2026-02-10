@@ -7,8 +7,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
 
 // MockCloner is a test double for the Cloner interface.
@@ -22,6 +24,24 @@ func (m *MockCloner) Status() clone.Status            { return clone.Status{} }
 func (m *MockCloner) Checkpoint() *clone.Checkpoint   { return nil }
 func (m *MockCloner) Recover(*clone.Checkpoint) error { return nil }
 func (m *MockCloner) ResetError()                     {}
+
+// MockReplicator is a test double for the Replicator interface.
+type MockReplicator struct {
+	doneCh    chan struct{}
+	startTime time.Time
+	pauseTime time.Time
+}
+
+func (m *MockReplicator) Start(context.Context, bson.Timestamp) error { return nil }
+func (m *MockReplicator) Pause(context.Context) error                 { return nil }
+func (m *MockReplicator) Resume(context.Context) error                { return nil }
+func (m *MockReplicator) Done() <-chan struct{}                       { return m.doneCh }
+func (m *MockReplicator) Status() repl.Status {
+	return repl.Status{StartTime: m.startTime, PauseTime: m.pauseTime}
+}
+func (m *MockReplicator) Checkpoint() *repl.Checkpoint   { return nil }
+func (m *MockReplicator) Recover(*repl.Checkpoint) error { return nil }
+func (m *MockReplicator) ResetError()                    {}
 
 func TestStart_StateValidation(t *testing.T) {
 	t.Parallel()
@@ -123,9 +143,8 @@ func TestPause_StateValidation(t *testing.T) {
 			}
 
 			if tt.setupRepl {
-				p.repl = &Repl{
-					pauseCh: make(chan struct{}),
-					doneCh:  make(chan struct{}),
+				p.repl = &MockReplicator{
+					doneCh: make(chan struct{}),
 				}
 			}
 
@@ -195,9 +214,8 @@ func TestResume_StateValidation(t *testing.T) {
 			}
 
 			if tt.initialState == StatePaused || tt.initialState == StateFailed {
-				p.repl = &Repl{
-					pauseCh: make(chan struct{}),
-					doneCh:  make(chan struct{}),
+				p.repl = &MockReplicator{
+					doneCh: make(chan struct{}),
 				}
 			}
 
@@ -217,12 +235,9 @@ func TestFinalize_FailsFromFailedStateWithoutIgnoreHistoryLost(t *testing.T) {
 	p := &PCSM{
 		state:          StateFailed,
 		onStateChanged: func(State) {},
-		err:            ErrOplogHistoryLost,
+		err:            repl.ErrOplogHistoryLost,
 		clone:          &MockCloner{doneCh: make(chan struct{})},
-		repl: &Repl{
-			pauseCh: make(chan struct{}),
-			doneCh:  make(chan struct{}),
-		},
+		repl:           &MockReplicator{doneCh: make(chan struct{})},
 	}
 
 	err := p.Finalize(context.Background(), FinalizeOptions{
@@ -239,10 +254,7 @@ func TestResumeFromPaused_FailsWhenReplNotStarted(t *testing.T) {
 	p := &PCSM{
 		state:          StatePaused,
 		onStateChanged: func(State) {},
-		repl: &Repl{
-			pauseCh: make(chan struct{}),
-			doneCh:  make(chan struct{}),
-		},
+		repl:           &MockReplicator{doneCh: make(chan struct{})},
 	}
 
 	err := p.Resume(context.Background(), ResumeOptions{
@@ -259,8 +271,7 @@ func TestResumeFromFailed_FailsWhenReplNotPaused(t *testing.T) {
 	p := &PCSM{
 		state:          StateFailed,
 		onStateChanged: func(State) {},
-		repl: &Repl{
-			pauseCh:   make(chan struct{}),
+		repl: &MockReplicator{
 			doneCh:    make(chan struct{}),
 			startTime: time.Now(),
 		},

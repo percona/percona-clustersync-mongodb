@@ -28,6 +28,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
@@ -62,6 +63,18 @@ type Cloner interface {
 	ResetError()
 }
 
+// Replicator defines the interface for the replication component.
+type Replicator interface {
+	Start(ctx context.Context, startAt bson.Timestamp) error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	Done() <-chan struct{}
+	Status() repl.Status
+	Checkpoint() *repl.Checkpoint
+	Recover(cp *repl.Checkpoint) error
+	ResetError()
+}
+
 // Status represents the status of the PCSM.
 type Status struct {
 	// State is the current state of the PCSM.
@@ -77,7 +90,7 @@ type Status struct {
 	InitialSyncCompleted bool
 
 	// Repl is the status of the replication process.
-	Repl ReplStatus
+	Repl repl.Status
 	// Clone is the status of the cloning process.
 	Clone clone.Status
 }
@@ -99,7 +112,7 @@ type PCSM struct {
 
 	catalog *catalog.Catalog // Catalog for managing collections and indexes
 	clone   Cloner           // Clone process
-	repl    *Repl            // Replication process
+	repl    Replicator       // Replication process
 
 	err error
 
@@ -122,7 +135,7 @@ type checkpoint struct {
 
 	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
 	Clone   *clone.Checkpoint   `bson:"clone,omitempty"`
-	Repl    *replCheckpoint     `bson:"repl,omitempty"`
+	Repl    *repl.Checkpoint    `bson:"repl,omitempty"`
 
 	State State  `bson:"state"`
 	Error string `bson:"error,omitempty"`
@@ -181,7 +194,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	cat := catalog.NewCatalog(ml.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
 	cloner := clone.NewClone(ml.source, ml.target, cat, nsFilter, &clone.Options{})
-	repl := NewRepl(ml.source, ml.target, cat, nsFilter, &ReplOptions{})
+	replInst := repl.NewRepl(ml.source, ml.target, cat, nsFilter, &repl.Options{})
 
 	if cp.Catalog != nil {
 		err = cat.Recover(cp.Catalog)
@@ -198,7 +211,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.Repl != nil {
-		err = repl.Recover(cp.Repl)
+		err = replInst.Recover(cp.Repl)
 		if err != nil {
 			return errors.Wrap(err, "recover repl")
 		}
@@ -209,7 +222,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	ml.nsFilter = nsFilter
 	ml.catalog = cat
 	ml.clone = cloner
-	ml.repl = repl
+	ml.repl = replInst
 	ml.state = cp.State
 
 	if cp.Error != "" {
@@ -291,7 +304,7 @@ func (ml *PCSM) Status(ctx context.Context) *Status {
 func (ml *PCSM) resetError() {
 	ml.err = nil
 	ml.clone.ResetError()
-	ml.repl.resetError()
+	ml.repl.ResetError()
 }
 
 // StartOptions represents the options for starting the PCSM.
@@ -306,7 +319,7 @@ type StartOptions struct {
 	// Clone contains clone tuning options.
 	Clone clone.Options
 	// Repl contains replication behavior options.
-	Repl ReplOptions
+	Repl repl.Options
 }
 
 // Start starts the replication process with the given options.
@@ -338,7 +351,7 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = catalog.NewCatalog(ml.target)
 	ml.clone = clone.NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
+	ml.repl = repl.NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
 	ml.state = StateRunning
 
 	go ml.run()
@@ -555,7 +568,7 @@ func (ml *PCSM) doPause(ctx context.Context) error {
 
 	err := ml.repl.Pause(ctx)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "pause replication")
 	}
 
 	ml.state = StatePaused
@@ -621,7 +634,7 @@ func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
 	defer ml.lock.Unlock()
 
 	if status.State == StateFailed {
-		if !options.IgnoreHistoryLost || !errors.Is(status.Repl.Err, ErrOplogHistoryLost) {
+		if !options.IgnoreHistoryLost || !errors.Is(status.Repl.Err, repl.ErrOplogHistoryLost) {
 			return errors.Wrap(status.Error, "failed state")
 		}
 	}

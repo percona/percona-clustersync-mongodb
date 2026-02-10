@@ -1,4 +1,4 @@
-package pcsm
+package repl
 
 import (
 	"bytes"
