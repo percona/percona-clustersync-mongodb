@@ -597,21 +597,15 @@ func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
 	return nil
 }
 
-type FinalizeOptions struct {
-	IgnoreHistoryLost bool
-}
-
 // Finalize finalizes the replication process.
-func (ml *PCSM) Finalize(ctx context.Context, options FinalizeOptions) error {
+func (ml *PCSM) Finalize(ctx context.Context) error {
 	status := ml.Status(ctx)
 
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 
 	if status.State == StateFailed {
-		if !options.IgnoreHistoryLost || !errors.Is(status.Repl.Err, ErrOplogHistoryLost) {
-			return errors.Wrap(status.Error, "failed state")
-		}
+		return errors.Wrap(status.Error, "failed state")
 	}
 
 	if !status.Clone.IsFinished() {

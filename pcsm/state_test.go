@@ -197,30 +197,6 @@ func TestResume_StateValidation(t *testing.T) {
 	}
 }
 
-func TestFinalize_FailsFromFailedStateWithoutIgnoreHistoryLost(t *testing.T) {
-	t.Parallel()
-
-	p := &PCSM{
-		state:          StateFailed,
-		onStateChanged: func(State) {},
-		err:            ErrOplogHistoryLost,
-		clone: &Clone{
-			doneCh: make(chan struct{}),
-		},
-		repl: &Repl{
-			pauseCh: make(chan struct{}),
-			doneCh:  make(chan struct{}),
-		},
-	}
-
-	err := p.Finalize(context.Background(), FinalizeOptions{
-		IgnoreHistoryLost: false,
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed state")
-}
-
 func TestResumeFromPaused_FailsWhenReplNotStarted(t *testing.T) {
 	t.Parallel()
 
