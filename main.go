@@ -229,6 +229,11 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				startOptions.CloneReadBatchSize = &v
 			}
 
+			if cfg.UseCollectionBulkWrite {
+				v := cfg.UseCollectionBulkWrite
+				startOptions.UseCollectionBulkWrite = &v
+			}
+
 			return NewClient(cfg.Port).Start(cmd.Context(), startOptions)
 		},
 	}
@@ -252,6 +257,9 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 
 	cmd.Flags().String("clone-read-batch-size", "", "")
 	cmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
+
+	cmd.Flags().Bool("use-collection-bulk-write", false,
+		"Use collection-level bulk write instead of client bulk write")
 
 	return cmd
 }
@@ -786,6 +794,10 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Clone.ReadBatchSizeBytes = batchSize
 	}
 
+	if params.UseCollectionBulkWrite != nil {
+		options.Repl.UseCollectionBulkWrite = *params.UseCollectionBulkWrite
+	}
+
 	return options, nil
 }
 
@@ -1004,7 +1016,9 @@ type startRequest struct {
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
 	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
 
-	// NOTE: UseCollectionBulkWrite intentionally NOT exposed via HTTP (internal only)
+	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
+	// instead of client bulk write.
+	UseCollectionBulkWrite *bool `json:"useCollectionBulkWrite,omitempty"`
 }
 
 // clientResponse is implemented by all API response types to allow
