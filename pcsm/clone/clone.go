@@ -1,4 +1,4 @@
-package pcsm
+package clone
 
 import (
 	"cmp"
@@ -23,8 +23,8 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-// CloneOptions configures the clone behavior.
-type CloneOptions struct {
+// Options configures the clone behavior.
+type Options struct {
 	// Parallelism is the number of collections to clone in parallel.
 	// Default: 2 (config.DefaultCloneNumParallelCollection)
 	Parallelism int
@@ -48,7 +48,7 @@ type Clone struct {
 	target   *mongo.Client    // Target MongoDB client
 	catalog  *catalog.Catalog // Catalog for managing collections and indexes
 	nsFilter sel.NSFilter     // Namespace filter
-	options  *CloneOptions    // Clone options
+	options  *Options         // Clone options
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -66,8 +66,8 @@ type Clone struct {
 	finishTime time.Time
 }
 
-// CloneStatus represents the status of the cloning process.
-type CloneStatus struct {
+// Status represents the status of the cloning process.
+type Status struct {
 	EstimatedTotalSizeBytes uint64 // Estimated total bytes to be copied
 	CopiedSizeBytes         uint64 // Bytes copied so far
 
@@ -81,17 +81,17 @@ type CloneStatus struct {
 }
 
 //go:inline
-func (cs *CloneStatus) IsStarted() bool {
+func (cs *Status) IsStarted() bool {
 	return !cs.StartTime.IsZero()
 }
 
 //go:inline
-func (cs *CloneStatus) IsRunning() bool {
+func (cs *Status) IsRunning() bool {
 	return cs.IsStarted() && !cs.IsFinished()
 }
 
 //go:inline
-func (cs *CloneStatus) IsFinished() bool {
+func (cs *Status) IsFinished() bool {
 	return !cs.FinishTime.IsZero()
 }
 
@@ -100,7 +100,7 @@ func NewClone(
 	source, target *mongo.Client,
 	cat *catalog.Catalog,
 	nsFilter sel.NSFilter,
-	opts *CloneOptions,
+	opts *Options,
 ) *Clone {
 	return &Clone{
 		source:   source,
@@ -112,7 +112,8 @@ func NewClone(
 	}
 }
 
-type cloneCheckpoint struct {
+// Checkpoint represents the checkpoint state for clone recovery.
+type Checkpoint struct {
 	TotalSize  uint64 `bson:"totalSize,omitempty"`
 	CopiedSize uint64 `bson:"copiedSize,omitempty"`
 
@@ -125,7 +126,7 @@ type cloneCheckpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
+func (c *Clone) Checkpoint() *Checkpoint {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -133,7 +134,7 @@ func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 		return nil
 	}
 
-	cp := &cloneCheckpoint{
+	cp := &Checkpoint{
 		TotalSize:  c.totalSize,
 		CopiedSize: c.copiedSize.Load(),
 		StartTS:    c.startTS,
@@ -148,7 +149,7 @@ func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 	return cp
 }
 
-func (c *Clone) Recover(cp *cloneCheckpoint) error {
+func (c *Clone) Recover(cp *Checkpoint) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -171,11 +172,11 @@ func (c *Clone) Recover(cp *cloneCheckpoint) error {
 }
 
 // Status returns the current status of the cloning process.
-func (c *Clone) Status() CloneStatus {
+func (c *Clone) Status() Status {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	return CloneStatus{
+	return Status{
 		EstimatedTotalSizeBytes: c.totalSize,
 		CopiedSizeBytes:         c.copiedSize.Load(),
 		StartTS:                 c.startTS,
@@ -186,7 +187,8 @@ func (c *Clone) Status() CloneStatus {
 	}
 }
 
-func (c *Clone) resetError() {
+// ResetError clears any error stored in the Clone instance.
+func (c *Clone) ResetError() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -731,6 +733,7 @@ func (c *Clone) listPrioritizedNamespaces() ([]namespaceInfo, error) {
 	return namespaces, nil
 }
 
+// NamespaceNotFoundError indicates a collection was not found.
 type NamespaceNotFoundError struct {
 	Database   string
 	Collection string

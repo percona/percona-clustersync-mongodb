@@ -27,6 +27,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
@@ -51,6 +52,16 @@ const (
 
 type OnStateChangedFunc func(newState State)
 
+// Cloner defines the interface for the clone component.
+type Cloner interface {
+	Start(ctx context.Context) error
+	Done() <-chan struct{}
+	Status() clone.Status
+	Checkpoint() *clone.Checkpoint
+	Recover(cp *clone.Checkpoint) error
+	ResetError()
+}
+
 // Status represents the status of the PCSM.
 type Status struct {
 	// State is the current state of the PCSM.
@@ -68,7 +79,7 @@ type Status struct {
 	// Repl is the status of the replication process.
 	Repl ReplStatus
 	// Clone is the status of the cloning process.
-	Clone CloneStatus
+	Clone clone.Status
 }
 
 // PCSM manages the replication process.
@@ -87,7 +98,7 @@ type PCSM struct {
 	state State // Current state of the PCSM
 
 	catalog *catalog.Catalog // Catalog for managing collections and indexes
-	clone   *Clone           // Clone process
+	clone   Cloner           // Clone process
 	repl    *Repl            // Replication process
 
 	err error
@@ -110,7 +121,7 @@ type checkpoint struct {
 	NSExclude []string `bson:"nsExclude,omitempty"`
 
 	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
-	Clone   *cloneCheckpoint    `bson:"clone,omitempty"`
+	Clone   *clone.Checkpoint   `bson:"clone,omitempty"`
 	Repl    *replCheckpoint     `bson:"repl,omitempty"`
 
 	State State  `bson:"state"`
@@ -169,7 +180,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	cat := catalog.NewCatalog(ml.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	clone := NewClone(ml.source, ml.target, cat, nsFilter, &CloneOptions{})
+	cloner := clone.NewClone(ml.source, ml.target, cat, nsFilter, &clone.Options{})
 	repl := NewRepl(ml.source, ml.target, cat, nsFilter, &ReplOptions{})
 
 	if cp.Catalog != nil {
@@ -180,7 +191,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.Clone != nil {
-		err = clone.Recover(cp.Clone)
+		err = cloner.Recover(cp.Clone)
 		if err != nil {
 			return errors.Wrap(err, "recover clone")
 		}
@@ -197,7 +208,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	ml.nsExclude = cp.NSExclude
 	ml.nsFilter = nsFilter
 	ml.catalog = cat
-	ml.clone = clone
+	ml.clone = cloner
 	ml.repl = repl
 	ml.state = cp.State
 
@@ -279,7 +290,7 @@ func (ml *PCSM) Status(ctx context.Context) *Status {
 
 func (ml *PCSM) resetError() {
 	ml.err = nil
-	ml.clone.resetError()
+	ml.clone.ResetError()
 	ml.repl.resetError()
 }
 
@@ -293,7 +304,7 @@ type StartOptions struct {
 	ExcludeNamespaces []string
 
 	// Clone contains clone tuning options.
-	Clone CloneOptions
+	Clone clone.Options
 	// Repl contains replication behavior options.
 	Repl ReplOptions
 }
@@ -326,7 +337,7 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = catalog.NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
+	ml.clone = clone.NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
 	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
 	ml.state = StateRunning
 

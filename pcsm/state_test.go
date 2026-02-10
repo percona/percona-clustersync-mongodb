@@ -7,7 +7,21 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 )
+
+// MockCloner is a test double for the Cloner interface.
+type MockCloner struct {
+	doneCh chan struct{}
+}
+
+func (m *MockCloner) Start(context.Context) error     { return nil }
+func (m *MockCloner) Done() <-chan struct{}           { return m.doneCh }
+func (m *MockCloner) Status() clone.Status            { return clone.Status{} }
+func (m *MockCloner) Checkpoint() *clone.Checkpoint   { return nil }
+func (m *MockCloner) Recover(*clone.Checkpoint) error { return nil }
+func (m *MockCloner) ResetError()                     {}
 
 func TestStart_StateValidation(t *testing.T) {
 	t.Parallel()
@@ -204,9 +218,7 @@ func TestFinalize_FailsFromFailedStateWithoutIgnoreHistoryLost(t *testing.T) {
 		state:          StateFailed,
 		onStateChanged: func(State) {},
 		err:            ErrOplogHistoryLost,
-		clone: &Clone{
-			doneCh: make(chan struct{}),
-		},
+		clone:          &MockCloner{doneCh: make(chan struct{})},
 		repl: &Repl{
 			pauseCh: make(chan struct{}),
 			doneCh:  make(chan struct{}),
