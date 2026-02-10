@@ -193,8 +193,8 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	cat := catalog.NewCatalog(ml.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	cloner := clone.NewClone(ml.source, ml.target, cat, nsFilter, &clone.Options{})
-	replInst := repl.NewRepl(ml.source, ml.target, cat, nsFilter, &repl.Options{})
+	cln := clone.NewClone(ml.source, ml.target, cat, nsFilter, &clone.Options{})
+	rpl := repl.NewRepl(ml.source, ml.target, cat, nsFilter, &repl.Options{})
 
 	if cp.Catalog != nil {
 		err = cat.Recover(cp.Catalog)
@@ -204,14 +204,14 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.Clone != nil {
-		err = cloner.Recover(cp.Clone)
+		err = cln.Recover(cp.Clone)
 		if err != nil {
 			return errors.Wrap(err, "recover clone")
 		}
 	}
 
 	if cp.Repl != nil {
-		err = replInst.Recover(cp.Repl)
+		err = rpl.Recover(cp.Repl)
 		if err != nil {
 			return errors.Wrap(err, "recover repl")
 		}
@@ -221,8 +221,8 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	ml.nsExclude = cp.NSExclude
 	ml.nsFilter = nsFilter
 	ml.catalog = cat
-	ml.clone = cloner
-	ml.repl = replInst
+	ml.clone = cln
+	ml.repl = rpl
 	ml.state = cp.State
 
 	if cp.Error != "" {
