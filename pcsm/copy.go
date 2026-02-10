@@ -19,6 +19,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
@@ -165,7 +166,7 @@ func (cm *CopyManager) Close() {
 // operation.
 func (cm *CopyManager) Start(
 	ctx context.Context,
-	namespace Namespace,
+	namespace catalog.Namespace,
 	spec *topo.CollectionSpecification,
 ) <-chan CopyProgressUpdate {
 	progressUpdateCh := make(chan CopyProgressUpdate)
@@ -292,13 +293,13 @@ func (cm *CopyManager) runInsertDispatcher(
 
 func (cm *CopyManager) copyCollection(
 	ctx context.Context,
-	namespace Namespace,
+	namespace catalog.Namespace,
 	spec *topo.CollectionSpecification,
 	progressUpdateCh chan<- CopyProgressUpdate,
 ) error {
 	switch spec.Type {
 	case topo.TypeTimeseries:
-		return ErrTimeseriesUnsupported
+		return catalog.ErrTimeseriesUnsupported
 	case topo.TypeView:
 		return nil
 	}
@@ -423,7 +424,7 @@ type (
 // for copying a single collection. One session is created per collection
 // and disposed when the copy completes.
 type collectionCopySession struct {
-	ns       Namespace
+	ns       catalog.Namespace
 	isCapped bool
 
 	readBatchCh      chan readBatch
@@ -440,7 +441,7 @@ type collectionCopySession struct {
 	cancel context.CancelFunc
 }
 
-func newCollectionCopySession(ctx context.Context, ns Namespace, isCapped bool) *collectionCopySession {
+func newCollectionCopySession(ctx context.Context, ns catalog.Namespace, isCapped bool) *collectionCopySession {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	return &collectionCopySession{
@@ -568,7 +569,7 @@ type readBatch struct {
 
 // insertTask represents a batch of documents to be inserted into the target collection.
 type insertTask struct {
-	Namespace Namespace
+	Namespace catalog.Namespace
 	ID        uint32
 	Documents []any
 	SizeBytes int
@@ -624,7 +625,7 @@ type SegmentOptions struct {
 func NewSegmenter(
 	ctx context.Context,
 	m *mongo.Client,
-	ns Namespace,
+	ns catalog.Namespace,
 	options SegmentOptions,
 ) (*Segmenter, error) {
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
@@ -922,7 +923,7 @@ type CappedSegmenter struct {
 func NewCappedSegmenter(
 	ctx context.Context,
 	m *mongo.Client,
-	ns Namespace,
+	ns catalog.Namespace,
 	batchSizeBytes int32,
 ) (*CappedSegmenter, error) {
 	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)

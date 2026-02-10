@@ -16,6 +16,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
@@ -40,8 +41,8 @@ type Repl struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
-	nsFilter sel.NSFilter // Namespace filter
-	catalog  *Catalog     // Catalog for managing collections and indexes
+	nsFilter sel.NSFilter     // Namespace filter
+	catalog  *catalog.Catalog // Catalog for managing collections and indexes
 
 	options *ReplOptions // Replication options
 
@@ -96,7 +97,7 @@ func (rs *ReplStatus) IsPaused() bool {
 // NewRepl creates a new Repl instance.
 func NewRepl(
 	source, target *mongo.Client,
-	catalog *Catalog,
+	cat *catalog.Catalog,
 	nsFilter sel.NSFilter,
 	opts *ReplOptions,
 ) *Repl {
@@ -104,7 +105,7 @@ func NewRepl(
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
-		catalog:  catalog,
+		catalog:  cat,
 		options:  opts,
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
@@ -825,7 +826,7 @@ func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 		}
 
 	case opts.ViewOn != "":
-		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
+		if strings.HasPrefix(opts.ViewOn, catalog.TimeseriesPrefix) {
 			log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
 
 			return

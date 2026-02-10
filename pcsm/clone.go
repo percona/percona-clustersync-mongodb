@@ -18,6 +18,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
@@ -43,11 +44,11 @@ type CloneOptions struct {
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
-	source   *mongo.Client // Source MongoDB client
-	target   *mongo.Client // Target MongoDB client
-	catalog  *Catalog      // Catalog for managing collections and indexes
-	nsFilter sel.NSFilter  // Namespace filter
-	options  *CloneOptions // Clone options
+	source   *mongo.Client    // Source MongoDB client
+	target   *mongo.Client    // Target MongoDB client
+	catalog  *catalog.Catalog // Catalog for managing collections and indexes
+	nsFilter sel.NSFilter     // Namespace filter
+	options  *CloneOptions    // Clone options
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -97,14 +98,14 @@ func (cs *CloneStatus) IsFinished() bool {
 // NewClone creates a new Clone instance with the given options.
 func NewClone(
 	source, target *mongo.Client,
-	catalog *Catalog,
+	cat *catalog.Catalog,
 	nsFilter sel.NSFilter,
 	opts *CloneOptions,
 ) *Clone {
 	return &Clone{
 		source:   source,
 		target:   target,
-		catalog:  catalog,
+		catalog:  cat,
 		nsFilter: nsFilter,
 		options:  opts,
 		doneCh:   make(chan struct{}),
@@ -372,7 +373,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 				prevNS := ns
 				ns = namespaceInfo{
-					Namespace: Namespace{Database: prevNS.Database, Collection: name},
+					Namespace: catalog.Namespace{Database: prevNS.Database, Collection: name},
 					UUID:      prevNS.UUID,
 				}
 
@@ -403,7 +404,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
-	ns Namespace,
+	ns catalog.Namespace,
 ) error {
 	copyLogger := log.Ctx(ctx)
 
@@ -445,7 +446,7 @@ func (c *Clone) doCollectionClone(
 	}
 
 	if spec.Type == topo.TypeTimeseries {
-		return ErrTimeseriesUnsupported
+		return catalog.ErrTimeseriesUnsupported
 	}
 
 	err = c.createCollection(ctx, ns, spec)
@@ -519,7 +520,7 @@ func (c *Clone) doCollectionClone(
 			case topo.IsCollectionRenamed(err):
 				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
 
-			case errors.Is(err, ErrTimeseriesUnsupported):
+			case errors.Is(err, catalog.ErrTimeseriesUnsupported):
 				lg.Warnf("Timeseries is not supported (%q)", ns)
 
 			default:
@@ -702,7 +703,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 }
 
 type namespaceInfo struct {
-	Namespace
+	catalog.Namespace
 
 	UUID *bson.Binary
 }
@@ -711,7 +712,7 @@ func (c *Clone) listPrioritizedNamespaces() ([]namespaceInfo, error) {
 	namespaces := []namespaceInfo{}
 
 	for ns, elem := range c.sizeMap {
-		namespace, err := parseNamespace(ns)
+		namespace, err := catalog.ParseNamespace(ns)
 		if err != nil {
 			return nil, errors.Wrapf(err, "parse namespace %q", ns)
 		}
@@ -741,14 +742,14 @@ func (e NamespaceNotFoundError) Error() string {
 
 func (c *Clone) createCollection(
 	ctx context.Context,
-	ns Namespace,
+	ns catalog.Namespace,
 	spec *topo.CollectionSpecification,
 ) error {
 	if spec.Type == topo.TypeTimeseries {
-		return ErrTimeseriesUnsupported
+		return catalog.ErrTimeseriesUnsupported
 	}
 
-	var createOptions CreateCollectionOptions
+	var createOptions catalog.CreateCollectionOptions
 
 	err := bson.Unmarshal(spec.Options, &createOptions)
 	if err != nil {
@@ -768,7 +769,7 @@ func (c *Clone) createCollection(
 	return nil
 }
 
-func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
+func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
 	indexes, err := topo.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")

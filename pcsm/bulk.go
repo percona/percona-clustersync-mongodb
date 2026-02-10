@@ -14,6 +14,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
@@ -261,7 +262,7 @@ func (o *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, err
 	grp.SetLimit(runtime.NumCPU())
 
 	for ns, ops := range o.writes {
-		namespace, err := parseNamespace(ns)
+		namespace, err := catalog.ParseNamespace(ns)
 		if err != nil {
 			return 0, errors.Wrapf(err, "parse namespace %q", namespace)
 		}
@@ -609,17 +610,4 @@ func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
 	_, err := strconv.Atoi(parts[len(parts)-1])
 
 	return err == nil
-}
-
-func parseNamespace(ns string) (Namespace, error) {
-	parts := strings.SplitN(ns, ".", 2) //nolint:mnd
-
-	if len(parts) != 2 { //nolint:mnd
-		return Namespace{}, errors.Errorf("invalid namespace %q", ns)
-	}
-
-	return Namespace{
-		Database:   parts[0],
-		Collection: parts[1],
-	}, nil
 }

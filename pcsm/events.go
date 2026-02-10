@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
@@ -88,32 +89,17 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
-// Namespace is the namespace (database and/or collection) affected by the event.
-type Namespace struct {
-	// Database is the name of the database where the event occurred.
-	Database string `bson:"db"`
+// Namespace is an alias to catalog.Namespace for use in event types.
+type Namespace = catalog.Namespace
 
-	// Collection is the name of the collection where the event occurred.
-	Collection string `bson:"coll"`
+// CreateCollectionOptions is an alias to catalog.CreateCollectionOptions.
+type CreateCollectionOptions = catalog.CreateCollectionOptions
 
-	// Sharded indicates whether the collection is sharded.
-	Sharded bool
+// ModifyIndexOption is an alias to catalog.ModifyIndexOption.
+type ModifyIndexOption = catalog.ModifyIndexOption
 
-	// ShardKey is the shard key used for the collection.
-	ShardKey bson.D
-}
-
-func (ns Namespace) String() string {
-	var rv string
-
-	if ns.Collection != "" {
-		rv = ns.Database + "." + ns.Collection
-	} else {
-		rv = ns.Database
-	}
-
-	return rv
-}
+// UUIDMap is an alias to catalog.UUIDMap.
+type UUIDMap = catalog.UUIDMap
 
 // InvalidateEvent occurs when an operation renders the change stream invalid. For example, a change
 // stream opened on a collection that was later dropped or renamed would cause an invalidate event.

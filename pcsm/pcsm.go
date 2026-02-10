@@ -26,6 +26,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
@@ -85,9 +86,9 @@ type PCSM struct {
 
 	state State // Current state of the PCSM
 
-	catalog *Catalog // Catalog for managing collections and indexes
-	clone   *Clone   // Clone process
-	repl    *Repl    // Replication process
+	catalog *catalog.Catalog // Catalog for managing collections and indexes
+	clone   *Clone           // Clone process
+	repl    *Repl            // Replication process
 
 	err error
 
@@ -108,9 +109,9 @@ type checkpoint struct {
 	NSInclude []string `bson:"nsInclude,omitempty"`
 	NSExclude []string `bson:"nsExclude,omitempty"`
 
-	Catalog *catalogCheckpoint `bson:"catalog,omitempty"`
-	Clone   *cloneCheckpoint   `bson:"clone,omitempty"`
-	Repl    *replCheckpoint    `bson:"repl,omitempty"`
+	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
+	Clone   *cloneCheckpoint    `bson:"clone,omitempty"`
+	Repl    *replCheckpoint     `bson:"repl,omitempty"`
 
 	State State  `bson:"state"`
 	Error string `bson:"error,omitempty"`
@@ -166,13 +167,13 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
-	catalog := NewCatalog(ml.target)
+	cat := catalog.NewCatalog(ml.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
+	clone := NewClone(ml.source, ml.target, cat, nsFilter, &CloneOptions{})
+	repl := NewRepl(ml.source, ml.target, cat, nsFilter, &ReplOptions{})
 
 	if cp.Catalog != nil {
-		err = catalog.Recover(cp.Catalog)
+		err = cat.Recover(cp.Catalog)
 		if err != nil {
 			return errors.Wrap(err, "recover catalog")
 		}
@@ -195,7 +196,7 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	ml.nsInclude = cp.NSInclude
 	ml.nsExclude = cp.NSExclude
 	ml.nsFilter = nsFilter
-	ml.catalog = catalog
+	ml.catalog = cat
 	ml.clone = clone
 	ml.repl = repl
 	ml.state = cp.State
@@ -324,7 +325,7 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 	ml.nsExclude = options.ExcludeNamespaces
 	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
-	ml.catalog = NewCatalog(ml.target)
+	ml.catalog = catalog.NewCatalog(ml.target)
 	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
 	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
 	ml.state = StateRunning
