@@ -89,18 +89,18 @@ type Status struct {
 }
 
 //go:inline
-func (cs *Status) IsStarted() bool {
-	return !cs.StartTime.IsZero()
+func (s *Status) IsStarted() bool {
+	return !s.StartTime.IsZero()
 }
 
 //go:inline
-func (cs *Status) IsRunning() bool {
-	return cs.IsStarted() && !cs.IsFinished()
+func (s *Status) IsRunning() bool {
+	return s.IsStarted() && !s.IsFinished()
 }
 
 //go:inline
-func (cs *Status) IsFinished() bool {
-	return !cs.FinishTime.IsZero()
+func (s *Status) IsFinished() bool {
+	return !s.FinishTime.IsZero()
 }
 
 // NewClone creates a new Clone instance with the given options.

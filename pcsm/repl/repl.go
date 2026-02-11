@@ -97,18 +97,18 @@ type Status struct {
 }
 
 //go:inline
-func (rs *Status) IsStarted() bool {
-	return !rs.StartTime.IsZero()
+func (s *Status) IsStarted() bool {
+	return !s.StartTime.IsZero()
 }
 
 //go:inline
-func (rs *Status) IsRunning() bool {
-	return rs.IsStarted() && !rs.IsPaused()
+func (s *Status) IsRunning() bool {
+	return s.IsStarted() && !s.IsPaused()
 }
 
 //go:inline
-func (rs *Status) IsPaused() bool {
-	return !rs.PauseTime.IsZero()
+func (s *Status) IsPaused() bool {
+	return !s.PauseTime.IsZero()
 }
 
 // NewRepl creates a new Repl instance.
