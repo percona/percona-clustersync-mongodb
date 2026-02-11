@@ -124,6 +124,17 @@ type ModifyIndexOption struct {
 	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
 }
 
+// BaseCatalog defines the shared collection-level operations used by clone and repl packages.
+type BaseCatalog interface {
+	DropCollection(ctx context.Context, db, coll string) error
+	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
+	CreateIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification) error
+	ShardCollection(ctx context.Context, db, coll string, shardKey bson.D, unique bool) error
+	SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary)
+}
+
+var _ BaseCatalog = (*Catalog)(nil)
+
 // Catalog manages the MongoDB catalog.
 type Catalog struct {
 	lock      sync.RWMutex

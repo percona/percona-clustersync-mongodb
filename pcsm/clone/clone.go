@@ -23,6 +23,14 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
+// Catalog defines the catalog operations required by the clone.
+type Catalog interface {
+	catalog.BaseCatalog
+	AddIncompleteIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
+	AddInconsistentIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
+	SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp)
+}
+
 // Options configures the clone behavior.
 type Options struct {
 	// Parallelism is the number of collections to clone in parallel.
@@ -44,11 +52,11 @@ type Options struct {
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
 type Clone struct {
-	source   *mongo.Client    // Source MongoDB client
-	target   *mongo.Client    // Target MongoDB client
-	catalog  *catalog.Catalog // Catalog for managing collections and indexes
-	nsFilter sel.NSFilter     // Namespace filter
-	options  *Options         // Clone options
+	source   *mongo.Client // Source MongoDB client
+	target   *mongo.Client // Target MongoDB client
+	catalog  Catalog       // Catalog for managing collections and indexes
+	nsFilter sel.NSFilter  // Namespace filter
+	options  *Options      // Clone options
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -98,7 +106,7 @@ func (cs *Status) IsFinished() bool {
 // NewClone creates a new Clone instance with the given options.
 func NewClone(
 	source, target *mongo.Client,
-	cat *catalog.Catalog,
+	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
 ) *Clone {

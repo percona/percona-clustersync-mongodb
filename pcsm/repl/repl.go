@@ -22,6 +22,23 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
+// Catalog defines the catalog operations required by the repl.
+type Catalog interface {
+	catalog.BaseCatalog
+	UUIDMap() catalog.UUIDMap
+	DropDatabase(ctx context.Context, db string) error
+	DropIndex(ctx context.Context, db, coll, index string) error
+	Rename(ctx context.Context, db, coll, targetDB, targetColl string) error
+	ModifyIndex(ctx context.Context, db, coll string, mods *catalog.ModifyIndexOption) error
+	ModifyCappedCollection(ctx context.Context, db, coll string, sizeBytes, maxDocs *int64) error
+	ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error
+	ModifyChangeStreamPreAndPostImages(ctx context.Context, db, coll string, enabled bool) error
+	ModifyValidation(
+		ctx context.Context, db, coll string,
+		validator *bson.Raw, validationLevel, validationAction *string,
+	) error
+}
+
 var (
 	ErrInvalidateEvent  = errors.New("invalidate")
 	ErrOplogHistoryLost = errors.New("oplog history is lost")
@@ -41,8 +58,8 @@ type Repl struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
-	nsFilter sel.NSFilter     // Namespace filter
-	catalog  *catalog.Catalog // Catalog for managing collections and indexes
+	nsFilter sel.NSFilter // Namespace filter
+	catalog  Catalog      // Catalog for managing collections and indexes
 
 	options *Options // Replication options
 
@@ -97,7 +114,7 @@ func (rs *Status) IsPaused() bool {
 // NewRepl creates a new Repl instance.
 func NewRepl(
 	source, target *mongo.Client,
-	cat *catalog.Catalog,
+	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
 ) *Repl {
