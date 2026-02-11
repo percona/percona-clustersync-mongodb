@@ -263,18 +263,9 @@ func newFinalizeCmd(cfg *config.Config) *cobra.Command {
 		Use:   "finalize",
 		Short: "Finalize Cluster Replication",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
-
-			finalizeOptions := finalizeRequest{
-				IgnoreHistoryLost: ignoreHistoryLost,
-			}
-
-			return NewClient(cfg.Port).Finalize(cmd.Context(), finalizeOptions)
+			return NewClient(cfg.Port).Finalize(cmd.Context())
 		},
 	}
-
-	cmd.Flags().Bool("ignore-history-lost", false, "")
-	cmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	return cmd
 }
@@ -881,33 +872,7 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var params finalizeRequest
-
-	if r.ContentLength != 0 {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusInternalServerError),
-				http.StatusInternalServerError)
-
-			return
-		}
-
-		err = json.Unmarshal(data, &params)
-		if err != nil {
-			http.Error(w,
-				http.StatusText(http.StatusBadRequest),
-				http.StatusBadRequest)
-
-			return
-		}
-	}
-
-	options := &pcsm.FinalizeOptions{
-		IgnoreHistoryLost: params.IgnoreHistoryLost,
-	}
-
-	err := s.pcsm.Finalize(ctx, *options)
+	err := s.pcsm.Finalize(ctx)
 	if err != nil {
 		writeResponse(w, finalizeResponse{Err: err.Error()})
 
@@ -1062,13 +1027,6 @@ type startResponse struct {
 func (r startResponse) IsOk() bool       { return r.Ok }
 func (r startResponse) GetError() string { return r.Err }
 
-// finalizeRequest represents the request body for the /finalize endpoint.
-type finalizeRequest struct {
-	// IgnoreHistoryLost indicates whether the operation can ignore the ChangeStreamHistoryLost
-	// error.
-	IgnoreHistoryLost bool `json:"ignoreHistoryLost,omitempty"`
-}
-
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
 	// Ok indicates if the operation was successful.
@@ -1180,8 +1138,8 @@ func (c PCSMClient) Start(ctx context.Context, req startRequest) error {
 }
 
 // Finalize sends a request to finalize the cluster replication.
-func (c PCSMClient) Finalize(ctx context.Context, req finalizeRequest) error {
-	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", req)
+func (c PCSMClient) Finalize(ctx context.Context) error {
+	return doClientRequest[finalizeResponse](ctx, c.port, http.MethodPost, "finalize", nil)
 }
 
 // Pause sends a request to pause the cluster replication.
