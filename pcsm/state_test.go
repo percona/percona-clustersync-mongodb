@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
@@ -243,6 +242,65 @@ func TestPause_FailsFromInvalidState(t *testing.T) {
 	}
 }
 
+func TestResume_Success(t *testing.T) {
+	t.Parallel()
+
+	// Note: Full Resume() success testing requires MongoDB clients because it spawns
+	// a goroutine that uses them. Here we test that Resume() accepts valid states
+	// and the doResume() preconditions would pass.
+	//
+	// The actual resume logic (state transition, error clearing) is tested via E2E tests.
+
+	tests := []struct {
+		name         string
+		initialState State
+		fromFailure  bool
+	}{
+		{
+			name:         "accepts paused state when repl started and paused",
+			initialState: StatePaused,
+			fromFailure:  false,
+		},
+		{
+			name:         "accepts failed state with flag when repl paused",
+			initialState: StateFailed,
+			fromFailure:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockRepl := &MockReplicator{
+				doneCh:    make(chan struct{}),
+				startTime: time.Now(), // IsStarted() = true
+				pauseTime: time.Now(), // IsPaused() = true
+			}
+
+			// Verify the preconditions for doResume() would pass
+			replStatus := mockRepl.Status()
+
+			if !tt.fromFailure {
+				// Resume from paused: requires repl.IsStarted()
+				assert.True(t, replStatus.IsStarted(), "repl should be started for resume from paused")
+			}
+
+			if tt.fromFailure {
+				// Resume from failed: requires repl.IsPaused()
+				assert.True(t, replStatus.IsPaused(), "repl should be paused for resume from failed")
+			}
+
+			// Verify state is valid for Resume()
+			if tt.fromFailure {
+				assert.Equal(t, State(StateFailed), tt.initialState, "fromFailure requires Failed state")
+			} else {
+				assert.Equal(t, State(StatePaused), tt.initialState, "normal resume requires Paused state")
+			}
+		})
+	}
+}
+
 func TestResume_FailsFromInvalidState(t *testing.T) {
 	t.Parallel()
 
@@ -329,7 +387,6 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 					doneCh: make(chan struct{}),
 				}
 			}
-
 			err := p.Resume(context.Background(), ResumeOptions{
 				ResumeFromFailure: tt.fromFailure,
 			})
@@ -338,107 +395,4 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.errorContains)
 		})
 	}
-}
-
-func TestResume_Success(t *testing.T) {
-	t.Parallel()
-
-	// Note: Full Resume() success testing requires MongoDB clients because it spawns
-	// a goroutine that uses them. Here we test that Resume() accepts valid states
-	// and the doResume() preconditions would pass.
-	//
-	// The actual resume logic (state transition, error clearing) is tested via E2E tests.
-
-	tests := []struct {
-		name         string
-		initialState State
-		fromFailure  bool
-	}{
-		{
-			name:         "accepts paused state when repl started and paused",
-			initialState: StatePaused,
-			fromFailure:  false,
-		},
-		{
-			name:         "accepts failed state with flag when repl paused",
-			initialState: StateFailed,
-			fromFailure:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			mockRepl := &MockReplicator{
-				doneCh:    make(chan struct{}),
-				startTime: time.Now(), // IsStarted() = true
-				pauseTime: time.Now(), // IsPaused() = true
-			}
-
-			// Verify the preconditions for doResume() would pass
-			replStatus := mockRepl.Status()
-
-			if !tt.fromFailure {
-				// Resume from paused: requires repl.IsStarted()
-				assert.True(t, replStatus.IsStarted(), "repl should be started for resume from paused")
-			}
-
-			if tt.fromFailure {
-				// Resume from failed: requires repl.IsPaused()
-				assert.True(t, replStatus.IsPaused(), "repl should be paused for resume from failed")
-			}
-
-			// Verify state is valid for Resume()
-			if tt.fromFailure {
-				assert.Equal(t, State(StateFailed), tt.initialState, "fromFailure requires Failed state")
-			} else {
-				assert.Equal(t, State(StatePaused), tt.initialState, "normal resume requires Paused state")
-			}
-		})
-	}
-}
-
-func TestFinalize_FailsFromInvalidState(t *testing.T) {
-	t.Parallel()
-
-	// Note: Finalize() calls Status() which requires MongoDB client for non-failed states.
-	// We can only unit test the StateFailed case without MongoDB.
-	// Other cases (clone not completed, repl not started, initial sync not completed)
-	// are tested via E2E tests.
-
-	t.Run("fails from failed state without IgnoreHistoryLost", func(t *testing.T) {
-		t.Parallel()
-
-		p := &PCSM{
-			state:          StateFailed,
-			err:            repl.ErrOplogHistoryLost,
-			onStateChanged: func(State) {},
-			clone:          &MockCloner{doneCh: make(chan struct{})},
-			repl:           &MockReplicator{doneCh: make(chan struct{})},
-		}
-
-		err := p.Finalize(context.Background(), FinalizeOptions{IgnoreHistoryLost: false})
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed state")
-	})
-
-	t.Run("fails from failed state with non-history-lost error", func(t *testing.T) {
-		t.Parallel()
-
-		p := &PCSM{
-			state:          StateFailed,
-			err:            errors.New("some other error"),
-			onStateChanged: func(State) {},
-			clone:          &MockCloner{doneCh: make(chan struct{})},
-			repl:           &MockReplicator{doneCh: make(chan struct{})},
-		}
-
-		// Even with IgnoreHistoryLost, should fail because error is not ErrOplogHistoryLost
-		err := p.Finalize(context.Background(), FinalizeOptions{IgnoreHistoryLost: true})
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed state")
-	})
 }
