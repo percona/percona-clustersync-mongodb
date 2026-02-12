@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
@@ -390,6 +391,61 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 			err := p.Resume(context.Background(), ResumeOptions{
 				ResumeFromFailure: tt.fromFailure,
 			})
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errorContains)
+		})
+	}
+}
+
+func TestFinalize_FailsFromInvalidState(t *testing.T) {
+	t.Parallel()
+
+	// Note: Only StateFailed can be tested without a MongoDB client because Status()
+	// returns early for StateFailed before calling topo.ClusterTime(). Other validation
+	// paths (clone not finished, repl not started, initial sync not completed) require
+	// Status() to call topo.ClusterTime() which needs a real MongoDB client.
+	// Those paths are covered by E2E tests.
+
+	tests := []struct {
+		name          string
+		initialState  State
+		err           error
+		clone         *MockCloner
+		repl          *MockReplicator
+		errorContains string
+	}{
+		{
+			name:         "fails from failed state",
+			initialState: StateFailed,
+			err:          errors.New("underlying error"),
+			clone: &MockCloner{
+				doneCh: make(chan struct{}),
+				status: clone.Status{FinishTime: time.Now()},
+			},
+			repl: &MockReplicator{
+				doneCh:     make(chan struct{}),
+				startTime:  time.Now(),
+				pauseTime:  time.Now(),
+				lastOpTime: bson.Timestamp{T: 200},
+			},
+			errorContains: "failed state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &PCSM{
+				state:          tt.initialState,
+				err:            tt.err,
+				clone:          tt.clone,
+				repl:           tt.repl,
+				onStateChanged: func(State) {},
+			}
+
+			err := p.Finalize(context.Background())
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorContains)
