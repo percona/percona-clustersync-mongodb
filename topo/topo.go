@@ -156,7 +156,7 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
 	stats, err := collStatsFromStorageStats(ctx, m, db, coll)
 	if err != nil {
-		return nil, err //nolint:wrapcheck
+		return nil, err
 	}
 
 	// If avgObjSize is 0, $collStats may have stale metadata (common with newly sharded collections).
@@ -167,7 +167,7 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 
 		stats, err = collStatsFromDocsAggregation(ctx, m, db, coll)
 		if err != nil {
-			return nil, err //nolint:wrapcheck
+			return nil, err
 		}
 
 		log.Ctx(ctx).Debugf("Collection %s.%s stats from fallback: count=%d, size=%d, avgObjSize=%d",
@@ -198,7 +198,8 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 	}
 
 	defer func() {
-		err := util.CtxWithTimeout(ctx, config.CloseCursorTimeout, cur.Close)
+		//nolint:contextcheck // fresh context for cleanup
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
 		}
@@ -249,7 +250,8 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 	}
 
 	defer func() {
-		err := util.CtxWithTimeout(ctx, config.CloseCursorTimeout, cur.Close)
+		//nolint:contextcheck // fresh context for cleanup
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
 		}
