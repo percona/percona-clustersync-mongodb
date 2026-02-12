@@ -42,6 +42,10 @@ type CopyManager struct {
 	close         func()          // function to stop workers and clean up resources
 	collectionsWg sync.WaitGroup  // tracks active collections being processed
 	readSem       chan struct{}   // semaphore to limit concurrent read workers
+
+	// insertWorkerFunc, when set, replaces insertBatch in the worker loop.
+	// This is a testing hook — nil in production.
+	insertWorkerFunc func(ctx context.Context, task insertTask)
 }
 
 // CopyGetCollSpecFunc defines a function type that retrieves a collection's specification,
@@ -134,7 +138,11 @@ func NewCopyManager(source, target *mongo.Client, options CopyManagerOptions) *C
 
 			for t := range cm.insertTaskCh {
 				l := lg.With(log.NS(t.Namespace.Database, t.Namespace.Collection))
-				cm.insertBatch(l.WithContext(insertCtx), t)
+				if cm.insertWorkerFunc != nil {
+					cm.insertWorkerFunc(l.WithContext(insertCtx), t)
+				} else {
+					cm.insertBatch(l.WithContext(insertCtx), t)
+				}
 			}
 		}()
 	}
