@@ -18,7 +18,7 @@ import (
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	p := New(nil, nil)
+	p := New(t.Context(), nil, nil)
 
 	assert.Equal(t, State(StateIdle), p.state, "initial state should be StateIdle")
 	assert.Nil(t, p.source, "source should be nil when passed nil")

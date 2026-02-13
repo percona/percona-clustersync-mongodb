@@ -71,7 +71,7 @@ type Replicator interface {
 	Done() <-chan struct{}
 	Status() repl.Status
 	Checkpoint() *repl.Checkpoint
-	Recover(cp *repl.Checkpoint) error
+	Recover(ctx context.Context, cp *repl.Checkpoint) error
 	ResetError()
 }
 
@@ -357,7 +357,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl)
 	p.state = StateRunning
 
-	go p.run(ml.lifecycleCtx)
+	go p.run(p.lifecycleCtx)
 
 	return nil
 }
@@ -619,7 +619,7 @@ func (p *PCSM) doResume(_ context.Context, fromFailure bool) error { //nolint:un
 	p.state = StateRunning
 	p.resetError()
 
-	go p.run(ml.lifecycleCtx)
+	go p.run(p.lifecycleCtx)
 	go p.onStateChanged(StateRunning)
 
 	return nil
