@@ -508,10 +508,10 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	}()
 
 	ctx := context.Background()
-	changeCh := make(chan *ChangeEvent, config.ReplQueueSize)
+	changeEventCh := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
-		defer close(changeCh)
+		defer close(changeEventCh)
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -521,7 +521,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeCh)
+		err := r.watchChangeEvents(ctx, opts, changeEventCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
@@ -554,7 +554,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			var ok bool
 
 			select {
-			case change, ok = <-changeCh:
+			case change, ok = <-changeEventCh:
 				if !ok {
 					return
 				}
@@ -604,7 +604,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
 			if change.IsTransaction() {
-				pending = r.handleTransaction(ctx, change, changeCh, uuidMap)
+				pending = r.handleTransaction(ctx, change, changeEventCh, uuidMap)
 				lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			} else {
 				ns := findNamespaceByUUID(uuidMap, change)

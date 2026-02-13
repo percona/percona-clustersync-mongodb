@@ -103,7 +103,12 @@ func (w *worker) run(ctx context.Context) {
 		case <-w.barrierReq:
 			lg.Debug("Barrier requested")
 
-			// Barrier requested: flush pending ops and signal done
+			// Drain all buffered events routed before the barrier was requested.
+			if !w.drainRoutedEvents(ctx, lg) {
+				return
+			}
+
+			// Flush remaining ops and signal done.
 			if !w.bulkWrite.Empty() {
 				if !w.flush(ctx, lg) {
 					lg.Debug("Worker stopped (flush error)")
@@ -111,8 +116,8 @@ func (w *worker) run(ctx context.Context) {
 					return
 				}
 			}
-			w.barrierDone <- struct{}{}
 
+			w.barrierDone <- struct{}{}
 			lg.Debug("Barrier complete, waiting for resume")
 
 			// Wait for resume signal or context cancellation
@@ -210,6 +215,28 @@ func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
 	}
 
 	return true
+}
+
+// drainRoutedEvents reads all buffered events from routedEventCh and adds them
+// to the current batch, flushing when the batch is full. This must be called
+// when handling a barrier request to ensure all events routed before the
+// barrier are included in the bulk.
+// Returns false if a flush error occurred and the worker should stop.
+func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) bool {
+	for {
+		select {
+		case event := <-w.routedEventCh:
+			w.addToBatch(event)
+
+			if w.bulkWrite.Full() {
+				if !w.flush(ctx, lg) {
+					return false
+				}
+			}
+		default:
+			return true
+		}
+	}
 }
 
 // workerPool manages parallel replication workers.
