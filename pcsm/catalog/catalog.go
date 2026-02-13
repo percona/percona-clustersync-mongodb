@@ -326,7 +326,7 @@ func (c *Catalog) doCreateView(
 
 		return errors.Wrapf(err, "create view %s.%s", db, view)
 	})
-	if err != nil {
+	if err != nil && !topo.IsNamespaceExists(err) {
 		return err //nolint:wrapcheck
 	}
 
