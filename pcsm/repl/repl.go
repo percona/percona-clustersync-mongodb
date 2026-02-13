@@ -25,6 +25,7 @@ import (
 // Catalog defines the catalog operations required by the repl.
 type Catalog interface {
 	catalog.BaseCatalog
+
 	UUIDMap() catalog.UUIDMap
 	DropDatabase(ctx context.Context, db string) error
 	DropIndex(ctx context.Context, db, coll, index string) error
@@ -632,7 +633,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 }
 
 //go:inline
-func findNamespaceByUUID(uuidMap UUIDMap, change *ChangeEvent) Namespace {
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
 	if change.CollectionUUID == nil {
 		return change.Namespace
 	}
@@ -803,7 +804,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	return nil
 }
 
-func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
+func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *ModifyEvent) {
 	opts := event.OperationDescription
 
 	if len(opts.Unknown) != 0 {

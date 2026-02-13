@@ -11,48 +11,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
-	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
-
-// MockCloner is a test double for the Cloner interface.
-type MockCloner struct {
-	doneCh           chan struct{}
-	status           clone.Status
-	resetErrorCalled bool
-}
-
-func (m *MockCloner) Start(context.Context) error     { return nil }
-func (m *MockCloner) Done() <-chan struct{}           { return m.doneCh }
-func (m *MockCloner) Status() clone.Status            { return m.status }
-func (m *MockCloner) Checkpoint() *clone.Checkpoint   { return nil }
-func (m *MockCloner) Recover(*clone.Checkpoint) error { return nil }
-func (m *MockCloner) ResetError()                     { m.resetErrorCalled = true }
-
-// MockReplicator is a test double for the Replicator interface.
-type MockReplicator struct {
-	doneCh           chan struct{}
-	startTime        time.Time
-	pauseTime        time.Time
-	lastOpTime       bson.Timestamp
-	err              error
-	resetErrorCalled bool
-}
-
-func (m *MockReplicator) Start(context.Context, bson.Timestamp) error { return nil }
-func (m *MockReplicator) Pause(context.Context) error                 { return nil }
-func (m *MockReplicator) Resume(context.Context) error                { return nil }
-func (m *MockReplicator) Done() <-chan struct{}                       { return m.doneCh }
-func (m *MockReplicator) Status() repl.Status {
-	return repl.Status{
-		StartTime:            m.startTime,
-		PauseTime:            m.pauseTime,
-		LastReplicatedOpTime: m.lastOpTime,
-		Err:                  m.err,
-	}
-}
-func (m *MockReplicator) Checkpoint() *repl.Checkpoint   { return nil }
-func (m *MockReplicator) Recover(*repl.Checkpoint) error { return nil }
-func (m *MockReplicator) ResetError()                    { m.resetErrorCalled = true }
 
 func TestStart_Success(t *testing.T) {
 	t.Parallel()
@@ -155,7 +114,7 @@ func TestPause_Success(t *testing.T) {
 		onStateChanged: func(s State) {
 			stateChangeCh <- s
 		},
-		repl: &MockReplicator{
+		repl: &mockReplicator{
 			doneCh:    make(chan struct{}),
 			startTime: time.Now(), // IsStarted() = true
 			// pauseTime is zero, so IsRunning() = true
@@ -230,7 +189,7 @@ func TestPause_FailsFromInvalidState(t *testing.T) {
 			}
 
 			if tt.setupRepl {
-				p.repl = &MockReplicator{
+				p.repl = &mockReplicator{
 					doneCh: make(chan struct{}),
 				}
 			}
@@ -273,7 +232,7 @@ func TestResume_Success(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			mockRepl := &MockReplicator{
+			mockRepl := &mockReplicator{
 				doneCh:    make(chan struct{}),
 				startTime: time.Now(), // IsStarted() = true
 				pauseTime: time.Now(), // IsPaused() = true
@@ -309,7 +268,7 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 		name          string
 		initialState  State
 		fromFailure   bool
-		repl          *MockReplicator
+		repl          *mockReplicator
 		errorContains string
 	}{
 		{
@@ -353,7 +312,7 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 			name:         "fails from paused when repl not started",
 			initialState: StatePaused,
 			fromFailure:  false,
-			repl: &MockReplicator{
+			repl: &mockReplicator{
 				doneCh: make(chan struct{}),
 				// startTime is zero, so IsStarted() = false
 			},
@@ -363,7 +322,7 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 			name:         "fails from failed with flag when repl not paused",
 			initialState: StateFailed,
 			fromFailure:  true,
-			repl: &MockReplicator{
+			repl: &mockReplicator{
 				doneCh:    make(chan struct{}),
 				startTime: time.Now(), // IsStarted() = true
 				// pauseTime is zero, so IsPaused() = false
@@ -384,7 +343,7 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 			if tt.repl != nil {
 				p.repl = tt.repl
 			} else if tt.initialState == StatePaused || tt.initialState == StateFailed {
-				p.repl = &MockReplicator{
+				p.repl = &mockReplicator{
 					doneCh: make(chan struct{}),
 				}
 			}
@@ -411,19 +370,19 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 		name          string
 		initialState  State
 		err           error
-		clone         *MockCloner
-		repl          *MockReplicator
+		clone         *mockCloner
+		repl          *mockReplicator
 		errorContains string
 	}{
 		{
 			name:         "fails from failed state",
 			initialState: StateFailed,
 			err:          errors.New("underlying error"),
-			clone: &MockCloner{
+			clone: &mockCloner{
 				doneCh: make(chan struct{}),
 				status: clone.Status{FinishTime: time.Now()},
 			},
-			repl: &MockReplicator{
+			repl: &mockReplicator{
 				doneCh:     make(chan struct{}),
 				startTime:  time.Now(),
 				pauseTime:  time.Now(),

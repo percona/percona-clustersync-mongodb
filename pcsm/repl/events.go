@@ -89,18 +89,6 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
-// Namespace is an alias to catalog.Namespace for use in event types.
-type Namespace = catalog.Namespace
-
-// CreateCollectionOptions is an alias to catalog.CreateCollectionOptions.
-type CreateCollectionOptions = catalog.CreateCollectionOptions
-
-// ModifyIndexOption is an alias to catalog.ModifyIndexOption.
-type ModifyIndexOption = catalog.ModifyIndexOption
-
-// UUIDMap is an alias to catalog.UUIDMap.
-type UUIDMap = catalog.UUIDMap
-
 // InvalidateEvent occurs when an operation renders the change stream invalid. For example, a change
 // stream opened on a collection that was later dropped or renamed would cause an invalidate event.
 type InvalidateEvent struct {
@@ -147,7 +135,7 @@ type EventHeader struct {
 	OperationType OperationType `bson:"operationType"`
 
 	// Namespace is the namespace (database and/or collection) affected by the event.
-	Namespace Namespace `bson:"ns"`
+	Namespace catalog.Namespace `bson:"ns"`
 
 	// CollectionUUID is the collection's UUID.
 	//
@@ -232,7 +220,7 @@ type CreateEvent struct {
 	// This document and its subfields only appear when the change stream uses expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription CreateCollectionOptions `bson:"operationDescription"`
+	OperationDescription catalog.CreateCollectionOptions `bson:"operationDescription"`
 }
 
 // IsTimeseries returns true if the event is for a timeseries collection.
@@ -303,7 +291,7 @@ type modifyOpDesc struct {
 	// Index is the index that was modified.
 	//
 	// New in version 6.0.
-	Index *ModifyIndexOption `bson:"index,omitempty"`
+	Index *catalog.ModifyIndexOption `bson:"index,omitempty"`
 
 	CappedSize *int64 `bson:"cappedSize,omitempty"`
 	CappedMax  *int64 `bson:"cappedMax,omitempty"`
@@ -510,7 +498,7 @@ type renameOpDesc struct {
 	// DropTarget bson.Binary `bson:"dropTarget,omitempty"`
 
 	// To is the new namespace of the collection after the rename.
-	To Namespace `bson:"to"`
+	To catalog.Namespace `bson:"to"`
 }
 
 // ParsingError represents an error that occurred during parsing.

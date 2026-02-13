@@ -39,10 +39,10 @@ type bulkWrite interface {
 	Empty() bool
 	Do(ctx context.Context, m *mongo.Client) (int, error)
 
-	Insert(ns Namespace, event *InsertEvent)
-	Update(ns Namespace, event *UpdateEvent)
-	Replace(ns Namespace, event *ReplaceEvent)
-	Delete(ns Namespace, event *DeleteEvent)
+	Insert(ns catalog.Namespace, event *InsertEvent)
+	Update(ns catalog.Namespace, event *UpdateEvent)
+	Replace(ns catalog.Namespace, event *ReplaceEvent)
+	Delete(ns catalog.Namespace, event *DeleteEvent)
 }
 
 type clientBulkWrite struct {
@@ -156,7 +156,7 @@ func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	return minIdx, replaceModel.Replacement
 }
 
-func (cbw *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -176,7 +176,7 @@ func (cbw *clientBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	cbw.writes = append(cbw.writes, bw)
 }
 
-func (cbw *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	m := &mongo.ClientUpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
@@ -195,7 +195,7 @@ func (cbw *clientBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	cbw.writes = append(cbw.writes, bw)
 }
 
-func (cbw *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+func (cbw *clientBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -214,7 +214,7 @@ func (cbw *clientBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	cbw.writes = append(cbw.writes, bw)
 }
 
-func (cbw *clientBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 	m := &mongo.ClientDeleteOneModel{
 		Filter: event.DocumentKey,
 	}
@@ -299,7 +299,7 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 func (cbw *collectionBulkWrite) doWithRetry(
 	ctx context.Context,
 	coll *mongo.Collection,
-	namespace Namespace,
+	ns catalog.Namespace,
 	bulkWrites []mongo.WriteModel,
 ) error {
 	if len(bulkWrites) == 0 {
@@ -312,7 +312,7 @@ func (cbw *collectionBulkWrite) doWithRetry(
 		_, err := coll.BulkWrite(ctx, bulkWrites, collectionBulkOptions)
 		bulkErr = err
 
-		return errors.Wrapf(err, "bulk write %q", namespace)
+		return errors.Wrapf(err, "bulk write %q", ns)
 	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
 	if err == nil {
 		return nil
@@ -331,7 +331,7 @@ func (cbw *collectionBulkWrite) doWithRetry(
 
 	// Retry remaining operations (from index+1 onwards)
 	// These operations were never executed due to ordered semantics
-	return cbw.doWithRetry(ctx, coll, namespace, bulkWrites[idx+1:])
+	return cbw.doWithRetry(ctx, coll, ns, bulkWrites[idx+1:])
 }
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
@@ -358,7 +358,7 @@ func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	return firstErr.Index, replaceModel.Replacement
 }
 
-func (cbw *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
+func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 	missingShardKeys := bson.D{}
 
 	if ns.Sharded && ns.ShardKey != nil {
@@ -390,7 +390,7 @@ func (cbw *collectionBulkWrite) Insert(ns Namespace, event *InsertEvent) {
 	cbw.count++
 }
 
-func (cbw *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
+func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: collectUpdateOps(event),
@@ -405,7 +405,7 @@ func (cbw *collectionBulkWrite) Update(ns Namespace, event *UpdateEvent) {
 	cbw.count++
 }
 
-func (cbw *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
+func (cbw *collectionBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
 	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -420,7 +420,7 @@ func (cbw *collectionBulkWrite) Replace(ns Namespace, event *ReplaceEvent) {
 	cbw.count++
 }
 
-func (cbw *collectionBulkWrite) Delete(ns Namespace, event *DeleteEvent) {
+func (cbw *collectionBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 	m := &mongo.DeleteOneModel{
 		Filter: event.DocumentKey,
 	}

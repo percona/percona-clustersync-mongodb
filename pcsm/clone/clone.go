@@ -26,6 +26,7 @@ import (
 // Catalog defines the catalog operations required by the clone.
 type Catalog interface {
 	catalog.BaseCatalog
+
 	AddIncompleteIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
 	AddInconsistentIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
 	SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp)
