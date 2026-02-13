@@ -1,13 +1,20 @@
+//go:build integration
+
 package catalog_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -15,56 +22,253 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-const (
-	// Default to RS topology target URI. Override with TEST_TARGET_URI for sharded.
-	defaultTargetURI = "mongodb://rs10:30100"
-	testDB           = "pcsm_test_catalog"
-)
+const testDB = "pcsm_test_catalog"
 
-// targetURI returns the MongoDB target URI from environment or falls back to
-// the default RS topology URI.
-func targetURI() string {
-	if uri := os.Getenv("TEST_TARGET_URI"); uri != "" {
-		return uri
-	}
+var mongosURI string
 
-	return defaultTargetURI
-}
+func TestMain(m *testing.M) {
+	ctx := context.Background()
 
-// isShardedTopology returns true if the connected MongoDB is a sharded cluster.
-func isShardedTopology(ctx context.Context, client *mongo.Client) bool {
-	var result bson.M
-
-	err := client.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Decode(&result)
+	// Find project root by walking up to go.mod
+	projectRoot, err := findProjectRoot()
 	if err != nil {
-		return false
+		fmt.Fprintf(os.Stderr, "Failed to find project root: %v\n", err)
+		os.Exit(1)
 	}
 
-	msg, _ := result["msg"].(string)
+	composePath := filepath.Join(projectRoot, "hack", "sh", "compose.yml")
 
-	return msg == "isdbgrid"
+	// Create compose stack
+	mongoVersion := os.Getenv("MONGO_VERSION")
+	if mongoVersion == "" {
+		mongoVersion = "8.0"
+	}
+
+	stack, err := compose.NewDockerComposeWith(
+		compose.WithStackFiles(composePath),
+		compose.StackIdentifier("catalog-integration-test"),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create compose stack: %v\n", err)
+		os.Exit(1)
+	}
+
+	stack = stack.WithEnv(map[string]string{"MONGO_VERSION": mongoVersion}).(*compose.DockerCompose)
+
+	// Phase 1: Start config server and shards
+	err = stack.Up(ctx, compose.RunServices("tgt-cfg0", "tgt-rs00", "tgt-rs10"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start config and shards: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize replica sets
+	if err := initReplicaSet(ctx, stack, "tgt-cfg0", "/cfg/tgt/cfg.js", 28000); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init config server: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	if err := initReplicaSet(ctx, stack, "tgt-rs00", "/cfg/tgt/rs0.js", 40000); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init shard rs0: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	if err := initReplicaSet(ctx, stack, "tgt-rs10", "/cfg/tgt/rs1.js", 40100); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init shard rs1: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	// Phase 2: Start mongos
+	err = stack.Up(ctx, compose.RunServices("tgt-mongos"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start mongos: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	// Wait for mongos to be ready
+	if err := waitForMongos(ctx, stack); err != nil {
+		fmt.Fprintf(os.Stderr, "Mongos not ready: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	// Add shards to cluster
+	if err := addShards(ctx, stack); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to add shards: %v\n", err)
+		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+		os.Exit(1)
+	}
+
+	// MongoDB 8.0+: transition from dedicated config server
+	if strings.HasPrefix(mongoVersion, "8.") {
+		if err := transitionConfigServer(ctx, stack); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to transition config server: %v\n", err)
+			_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+			os.Exit(1)
+		}
+	}
+
+	// Set mongos URI for tests
+	mongosURI = "mongodb://tgt-mongos:29017"
+
+	// Run tests
+	exitCode := m.Run()
+
+	// Teardown
+	_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
+
+	os.Exit(exitCode)
 }
 
-// connectToMongoDB establishes a connection to MongoDB and returns the client.
-// If MongoDB is unavailable, the test is skipped.
+// findProjectRoot walks up directories until finding go.mod
+func findProjectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.mod not found")
+		}
+		dir = parent
+	}
+}
+
+// initReplicaSet initializes a replica set and waits for primary
+func initReplicaSet(ctx context.Context, stack *compose.DockerCompose, containerName, initScript string, port int) error {
+	container, err := stack.ServiceContainer(ctx, containerName)
+	if err != nil {
+		return fmt.Errorf("get container %s: %w", containerName, err)
+	}
+
+	// Run rs.initiate script
+	_, _, err = container.Exec(ctx, []string{"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port), initScript})
+	if err != nil {
+		return fmt.Errorf("exec init script: %w", err)
+	}
+
+	// Wait for primary
+	if err := waitForPrimary(ctx, container, port); err != nil {
+		return fmt.Errorf("wait for primary: %w", err)
+	}
+
+	// Run deprioritize script
+	_, _, err = container.Exec(ctx, []string{"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port), "/cfg/scripts/deprioritize.js"})
+	if err != nil {
+		return fmt.Errorf("exec deprioritize: %w", err)
+	}
+
+	return nil
+}
+
+// waitForPrimary polls until replica set has a primary
+func waitForPrimary(ctx context.Context, container *testcontainers.DockerContainer, port int) error {
+	timeout := time.After(60 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for primary")
+		case <-ticker.C:
+			exitCode, _, err := container.Exec(ctx, []string{
+				"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port),
+				"--eval", "exit(db.hello().isWritablePrimary ? 0 : 1)",
+			})
+			if err == nil && exitCode == 0 {
+				return nil
+			}
+		}
+	}
+}
+
+// waitForMongos polls until mongos is ready
+func waitForMongos(ctx context.Context, stack *compose.DockerCompose) error {
+	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
+	if err != nil {
+		return fmt.Errorf("get mongos container: %w", err)
+	}
+
+	timeout := time.After(60 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for mongos")
+		case <-ticker.C:
+			exitCode, _, err := container.Exec(ctx, []string{
+				"mongosh", "--quiet", "--port", "27017",
+				"--eval", "db.adminCommand('ping')",
+			})
+			if err == nil && exitCode == 0 {
+				return nil
+			}
+		}
+	}
+}
+
+// addShards adds shards to the cluster via mongos
+func addShards(ctx context.Context, stack *compose.DockerCompose) error {
+	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
+	if err != nil {
+		return fmt.Errorf("get mongos container: %w", err)
+	}
+
+	addShardsCmd := "sh.addShard('rs0/tgt-rs00:40000'); sh.addShard('rs1/tgt-rs10:40100');"
+	_, _, err = container.Exec(ctx, []string{
+		"mongosh", "--quiet", "--port", "27017",
+		"--eval", addShardsCmd,
+	})
+	if err != nil {
+		return fmt.Errorf("exec addShard: %w", err)
+	}
+
+	return nil
+}
+
+// transitionConfigServer runs transitionFromDedicatedConfigServer for MongoDB 8.0+
+func transitionConfigServer(ctx context.Context, stack *compose.DockerCompose) error {
+	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
+	if err != nil {
+		return fmt.Errorf("get mongos container: %w", err)
+	}
+
+	_, _, err = container.Exec(ctx, []string{
+		"mongosh", "--quiet", "--port", "27017",
+		"--eval", "db.adminCommand('transitionFromDedicatedConfigServer')",
+	})
+	if err != nil {
+		return fmt.Errorf("exec transition: %w", err)
+	}
+
+	return nil
+}
+
+// connectToMongoDB establishes a connection to MongoDB
 func connectToMongoDB(t *testing.T) *mongo.Client {
 	t.Helper()
-
-	uri := targetURI()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetServerSelectionTimeout(5 * time.Second))
-	if err != nil {
-		t.Skip("MongoDB not available:", err)
-	}
+	client, err := mongo.Connect(options.Client().ApplyURI(mongosURI).SetServerSelectionTimeout(5 * time.Second))
+	require.NoError(t, err, "MongoDB connection should succeed")
 
 	err = client.Ping(ctx, nil)
-	if err != nil {
-		_ = client.Disconnect(t.Context())
-		t.Skip("MongoDB not reachable:", err)
-	}
+	require.NoError(t, err, "MongoDB ping should succeed")
 
 	return client
 }
@@ -134,10 +338,6 @@ func TestShardCollection_Idempotency(t *testing.T) {
 	ctx := t.Context()
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
-
-	if !isShardedTopology(ctx, client) {
-		t.Skip("ShardCollection test requires sharded topology (set TEST_TARGET_URI to mongos)")
-	}
 
 	cat := catalog.NewCatalog(client)
 
