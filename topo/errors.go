@@ -27,12 +27,6 @@ func IsNamespaceExists(err error) bool {
 	return isMongoCommandError(err, "NamespaceExists")
 }
 
-// IsAlreadyInitialized checks if an error indicates a resource is already initialized.
-// This occurs when attempting to shard a collection that is already sharded.
-func IsAlreadyInitialized(err error) bool {
-	return isMongoCommandError(err, "AlreadyInitialized")
-}
-
 // IsCollectionDropped checks if the error is caused by a collection being dropped.
 func IsCollectionDropped(err error) bool {
 	var cmdErr mongo.CommandError
