@@ -54,7 +54,7 @@ func (m *mockReplicator) Status() repl.Status {
 	}
 }
 func (m *mockReplicator) Checkpoint() *repl.Checkpoint { return m.checkpoint }
-func (m *mockReplicator) Recover(*repl.Checkpoint) error {
+func (m *mockReplicator) Recover(context.Context, *repl.Checkpoint) error {
 	return m.recoverErr
 }
 func (m *mockReplicator) ResetError() { m.resetErrorCalled = true }
