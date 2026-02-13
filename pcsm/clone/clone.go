@@ -1,4 +1,4 @@
-package pcsm
+package clone
 
 import (
 	"cmp"
@@ -18,12 +18,22 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-// CloneOptions configures the clone behavior.
-type CloneOptions struct {
+// Catalog defines the catalog operations required by the clone.
+type Catalog interface {
+	catalog.BaseCatalog
+
+	AddIncompleteIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
+	AddInconsistentIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
+	SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp)
+}
+
+// Options configures the clone behavior.
+type Options struct {
 	// Parallelism is the number of collections to clone in parallel.
 	// Default: 2 (config.DefaultCloneNumParallelCollection)
 	Parallelism int
@@ -45,9 +55,9 @@ type CloneOptions struct {
 type Clone struct {
 	source   *mongo.Client // Source MongoDB client
 	target   *mongo.Client // Target MongoDB client
-	catalog  *Catalog      // Catalog for managing collections and indexes
+	catalog  Catalog       // Catalog for managing collections and indexes
 	nsFilter sel.NSFilter  // Namespace filter
-	options  *CloneOptions // Clone options
+	options  *Options      // Clone options
 
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
@@ -65,8 +75,8 @@ type Clone struct {
 	finishTime time.Time
 }
 
-// CloneStatus represents the status of the cloning process.
-type CloneStatus struct {
+// Status represents the status of the cloning process.
+type Status struct {
 	EstimatedTotalSizeBytes uint64 // Estimated total bytes to be copied
 	CopiedSizeBytes         uint64 // Bytes copied so far
 
@@ -80,38 +90,39 @@ type CloneStatus struct {
 }
 
 //go:inline
-func (cs *CloneStatus) IsStarted() bool {
-	return !cs.StartTime.IsZero()
+func (s *Status) IsStarted() bool {
+	return !s.StartTime.IsZero()
 }
 
 //go:inline
-func (cs *CloneStatus) IsRunning() bool {
-	return cs.IsStarted() && !cs.IsFinished()
+func (s *Status) IsRunning() bool {
+	return s.IsStarted() && !s.IsFinished()
 }
 
 //go:inline
-func (cs *CloneStatus) IsFinished() bool {
-	return !cs.FinishTime.IsZero()
+func (s *Status) IsFinished() bool {
+	return !s.FinishTime.IsZero()
 }
 
 // NewClone creates a new Clone instance with the given options.
 func NewClone(
 	source, target *mongo.Client,
-	catalog *Catalog,
+	cat Catalog,
 	nsFilter sel.NSFilter,
-	opts *CloneOptions,
+	opts *Options,
 ) *Clone {
 	return &Clone{
 		source:   source,
 		target:   target,
-		catalog:  catalog,
+		catalog:  cat,
 		nsFilter: nsFilter,
 		options:  opts,
 		doneCh:   make(chan struct{}),
 	}
 }
 
-type cloneCheckpoint struct {
+// Checkpoint represents the checkpoint state for clone recovery.
+type Checkpoint struct {
 	TotalSize  uint64 `bson:"totalSize,omitempty"`
 	CopiedSize uint64 `bson:"copiedSize,omitempty"`
 
@@ -124,7 +135,7 @@ type cloneCheckpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
+func (c *Clone) Checkpoint() *Checkpoint {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -132,7 +143,7 @@ func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 		return nil
 	}
 
-	cp := &cloneCheckpoint{
+	cp := &Checkpoint{
 		TotalSize:  c.totalSize,
 		CopiedSize: c.copiedSize.Load(),
 		StartTS:    c.startTS,
@@ -147,7 +158,7 @@ func (c *Clone) Checkpoint() *cloneCheckpoint { //nolint:revive
 	return cp
 }
 
-func (c *Clone) Recover(cp *cloneCheckpoint) error {
+func (c *Clone) Recover(cp *Checkpoint) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -170,11 +181,11 @@ func (c *Clone) Recover(cp *cloneCheckpoint) error {
 }
 
 // Status returns the current status of the cloning process.
-func (c *Clone) Status() CloneStatus {
+func (c *Clone) Status() Status {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	return CloneStatus{
+	return Status{
 		EstimatedTotalSizeBytes: c.totalSize,
 		CopiedSizeBytes:         c.copiedSize.Load(),
 		StartTS:                 c.startTS,
@@ -185,7 +196,8 @@ func (c *Clone) Status() CloneStatus {
 	}
 }
 
-func (c *Clone) resetError() {
+// ResetError clears any error stored in the Clone instance.
+func (c *Clone) ResetError() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -369,7 +381,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 				prevNS := ns
 				ns = namespaceInfo{
-					Namespace: Namespace{Database: prevNS.Database, Collection: name},
+					Namespace: catalog.Namespace{Database: prevNS.Database, Collection: name},
 					UUID:      prevNS.UUID,
 				}
 
@@ -400,7 +412,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
-	ns Namespace,
+	ns catalog.Namespace,
 ) error {
 	copyLogger := log.Ctx(ctx)
 
@@ -439,7 +451,7 @@ func (c *Clone) doCollectionClone(
 	}
 
 	if spec.Type == topo.TypeTimeseries {
-		return ErrTimeseriesUnsupported
+		return catalog.ErrTimeseriesUnsupported
 	}
 
 	err = c.createCollection(ctx, ns, spec)
@@ -513,7 +525,7 @@ func (c *Clone) doCollectionClone(
 			case topo.IsCollectionRenamed(err):
 				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
 
-			case errors.Is(err, ErrTimeseriesUnsupported):
+			case errors.Is(err, catalog.ErrTimeseriesUnsupported):
 				lg.Warnf("Timeseries is not supported (%q)", ns)
 
 			default:
@@ -696,7 +708,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 }
 
 type namespaceInfo struct {
-	Namespace
+	catalog.Namespace
 
 	UUID *bson.Binary
 }
@@ -705,7 +717,7 @@ func (c *Clone) listPrioritizedNamespaces() ([]namespaceInfo, error) {
 	namespaces := []namespaceInfo{}
 
 	for ns, elem := range c.sizeMap {
-		namespace, err := parseNamespace(ns)
+		namespace, err := catalog.ParseNamespace(ns)
 		if err != nil {
 			return nil, errors.Wrapf(err, "parse namespace %q", ns)
 		}
@@ -724,6 +736,7 @@ func (c *Clone) listPrioritizedNamespaces() ([]namespaceInfo, error) {
 	return namespaces, nil
 }
 
+// NamespaceNotFoundError indicates a collection was not found.
 type NamespaceNotFoundError struct {
 	Database   string
 	Collection string
@@ -735,14 +748,14 @@ func (e NamespaceNotFoundError) Error() string {
 
 func (c *Clone) createCollection(
 	ctx context.Context,
-	ns Namespace,
+	ns catalog.Namespace,
 	spec *topo.CollectionSpecification,
 ) error {
 	if spec.Type == topo.TypeTimeseries {
-		return ErrTimeseriesUnsupported
+		return catalog.ErrTimeseriesUnsupported
 	}
 
-	var createOptions CreateCollectionOptions
+	var createOptions catalog.CreateCollectionOptions
 
 	err := bson.Unmarshal(spec.Options, &createOptions)
 	if err != nil {
@@ -762,7 +775,7 @@ func (c *Clone) createCollection(
 	return nil
 }
 
-func (c *Clone) createIndexes(ctx context.Context, ns Namespace) error {
+func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
 	indexes, err := topo.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")

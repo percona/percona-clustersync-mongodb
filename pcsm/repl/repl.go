@@ -1,4 +1,4 @@
-package pcsm
+package repl
 
 import (
 	"context"
@@ -16,10 +16,29 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
+
+// Catalog defines the catalog operations required by the repl.
+type Catalog interface {
+	catalog.BaseCatalog
+
+	UUIDMap() catalog.UUIDMap
+	DropDatabase(ctx context.Context, db string) error
+	DropIndex(ctx context.Context, db, coll, index string) error
+	Rename(ctx context.Context, db, coll, targetDB, targetColl string) error
+	ModifyIndex(ctx context.Context, db, coll string, mods *catalog.ModifyIndexOption) error
+	ModifyCappedCollection(ctx context.Context, db, coll string, sizeBytes, maxDocs *int64) error
+	ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error
+	ModifyChangeStreamPreAndPostImages(ctx context.Context, db, coll string, enabled bool) error
+	ModifyValidation(
+		ctx context.Context, db, coll string,
+		validator *bson.Raw, validationLevel, validationAction *string,
+	) error
+}
 
 var (
 	ErrInvalidateEvent  = errors.New("invalidate")
@@ -28,8 +47,8 @@ var (
 
 const advanceTimePseudoEvent = "@tick"
 
-// ReplOptions configures the replication behavior.
-type ReplOptions struct {
+// Options configures the replication behavior.
+type Options struct {
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
@@ -41,9 +60,9 @@ type Repl struct {
 	target *mongo.Client // Target MongoDB client
 
 	nsFilter sel.NSFilter // Namespace filter
-	catalog  *Catalog     // Catalog for managing collections and indexes
+	catalog  Catalog      // Catalog for managing collections and indexes
 
-	options *ReplOptions // Replication options
+	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
 
@@ -66,8 +85,8 @@ type Repl struct {
 	lastBulkDoneAt time.Time
 }
 
-// ReplStatus represents the status of change replication.
-type ReplStatus struct {
+// Status represents the status of change replication.
+type Status struct {
 	StartTime time.Time
 	PauseTime time.Time
 
@@ -79,39 +98,40 @@ type ReplStatus struct {
 }
 
 //go:inline
-func (rs *ReplStatus) IsStarted() bool {
-	return !rs.StartTime.IsZero()
+func (s *Status) IsStarted() bool {
+	return !s.StartTime.IsZero()
 }
 
 //go:inline
-func (rs *ReplStatus) IsRunning() bool {
-	return rs.IsStarted() && !rs.IsPaused()
+func (s *Status) IsRunning() bool {
+	return s.IsStarted() && !s.IsPaused()
 }
 
 //go:inline
-func (rs *ReplStatus) IsPaused() bool {
-	return !rs.PauseTime.IsZero()
+func (s *Status) IsPaused() bool {
+	return !s.PauseTime.IsZero()
 }
 
 // NewRepl creates a new Repl instance.
 func NewRepl(
 	source, target *mongo.Client,
-	catalog *Catalog,
+	cat Catalog,
 	nsFilter sel.NSFilter,
-	opts *ReplOptions,
+	opts *Options,
 ) *Repl {
 	return &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
-		catalog:  catalog,
+		catalog:  cat,
 		options:  opts,
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
 }
 
-type replCheckpoint struct {
+// Checkpoint represents the checkpoint state for replication recovery.
+type Checkpoint struct {
 	StartTime            time.Time      `bson:"startTime,omitempty"`
 	PauseTime            time.Time      `bson:"pauseTime,omitempty"`
 	EventsRead           int64          `bson:"eventsRead,omitempty"`
@@ -121,7 +141,7 @@ type replCheckpoint struct {
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
 
-func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
+func (r *Repl) Checkpoint() *Checkpoint {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -129,7 +149,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 		return nil
 	}
 
-	cp := &replCheckpoint{
+	cp := &Checkpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
 		EventsRead:           r.eventsApplied,
@@ -147,7 +167,7 @@ func (r *Repl) Checkpoint() *replCheckpoint { //nolint:revive
 	return cp
 }
 
-func (r *Repl) Recover(ctx context.Context, cp *replCheckpoint) error {
+func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -189,11 +209,11 @@ func (r *Repl) Recover(ctx context.Context, cp *replCheckpoint) error {
 }
 
 // Status returns the current replication status.
-func (r *Repl) Status() ReplStatus {
+func (r *Repl) Status() Status {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	return ReplStatus{
+	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        r.eventsApplied,
@@ -205,7 +225,8 @@ func (r *Repl) Status() ReplStatus {
 	}
 }
 
-func (r *Repl) resetError() {
+// ResetError clears any error stored in the Repl instance.
+func (r *Repl) ResetError() {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -611,7 +632,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 }
 
 //go:inline
-func findNamespaceByUUID(uuidMap UUIDMap, change *ChangeEvent) Namespace {
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
 	if change.CollectionUUID == nil {
 		return change.Namespace
 	}
@@ -782,7 +803,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	return nil
 }
 
-func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
+func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *ModifyEvent) {
 	opts := event.OperationDescription
 
 	if len(opts.Unknown) != 0 {
@@ -824,7 +845,7 @@ func (r *Repl) doModify(ctx context.Context, ns Namespace, event *ModifyEvent) {
 		}
 
 	case opts.ViewOn != "":
-		if strings.HasPrefix(opts.ViewOn, TimeseriesPrefix) {
+		if strings.HasPrefix(opts.ViewOn, catalog.TimeseriesPrefix) {
 			log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
 
 			return

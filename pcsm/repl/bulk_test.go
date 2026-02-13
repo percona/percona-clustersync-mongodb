@@ -1,4 +1,4 @@
-package pcsm //nolint
+package repl //nolint
 
 import (
 	"testing"
