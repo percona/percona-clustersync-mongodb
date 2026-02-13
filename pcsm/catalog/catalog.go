@@ -1,4 +1,6 @@
-package pcsm
+// Package catalog manages the MongoDB catalog for the target cluster.
+// It handles collection and index creation, modification, and tracking.
+package catalog
 
 import (
 	"context"
@@ -16,6 +18,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
+// ErrTimeseriesUnsupported is returned when a timeseries collection is encountered.
 var ErrTimeseriesUnsupported = errors.New("timeseries is not supported")
 
 // IDIndex is the name of the "_id" index.
@@ -27,6 +30,48 @@ const (
 	// TimeseriesPrefix is the prefix for timeseries buckets.
 	TimeseriesPrefix = "system.buckets."
 )
+
+// Namespace is the namespace (database and/or collection) affected by the event.
+type Namespace struct {
+	// Database is the name of the database where the event occurred.
+	Database string `bson:"db"`
+
+	// Collection is the name of the collection where the event occurred.
+	Collection string `bson:"coll"`
+
+	// Sharded indicates whether the collection is sharded.
+	Sharded bool
+
+	// ShardKey is the shard key used for the collection.
+	ShardKey bson.D
+}
+
+// String returns the string representation of the namespace.
+func (ns Namespace) String() string {
+	var rv string
+
+	if ns.Collection != "" {
+		rv = ns.Database + "." + ns.Collection
+	} else {
+		rv = ns.Database
+	}
+
+	return rv
+}
+
+// ParseNamespace parses a namespace string into a Namespace struct.
+func ParseNamespace(ns string) (Namespace, error) {
+	parts := strings.SplitN(ns, ".", 2) //nolint:mnd
+
+	if len(parts) != 2 { //nolint:mnd
+		return Namespace{}, errors.Errorf("invalid namespace %q", ns)
+	}
+
+	return Namespace{
+		Database:   parts[0],
+		Collection: parts[1],
+	}, nil
+}
 
 // UUIDMap is mapping of hex string of a collection UUID to its namespace.
 type UUIDMap map[string]Namespace
@@ -79,6 +124,17 @@ type ModifyIndexOption struct {
 	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
 }
 
+// BaseCatalog defines the shared collection-level operations used by clone and repl packages.
+type BaseCatalog interface {
+	DropCollection(ctx context.Context, db, coll string) error
+	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
+	CreateIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification) error
+	ShardCollection(ctx context.Context, db, coll string, shardKey bson.D, unique bool) error
+	SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary)
+}
+
+var _ BaseCatalog = (*Catalog)(nil)
+
 // Catalog manages the MongoDB catalog.
 type Catalog struct {
 	lock      sync.RWMutex
@@ -118,33 +174,37 @@ func NewCatalog(target *mongo.Client) *Catalog {
 	}
 }
 
-type catalogCheckpoint struct {
+// Checkpoint is the checkpoint data for the catalog as part of the recovery mechanism.
+type Checkpoint struct {
 	Catalog map[string]databaseCatalog `bson:"catalog"`
 }
 
+// LockWrite locks the catalog for writing.
 func (c *Catalog) LockWrite() {
 	c.lock.RLock()
 }
 
+// UnlockWrite unlocks the catalog for writing.
 func (c *Catalog) UnlockWrite() {
 	c.lock.RUnlock()
 }
 
-// Checkpoint returns [catalogCheckpoint] as a part of recovery mechanism.
+// Checkpoint returns [Checkpoint] as a part of recovery mechanism.
 //
 // The [Catalog.LockWrite] must be called before the function is called and
 // the [Catalog.UnlockWrite] must be called after the return value is no used anymore.
-func (c *Catalog) Checkpoint() *catalogCheckpoint { //nolint:revive
+func (c *Catalog) Checkpoint() *Checkpoint {
 	// do not call [sync.RWMutex.RLock] to avoid deadlock through recursive read-locking
 	// that may happen during clone or change replication
 	if len(c.Databases) == 0 {
 		return nil
 	}
 
-	return &catalogCheckpoint{Catalog: c.Databases}
+	return &Checkpoint{Catalog: c.Databases}
 }
 
-func (c *Catalog) Recover(cp *catalogCheckpoint) error {
+// Recover restores the catalog from a checkpoint.
+func (c *Catalog) Recover(cp *Checkpoint) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -157,6 +217,7 @@ func (c *Catalog) Recover(cp *catalogCheckpoint) error {
 	return nil
 }
 
+// CreateCollection creates a collection in the target MongoDB.
 func (c *Catalog) CreateCollection(
 	ctx context.Context,
 	db string,
@@ -593,6 +654,7 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 	}) //nolint:wrapcheck
 }
 
+// ModifyChangeStreamPreAndPostImages modifies the changeStreamPreAndPostImages option for a collection.
 func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 	ctx context.Context,
 	db string,
@@ -689,6 +751,7 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 	return nil
 }
 
+// Rename renames a collection in the target MongoDB.
 func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl string) error {
 	lg := log.Ctx(ctx)
 
@@ -744,6 +807,7 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 	return nil
 }
 
+// SetCollectionTimestamp sets the timestamp for a collection in the catalog.
 func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -769,6 +833,7 @@ func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, t
 	c.Databases[db] = databaseEntry
 }
 
+// SetCollectionUUID sets the UUID for a collection in the catalog.
 func (c *Catalog) SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -792,6 +857,7 @@ func (c *Catalog) SetCollectionUUID(ctx context.Context, db, coll string, uuid *
 	c.Databases[db] = databaseEntry
 }
 
+// UUIDMap returns a map of collection UUIDs to their namespaces.
 func (c *Catalog) UUIDMap() UUIDMap {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
@@ -1200,6 +1266,7 @@ func (c *Catalog) renameCollectionInCatalog(
 	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
 }
 
+// ShardCollection shards a collection in the target MongoDB.
 func (c *Catalog) ShardCollection(
 	ctx context.Context,
 	db string,

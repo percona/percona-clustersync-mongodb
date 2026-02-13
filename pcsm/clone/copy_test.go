@@ -1,4 +1,4 @@
-package pcsm_test
+package clone_test
 
 import (
 	"container/list"
@@ -18,11 +18,11 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
-	"github.com/percona/percona-clustersync-mongodb/pcsm"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-func getNamespace() pcsm.Namespace {
+func getNamespace() catalog.Namespace {
 	s := os.Getenv("PCSM_TEST_NAMESPACE")
 	if s == "" {
 		panic("PCSM_TEST_NAMESPACE is empty")
@@ -33,7 +33,7 @@ func getNamespace() pcsm.Namespace {
 		panic("PCSM_TEST_NAMESPACE contains invalid namespace")
 	}
 
-	return pcsm.Namespace{Database: db, Collection: coll}
+	return catalog.Namespace{Database: db, Collection: coll}
 }
 
 func getSourceURI() string {

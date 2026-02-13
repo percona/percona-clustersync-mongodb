@@ -26,6 +26,9 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
@@ -50,6 +53,28 @@ const (
 
 type OnStateChangedFunc func(newState State)
 
+// Cloner defines the interface for the clone component.
+type Cloner interface {
+	Start(ctx context.Context) error
+	Done() <-chan struct{}
+	Status() clone.Status
+	Checkpoint() *clone.Checkpoint
+	Recover(cp *clone.Checkpoint) error
+	ResetError()
+}
+
+// Replicator defines the interface for the replication component.
+type Replicator interface {
+	Start(ctx context.Context, startAt bson.Timestamp) error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	Done() <-chan struct{}
+	Status() repl.Status
+	Checkpoint() *repl.Checkpoint
+	Recover(cp *repl.Checkpoint) error
+	ResetError()
+}
+
 // Status represents the status of the PCSM.
 type Status struct {
 	// State is the current state of the PCSM.
@@ -65,9 +90,9 @@ type Status struct {
 	InitialSyncCompleted bool
 
 	// Repl is the status of the replication process.
-	Repl ReplStatus
+	Repl repl.Status
 	// Clone is the status of the cloning process.
-	Clone CloneStatus
+	Clone clone.Status
 }
 
 // PCSM manages the replication process.
@@ -85,9 +110,9 @@ type PCSM struct {
 
 	state State // Current state of the PCSM
 
-	catalog *Catalog // Catalog for managing collections and indexes
-	clone   *Clone   // Clone process
-	repl    *Repl    // Replication process
+	catalog *catalog.Catalog // Catalog for managing collections and indexes
+	clone   Cloner           // Clone process
+	repl    Replicator       // Replication process
 
 	err error
 
@@ -108,49 +133,49 @@ type checkpoint struct {
 	NSInclude []string `bson:"nsInclude,omitempty"`
 	NSExclude []string `bson:"nsExclude,omitempty"`
 
-	Catalog *catalogCheckpoint `bson:"catalog,omitempty"`
-	Clone   *cloneCheckpoint   `bson:"clone,omitempty"`
-	Repl    *replCheckpoint    `bson:"repl,omitempty"`
+	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
+	Clone   *clone.Checkpoint   `bson:"clone,omitempty"`
+	Repl    *repl.Checkpoint    `bson:"repl,omitempty"`
 
 	State State  `bson:"state"`
 	Error string `bson:"error,omitempty"`
 }
 
-func (ml *PCSM) Checkpoint(context.Context) ([]byte, error) {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Checkpoint(context.Context) ([]byte, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	if ml.state == StateIdle {
+	if p.state == StateIdle {
 		return nil, nil
 	}
 
 	// prevent catalog changes during checkpoint
-	ml.catalog.LockWrite()
-	defer ml.catalog.UnlockWrite()
+	p.catalog.LockWrite()
+	defer p.catalog.UnlockWrite()
 
 	cp := &checkpoint{
-		NSInclude: ml.nsInclude,
-		NSExclude: ml.nsExclude,
+		NSInclude: p.nsInclude,
+		NSExclude: p.nsExclude,
 
-		Catalog: ml.catalog.Checkpoint(),
-		Clone:   ml.clone.Checkpoint(),
-		Repl:    ml.repl.Checkpoint(),
+		Catalog: p.catalog.Checkpoint(),
+		Clone:   p.clone.Checkpoint(),
+		Repl:    p.repl.Checkpoint(),
 
-		State: ml.state,
+		State: p.state,
 	}
 
-	if ml.err != nil {
-		cp.Error = ml.err.Error()
+	if p.err != nil {
+		cp.Error = p.err.Error()
 	}
 
 	return bson.Marshal(cp) //nolint:wrapcheck
 }
 
-func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Recover(ctx context.Context, data []byte) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	if ml.state != StateIdle {
+	if p.state != StateIdle {
 		return errors.New("cannot recover: invalid PCSM state")
 	}
 
@@ -166,80 +191,80 @@ func (ml *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
-	catalog := NewCatalog(ml.target)
+	cat := catalog.NewCatalog(p.target)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	clone := NewClone(ml.source, ml.target, catalog, nsFilter, &CloneOptions{})
-	repl := NewRepl(ml.source, ml.target, catalog, nsFilter, &ReplOptions{})
+	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{})
+	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{})
 
 	if cp.Catalog != nil {
-		err = catalog.Recover(cp.Catalog)
+		err = cat.Recover(cp.Catalog)
 		if err != nil {
 			return errors.Wrap(err, "recover catalog")
 		}
 	}
 
 	if cp.Clone != nil {
-		err = clone.Recover(cp.Clone)
+		err = cln.Recover(cp.Clone)
 		if err != nil {
 			return errors.Wrap(err, "recover clone")
 		}
 	}
 
 	if cp.Repl != nil {
-		err = repl.Recover(cp.Repl)
+		err = rpl.Recover(cp.Repl)
 		if err != nil {
 			return errors.Wrap(err, "recover repl")
 		}
 	}
 
-	ml.nsInclude = cp.NSInclude
-	ml.nsExclude = cp.NSExclude
-	ml.nsFilter = nsFilter
-	ml.catalog = catalog
-	ml.clone = clone
-	ml.repl = repl
-	ml.state = cp.State
+	p.nsInclude = cp.NSInclude
+	p.nsExclude = cp.NSExclude
+	p.nsFilter = nsFilter
+	p.catalog = cat
+	p.clone = cln
+	p.repl = rpl
+	p.state = cp.State
 
 	if cp.Error != "" {
-		ml.err = errors.New(cp.Error)
+		p.err = errors.New(cp.Error)
 	}
 
 	if cp.State == StateRunning {
-		return ml.doResume(ctx, false)
+		return p.doResume(ctx, false)
 	}
 
 	return nil
 }
 
 // SetOnStateChanged set the f function to be called on each state change.
-func (ml *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
+func (p *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 	if f == nil {
 		f = func(State) {}
 	}
 
-	ml.lock.Lock()
-	ml.onStateChanged = f
-	ml.lock.Unlock()
+	p.lock.Lock()
+	p.onStateChanged = f
+	p.lock.Unlock()
 }
 
 // Status returns the current status of the PCSM.
-func (ml *PCSM) Status(ctx context.Context) *Status {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Status(ctx context.Context) *Status {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	if ml.state == StateIdle {
+	if p.state == StateIdle {
 		return &Status{State: StateIdle}
 	}
 
 	s := &Status{
-		State: ml.state,
-		Clone: ml.clone.Status(),
-		Repl:  ml.repl.Status(),
+		State: p.state,
+		Clone: p.clone.Status(),
+		Repl:  p.repl.Status(),
 	}
 
 	switch {
-	case ml.err != nil:
-		s.Error = ml.err
+	case p.err != nil:
+		s.Error = p.err
 	case s.Repl.Err != nil:
 		s.Error = errors.Wrap(s.Repl.Err, "Change Replication")
 	case s.Clone.Err != nil:
@@ -250,11 +275,11 @@ func (ml *PCSM) Status(ctx context.Context) *Status {
 		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
 	}
 
-	if ml.state == StateFailed {
+	if p.state == StateFailed {
 		return s
 	}
 
-	sourceTime, err := topo.ClusterTime(ctx, ml.source)
+	sourceTime, err := topo.ClusterTime(ctx, p.source)
 	if err != nil {
 		// Do not block status if source cluster is lost
 		log.New("pcsm").Error(err, "Status: get source cluster time")
@@ -276,10 +301,10 @@ func (ml *PCSM) Status(ctx context.Context) *Status {
 	return s
 }
 
-func (ml *PCSM) resetError() {
-	ml.err = nil
-	ml.clone.resetError()
-	ml.repl.resetError()
+func (p *PCSM) resetError() {
+	p.err = nil
+	p.clone.ResetError()
+	p.repl.ResetError()
 }
 
 // StartOptions represents the options for starting the PCSM.
@@ -292,17 +317,17 @@ type StartOptions struct {
 	ExcludeNamespaces []string
 
 	// Clone contains clone tuning options.
-	Clone CloneOptions
+	Clone clone.Options
 	// Repl contains replication behavior options.
-	Repl ReplOptions
+	Repl repl.Options
 }
 
 // Start starts the replication process with the given options.
-func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Start(_ context.Context, options *StartOptions) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	switch ml.state {
+	switch p.state {
 	case StateRunning, StateFinalizing, StateFailed:
 		err := errors.New("already running")
 		log.New("pcsm:start").Error(err, "")
@@ -320,33 +345,33 @@ func (ml *PCSM) Start(_ context.Context, options *StartOptions) error {
 		options = &StartOptions{}
 	}
 
-	ml.nsInclude = options.IncludeNamespaces
-	ml.nsExclude = options.ExcludeNamespaces
-	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
-	ml.pauseOnInitialSync = options.PauseOnInitialSync
-	ml.catalog = NewCatalog(ml.target)
-	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Clone)
-	ml.repl = NewRepl(ml.source, ml.target, ml.catalog, ml.nsFilter, &options.Repl)
-	ml.state = StateRunning
+	p.nsInclude = options.IncludeNamespaces
+	p.nsExclude = options.ExcludeNamespaces
+	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
+	p.pauseOnInitialSync = options.PauseOnInitialSync
+	p.catalog = catalog.NewCatalog(p.target)
+	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
+	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl)
+	p.state = StateRunning
 
-	go ml.run()
+	go p.run()
 
 	return nil
 }
 
-func (ml *PCSM) setFailed(err error) {
-	ml.lock.Lock()
-	ml.state = StateFailed
-	ml.err = err
-	ml.lock.Unlock()
+func (p *PCSM) setFailed(err error) {
+	p.lock.Lock()
+	p.state = StateFailed
+	p.err = err
+	p.lock.Unlock()
 
 	log.New("pcsm").Error(err, "Cluster Replication has failed")
 
-	go ml.onStateChanged(StateFailed)
+	go p.onStateChanged(StateFailed)
 }
 
 // run executes the cluster replication.
-func (ml *PCSM) run() {
+func (p *PCSM) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -354,67 +379,67 @@ func (ml *PCSM) run() {
 
 	lg.Info("Starting Cluster Replication")
 
-	cloneStatus := ml.clone.Status()
+	cloneStatus := p.clone.Status()
 	if !cloneStatus.IsFinished() {
-		err := ml.clone.Start(ctx)
+		err := p.clone.Start(ctx)
 		if err != nil {
-			ml.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
+			p.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
 
 			return
 		}
 
-		<-ml.clone.Done()
+		<-p.clone.Done()
 
-		cloneStatus = ml.clone.Status()
+		cloneStatus = p.clone.Status()
 		if cloneStatus.Err != nil {
-			ml.setFailed(errors.Wrap(cloneStatus.Err, "clone"))
+			p.setFailed(errors.Wrap(cloneStatus.Err, "clone"))
 
 			return
 		}
 	}
 
-	replStatus := ml.repl.Status()
+	replStatus := p.repl.Status()
 	if !replStatus.IsStarted() {
-		err := ml.repl.Start(ctx, cloneStatus.StartTS)
+		err := p.repl.Start(ctx, cloneStatus.StartTS)
 		if err != nil {
-			ml.setFailed(errors.Wrap(err, "start change replication"))
+			p.setFailed(errors.Wrap(err, "start change replication"))
 
 			return
 		}
 	} else {
-		err := ml.repl.Resume(ctx)
+		err := p.repl.Resume(ctx)
 		if err != nil {
-			ml.setFailed(errors.Wrap(err, "resume change replication"))
+			p.setFailed(errors.Wrap(err, "resume change replication"))
 
 			return
 		}
 	}
 
 	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
-		go ml.monitorInitialSync(ctx)
+		go p.monitorInitialSync(ctx)
 	}
-	go ml.monitorLagTime(ctx)
+	go p.monitorLagTime(ctx)
 
-	<-ml.repl.Done()
+	<-p.repl.Done()
 
-	replStatus = ml.repl.Status()
+	replStatus = p.repl.Status()
 	if replStatus.Err != nil {
-		ml.setFailed(errors.Wrap(replStatus.Err, "change replication"))
+		p.setFailed(errors.Wrap(replStatus.Err, "change replication"))
 	}
 }
 
-func (ml *PCSM) monitorInitialSync(ctx context.Context) {
+func (p *PCSM) monitorInitialSync(ctx context.Context) {
 	lg := log.New("monitor:initial-sync-lag-time")
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
-	cloneStatus := ml.clone.Status()
+	cloneStatus := p.clone.Status()
 	if cloneStatus.Err != nil {
 		return
 	}
 
-	replStatus := ml.repl.Status()
+	replStatus := p.repl.Status()
 	if replStatus.Err != nil {
 		return
 	}
@@ -433,7 +458,7 @@ func (ml *PCSM) monitorInitialSync(ctx context.Context) {
 		case <-t.C:
 		}
 
-		replStatus = ml.repl.Status()
+		replStatus = p.repl.Status()
 		if replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
 			elapsed := time.Since(replStatus.StartTime)
 			lg.With(log.Elapsed(elapsed)).
@@ -442,14 +467,14 @@ func (ml *PCSM) monitorInitialSync(ctx context.Context) {
 			lg.With(log.Elapsed(elapsed)).
 				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
 
-			ml.lock.Lock()
-			pauseOnInitialSync := ml.pauseOnInitialSync
-			ml.lock.Unlock()
+			p.lock.Lock()
+			pauseOnInitialSync := p.pauseOnInitialSync
+			p.lock.Unlock()
 
 			if pauseOnInitialSync {
 				lg.Info("Pausing [PauseOnInitialSync]")
 
-				err := ml.Pause(ctx)
+				err := p.Pause(ctx)
 				if err != nil {
 					lg.Error(err, "PauseOnInitialSync")
 				}
@@ -469,7 +494,7 @@ func (ml *PCSM) monitorInitialSync(ctx context.Context) {
 	}
 }
 
-func (ml *PCSM) monitorLagTime(ctx context.Context) {
+func (p *PCSM) monitorLagTime(ctx context.Context) {
 	lg := log.New("monitor:lag-time")
 
 	t := time.NewTicker(time.Second)
@@ -485,7 +510,7 @@ func (ml *PCSM) monitorLagTime(ctx context.Context) {
 		case <-t.C:
 		}
 
-		sourceTS, err := topo.ClusterTime(ctx, ml.source)
+		sourceTS, err := topo.ClusterTime(ctx, p.source)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -496,7 +521,7 @@ func (ml *PCSM) monitorLagTime(ctx context.Context) {
 			continue
 		}
 
-		replStatus := ml.repl.Status()
+		replStatus := p.repl.Status()
 		timeDiff := max(int64(sourceTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
 		if timeDiff == 1 && replStatus.LastReplicatedOpTime.I == 1 {
 			timeDiff = 0 // likely the oplog note from [Repl]. can approximate the 1 increment.
@@ -514,11 +539,11 @@ func (ml *PCSM) monitorLagTime(ctx context.Context) {
 }
 
 // Pause pauses the replication process.
-func (ml *PCSM) Pause(ctx context.Context) error {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Pause(ctx context.Context) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	err := ml.doPause(ctx)
+	err := p.doPause(ctx)
 	if err != nil {
 		log.New("pcsm").Error(err, "Pause Cluster Replication")
 
@@ -530,24 +555,24 @@ func (ml *PCSM) Pause(ctx context.Context) error {
 	return nil
 }
 
-func (ml *PCSM) doPause(ctx context.Context) error {
-	if ml.state != StateRunning {
+func (p *PCSM) doPause(ctx context.Context) error {
+	if p.state != StateRunning {
 		return errors.New("cannot pause: not running")
 	}
 
-	replStatus := ml.repl.Status()
+	replStatus := p.repl.Status()
 
 	if !replStatus.IsRunning() {
 		return errors.New("cannot pause: Change Replication is not running")
 	}
 
-	err := ml.repl.Pause(ctx)
+	err := p.repl.Pause(ctx)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "pause replication")
 	}
 
-	ml.state = StatePaused
-	go ml.onStateChanged(StatePaused)
+	p.state = StatePaused
+	go p.onStateChanged(StatePaused)
 
 	return nil
 }
@@ -557,15 +582,15 @@ type ResumeOptions struct {
 }
 
 // Resume resumes the replication process.
-func (ml *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
-	if ml.state != StatePaused && (ml.state != StateFailed || !options.ResumeFromFailure) {
+	if p.state != StatePaused && (p.state != StateFailed || !options.ResumeFromFailure) {
 		return errors.New("cannot resume: not paused or not resuming from failure")
 	}
 
-	err := ml.doResume(ctx, options.ResumeFromFailure)
+	err := p.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
 		log.New("pcsm").Error(err, "Resume Cluster Replication")
 
@@ -577,8 +602,8 @@ func (ml *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	return nil
 }
 
-func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
-	replStatus := ml.repl.Status()
+func (p *PCSM) doResume(_ context.Context, fromFailure bool) error {
+	replStatus := p.repl.Status()
 
 	if !replStatus.IsStarted() && !fromFailure {
 		return errors.New("cannot resume: replication is not started or not resuming from failure")
@@ -588,21 +613,21 @@ func (ml *PCSM) doResume(_ context.Context, fromFailure bool) error {
 		return errors.New("cannot resume: replication is not paused or not resuming from failure")
 	}
 
-	ml.state = StateRunning
-	ml.resetError()
+	p.state = StateRunning
+	p.resetError()
 
-	go ml.run()
-	go ml.onStateChanged(StateRunning)
+	go p.run()
+	go p.onStateChanged(StateRunning)
 
 	return nil
 }
 
 // Finalize finalizes the replication process.
-func (ml *PCSM) Finalize(ctx context.Context) error {
-	status := ml.Status(ctx)
+func (p *PCSM) Finalize(ctx context.Context) error {
+	status := p.Status(ctx)
 
-	ml.lock.Lock()
-	defer ml.lock.Unlock()
+	p.lock.Lock()
+	defer p.lock.Unlock()
 
 	if status.State == StateFailed {
 		return errors.Wrap(status.Error, "failed state")
@@ -626,15 +651,15 @@ func (ml *PCSM) Finalize(ctx context.Context) error {
 	if status.Repl.IsRunning() {
 		lg.Info("Pausing Change Replication")
 
-		err := ml.repl.Pause(ctx)
+		err := p.repl.Pause(ctx)
 		if err != nil {
 			return errors.Wrap(err, "pause change replication")
 		}
 
-		<-ml.repl.Done()
+		<-p.repl.Done()
 		lg.Info("Change Replication is paused")
 
-		err = ml.repl.Status().Err
+		err = p.repl.Status().Err
 		if err != nil {
 			// no need to set the PCSM failed status here.
 			// [PCSM.setFailed] is called in [PCSM.run].
@@ -643,29 +668,29 @@ func (ml *PCSM) Finalize(ctx context.Context) error {
 	}
 
 	startedTime := time.Now()
-	ml.state = StateFinalizing
+	p.state = StateFinalizing
 
 	go func() {
-		err := ml.catalog.Finalize(context.Background())
+		err := p.catalog.Finalize(context.Background())
 		if err != nil {
-			ml.setFailed(errors.Wrap(err, "finalization"))
+			p.setFailed(errors.Wrap(err, "finalization"))
 
 			return
 		}
 
-		ml.lock.Lock()
-		ml.state = StateFinalized
-		ml.lock.Unlock()
+		p.lock.Lock()
+		p.state = StateFinalized
+		p.lock.Unlock()
 
 		lg.With(log.Elapsed(time.Since(startedTime))).
 			Info("Finalization is completed")
 
-		go ml.onStateChanged(StateFinalized)
+		go p.onStateChanged(StateFinalized)
 	}()
 
 	lg.Info("Finalizing")
 
-	go ml.onStateChanged(StateFinalizing)
+	go p.onStateChanged(StateFinalizing)
 
 	return nil
 }
