@@ -37,6 +37,7 @@ type worker struct {
 	bulkWrite     bulkWriter
 	lastTS        atomic.Pointer[bson.Timestamp] // last committed timestamp
 	pendingTS     bson.Timestamp                 // timestamp of last event in current batch
+	tickerOffset  time.Duration                  // stagger delay before starting the flush ticker
 
 	target *mongo.Client
 
@@ -85,7 +86,17 @@ func (w *worker) run(ctx context.Context) {
 	lg := log.New("repl:worker").With(log.Int64("id", int64(w.id)))
 	lg.Debug("Worker started")
 
-	ticker := time.NewTicker(config.BulkOpsInterval)
+	// Stagger ticker start to spread flushes evenly across the interval.
+	// Without this, all workers flush simultaneously causing write contention.
+	if w.tickerOffset > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(w.tickerOffset):
+		}
+	}
+
+	ticker := time.NewTicker(config.WorkerFlushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -281,6 +292,7 @@ func newWorkerPool(
 	// Create and start workers
 	for i := range numWorkers {
 		w := newWorker(i, target, useCollectionBulk, useSimpleCollation, p.errCh)
+		w.tickerOffset = time.Duration(i) * config.WorkerFlushInterval / time.Duration(numWorkers)
 		p.workers[i] = w
 
 		p.wg.Go(func() {

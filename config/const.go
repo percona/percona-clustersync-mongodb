@@ -52,16 +52,19 @@ const (
 // Change stream and replication settings.
 const (
 	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
-	ChangeStreamBatchSize = 1000
+	// Larger values reduce getMore round-trips to the source.
+	ChangeStreamBatchSize = 10_000
 	// ChangeStreamAwaitTime is the maximum amount of time to wait for new change event.
 	ChangeStreamAwaitTime = time.Second
 	// ReplQueueSize defines the buffer size of the internal channel used to transfer
-	// events between the change stream read and the change replication.
-	ReplQueueSize = ChangeStreamBatchSize
+	// events between the change stream reader and the dispatcher, and also the buffer
+	// size of each worker's routed event channel. Larger values absorb flush latency
+	// spikes and prevent head-of-line blocking across workers.
+	ReplQueueSize = 10_000
 	// BulkOpsSize is the maximum number of operations in a bulk write.
-	BulkOpsSize = ChangeStreamBatchSize
-	// BulkOpsInterval is the maximum interval between bulk write operations.
-	BulkOpsInterval = ChangeStreamAwaitTime
+	BulkOpsSize = 5_000
+	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
+	WorkerFlushInterval = ChangeStreamAwaitTime
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
 	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.

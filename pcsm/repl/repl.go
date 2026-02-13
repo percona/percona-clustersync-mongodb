@@ -540,6 +540,15 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	// the old bulkWrite.Empty() check).
 	var lastRoutedTS bson.Timestamp
 
+	// cpTicker triggers periodic advancement of lastReplicatedOpTime based on
+	// the worker pool's SafeCheckpoint. Under sustained DML load, @tick
+	// pseudo-events may be delayed (queued behind DML in changeCh), and
+	// poolIdle() returns false because workers haven't caught up yet. Without
+	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
+	// even though workers are making progress.
+	cpTicker := time.NewTicker(time.Second)
+	defer cpTicker.Stop()
+
 	// pending holds an event read ahead during transaction collection that
 	// needs to be processed in the next iteration.
 	var pending *ChangeEvent
@@ -583,6 +592,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
+			} else {
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
@@ -596,6 +607,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
+			} else {
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
@@ -610,6 +623,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				ns := findNamespaceByUUID(uuidMap, change)
 				r.pool.Route(change, ns)
 				lastRoutedTS = change.ClusterTime
+
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
 		default:
@@ -690,6 +705,27 @@ func (r *Repl) handleTransaction(
 	r.pool.ReleaseBarrier()
 
 	return overflow
+}
+
+// tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
+// advances lastReplicatedOpTime to the worker pool's SafeCheckpoint. This
+// ensures lag tracking stays current during sustained DML when @tick
+// pseudo-events and poolIdle updates are insufficient.
+func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
+	select {
+	case <-cpTicker.C:
+		cp := r.pool.SafeCheckpoint()
+		if cp.IsZero() {
+			return
+		}
+
+		r.lock.Lock()
+		if cp.After(r.lastReplicatedOpTime) {
+			r.lastReplicatedOpTime = cp
+		}
+		r.lock.Unlock()
+	default:
+	}
 }
 
 // poolIdle returns true when no events are pending in the worker pool.

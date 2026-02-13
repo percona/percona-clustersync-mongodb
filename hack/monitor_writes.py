@@ -66,11 +66,7 @@ def main():
             deletes = (curr["delete"] - prev["delete"]) // args.interval
             total = inserts + updates + deletes
 
-            # Clear line and print in place
-            sys.stdout.write(
-                f"\rWrites/sec: {total} (ins: {inserts}, upd: {updates}, del: {deletes})    "
-            )
-            sys.stdout.flush()
+            print(f"Writes/sec: {total} (ins: {inserts}, upd: {updates}, del: {deletes})")
 
             prev = curr
     except KeyboardInterrupt:
