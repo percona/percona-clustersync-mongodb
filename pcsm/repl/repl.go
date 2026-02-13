@@ -79,10 +79,10 @@ type Repl struct {
 	pauseCh chan struct{}
 	doneCh  chan struct{}
 
-	bulkWrite      bulkWrite
-	bulkToken      bson.Raw
-	bulkTS         bson.Timestamp
-	lastBulkDoneAt time.Time
+	pool *workerPool
+
+	useCollectionBulk  bool
+	useSimpleCollation bool
 }
 
 // Status represents the status of change replication.
@@ -149,16 +149,19 @@ func (r *Repl) Checkpoint() *Checkpoint {
 		return nil
 	}
 
+	applied := r.eventsApplied
+	if r.pool != nil {
+		applied += r.pool.TotalEventsApplied()
+	}
+
 	cp := &Checkpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		EventsRead:           r.eventsApplied,
-		EventsApplied:        r.eventsApplied,
+		EventsRead:           applied,
+		EventsApplied:        applied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
+		UseClientBulkWrite:   !r.useCollectionBulk,
 	}
-
-	_, ok := r.bulkWrite.(*clientBulkWrite)
-	cp.UseClientBulkWrite = ok
 
 	if r.err != nil {
 		cp.Error = r.err.Error()
@@ -195,11 +198,8 @@ func (r *Repl) Recover(cp *Checkpoint) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if cp.UseClientBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	}
+	r.useCollectionBulk = !cp.UseClientBulkWrite
+	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
@@ -213,10 +213,15 @@ func (r *Repl) Status() Status {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
+	applied := r.eventsApplied
+	if r.pool != nil {
+		applied += r.pool.TotalEventsApplied()
+	}
+
 	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 		EventsRead:           r.eventsRead.Load(),
-		EventsApplied:        r.eventsApplied,
+		EventsApplied:        applied,
 
 		StartTime: r.startTime,
 		PauseTime: r.pauseTime,
@@ -258,13 +263,14 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(targetVer).ClientBulkWrite() && !r.options.UseCollectionBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
+	r.useCollectionBulk = !topo.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
+	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
 
+	if r.useCollectionBulk {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
+
+	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -355,6 +361,7 @@ func (r *Repl) Resume(context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
+	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
@@ -490,13 +497,21 @@ func (r *Repl) watchChangeEvents(
 }
 
 func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
-	defer close(r.doneCh)
+	defer func() {
+		r.lock.Lock()
+		r.eventsApplied += r.pool.TotalEventsApplied()
+		r.lock.Unlock()
+
+		r.pool.Stop()
+
+		close(r.doneCh)
+	}()
 
 	ctx := context.Background()
-	changeChh := make(chan *ChangeEvent, config.ReplQueueSize)
+	changeCh := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
-		defer close(changeChh)
+		defer close(changeCh)
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -506,7 +521,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeChh)
+		err := r.watchChangeEvents(ctx, opts, changeCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
@@ -517,13 +532,35 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	}()
 
 	uuidMap := r.catalog.UUIDMap()
-	r.lastBulkDoneAt = time.Now()
 
 	lg := log.New("repl")
 
-	for change := range changeChh {
-		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkWrite.Empty() {
-			if !r.doBulkOps(ctx) {
+	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
+	// Used with SafeCheckpoint() to determine if the pool is idle (equivalent of
+	// the old bulkWrite.Empty() check).
+	var lastRoutedTS bson.Timestamp
+
+	// pending holds an event read ahead during transaction collection that
+	// needs to be processed in the next iteration.
+	var pending *ChangeEvent
+
+	for {
+		var change *ChangeEvent
+
+		if pending != nil {
+			change = pending
+			pending = nil
+		} else {
+			var ok bool
+
+			select {
+			case change, ok = <-changeCh:
+				if !ok {
+					return
+				}
+			case err := <-r.pool.Err():
+				r.setFailed(err, "Worker error")
+
 				return
 			}
 		}
@@ -539,7 +576,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if change.Namespace.Database == config.PCSMDatabase {
-			if r.bulkWrite.Empty() {
+			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsApplied++
@@ -552,7 +589,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
-			if r.bulkWrite.Empty() {
+			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsApplied++
@@ -565,43 +602,22 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		}
 
 		switch change.OperationType { //nolint:exhaustive
-		case Insert:
-			event := change.Event.(InsertEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Insert(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		case Update:
-			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Update(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		case Delete:
-			event := change.Event.(DeleteEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Delete(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		case Replace:
-			event := change.Event.(ReplaceEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Replace(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
+		case Insert, Update, Delete, Replace:
+			if change.IsTransaction() {
+				pending = r.handleTransaction(ctx, change, changeCh, uuidMap)
+				lastRoutedTS = bson.Timestamp{} // barrier flushed everything
+			} else {
+				ns := findNamespaceByUUID(uuidMap, change)
+				r.pool.Route(change, ns)
+				lastRoutedTS = change.ClusterTime
+			}
 
 		default:
-			if !r.bulkWrite.Empty() {
-				if !r.doBulkOps(ctx) {
-					return
-				}
-			}
+			r.pool.Barrier()
 
 			err := r.applyDDLChange(ctx, change)
 			if err != nil {
+				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Apply change")
 
 				return
@@ -618,18 +634,77 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			case Create, Rename, Drop, DropDatabase, ShardCollection:
 				uuidMap = r.catalog.UUIDMap()
 			}
-		}
 
-		if r.bulkWrite.Full() {
-			if !r.doBulkOps(ctx) {
-				return
-			}
+			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
+			r.pool.ReleaseBarrier()
 		}
 	}
+}
 
-	if !r.bulkWrite.Empty() {
-		r.doBulkOps(ctx) //nolint:errcheck
+// handleTransaction collects all events belonging to the same transaction,
+// applies them as a single ordered bulk write, and returns the first event
+// that is not part of the transaction (or nil if the channel was closed).
+func (r *Repl) handleTransaction(
+	ctx context.Context,
+	first *ChangeEvent,
+	changeCh <-chan *ChangeEvent,
+	uuidMap catalog.UUIDMap,
+) *ChangeEvent {
+	r.pool.Barrier()
+
+	events := []*routedEvent{{
+		change: first,
+		ns:     findNamespaceByUUID(uuidMap, first),
+	}}
+
+	var overflow *ChangeEvent
+
+	for next := range changeCh {
+		if !first.IsSameTransaction(&next.EventHeader) {
+			overflow = next
+
+			break
+		}
+
+		events = append(events, &routedEvent{
+			change: next,
+			ns:     findNamespaceByUUID(uuidMap, next),
+		})
 	}
+
+	err := applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Apply transaction")
+
+		return nil
+	}
+
+	r.lock.Lock()
+	r.lastReplicatedOpTime = first.ClusterTime
+	r.eventsApplied += int64(len(events))
+	r.lock.Unlock()
+
+	metrics.AddEventsApplied(len(events))
+
+	r.pool.ReleaseBarrier()
+
+	return overflow
+}
+
+// poolIdle returns true when no events are pending in the worker pool.
+// This is the equivalent of the old bulkWrite.Empty() check: it compares
+// the last routed timestamp against the minimum committed timestamp across
+// all workers (SafeCheckpoint). When SafeCheckpoint >= lastRoutedTS, all
+// routed events have been committed and the pool is idle.
+func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
+	if lastRoutedTS.IsZero() {
+		return true
+	}
+
+	cp := r.pool.SafeCheckpoint()
+
+	return !cp.IsZero() && !lastRoutedTS.After(cp)
 }
 
 //go:inline
@@ -644,34 +719,6 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	}
 
 	return ns
-}
-
-func (r *Repl) doBulkOps(ctx context.Context) bool {
-	size, err := r.bulkWrite.Do(ctx, r.target)
-	if err != nil {
-		r.setFailed(err, "Flush bulk ops")
-
-		return false
-	}
-
-	if size == 0 {
-		return true
-	}
-
-	r.lock.Lock()
-	r.lastReplicatedOpTime = r.bulkTS
-	r.eventsApplied += int64(size)
-	r.lock.Unlock()
-
-	metrics.AddEventsApplied(size)
-
-	log.New("bulk:write").
-		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDoneAt))).
-		Debug("BulkOps applied")
-
-	r.lastBulkDoneAt = time.Now()
-
-	return true
 }
 
 // applyDDLChange applies a schema change to the target MongoDB.

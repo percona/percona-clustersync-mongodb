@@ -34,7 +34,7 @@ var collectionBulkOptions = options.BulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
 
-type bulkWrite interface {
+type bulkWriter interface {
 	Full() bool
 	Empty() bool
 	Do(ctx context.Context, m *mongo.Client) (int, error)
@@ -50,7 +50,7 @@ type clientBulkWrite struct {
 	writes             []mongo.ClientBulkWrite
 }
 
-func newClientBulkWrite(size int, useSimpleCollation bool) *clientBulkWrite {
+func newClientBulkWriter(size int, useSimpleCollation bool) *clientBulkWrite {
 	return &clientBulkWrite{
 		useSimpleCollation: useSimpleCollation,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
@@ -239,7 +239,7 @@ type collectionBulkWrite struct {
 	writes             map[string][]mongo.WriteModel
 }
 
-func newCollectionBulkWrite(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
+func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,
 		max:                size,
