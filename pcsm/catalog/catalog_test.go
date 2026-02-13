@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go/network"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -29,161 +29,228 @@ var mongosURI string
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	// Find project root by walking up to go.mod
-	projectRoot, err := findProjectRoot()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to find project root: %v\n", err)
-		os.Exit(1)
-	}
-
-	composePath := filepath.Join(projectRoot, "hack", "sh", "compose.yml")
-
-	// Create compose stack
 	mongoVersion := os.Getenv("MONGO_VERSION")
 	if mongoVersion == "" {
 		mongoVersion = "8.0"
 	}
+	image := "percona/percona-server-mongodb:" + mongoVersion
 
-	stack, err := compose.NewDockerComposeWith(
-		compose.WithStackFiles(composePath),
-		compose.StackIdentifier("catalog-integration-test"),
-	)
+	// 1. Create Docker network
+	nw, err := network.New(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create compose stack: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create network: %v\n", err)
 		os.Exit(1)
 	}
 
-	stack = stack.WithEnv(map[string]string{"MONGO_VERSION": mongoVersion}).(*compose.DockerCompose)
+	// Container references for cleanup
+	var cfgContainer, rs0Container, rs1Container, mongosContainer testcontainers.Container
 
-	// Phase 1: Start config server and shards
-	err = stack.Up(ctx, compose.RunServices("tgt-cfg0", "tgt-rs00", "tgt-rs10"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start config and shards: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Initialize replica sets
-	if err := initReplicaSet(ctx, stack, "tgt-cfg0", "/cfg/tgt/cfg.js", 28000); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to init config server: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	if err := initReplicaSet(ctx, stack, "tgt-rs00", "/cfg/tgt/rs0.js", 40000); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to init shard rs0: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	if err := initReplicaSet(ctx, stack, "tgt-rs10", "/cfg/tgt/rs1.js", 40100); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to init shard rs1: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	// Phase 2: Start mongos
-	err = stack.Up(ctx, compose.RunServices("tgt-mongos"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start mongos: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	// Wait for mongos to be ready
-	if err := waitForMongos(ctx, stack); err != nil {
-		fmt.Fprintf(os.Stderr, "Mongos not ready: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	// Add shards to cluster
-	if err := addShards(ctx, stack); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to add shards: %v\n", err)
-		_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-		os.Exit(1)
-	}
-
-	// MongoDB 8.0+: transition from dedicated config server
-	if strings.HasPrefix(mongoVersion, "8.") {
-		if err := transitionConfigServer(ctx, stack); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to transition config server: %v\n", err)
-			_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-			os.Exit(1)
+	cleanup := func() {
+		if mongosContainer != nil {
+			_ = mongosContainer.Terminate(ctx)
+		}
+		if rs1Container != nil {
+			_ = rs1Container.Terminate(ctx)
+		}
+		if rs0Container != nil {
+			_ = rs0Container.Terminate(ctx)
+		}
+		if cfgContainer != nil {
+			_ = cfgContainer.Terminate(ctx)
+		}
+		if nw != nil {
+			_ = nw.Remove(ctx)
 		}
 	}
 
-	// Set mongos URI for tests
-	mongosURI = "mongodb://tgt-mongos:29017"
+	exitWithError := func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+		cleanup()
+		os.Exit(1)
+	}
 
-	// Run tests
+	// 2. Start config server
+	cfgContainer, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"28000/tcp"},
+			Networks:     []string{nw.Name},
+			NetworkAliases: map[string][]string{
+				nw.Name: {"tgt-cfg0"},
+			},
+			Cmd: []string{
+				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
+				"--wiredTigerCacheSizeGB", "0.25",
+				"--configsvr", "--replSet", "tgt-cfg", "--port", "28000",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		exitWithError("Failed to start config server: %v", err)
+	}
+
+	// 3. Start shard rs0
+	rs0Container, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"40000/tcp"},
+			Networks:     []string{nw.Name},
+			NetworkAliases: map[string][]string{
+				nw.Name: {"tgt-rs00"},
+			},
+			Cmd: []string{
+				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
+				"--wiredTigerCacheSizeGB", "0.4",
+				"--shardsvr", "--replSet", "rs0", "--port", "40000",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		exitWithError("Failed to start shard rs0: %v", err)
+	}
+
+	// 4. Start shard rs1
+	rs1Container, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"40100/tcp"},
+			Networks:     []string{nw.Name},
+			NetworkAliases: map[string][]string{
+				nw.Name: {"tgt-rs10"},
+			},
+			Cmd: []string{
+				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
+				"--wiredTigerCacheSizeGB", "0.4",
+				"--shardsvr", "--replSet", "rs1", "--port", "40100",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		exitWithError("Failed to start shard rs1: %v", err)
+	}
+
+	// 5. Init replica sets
+	if err := initReplicaSet(ctx, cfgContainer, `rs.initiate({_id:'tgt-cfg', configsvr:true, members:[{_id:0, host:'tgt-cfg0:28000', priority:2}]})`, 28000); err != nil {
+		exitWithError("Failed to init config server: %v", err)
+	}
+
+	if err := initReplicaSet(ctx, rs0Container, `rs.initiate({_id:'rs0', members:[{_id:0, host:'tgt-rs00:40000', priority:2}]})`, 40000); err != nil {
+		exitWithError("Failed to init shard rs0: %v", err)
+	}
+
+	if err := initReplicaSet(ctx, rs1Container, `rs.initiate({_id:'rs1', members:[{_id:0, host:'tgt-rs10:40100', priority:2}]})`, 40100); err != nil {
+		exitWithError("Failed to init shard rs1: %v", err)
+	}
+
+	// 6. Start mongos (AFTER replica sets initialized)
+	mongosContainer, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"27017/tcp"},
+			Networks:     []string{nw.Name},
+			NetworkAliases: map[string][]string{
+				nw.Name: {"tgt-mongos"},
+			},
+			Cmd: []string{
+				"mongos", "--quiet", "--bind_ip_all",
+				"--configdb", "tgt-cfg/tgt-cfg0:28000",
+				"--port", "27017",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		exitWithError("Failed to start mongos: %v", err)
+	}
+
+	// 7. Wait for mongos ready
+	if err := waitForMongos(ctx, mongosContainer); err != nil {
+		exitWithError("Mongos not ready: %v", err)
+	}
+
+	// 8. Add shards
+	if err := addShards(ctx, mongosContainer); err != nil {
+		exitWithError("Failed to add shards: %v", err)
+	}
+
+	// 9. MongoDB 8.0+: transition config server
+	if strings.HasPrefix(mongoVersion, "8.") {
+		if err := transitionConfigServer(ctx, mongosContainer); err != nil {
+			exitWithError("Failed to transition config server: %v", err)
+		}
+	}
+
+	// 10. Get dynamic mongos URI
+	host, err := mongosContainer.Host(ctx)
+	if err != nil {
+		exitWithError("Failed to get mongos host: %v", err)
+	}
+	mappedPort, err := mongosContainer.MappedPort(ctx, "27017/tcp")
+	if err != nil {
+		exitWithError("Failed to get mongos port: %v", err)
+	}
+	mongosURI = fmt.Sprintf("mongodb://%s:%s", host, mappedPort.Port())
+
+	// 11. Run tests
 	exitCode := m.Run()
 
-	// Teardown
-	_ = stack.Down(ctx, compose.RemoveOrphans(true), compose.RemoveVolumes(true))
-
+	// 12. Cleanup
+	cleanup()
 	os.Exit(exitCode)
 }
 
-// findProjectRoot walks up directories until finding go.mod
-func findProjectRoot() (string, error) {
-	dir, err := os.Getwd()
+// initReplicaSet initializes a replica set using inline --eval and waits for primary
+func initReplicaSet(ctx context.Context, container testcontainers.Container, initJS string, port int) error {
+	portStr := fmt.Sprintf("%d", port)
+
+	exitCode, _, err := container.Exec(ctx, []string{
+		"mongosh", "--quiet", "--port", portStr, "--eval", initJS,
+	})
 	if err != nil {
-		return "", err
+		return fmt.Errorf("exec init: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("init exited with code %d", exitCode)
 	}
 
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("go.mod not found")
-		}
-		dir = parent
-	}
-}
-
-// initReplicaSet initializes a replica set and waits for primary
-func initReplicaSet(ctx context.Context, stack *compose.DockerCompose, containerName, initScript string, port int) error {
-	container, err := stack.ServiceContainer(ctx, containerName)
-	if err != nil {
-		return fmt.Errorf("get container %s: %w", containerName, err)
-	}
-
-	// Run rs.initiate script
-	_, _, err = container.Exec(ctx, []string{"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port), initScript})
-	if err != nil {
-		return fmt.Errorf("exec init script: %w", err)
-	}
-
-	// Wait for primary
 	if err := waitForPrimary(ctx, container, port); err != nil {
 		return fmt.Errorf("wait for primary: %w", err)
 	}
 
-	// Run deprioritize script
-	_, _, err = container.Exec(ctx, []string{"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port), "/cfg/scripts/deprioritize.js"})
+	deprioritizeJS := "let c=rs.config(); c.members.forEach(m=>delete m.priority); rs.reconfig(c)"
+	exitCode, _, err = container.Exec(ctx, []string{
+		"mongosh", "--quiet", "--port", portStr, "--eval", deprioritizeJS,
+	})
 	if err != nil {
 		return fmt.Errorf("exec deprioritize: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("deprioritize exited with code %d", exitCode)
 	}
 
 	return nil
 }
 
-// waitForPrimary polls until replica set has a primary
-func waitForPrimary(ctx context.Context, container *testcontainers.DockerContainer, port int) error {
+func waitForPrimary(ctx context.Context, container testcontainers.Container, port int) error {
 	timeout := time.After(60 * time.Second)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	portStr := fmt.Sprintf("%d", port)
 	for {
 		select {
 		case <-timeout:
 			return fmt.Errorf("timeout waiting for primary")
 		case <-ticker.C:
 			exitCode, _, err := container.Exec(ctx, []string{
-				"mongosh", "--quiet", "--port", fmt.Sprintf("%d", port),
+				"mongosh", "--quiet", "--port", portStr,
 				"--eval", "exit(db.hello().isWritablePrimary ? 0 : 1)",
 			})
 			if err == nil && exitCode == 0 {
@@ -193,13 +260,7 @@ func waitForPrimary(ctx context.Context, container *testcontainers.DockerContain
 	}
 }
 
-// waitForMongos polls until mongos is ready
-func waitForMongos(ctx context.Context, stack *compose.DockerCompose) error {
-	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
-	if err != nil {
-		return fmt.Errorf("get mongos container: %w", err)
-	}
-
+func waitForMongos(ctx context.Context, container testcontainers.Container) error {
 	timeout := time.After(60 * time.Second)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -220,44 +281,36 @@ func waitForMongos(ctx context.Context, stack *compose.DockerCompose) error {
 	}
 }
 
-// addShards adds shards to the cluster via mongos
-func addShards(ctx context.Context, stack *compose.DockerCompose) error {
-	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
-	if err != nil {
-		return fmt.Errorf("get mongos container: %w", err)
-	}
-
+func addShards(ctx context.Context, container testcontainers.Container) error {
 	addShardsCmd := "sh.addShard('rs0/tgt-rs00:40000'); sh.addShard('rs1/tgt-rs10:40100');"
-	_, _, err = container.Exec(ctx, []string{
+	exitCode, _, err := container.Exec(ctx, []string{
 		"mongosh", "--quiet", "--port", "27017",
 		"--eval", addShardsCmd,
 	})
 	if err != nil {
 		return fmt.Errorf("exec addShard: %w", err)
 	}
-
+	if exitCode != 0 {
+		return fmt.Errorf("addShard exited with code %d", exitCode)
+	}
 	return nil
 }
 
 // transitionConfigServer runs transitionFromDedicatedConfigServer for MongoDB 8.0+
-func transitionConfigServer(ctx context.Context, stack *compose.DockerCompose) error {
-	container, err := stack.ServiceContainer(ctx, "tgt-mongos")
-	if err != nil {
-		return fmt.Errorf("get mongos container: %w", err)
-	}
-
-	_, _, err = container.Exec(ctx, []string{
+func transitionConfigServer(ctx context.Context, container testcontainers.Container) error {
+	exitCode, _, err := container.Exec(ctx, []string{
 		"mongosh", "--quiet", "--port", "27017",
 		"--eval", "db.adminCommand('transitionFromDedicatedConfigServer')",
 	})
 	if err != nil {
 		return fmt.Errorf("exec transition: %w", err)
 	}
-
+	if exitCode != 0 {
+		return fmt.Errorf("transition exited with code %d", exitCode)
+	}
 	return nil
 }
 
-// connectToMongoDB establishes a connection to MongoDB
 func connectToMongoDB(t *testing.T) *mongo.Client {
 	t.Helper()
 

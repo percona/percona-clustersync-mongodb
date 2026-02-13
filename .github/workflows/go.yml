@@ -37,3 +37,19 @@ jobs:
         with:
           reporter: github-pr-review
           level: error
+
+  integration-test:
+    name: Integration (MongoDB ${{ matrix.mongo_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo_version: ["6.0", "7.0", "8.0"]
+    env:
+      MONGO_VERSION: ${{ matrix.mongo_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - run: make test-integration
