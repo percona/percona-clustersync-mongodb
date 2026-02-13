@@ -1292,7 +1292,7 @@ func (c *Catalog) ShardCollection(
 
 		return errors.Wrap(err, "shard collection")
 	})
-	if err != nil {
+	if err != nil && !topo.IsAlreadyInitialized(err) {
 		return err //nolint:wrapcheck
 	}
 
