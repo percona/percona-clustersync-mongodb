@@ -397,21 +397,17 @@ func (r *Repl) watchChangeEvents(
 
 	for {
 		lastEventTS := bson.Timestamp{}
-		sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-
-			log.New("watch").Error(err, "Unable to advance the source cluster time")
-		}
+		hasEvents := false
 
 		for cur.TryNext(ctx) {
+			hasEvents = true
 			r.eventsRead.Add(1)
 			metrics.IncEventsRead()
 
 			change := &ChangeEvent{}
-			err := parseChangeEvent(cur.Current, change)
+			change.RawData = append(change.RawData, cur.Current...)
+
+			err := parseEventHeader(change.RawData, &change.EventHeader)
 			if err != nil {
 				return err
 			}
@@ -430,7 +426,9 @@ func (r *Repl) watchChangeEvents(
 					metrics.IncEventsRead()
 
 					change = &ChangeEvent{}
-					err := parseChangeEvent(cur.Current, change)
+					change.RawData = append(change.RawData, cur.Current...)
+
+					err := parseEventHeader(change.RawData, &change.EventHeader)
 					if err != nil {
 						return err
 					}
@@ -484,13 +482,26 @@ func (r *Repl) watchChangeEvents(
 			return errors.Wrap(err, "cursor")
 		}
 
-		// no event available yet. progress pcsm time
-		if sourceTS.After(lastEventTS) {
-			changeCh <- &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType: advanceTimePseudoEvent,
-					ClusterTime:   sourceTS,
-				},
+		// Only advance cluster time when the cursor had no events (truly idle).
+		// Under sustained load, tryAdvanceOpTime + SafeCheckpoint keep
+		// lastReplicatedOpTime current without the appendOplogNote overhead.
+		if !hasEvents {
+			sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+
+				log.New("watch").Error(err, "Unable to advance the source cluster time")
+			}
+
+			if sourceTS.After(lastEventTS) {
+				changeCh <- &ChangeEvent{
+					EventHeader: EventHeader{
+						OperationType: advanceTimePseudoEvent,
+						ClusterTime:   sourceTS,
+					},
+				}
 			}
 		}
 	}
@@ -546,7 +557,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	// poolIdle() returns false because workers haven't caught up yet. Without
 	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
 	// even though workers are making progress.
-	cpTicker := time.NewTicker(time.Second)
+	cpTicker := time.NewTicker(500 * time.Millisecond)
 	defer cpTicker.Stop()
 
 	// pending holds an event read ahead during transaction collection that
@@ -630,7 +641,18 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		default:
 			r.pool.Barrier()
 
-			err := r.applyDDLChange(ctx, change)
+			// DDL events need full parsing (rare path). The header is already
+			// parsed; this additionally deserializes the typed event body
+			// (e.g. CreateEvent, RenameEvent) needed by applyDDLChange.
+			err := parseChangeEvent(change.RawData, change)
+			if err != nil {
+				r.pool.ReleaseBarrier()
+				r.setFailed(err, "Parse DDL event")
+
+				return
+			}
+
+			err = r.applyDDLChange(ctx, change)
 			if err != nil {
 				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Apply change")
@@ -685,6 +707,21 @@ func (r *Repl) handleTransaction(
 			change: next,
 			ns:     findNamespaceByUUID(uuidMap, next),
 		})
+	}
+
+	// Parse DML event bodies for all transaction events (deferred from reader).
+	// Transactions are rare, so this doesn't need to be parallelized.
+	for _, event := range events {
+		parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
+		if err != nil {
+			r.pool.ReleaseBarrier()
+			r.setFailed(err, "Parse transaction event")
+
+			return nil
+		}
+
+		event.change.Event = parsed
+		event.change.RawData = nil // release for GC
 	}
 
 	err := applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)

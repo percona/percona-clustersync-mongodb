@@ -162,7 +162,12 @@ func (w *worker) run(ctx context.Context) {
 				return
 			}
 
-			w.addToBatch(event)
+			err := w.addToBatch(event)
+			if err != nil {
+				w.reportError(err)
+
+				return
+			}
 
 			if w.bulkWrite.Full() {
 				if !w.flush(ctx, lg) {
@@ -175,28 +180,45 @@ func (w *worker) run(ctx context.Context) {
 	}
 }
 
-// addToBatch adds an event to the bulk write buffer.
-func (w *worker) addToBatch(event *routedEvent) {
-	switch event.change.OperationType { //nolint:exhaustive
-	case Insert:
-		e := event.change.Event.(InsertEvent) //nolint:forcetypeassert
+// addToBatch parses the deferred DML event body from raw BSON and adds
+// it to the bulk write buffer. Parsing is done here (in the worker) rather
+// than in the single-threaded reader to parallelize the expensive
+// deserialization of fullDocument across all workers.
+func (w *worker) addToBatch(event *routedEvent) error {
+	parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
+	if err != nil {
+		return err
+	}
+
+	event.change.RawData = nil // release raw bytes for GC
+
+	switch e := parsed.(type) { //nolint:exhaustive
+	case InsertEvent:
 		w.bulkWrite.Insert(event.ns, &e)
 
-	case Update:
-		e := event.change.Event.(UpdateEvent) //nolint:forcetypeassert
+	case UpdateEvent:
 		w.bulkWrite.Update(event.ns, &e)
 
-	case Delete:
-		e := event.change.Event.(DeleteEvent) //nolint:forcetypeassert
+	case DeleteEvent:
 		w.bulkWrite.Delete(event.ns, &e)
 
-	case Replace:
-		e := event.change.Event.(ReplaceEvent) //nolint:forcetypeassert
+	case ReplaceEvent:
 		w.bulkWrite.Replace(event.ns, &e)
 	}
 
 	// Track the timestamp of the last event in the batch
 	w.pendingTS = event.change.ClusterTime
+
+	return nil
+}
+
+// reportError sends an error to the error channel (non-blocking).
+func (w *worker) reportError(err error) {
+	select {
+	case w.errCh <- err:
+	default:
+		// Error channel full, another error already reported
+	}
 }
 
 // flush executes the bulk write and updates metrics.
@@ -204,12 +226,7 @@ func (w *worker) addToBatch(event *routedEvent) {
 func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
 	size, err := w.bulkWrite.Do(ctx, w.target)
 	if err != nil {
-		// Report error and signal to stop
-		select {
-		case w.errCh <- err:
-		default:
-			// Error channel full, another error already reported
-		}
+		w.reportError(err)
 
 		return false
 	}
@@ -232,12 +249,17 @@ func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
 // to the current batch, flushing when the batch is full. This must be called
 // when handling a barrier request to ensure all events routed before the
 // barrier are included in the bulk.
-// Returns false if a flush error occurred and the worker should stop.
+// Returns false if a parse or flush error occurred and the worker should stop.
 func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) bool {
 	for {
 		select {
 		case event := <-w.routedEventCh:
-			w.addToBatch(event)
+			err := w.addToBatch(event)
+			if err != nil {
+				w.reportError(err)
+
+				return false
+			}
 
 			if w.bulkWrite.Full() {
 				if !w.flush(ctx, lg) {
@@ -307,9 +329,11 @@ func newWorkerPool(
 }
 
 // Route sends an event to the appropriate worker based on document key hash.
+// Uses bson.Raw.Lookup to extract the documentKey bytes directly from the raw
+// BSON, avoiding the unmarshal-then-remarshal round-trip of extractDocumentKey.
 func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
-	docKey := extractDocumentKey(change)
-	workerIdx := hashDocumentKey(docKey, p.numWorkers)
+	docKey := change.RawData.Lookup("documentKey")
+	workerIdx := hashDocumentKey(docKey.Value, p.numWorkers)
 
 	p.workers[workerIdx].routedEventCh <- &routedEvent{
 		change: change,
@@ -401,32 +425,6 @@ func (p *workerPool) Err() <-chan error {
 // NumWorkers returns the number of workers in the pool.
 func (p *workerPool) NumWorkers() int {
 	return p.numWorkers
-}
-
-// extractDocumentKey extracts the document key bytes from a change event for hashing.
-func extractDocumentKey(event *ChangeEvent) []byte {
-	switch e := event.Event.(type) {
-	case InsertEvent:
-		data, _ := bson.Marshal(e.DocumentKey)
-
-		return data
-
-	case UpdateEvent:
-		data, _ := bson.Marshal(e.DocumentKey)
-
-		return data
-
-	case DeleteEvent:
-		data, _ := bson.Marshal(e.DocumentKey)
-
-		return data
-
-	case ReplaceEvent:
-		// ReplaceEvent.DocumentKey is already bson.Raw
-		return []byte(e.DocumentKey)
-	}
-
-	return nil
 }
 
 // hashDocumentKey computes a consistent hash of the document key
