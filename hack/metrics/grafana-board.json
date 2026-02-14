@@ -26,7 +26,7 @@
         "type": "prometheus",
         "uid": "pcsm-prometheus"
       },
-      "description": "",
+      "description": "Rate of change events read from the source cluster vs. applied to the target cluster. A growing gap indicates the pipeline is falling behind.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -248,7 +248,8 @@
         }
       ],
       "title": "Lag Time",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Time difference between the latest event on the source and the latest event applied on the target. Includes both change replication lag and initial sync lag."
     },
     {
       "collapsed": false,
@@ -303,7 +304,7 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "mappings": [],
@@ -311,11 +312,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "transparent",
+                "value": null
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 5000
               }
             ]
           },
@@ -359,7 +361,8 @@
         }
       ],
       "title": "Event Queue Size",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Number of events buffered in the dispatcher queue between the change stream reader and the worker pool. Red line indicates max capacity (5000). Sustained values near the limit mean workers cannot keep up with incoming events."
     },
     {
       "datasource": {
@@ -401,7 +404,7 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "mappings": [],
@@ -409,11 +412,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "transparent",
+                "value": null
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 5000
               }
             ]
           },
@@ -457,7 +461,8 @@
         }
       ],
       "title": "Worker Event Queue Size",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Number of events buffered in each worker's queue, waiting to be flushed. Red line indicates max capacity (5000). High values per worker suggest slow bulk writes or uneven routing."
     },
     {
       "datasource": {
@@ -555,7 +560,8 @@
         }
       ],
       "title": "Worker Events Applied Rate",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Rate of change events applied to the target cluster, broken down per worker. Uneven rates may indicate hot collections or skewed document routing."
     },
     {
       "datasource": {
@@ -597,7 +603,7 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "mappings": [],
@@ -605,11 +611,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green"
+                "color": "transparent",
+                "value": null
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 5000
               }
             ]
           },
@@ -655,7 +662,8 @@
         }
       ],
       "title": "Worker Flush Batch Size (p99)",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "99th percentile of the number of events in each worker's bulk write batch. Red line indicates max batch size (5000). Consistently hitting the limit means the worker buffer fills before the flush interval."
     },
     {
       "datasource": {
@@ -755,7 +763,8 @@
         }
       ],
       "title": "Worker Flush Duration (p99)",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "99th percentile of the time each worker spends executing a bulk write against the target cluster. High values indicate slow writes or network latency to the target."
     },
     {
       "datasource": {
@@ -879,7 +888,8 @@
         }
       ],
       "title": "Transactions",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Multi-document transaction application rate, p99 duration, and p99 event count per transaction. Transactions require ordered, all-or-nothing application across the worker pool."
     },
     {
       "collapsed": false,
@@ -1007,7 +1017,8 @@
         }
       ],
       "title": "Cloned Size",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Cumulative data copied to the target cluster compared to the estimated total source size. Shows overall clone progress in megabytes."
     },
     {
       "datasource": {
@@ -1130,7 +1141,8 @@
       ],
       "title": "Megabytes Read/Write Rate",
       "transparent": true,
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Throughput of the initial sync pipeline in MB/s, showing read rate from the source and insert rate to the target."
     },
     {
       "datasource": {
@@ -1252,7 +1264,8 @@
         }
       ],
       "title": "Documents Copied",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Cumulative count of documents read from the source and inserted into the target during initial sync."
     },
     {
       "datasource": {
@@ -1374,7 +1387,8 @@
         }
       ],
       "title": "Batch Duration",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Time spent reading a batch of documents from the source and inserting a batch into the target during initial sync."
     },
     {
       "collapsed": false,
@@ -1486,7 +1500,8 @@
         }
       ],
       "title": "Running Goroutines",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Number of active Go goroutines. A steady increase over time may indicate a goroutine leak."
     },
     {
       "datasource": {
@@ -1585,7 +1600,8 @@
         }
       ],
       "title": "Running Threads",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Number of OS threads created by the Go runtime. Typically stable; a spike may indicate blocking system calls."
     },
     {
       "datasource": {
@@ -1685,7 +1701,8 @@
         }
       ],
       "title": "Memory",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Heap memory currently allocated by the Go runtime. Does not include memory returned to the OS."
     },
     {
       "datasource": {
@@ -1784,7 +1801,8 @@
         }
       ],
       "title": "CPU Usage",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Process CPU utilization as a fraction of one core. Values above 1.0 indicate multi-core usage."
     },
     {
       "datasource": {
@@ -1883,7 +1901,8 @@
         }
       ],
       "title": "Resident Memory",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Resident Set Size (RSS) \u2014 physical memory held by the process as reported by the OS."
     },
     {
       "datasource": {
@@ -1994,7 +2013,8 @@
         }
       ],
       "title": "Open File Descriptors",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Number of open file descriptors vs. the OS limit. Approaching the limit may cause connection failures."
     },
     {
       "datasource": {
@@ -2106,7 +2126,8 @@
         }
       ],
       "title": "GC Pause Duration",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Go garbage collection stop-the-world pause duration at p50 and max. High values may cause latency spikes."
     },
     {
       "datasource": {
@@ -2231,7 +2252,8 @@
         }
       ],
       "title": "Heap Breakdown",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Go heap memory breakdown: in-use (active allocations), idle (returned to runtime but not OS), and total memory obtained from the OS."
     }
   ],
   "preload": false,

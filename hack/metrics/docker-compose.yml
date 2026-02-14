@@ -14,7 +14,7 @@ services:
     container_name: pcsm-grafana
     volumes:
       - ./provisioning:/etc/grafana/provisioning:ro
-      - ./graphana-board.json:/var/lib/grafana/dashboards/pcsm.json:ro
+      - ./grafana-board.json:/var/lib/grafana/dashboards/pcsm.json:ro
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
