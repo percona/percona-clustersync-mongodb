@@ -20,6 +20,7 @@
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
   "files.trimTrailingWhitespace": true,
+  "go.buildTags": "integration",
   "go.formatFlags": [
     "-extra"
   ],
