@@ -326,11 +326,15 @@ func (c *Catalog) doCreateView(
 
 		return errors.Wrapf(err, "create view %s.%s", db, view)
 	})
-	if err != nil {
+	if err != nil && !topo.IsNamespaceExists(err) {
 		return err //nolint:wrapcheck
 	}
 
 	log.Ctx(ctx).Debugf("Created view %s.%s", db, view)
+
+	c.lock.Lock()
+	c.addCollectionToCatalog(ctx, db, view)
+	c.lock.Unlock()
 
 	return nil
 }

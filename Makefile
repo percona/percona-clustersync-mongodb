@@ -30,6 +30,9 @@ test-build:
 test:
 	go test -race ./...
 
+test-integration:
+	go test -v -tags integration -count=1 -timeout 5m ./pcsm/catalog/...
+
 pytest:
 	poetry run pytest
 
@@ -63,4 +66,4 @@ metrics-up:
 metrics-down:
 	docker compose -f hack/metrics/docker-compose.yml down
 
-.PHONY: all build test-build test pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down
+.PHONY: all build test-build test test-integration pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down
