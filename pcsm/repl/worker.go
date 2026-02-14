@@ -4,6 +4,7 @@ import (
 	"context"
 	"hash/fnv"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,7 +32,7 @@ type routedEvent struct {
 // operations on the same document are processed by the same worker,
 // preserving per-document ordering.
 type worker struct {
-	id int
+	id string
 
 	routedEventCh chan *routedEvent
 	bulkWrite     bulkWriter
@@ -69,7 +70,7 @@ func newWorker(
 	}
 
 	return &worker{
-		id:            id,
+		id:            strconv.Itoa(id),
 		routedEventCh: make(chan *routedEvent, config.ReplQueueSize),
 		bulkWrite:     bw,
 		target:        target,
@@ -83,7 +84,7 @@ func newWorker(
 // run is the main loop for the worker. It processes events from eventC,
 // batches them, and flushes on buffer full, time interval, or barrier signal.
 func (w *worker) run(ctx context.Context) {
-	lg := log.New("repl:worker").With(log.Int64("id", int64(w.id)))
+	lg := log.New("repl:worker").With(log.String("id", w.id))
 	lg.Debug("Worker started")
 
 	// Stagger ticker start to spread flushes evenly across the interval.
@@ -224,6 +225,8 @@ func (w *worker) reportError(err error) {
 // flush executes the bulk write and updates metrics.
 // Returns false if an error occurred and the worker should stop.
 func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
+	start := time.Now()
+
 	size, err := w.bulkWrite.Do(ctx, w.target)
 	if err != nil {
 		w.reportError(err)
@@ -234,6 +237,9 @@ func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
 	if size > 0 {
 		w.eventsApplied.Add(int64(size))
 		metrics.AddEventsApplied(size)
+		metrics.AddReplWorkerEventsApplied(w.id, size)
+		metrics.ObserveReplWorkerFlushBatchSize(w.id, size)
+		metrics.ObserveReplWorkerFlushDuration(w.id, time.Since(start))
 
 		// Update the last committed timestamp
 		ts := w.pendingTS
@@ -335,10 +341,13 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	docKey := change.RawData.Lookup("documentKey")
 	workerIdx := hashDocumentKey(docKey.Value, p.numWorkers)
 
-	p.workers[workerIdx].routedEventCh <- &routedEvent{
+	w := p.workers[workerIdx]
+	w.routedEventCh <- &routedEvent{
 		change: change,
 		ns:     ns,
 	}
+
+	metrics.SetReplWorkerEventQueueSize(w.id, len(w.routedEventCh))
 }
 
 // Barrier flushes all workers and waits for them to complete.

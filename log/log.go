@@ -88,6 +88,12 @@ func Int64(key string, val int64) AttrFn {
 	}
 }
 
+func String(key string, val string) AttrFn {
+	return func(l zerolog.Context) zerolog.Context {
+		return l.Str(key, val)
+	}
+}
+
 // New creates a new Logger with the specified scope.
 func New(scope string) Logger {
 	log := zerolog.Ctx(context.Background()).With().Logger()

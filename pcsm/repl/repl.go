@@ -585,6 +585,8 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			}
 		}
 
+		metrics.SetReplEventQueueSize(len(changeEventCh))
+
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
 
@@ -724,6 +726,8 @@ func (r *Repl) handleTransaction(
 		event.change.RawData = nil // release for GC
 	}
 
+	txnStart := time.Now()
+
 	err := applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
 	if err != nil {
 		r.pool.ReleaseBarrier()
@@ -731,6 +735,10 @@ func (r *Repl) handleTransaction(
 
 		return nil
 	}
+
+	metrics.IncReplTransactionsApplied()
+	metrics.ObserveReplTransactionSize(len(events))
+	metrics.ObserveReplTransactionDuration(time.Since(txnStart))
 
 	r.lock.Lock()
 	r.lastReplicatedOpTime = first.ClusterTime
