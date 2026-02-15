@@ -71,7 +71,7 @@ type Replicator interface {
 	Done() <-chan struct{}
 	Status() repl.Status
 	Checkpoint() *repl.Checkpoint
-	Recover(cp *repl.Checkpoint) error
+	Recover(ctx context.Context, cp *repl.Checkpoint) error
 	ResetError()
 }
 
@@ -97,6 +97,8 @@ type Status struct {
 
 // PCSM manages the replication process.
 type PCSM struct {
+	lifecycleCtx context.Context //nolint:containedctx // Lifecycle context for background operations
+
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
@@ -120,8 +122,9 @@ type PCSM struct {
 }
 
 // New creates a new PCSM.
-func New(source, target *mongo.Client) *PCSM {
+func New(lifecycleCtx context.Context, source, target *mongo.Client) *PCSM {
 	return &PCSM{
+		lifecycleCtx:   lifecycleCtx,
 		source:         source,
 		target:         target,
 		state:          StateIdle,
@@ -141,7 +144,7 @@ type checkpoint struct {
 	Error string `bson:"error,omitempty"`
 }
 
-func (p *PCSM) Checkpoint(context.Context) ([]byte, error) {
+func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -211,7 +214,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.Repl != nil {
-		err = rpl.Recover(cp.Repl)
+		err = rpl.Recover(ctx, cp.Repl)
 		if err != nil {
 			return errors.Wrap(err, "recover repl")
 		}
@@ -323,7 +326,7 @@ type StartOptions struct {
 }
 
 // Start starts the replication process with the given options.
-func (p *PCSM) Start(_ context.Context, options *StartOptions) error {
+func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -354,7 +357,7 @@ func (p *PCSM) Start(_ context.Context, options *StartOptions) error {
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl)
 	p.state = StateRunning
 
-	go p.run()
+	go p.run(p.lifecycleCtx)
 
 	return nil
 }
@@ -371,8 +374,8 @@ func (p *PCSM) setFailed(err error) {
 }
 
 // run executes the cluster replication.
-func (p *PCSM) run() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (p *PCSM) run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	lg := log.New("pcsm")
@@ -602,7 +605,7 @@ func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	return nil
 }
 
-func (p *PCSM) doResume(_ context.Context, fromFailure bool) error {
+func (p *PCSM) doResume(_ context.Context, fromFailure bool) error { //nolint:unparam
 	replStatus := p.repl.Status()
 
 	if !replStatus.IsStarted() && !fromFailure {
@@ -616,7 +619,7 @@ func (p *PCSM) doResume(_ context.Context, fromFailure bool) error {
 	p.state = StateRunning
 	p.resetError()
 
-	go p.run()
+	go p.run(p.lifecycleCtx)
 	go p.onStateChanged(StateRunning)
 
 	return nil
@@ -671,7 +674,7 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	p.state = StateFinalizing
 
 	go func() {
-		err := p.catalog.Finalize(context.Background())
+		err := p.catalog.Finalize(p.lifecycleCtx)
 		if err != nil {
 			p.setFailed(errors.Wrap(err, "finalization"))
 

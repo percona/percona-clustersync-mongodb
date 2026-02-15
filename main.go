@@ -114,7 +114,7 @@ func newRootCmd() *cobra.Command {
 
 			log.Ctx(cmd.Context()).Info("Percona ClusterSync for MongoDB " + buildVersion())
 
-			return runServer(cmd.Context(), cfg)
+			return runServer(cfg)
 		},
 	}
 
@@ -438,7 +438,7 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 }
 
 // runServer starts the HTTP server with the provided configuration.
-func runServer(_ context.Context, cfg *config.Config) error {
+func runServer(cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
@@ -464,7 +464,10 @@ func runServer(_ context.Context, cfg *config.Config) error {
 	go func() {
 		<-ctx.Done()
 
-		err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, srv.Close)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.DisconnectTimeout)
+		defer cancel()
+
+		err := srv.Close(cleanupCtx)
 		if err != nil {
 			log.New("server").Error(err, "Close server")
 		}
@@ -569,7 +572,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	pcs := pcsm.New(source, target)
+	pcs := pcsm.New(ctx, source, target)
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {

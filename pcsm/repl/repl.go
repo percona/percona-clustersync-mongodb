@@ -170,7 +170,7 @@ func (r *Repl) Checkpoint() *Checkpoint {
 	return cp
 }
 
-func (r *Repl) Recover(cp *Checkpoint) error {
+func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -193,7 +193,7 @@ func (r *Repl) Recover(cp *Checkpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
-	targetVer, err := topo.Version(context.Background(), r.target)
+	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "major version")
 	}
@@ -215,7 +215,10 @@ func (r *Repl) Status() Status {
 
 	applied := r.eventsApplied
 	if r.pool != nil {
-		applied += r.pool.TotalEventsApplied()
+		applied += r.
+    
+    
+    tsApplied()
 	}
 
 	return Status{
@@ -272,7 +275,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 
 	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
-	go r.run(options.ChangeStream().SetStartAtOperationTime(&startAt))
+	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
 	r.startTime = time.Now()
 
@@ -283,7 +286,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 }
 
 // Pause pauses the change replication.
-func (r *Repl) Pause(context.Context) error {
+func (r *Repl) Pause(_ context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -337,7 +340,7 @@ func (r *Repl) setFailed(err error, msg string) {
 	r.doPause()
 }
 
-func (r *Repl) Resume(context.Context) error {
+func (r *Repl) Resume(ctx context.Context) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -363,7 +366,7 @@ func (r *Repl) Resume(context.Context) error {
 	r.doneCh = make(chan struct{})
 	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
-	go r.run(options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
+	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
 	log.New("repl").With(log.OpTime(r.lastReplicatedOpTime.T, r.lastReplicatedOpTime.I)).
 		Info("Change Replication resumed")
@@ -507,7 +510,8 @@ func (r *Repl) watchChangeEvents(
 	}
 }
 
-func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
+
+func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	defer func() {
 		r.lock.Lock()
 		r.eventsApplied += r.pool.TotalEventsApplied()
@@ -518,7 +522,6 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 		close(r.doneCh)
 	}()
 
-	ctx := context.Background()
 	changeEventCh := make(chan *ChangeEvent, config.ReplQueueSize)
 
 	go func() {
