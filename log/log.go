@@ -88,7 +88,7 @@ func Int64(key string, val int64) AttrFn {
 	}
 }
 
-func String(key string, val string) AttrFn {
+func String(key, val string) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Str(key, val)
 	}

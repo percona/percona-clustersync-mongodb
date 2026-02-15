@@ -215,10 +215,7 @@ func (r *Repl) Status() Status {
 
 	applied := r.eventsApplied
 	if r.pool != nil {
-		applied += r.
-    
-    
-    tsApplied()
+		applied += r.pool.TotalEventsApplied()
 	}
 
 	return Status{
@@ -510,7 +507,6 @@ func (r *Repl) watchChangeEvents(
 	}
 }
 
-
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	defer func() {
 		r.lock.Lock()
@@ -560,7 +556,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	// poolIdle() returns false because workers haven't caught up yet. Without
 	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
 	// even though workers are making progress.
-	cpTicker := time.NewTicker(500 * time.Millisecond)
+	cpTicker := time.NewTicker(500 * time.Millisecond) //nolint:mnd
 	defer cpTicker.Stop()
 
 	// pending holds an event read ahead during transaction collection that
