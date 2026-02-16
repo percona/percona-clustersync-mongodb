@@ -120,7 +120,7 @@ func (w *worker) run(ctx context.Context) {
 			return
 
 		case <-w.barrierReq:
-			lg.Debug("Barrier requested")
+			lg.Trace("Barrier requested")
 
 			// Drain all buffered events routed before the barrier was requested.
 			err := w.drainRoutedEvents(ctx, lg)
@@ -142,12 +142,12 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			w.barrierDone <- nil
-			lg.Debug("Barrier complete, waiting for resume")
+			lg.Trace("Barrier complete, waiting for resume")
 
 			// Wait for resume signal or context cancellation
 			select {
 			case <-w.resumeCh:
-				lg.Debug("Resumed")
+				lg.Trace("Resumed")
 			case <-ctx.Done():
 				lg.Debug("Worker stopped (context done while waiting for resume)")
 
@@ -261,7 +261,7 @@ func (w *worker) flush(ctx context.Context, lg log.Logger) error {
 		ts := w.pendingTS
 		w.lastTS.Store(&ts)
 
-		lg.With(log.Int64("size", int64(size))).Debug("Flushed batch")
+		lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
 	}
 
 	return nil
