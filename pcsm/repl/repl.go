@@ -716,6 +716,15 @@ func (r *Repl) handleTransaction(
 			break
 		}
 
+		// DDL events within a transaction (e.g. implicit collection create)
+		// cannot be applied via bulk write. Return them as overflow so the
+		// dispatcher routes them through the DDL handler.
+		if !isBulkWriteOperation(next.OperationType) {
+			overflow = next
+
+			break
+		}
+
 		events = append(events, &routedEvent{
 			change: next,
 			ns:     findNamespaceByUUID(uuidMap, next),

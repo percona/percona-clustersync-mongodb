@@ -501,6 +501,78 @@ func TestBarrier_WorkerAlreadyDead(t *testing.T) {
 	}
 }
 
+// TestApplyTransaction_RejectsDDLEvent verifies that applyTransaction fails
+// when a DDL event (e.g. "create") is included in the events list. This
+// reproduces the bug where handleTransaction collects DDL events within a
+// transaction and passes them to applyTransaction, which only handles DML.
+func TestApplyTransaction_RejectsDDLEvent(t *testing.T) {
+	t.Parallel()
+
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+
+	events := []*routedEvent{
+		{
+			change: &ChangeEvent{
+				EventHeader: EventHeader{OperationType: Insert},
+				Event:       InsertEvent{FullDocument: bson.Raw(mustMarshal(bson.D{{"_id", "1"}}))},
+			},
+			ns: ns,
+		},
+		{
+			change: &ChangeEvent{
+				EventHeader: EventHeader{OperationType: Create},
+			},
+			ns: ns,
+		},
+	}
+
+	err := applyTransaction(context.Background(), nil, events, true, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unexpected operation "create" in transaction`)
+}
+
+// TestIsBulkWriteOperation verifies the helper correctly classifies operation types.
+func TestIsBulkWriteOperation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		op       OperationType
+		expected bool
+	}{
+		{Insert, true},
+		{Update, true},
+		{Delete, true},
+		{Replace, true},
+		{Create, false},
+		{Drop, false},
+		{Rename, false},
+		{Modify, false},
+		{DropDatabase, false},
+		{CreateIndexes, false},
+		{DropIndexes, false},
+		{ShardCollection, false},
+		{Invalidate, false},
+		{OperationType("unknown"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.op), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isBulkWriteOperation(tt.op))
+		})
+	}
+}
+
+// mustMarshal marshals a value to BSON or panics.
+func mustMarshal(v any) []byte {
+	raw, err := bson.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("marshal: %v", err))
+	}
+
+	return raw
+}
+
 // TestReleaseBarrier_WorkerDead verifies that ReleaseBarrier() does not
 // deadlock when a worker has exited. This mirrors the real-world sequence:
 // Barrier() detects a dead worker and returns an error, then the dispatcher

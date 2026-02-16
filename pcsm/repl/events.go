@@ -89,6 +89,18 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
+// isBulkWriteOperation returns true if the operation type can be applied
+// via a bulk write (Insert, Update, Delete, Replace). DDL operations like
+// Create, Drop, Rename etc. return false and must be handled separately.
+func isBulkWriteOperation(op OperationType) bool {
+	switch op { //nolint:exhaustive
+	case Insert, Update, Delete, Replace:
+		return true
+	default:
+		return false
+	}
+}
+
 // InvalidateEvent occurs when an operation renders the change stream invalid. For example, a change
 // stream opened on a collection that was later dropped or renamed would cause an invalidate event.
 type InvalidateEvent struct {
