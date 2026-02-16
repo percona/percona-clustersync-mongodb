@@ -335,11 +335,19 @@ func newWorkerPool(
 }
 
 // Route sends an event to the appropriate worker based on document key hash.
+// For capped collections, events are routed by namespace instead of document
+// key to ensure all operations on the same capped collection are processed by
+// the same worker, preserving insertion order.
 // Uses bson.Raw.Lookup to extract the documentKey bytes directly from the raw
 // BSON, avoiding the unmarshal-then-remarshal round-trip of extractDocumentKey.
 func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
-	docKey := change.RawData.Lookup("documentKey")
-	workerIdx := hashDocumentKey(docKey.Value, p.numWorkers)
+	var workerIdx int
+	if ns.Capped {
+		workerIdx = hashNamespace(ns, p.numWorkers)
+	} else {
+		docKey := change.RawData.Lookup("documentKey")
+		workerIdx = hashDocumentKey(docKey.Value, p.numWorkers)
+	}
 
 	w := p.workers[workerIdx]
 	w.routedEventCh <- &routedEvent{
@@ -441,6 +449,19 @@ func (p *workerPool) NumWorkers() int {
 func hashDocumentKey(key []byte, numWorkers int) int {
 	h := fnv.New32a()
 	h.Write(key)
+
+	return int(h.Sum32()) % numWorkers
+}
+
+// hashNamespace computes a consistent hash of the namespace (database.collection)
+// and returns a worker index in range [0, numWorkers).
+// Used for capped collections to route all events for the same collection to the
+// same worker, preserving insertion order.
+func hashNamespace(ns catalog.Namespace, numWorkers int) int {
+	h := fnv.New32a()
+	h.Write([]byte(ns.Database))
+	h.Write([]byte("."))
+	h.Write([]byte(ns.Collection))
 
 	return int(h.Sum32()) % numWorkers
 }
