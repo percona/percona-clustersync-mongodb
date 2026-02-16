@@ -640,12 +640,18 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			}
 
 		default:
-			r.pool.Barrier()
+			err := r.pool.Barrier()
+			if err != nil {
+				r.pool.ReleaseBarrier()
+				r.setFailed(err, "Worker error during barrier")
+
+				return
+			}
 
 			// DDL events need full parsing (rare path). The header is already
 			// parsed; this additionally deserializes the typed event body
 			// (e.g. CreateEvent, RenameEvent) needed by applyDDLChange.
-			err := parseChangeEvent(change.RawData, change)
+			err = parseChangeEvent(change.RawData, change)
 			if err != nil {
 				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Parse DDL event")
@@ -688,7 +694,13 @@ func (r *Repl) handleTransaction(
 	changeCh <-chan *ChangeEvent,
 	uuidMap catalog.UUIDMap,
 ) *ChangeEvent {
-	r.pool.Barrier()
+	err := r.pool.Barrier()
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return nil
+	}
 
 	events := []*routedEvent{{
 		change: first,
@@ -727,7 +739,7 @@ func (r *Repl) handleTransaction(
 
 	txnStart := time.Now()
 
-	err := applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
+	err = applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
 	if err != nil {
 		r.pool.ReleaseBarrier()
 		r.setFailed(err, "Apply transaction")

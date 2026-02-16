@@ -44,8 +44,12 @@ type worker struct {
 
 	// Barrier coordination
 	barrierReq  chan struct{}
-	barrierDone chan struct{}
+	barrierDone chan error
 	resumeCh    chan struct{}
+
+	// Lifecycle: closed when run() exits, used by Barrier/ReleaseBarrier
+	// to detect dead workers and avoid blocking on their channels.
+	done chan struct{}
 
 	// Error reporting
 	errCh chan<- error
@@ -75,8 +79,9 @@ func newWorker(
 		bulkWrite:     bw,
 		target:        target,
 		barrierReq:    make(chan struct{}),
-		barrierDone:   make(chan struct{}),
+		barrierDone:   make(chan error),
 		resumeCh:      make(chan struct{}),
+		done:          make(chan struct{}),
 		errCh:         errC,
 	}
 }
@@ -84,6 +89,8 @@ func newWorker(
 // run is the main loop for the worker. It processes events from eventC,
 // batches them, and flushes on buffer full, time interval, or barrier signal.
 func (w *worker) run(ctx context.Context) {
+	defer close(w.done) // signal Barrier/ReleaseBarrier that this worker has exited
+
 	lg := log.New("repl:worker").With(log.String("id", w.id))
 	lg.Debug("Worker started")
 
@@ -103,9 +110,9 @@ func (w *worker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush remaining ops before exit
+			// Flush remaining ops before exit (best-effort)
 			if !w.bulkWrite.Empty() {
-				w.flush(ctx, lg)
+				_ = w.flush(ctx, lg)
 			}
 
 			lg.Debug("Worker stopped (context done)")
@@ -116,20 +123,25 @@ func (w *worker) run(ctx context.Context) {
 			lg.Debug("Barrier requested")
 
 			// Drain all buffered events routed before the barrier was requested.
-			if !w.drainRoutedEvents(ctx, lg) {
+			err := w.drainRoutedEvents(ctx, lg)
+			if err != nil {
+				w.barrierDone <- err
+
 				return
 			}
 
 			// Flush remaining ops and signal done.
 			if !w.bulkWrite.Empty() {
-				if !w.flush(ctx, lg) {
+				err = w.flush(ctx, lg)
+				if err != nil {
+					w.barrierDone <- err
 					lg.Debug("Worker stopped (flush error)")
 
 					return
 				}
 			}
 
-			w.barrierDone <- struct{}{}
+			w.barrierDone <- nil
 			lg.Debug("Barrier complete, waiting for resume")
 
 			// Wait for resume signal or context cancellation
@@ -144,7 +156,8 @@ func (w *worker) run(ctx context.Context) {
 
 		case <-ticker.C:
 			if !w.bulkWrite.Empty() {
-				if !w.flush(ctx, lg) {
+				flushErr := w.flush(ctx, lg)
+				if flushErr != nil {
 					lg.Debug("Worker stopped (flush error)")
 
 					return
@@ -153,9 +166,9 @@ func (w *worker) run(ctx context.Context) {
 
 		case event, ok := <-w.routedEventCh:
 			if !ok {
-				// Channel closed, flush and exit
+				// Channel closed, flush and exit (best-effort)
 				if !w.bulkWrite.Empty() {
-					w.flush(ctx, lg)
+					_ = w.flush(ctx, lg)
 				}
 
 				lg.Debug("Worker stopped (channel closed)")
@@ -171,7 +184,8 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			if w.bulkWrite.Full() {
-				if !w.flush(ctx, lg) {
+				flushErr := w.flush(ctx, lg)
+				if flushErr != nil {
 					lg.Debug("Worker stopped (flush error)")
 
 					return
@@ -223,15 +237,17 @@ func (w *worker) reportError(err error) {
 }
 
 // flush executes the bulk write and updates metrics.
-// Returns false if an error occurred and the worker should stop.
-func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
+// Returns a non-nil error if the bulk write failed and the worker should stop.
+// The error is also sent to errCh via reportError so the dispatcher can detect it.
+func (w *worker) flush(ctx context.Context, lg log.Logger) error {
 	start := time.Now()
 
 	size, err := w.bulkWrite.Do(ctx, w.target)
 	if err != nil {
+		err = errors.Wrap(err, "bulk write")
 		w.reportError(err)
 
-		return false
+		return err
 	}
 
 	if size > 0 {
@@ -248,15 +264,15 @@ func (w *worker) flush(ctx context.Context, lg log.Logger) bool {
 		lg.With(log.Int64("size", int64(size))).Debug("Flushed batch")
 	}
 
-	return true
+	return nil
 }
 
 // drainRoutedEvents reads all buffered events from routedEventCh and adds them
 // to the current batch, flushing when the batch is full. This must be called
 // when handling a barrier request to ensure all events routed before the
 // barrier are included in the bulk.
-// Returns false if a parse or flush error occurred and the worker should stop.
-func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) bool {
+// Returns a non-nil error if a parse or flush error occurred and the worker should stop.
+func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) error {
 	for {
 		select {
 		case event := <-w.routedEventCh:
@@ -264,16 +280,17 @@ func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) bool {
 			if err != nil {
 				w.reportError(err)
 
-				return false
+				return err
 			}
 
 			if w.bulkWrite.Full() {
-				if !w.flush(ctx, lg) {
-					return false
+				flushErr := w.flush(ctx, lg)
+				if flushErr != nil {
+					return flushErr
 				}
 			}
 		default:
-			return true
+			return nil
 		}
 	}
 }
@@ -359,23 +376,48 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 }
 
 // Barrier flushes all workers and waits for them to complete.
-// After Barrier returns, all workers are paused and no writes are in-flight.
-func (p *workerPool) Barrier() {
-	// Signal all workers to flush and pause
+// After Barrier returns nil, all workers are paused and no writes are in-flight.
+// Returns a non-nil error if any worker died during (or before) the barrier.
+func (p *workerPool) Barrier() error {
+	// Signal all workers to flush and pause, skipping dead ones.
 	for _, w := range p.workers {
-		w.barrierReq <- struct{}{}
+		select {
+		case w.barrierReq <- struct{}{}:
+		case <-w.done:
+			// Worker already exited; will collect error below.
+		}
 	}
 
-	// Wait for all workers to acknowledge and flush pending ops
+	// Wait for all workers to acknowledge and flush pending ops.
+	var firstErr error
+
 	for _, w := range p.workers {
-		<-w.barrierDone
+		select {
+		case err := <-w.barrierDone:
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case <-w.done:
+			// Worker exited without sending on barrierDone (e.g. died
+			// before barrier was sent, or context canceled).
+			if firstErr == nil {
+				firstErr = errors.Errorf("worker %s died", w.id)
+			}
+		}
 	}
+
+	return firstErr
 }
 
 // ReleaseBarrier signals all workers to resume processing.
+// Dead workers are skipped to avoid blocking on their resumeCh.
 func (p *workerPool) ReleaseBarrier() {
 	for _, w := range p.workers {
-		w.resumeCh <- struct{}{}
+		select {
+		case w.resumeCh <- struct{}{}:
+		case <-w.done:
+			// Worker is dead, skip.
+		}
 	}
 }
 
