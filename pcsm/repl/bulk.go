@@ -589,19 +589,27 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
 func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
+	// Case 1: disambiguatedPaths[field] exists → check LAST component only
 	if path, ok := disambiguatedPaths[field]; ok {
-		for _, p := range path {
-			switch p.(type) {
-			case int, int8, int16, int32, int64:
-				return true
-			}
-
-			continue
+		if len(path) == 0 {
+			return false
 		}
 
+		lastComponent := path[len(path)-1]
+		switch lastComponent.(type) {
+		case int, int8, int16, int32, int64:
+			return true
+		default:
+			return false
+		}
+	}
+
+	// Case 2: disambiguatedPaths is nil (MongoDB <6.1) → safe fallback
+	if disambiguatedPaths == nil {
 		return false
 	}
 
+	// Case 3: disambiguatedPaths non-nil but field not in it → Atoi fallback (unambiguous)
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 { //nolint:mnd
 		return false
