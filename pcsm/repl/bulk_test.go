@@ -1,4 +1,4 @@
-package repl //nolint
+package repl //nolint:testpackage
 
 import (
 	"testing"

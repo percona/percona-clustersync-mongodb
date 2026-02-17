@@ -98,7 +98,7 @@ func GetCollectionSpec(
 			err = ErrNotFound
 		}
 
-		return nil, err //nolint:wrapcheck
+		return nil, err
 	}
 
 	if len(colls) == 0 {
@@ -306,7 +306,7 @@ func GetCollectionShardingInfo(
 	}
 	defer cur.Close(ctx)
 
-	if err := cur.Err(); err != nil { // nolint:noinlineerr
+	if err := cur.Err(); err != nil { //nolint:noinlineerr
 		return nil, errors.Wrap(err, "iterate chunks")
 	}
 
