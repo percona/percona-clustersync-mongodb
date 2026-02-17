@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"encoding/hex"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,62 @@ type Options struct {
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
+	// NumWorkers is the number of replication workers.
+	// 0 means auto (defaults to runtime.NumCPU()).
+	NumWorkers int
+	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
+	// 0 means auto (defaults to config.ChangeStreamBatchSize).
+	ChangeStreamBatchSize int
+	// EventQueueSize is the buffer size of the channel between the change stream
+	// reader and the dispatcher.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	EventQueueSize int
+	// WorkerQueueSize is the per-worker routed event channel buffer size.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	WorkerQueueSize int
+	// BulkOpsSize is the maximum number of operations per bulk write.
+	// 0 means auto (defaults to config.BulkOpsSize).
+	BulkOpsSize int
+}
+
+func (o *Options) numWorkers() int {
+	if o.NumWorkers > 0 {
+		return o.NumWorkers
+	}
+
+	return runtime.NumCPU()
+}
+
+func (o *Options) changeStreamBatchSize() int32 {
+	if o.ChangeStreamBatchSize > 0 {
+		return int32(o.ChangeStreamBatchSize) //nolint:gosec
+	}
+
+	return config.ChangeStreamBatchSize
+}
+
+func (o *Options) eventQueueSize() int {
+	if o.EventQueueSize > 0 {
+		return o.EventQueueSize
+	}
+
+	return config.DefaultReplQueueSize
+}
+
+func (o *Options) workerQueueSize() int {
+	if o.WorkerQueueSize > 0 {
+		return o.WorkerQueueSize
+	}
+
+	return config.DefaultReplQueueSize
+}
+
+func (o *Options) bulkOpsSize() int {
+	if o.BulkOpsSize > 0 {
+		return o.BulkOpsSize
+	}
+
+	return config.BulkOpsSize
 }
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
@@ -270,7 +327,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
-	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -361,7 +418,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
-	r.pool = newWorkerPool(context.Background(), 0, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
@@ -378,7 +435,7 @@ func (r *Repl) watchChangeEvents(
 ) error {
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
-			SetBatchSize(config.ChangeStreamBatchSize).
+			SetBatchSize(r.options.changeStreamBatchSize()).
 			SetMaxAwaitTime(config.ChangeStreamAwaitTime))
 	if err != nil {
 		return errors.Wrap(err, "open")
@@ -518,7 +575,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		close(r.doneCh)
 	}()
 
-	changeEventCh := make(chan *ChangeEvent, config.ReplQueueSize)
+	changeEventCh := make(chan *ChangeEvent, r.options.eventQueueSize())
 
 	go func() {
 		defer close(changeEventCh)

@@ -56,11 +56,11 @@ const (
 	ChangeStreamBatchSize = 10_000
 	// ChangeStreamAwaitTime is the maximum amount of time to wait for new change event.
 	ChangeStreamAwaitTime = time.Second
-	// ReplQueueSize defines the buffer size of the internal channel used to transfer
+	// DefaultReplQueueSize defines the buffer size of the internal channel used to transfer
 	// events between the change stream reader and the dispatcher, and also the buffer
 	// size of each worker's routed event channel. Larger values absorb flush latency
 	// spikes and prevent head-of-line blocking across workers.
-	ReplQueueSize = 5_000
+	DefaultReplQueueSize = 5_000
 	// BulkOpsSize is the maximum number of operations in a bulk write.
 	// Sized to allow efficient large batches when workers drain accumulated events.
 	BulkOpsSize = 5_000

@@ -3,7 +3,6 @@ package repl
 import (
 	"context"
 	"hash/fnv"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -61,6 +60,7 @@ type worker struct {
 // newWorker creates a new replication worker.
 func newWorker(
 	id int,
+	opts *Options,
 	target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
@@ -68,14 +68,14 @@ func newWorker(
 ) *worker {
 	var bw bulkWriter
 	if useCollectionBulk {
-		bw = newCollectionBulkWriter(config.BulkOpsSize, useSimpleCollation)
+		bw = newCollectionBulkWriter(opts.bulkOpsSize(), useSimpleCollation)
 	} else {
-		bw = newClientBulkWriter(config.BulkOpsSize, useSimpleCollation)
+		bw = newClientBulkWriter(opts.bulkOpsSize(), useSimpleCollation)
 	}
 
 	return &worker{
 		id:            strconv.Itoa(id),
-		routedEventCh: make(chan *routedEvent, config.ReplQueueSize),
+		routedEventCh: make(chan *routedEvent, opts.workerQueueSize()),
 		bulkWrite:     bw,
 		target:        target,
 		barrierReq:    make(chan struct{}),
@@ -310,17 +310,15 @@ type workerPool struct {
 }
 
 // newWorkerPool creates a new worker pool with the specified number of workers.
-// If numWorkers is 0, it defaults to runtime.NumCPU().
+// If opts.NumWorkers is 0, it defaults to runtime.NumCPU().
 func newWorkerPool(
 	ctx context.Context,
-	numWorkers int,
+	opts *Options,
 	target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
 ) *workerPool {
-	if numWorkers <= 0 {
-		numWorkers = runtime.NumCPU()
-	}
+	numWorkers := opts.numWorkers()
 
 	poolCtx, cancel := context.WithCancel(ctx)
 
@@ -336,7 +334,7 @@ func newWorkerPool(
 
 	// Create and start workers
 	for i := range numWorkers {
-		w := newWorker(i, target, useCollectionBulk, useSimpleCollation, p.errCh)
+		w := newWorker(i, opts, target, useCollectionBulk, useSimpleCollation, p.errCh)
 		w.tickerOffset = time.Duration(i) * config.WorkerFlushInterval / time.Duration(numWorkers)
 		p.workers[i] = w
 
