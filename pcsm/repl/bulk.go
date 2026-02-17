@@ -70,7 +70,7 @@ func (cbw *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error
 
 	err := cbw.doWithRetry(ctx, m, cbw.writes)
 	if err != nil {
-		return 0, err // nolint:wrapcheck
+		return 0, err
 	}
 
 	clear(cbw.writes)
@@ -272,7 +272,7 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 
 			err := cbw.doWithRetry(grpCtx, mcoll, namespace, ops)
 			if err != nil {
-				return err // nolint:wrapcheck
+				return err
 			}
 
 			total.Add(int64(len(ops)))
@@ -283,7 +283,7 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 
 	err := grp.Wait()
 	if err != nil {
-		return 0, err // nolint:wrapcheck
+		return 0, err //nolint:wrapcheck
 	}
 
 	clear(cbw.writes)
@@ -488,7 +488,7 @@ func collectUpdateOps(event *UpdateEvent) any {
 		}
 	}
 
-	ops := make(bson.D, 0, 1) //nolint:mnd
+	ops := make(bson.D, 0, 1)
 
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
 		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})

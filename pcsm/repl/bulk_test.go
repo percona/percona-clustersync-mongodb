@@ -167,7 +167,6 @@ func TestCollectUpdateOps(t *testing.T) {
 
 			result := collectUpdateOps(tt.event)
 
-			// Check if result is pipeline or simple update doc
 			switch v := result.(type) {
 			case bson.A:
 				if !tt.expectPipeline {
@@ -176,59 +175,9 @@ func TestCollectUpdateOps(t *testing.T) {
 					return
 				}
 
-				// Verify pipeline structure
-				foundConcatArrays := make(map[string]bool)
-				foundSimpleSet := make(map[string]bool)
-
-				for _, stage := range v {
-					stageDoc, ok := stage.(bson.D)
-					if !ok {
-						t.Errorf("Pipeline stage is not bson.D: %T", stage)
-
-						continue
-					}
-
-					for _, elem := range stageDoc {
-						if elem.Key != "$set" {
-							continue
-						}
-
-						setDoc, ok := elem.Value.(bson.D)
-						if !ok {
-							t.Errorf("$set value is not bson.D: %T", elem.Value)
-
-							continue
-						}
-
-						for _, setField := range setDoc {
-							// Check if value contains $concatArrays
-							if valueDoc, ok := setField.Value.(bson.D); ok {
-								for _, innerElem := range valueDoc {
-									if innerElem.Key == "$concatArrays" {
-										foundConcatArrays[setField.Key] = true
-									}
-								}
-							} else {
-								// Simple value, not $concatArrays
-								foundSimpleSet[setField.Key] = true
-							}
-						}
-					}
-				}
-
-				// Verify expected $concatArrays fields
-				for _, field := range tt.expectConcatArraysFor {
-					if !foundConcatArrays[field] {
-						t.Errorf("Expected field %q to use $concatArrays, but it doesn't", field)
-					}
-				}
-
-				// Verify expected simple $set fields
-				for _, field := range tt.expectSimpleSetFor {
-					if !foundSimpleSet[field] {
-						t.Errorf("Expected field %q to use simple $set, but it doesn't", field)
-					}
-				}
+				foundConcatArrays, foundSimpleSet := extractPipelineFields(t, v)
+				assertFieldsPresent(t, foundConcatArrays, tt.expectConcatArraysFor, "$concatArrays")
+				assertFieldsPresent(t, foundSimpleSet, tt.expectSimpleSetFor, "simple $set")
 
 			case bson.D:
 				if tt.expectPipeline {
@@ -237,32 +186,106 @@ func TestCollectUpdateOps(t *testing.T) {
 					return
 				}
 
-				// For simple update doc, verify $set contains expected fields
-				for _, elem := range v {
-					if elem.Key == "$set" {
-						setDoc, ok := elem.Value.(bson.D)
-						if !ok {
-							t.Errorf("$set value is not bson.D: %T", elem.Value)
-
-							continue
-						}
-
-						foundFields := make(map[string]bool)
-						for _, setField := range setDoc {
-							foundFields[setField.Key] = true
-						}
-
-						for _, field := range tt.expectSimpleSetFor {
-							if !foundFields[field] {
-								t.Errorf("Expected field %q in $set, but it's missing", field)
-							}
-						}
-					}
-				}
+				verifySimpleUpdateDoc(t, v, tt.expectSimpleSetFor)
 
 			default:
 				t.Errorf("Unexpected result type: %T", result)
 			}
 		})
+	}
+}
+
+func extractPipelineFields(t *testing.T, pipeline bson.A) (map[string]bool, map[string]bool) {
+	t.Helper()
+
+	concatArrays := make(map[string]bool)
+	simpleSet := make(map[string]bool)
+
+	for _, stage := range pipeline {
+		stageDoc, ok := stage.(bson.D)
+		if !ok {
+			t.Errorf("Pipeline stage is not bson.D: %T", stage)
+
+			continue
+		}
+
+		extractSetFields(t, stageDoc, concatArrays, simpleSet)
+	}
+
+	return concatArrays, simpleSet
+}
+
+func extractSetDocs(t *testing.T, doc bson.D) []bson.D {
+	t.Helper()
+
+	var docs []bson.D
+
+	for _, elem := range doc {
+		if elem.Key != "$set" {
+			continue
+		}
+
+		setDoc, ok := elem.Value.(bson.D)
+		if !ok {
+			t.Errorf("$set value is not bson.D: %T", elem.Value)
+
+			continue
+		}
+
+		docs = append(docs, setDoc)
+	}
+
+	return docs
+}
+
+func extractSetFields(t *testing.T, stageDoc bson.D, concatArrays, simpleSet map[string]bool) {
+	t.Helper()
+
+	for _, setDoc := range extractSetDocs(t, stageDoc) {
+		for _, setField := range setDoc {
+			if hasConcatArrays(setField.Value) {
+				concatArrays[setField.Key] = true
+			} else {
+				simpleSet[setField.Key] = true
+			}
+		}
+	}
+}
+
+func hasConcatArrays(v any) bool {
+	valueDoc, ok := v.(bson.D)
+	if !ok {
+		return false
+	}
+
+	for _, elem := range valueDoc {
+		if elem.Key == "$concatArrays" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func assertFieldsPresent(t *testing.T, found map[string]bool, expected []string, fieldType string) {
+	t.Helper()
+
+	for _, field := range expected {
+		if !found[field] {
+			t.Errorf("Expected field %q to use %s, but it doesn't", field, fieldType)
+		}
+	}
+}
+
+func verifySimpleUpdateDoc(t *testing.T, doc bson.D, expectedFields []string) {
+	t.Helper()
+
+	for _, setDoc := range extractSetDocs(t, doc) {
+		foundFields := make(map[string]bool)
+		for _, setField := range setDoc {
+			foundFields[setField.Key] = true
+		}
+
+		assertFieldsPresent(t, foundFields, expectedFields, "$set")
 	}
 }
