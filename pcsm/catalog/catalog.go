@@ -332,10 +332,6 @@ func (c *Catalog) doCreateView(
 
 	log.Ctx(ctx).Debugf("Created view %s.%s", db, view)
 
-	c.lock.Lock()
-	c.addCollectionToCatalog(ctx, db, view)
-	c.lock.Unlock()
-
 	return nil
 }
 
