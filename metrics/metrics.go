@@ -78,29 +78,6 @@ var (
 		Namespace: metricNamespace,
 		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 	}, []string{"worker"})
-
-	//nolint:gochecknoglobals
-	replTransactionsAppliedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name:      "repl_transactions_applied_total",
-		Help:      "Total number of transactions applied.",
-		Namespace: metricNamespace,
-	})
-
-	//nolint:gochecknoglobals
-	replTransactionSize = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:      "repl_transaction_size",
-		Help:      "Number of events per applied transaction.",
-		Namespace: metricNamespace,
-		Buckets:   []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000},
-	})
-
-	//nolint:gochecknoglobals
-	replTransactionDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:      "repl_transaction_duration_seconds",
-		Help:      "Duration of transaction application in seconds.",
-		Namespace: metricNamespace,
-		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-	})
 )
 
 // Gauges.
@@ -181,9 +158,6 @@ func Init(reg prometheus.Registerer) {
 		replWorkerEventsAppliedTotal,
 		replWorkerFlushBatchSize,
 		replWorkerFlushDurationSeconds,
-		replTransactionsAppliedTotal,
-		replTransactionSize,
-		replTransactionDurationSeconds,
 	)
 }
 
@@ -267,19 +241,4 @@ func ObserveReplWorkerFlushBatchSize(worker string, v int) {
 // ObserveReplWorkerFlushDuration records the duration of a worker's bulk write flush.
 func ObserveReplWorkerFlushDuration(worker string, d time.Duration) {
 	replWorkerFlushDurationSeconds.WithLabelValues(worker).Observe(d.Seconds())
-}
-
-// IncReplTransactionsApplied increments the total transactions applied counter.
-func IncReplTransactionsApplied() {
-	replTransactionsAppliedTotal.Inc()
-}
-
-// ObserveReplTransactionSize records the number of events in an applied transaction.
-func ObserveReplTransactionSize(v int) {
-	replTransactionSize.Observe(float64(v))
-}
-
-// ObserveReplTransactionDuration records the duration of a transaction application.
-func ObserveReplTransactionDuration(d time.Duration) {
-	replTransactionDurationSeconds.Observe(d.Seconds())
 }
