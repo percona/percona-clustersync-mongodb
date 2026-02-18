@@ -5,8 +5,9 @@ import time
 
 import pytest
 import testing
-from pcsm import PCSM
 from pymongo import MongoClient
+
+from pcsm import PCSM
 
 
 def pytest_addoption(parser):
@@ -34,13 +35,16 @@ def pytest_collection_modifyitems(config, items):
             if "slow" in item.keywords:
                 item.add_marker(skip_slow)
 
+
 def source_uri(request: pytest.FixtureRequest):
     """Provide the source MongoDB URI."""
     return request.config.getoption("--source-uri") or os.environ["TEST_SOURCE_URI"]
 
+
 def target_uri(request: pytest.FixtureRequest):
     """Provide the target MongoDB URI."""
     return request.config.getoption("--target-uri") or os.environ["TEST_TARGET_URI"]
+
 
 @pytest.fixture(scope="session")
 def source_conn(request: pytest.FixtureRequest):
@@ -87,7 +91,9 @@ PCSM_PROC: subprocess.Popen = None
 def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest):
     source = source_uri(request)
     target = target_uri(request)
-    rv = subprocess.Popen([pcsm_bin,"--source", source ,"--target", target, "--reset-state", "--log-level=trace"])
+    rv = subprocess.Popen(
+        [pcsm_bin, "--source", source, "--target", target, "--reset-state", "--log-level=trace"]
+    )
     time.sleep(1)
     return rv
 

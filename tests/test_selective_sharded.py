@@ -1,8 +1,9 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
 import testing
-from pcsm import Runner
 from pymongo import MongoClient
+
+from pcsm import Runner
 
 
 def perform_with_options(
@@ -92,7 +93,7 @@ def test_create_collection_with_exclude_only(t: testing.Testing, phase: Runner.P
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
-def test_create_collection(t: testing.Testing, phase: Runner.Phase):
+def test_create_collection_with_both_include_exclude(t: testing.Testing, phase: Runner.Phase):
     with perform_with_options(
         t.source,
         t.target,
@@ -117,9 +118,9 @@ def test_create_collection(t: testing.Testing, phase: Runner.Phase):
         "db_2.coll_0",
         "db_2.coll_1",
         # "db_2.coll_2",
-        "db_3.coll_0",
+        # "db_3.coll_0",
         # "db_3.coll_1",
-        "db_3.coll_2",
+        # "db_3.coll_2",
     }
 
     assert expected == set(testing.list_all_namespaces(t.target))

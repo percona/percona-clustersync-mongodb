@@ -8,7 +8,17 @@ permissions:
 
 jobs:
   replset:
+    name: ReplicaSet (MongoDB ${{ matrix.mongo_version }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo_version: ["6.0", "7.0", "8.0"]
+
+    env:
+      MONGO_VERSION: ${{ matrix.mongo_version }}
+      PYTEST_TIMEOUT: 60
 
     steps:
       - name: Checkout code
@@ -38,7 +48,8 @@ jobs:
 
       - name: Start source and target ReplicaSet clusters
         run: |
-          .github/workflows/rs/run
+          chmod +x hack/rs/run.sh hack/util
+          hack/rs/run.sh
 
       - name: Build the project
         run: |
@@ -55,10 +66,20 @@ jobs:
 
       - name: Teardown Docker Compose
         if: always()
-        run: docker compose -f .github/workflows/sh/compose.yml down
+        run: docker compose -f hack/rs/compose.yml down
 
   sharded:
+    name: Sharded (MongoDB ${{ matrix.mongo_version }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo_version: ["8.0"] # when in matrix sharded tests are failing due to PCSM-255
+
+    env:
+      MONGO_VERSION: ${{ matrix.mongo_version }}
+      PYTEST_TIMEOUT: 60
 
     steps:
       - name: Checkout code
@@ -84,11 +105,12 @@ jobs:
 
       - name: Update hosts file
         run: |
-          echo "127.0.0.1 src-mongos src-cfg0 src-rs00 src-rs01 tgt-mongos tgt-cfg0 tgt-rs00 tgt-rs01" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 src-mongos src-cfg0 src-rs00 src-rs01 src-rs10 src-rs20 tgt-mongos tgt-cfg0 tgt-rs00 tgt-rs01 tgt-rs10 tgt-rs20" | sudo tee -a /etc/hosts
 
       - name: Start source and target clusters
         run: |
-          .github/workflows/sh/run
+          chmod +x hack/sh/run.sh hack/util
+          hack/sh/run.sh
 
       - name: Build the project
         run: |
@@ -105,4 +127,4 @@ jobs:
 
       - name: Teardown Docker Compose
         if: always()
-        run: docker compose -f .github/workflows/sh/compose.yml down
+        run: docker compose -f hack/sh/compose.yml down

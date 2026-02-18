@@ -45,7 +45,7 @@ func RunHeartbeat(ctx context.Context, m *mongo.Client) (StopHeartbeat, error) {
 
 	lg.With(log.Int64("hb", lastBeat)).Trace("")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		lastBeat := lastBeat

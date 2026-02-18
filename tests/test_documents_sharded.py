@@ -1,9 +1,9 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-from datetime import datetime
 
 import pytest
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])

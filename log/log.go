@@ -4,7 +4,6 @@ package log
 import (
 	"context"
 	"io"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -16,14 +15,16 @@ const TimeFieldFormat = "2006-01-02 15:04:05.000"
 //   - level: the log level (e.g., debug, info, warn, error).
 //   - json: if true, output logs in JSON format with disabled color.
 //   - noColor: if true, disable color in the console output.
-func InitGlobals(level zerolog.Level, json, noColor bool) *zerolog.Logger {
+//   - output: the output writer (os.Stdout for server, os.Stderr for client commands).
+func InitGlobals(level zerolog.Level, json, noColor bool, output io.Writer) *zerolog.Logger {
 	zerolog.TimeFieldFormat = TimeFieldFormat
 	zerolog.DurationFieldUnit = time.Second
 	zerolog.DurationFieldInteger = false
 
-	var logWriter io.Writer = os.Stdout
+	logWriter := output
 	if !json {
 		logWriter = zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+			w.Out = output
 			w.NoColor = noColor
 			w.TimeFormat = TimeFieldFormat
 		})
@@ -84,6 +85,12 @@ func Count(count int64) AttrFn {
 func Int64(key string, val int64) AttrFn {
 	return func(l zerolog.Context) zerolog.Context {
 		return l.Int64(key, val)
+	}
+}
+
+func String(key, val string) AttrFn {
+	return func(l zerolog.Context) zerolog.Context {
+		return l.Str(key, val)
 	}
 }
 

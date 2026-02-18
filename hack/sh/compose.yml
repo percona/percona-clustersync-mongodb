@@ -2,9 +2,11 @@ services:
 
   # ----------------- Source -----------------
   src-mongos:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-mongos
     hostname: src-mongos
+    mem_limit: 512m
+    memswap_limit: 512m
     ports: ["27017:27017"]
     volumes: ["./mongo/:/cfg:ro"]
     command:
@@ -17,9 +19,11 @@ services:
       ]
 
   src-cfg0:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-cfg0
     hostname: src-cfg0
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["27000:27000"]
     volumes: ["src-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -34,9 +38,11 @@ services:
       ]
 
   src-rs00:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs00
     hostname: src-rs00
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30000:30000"]
     volumes: ["src-rs00:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -51,9 +57,11 @@ services:
       ]
 
   src-rs10:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs10
     hostname: src-rs10
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30100:30100"]
     volumes: ["src-rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -68,9 +76,11 @@ services:
       ]
 
   src-rs20:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: src-rs20
     hostname: src-rs20
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["30200:30200"]
     volumes: ["src-rs20:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -86,9 +96,11 @@ services:
 
   # ----------------- Target -----------------
   tgt-mongos:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-mongos
     hostname: tgt-mongos
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["29017:27017"]
     volumes: ["./mongo/:/cfg:ro"]
     command:
@@ -101,9 +113,11 @@ services:
       ]
 
   tgt-cfg0:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-cfg0
     hostname: tgt-cfg0
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["28000:28000"]
     volumes: ["tgt-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -118,9 +132,11 @@ services:
       ]
 
   tgt-rs00:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs00
     hostname: tgt-rs00
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["40000:40000"]
     volumes: ["tgt-rs00:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -135,9 +151,11 @@ services:
       ]
 
   tgt-rs10:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs10
     hostname: tgt-rs10
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["40100:40100"]
     volumes: ["tgt-rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -152,9 +170,11 @@ services:
       ]
 
   tgt-rs20:
-    image: "${MONGO_IMAGE:-percona/percona-server-mongodb:8.0}"
+    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
     container_name: tgt-rs20
     hostname: tgt-rs20
+    mem_limit: 2g
+    memswap_limit: 2g
     ports: ["40200:40200"]
     volumes: ["tgt-rs20:/data/db", "./mongo/:/cfg:ro"]
     command:

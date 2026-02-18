@@ -8,6 +8,9 @@ pytest = "^8.3.5"
 pytest-timeout = "^2.4.0"
 requests = "^2.32.4"
 
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.9.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
@@ -17,3 +20,20 @@ addopts = "-ra"
 testpaths = ["tests"]
 timeout = 15
 timeout_func_only = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.format]
+quote-style = "double"

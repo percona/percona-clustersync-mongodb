@@ -81,6 +81,10 @@ for i in $(seq 0 $((SRC_SHARDS - 1))); do
 done
 msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
+if [[ "${MONGO_VERSION:-8.0}" == 8.* ]]; then
+    msh "src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
+fi
+
 # Build list of target shard services to start
 TGT_SERVICES="tgt-cfg0"
 for i in $(seq 0 $((TGT_SHARDS - 1))); do
@@ -109,3 +113,7 @@ for i in $(seq 0 $((TGT_SHARDS - 1))); do
     ADD_SHARDS_CMD="${ADD_SHARDS_CMD}sh.addShard('rs${i}/tgt-rs${i}0:${PORT}'); "
 done
 msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
+
+if [[ "${MONGO_VERSION:-8.0}" == 8.* ]]; then
+    msh "tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
+fi
