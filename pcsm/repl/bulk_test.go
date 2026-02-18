@@ -13,66 +13,112 @@ func TestIsArrayPath(t *testing.T) {
 		name  string
 		field string
 		dp    map[string][]any
+		tf    map[string]struct{}
 		want  bool
 	}{
 		{
-			name:  "dp nil: safe fallback",
+			name:  "dp nil: depth 2 numeric path returns false",
 			field: "a.1",
 			dp:    nil,
+			tf:    nil,
 			want:  false,
 		},
 		{
-			name:  "dp nil: another case",
+			name:  "dp nil: another depth 2 numeric path returns false",
 			field: "f2.1",
 			dp:    nil,
+			tf:    nil,
 			want:  false,
 		},
 		{
 			name:  "dp present, field not in dp, Atoi true",
 			field: "a.b.1",
 			dp:    map[string][]any{"a.b": {"c", "d"}},
+			tf:    nil,
 			want:  true,
 		},
 		{
 			name:  "dp present, field exists, last is integer",
 			field: "a.22.1",
 			dp:    map[string][]any{"a.22.1": {"a", "22", 1}},
+			tf:    nil,
 			want:  true,
 		},
 		{
 			name:  "dp present, field exists, last is string",
 			field: "a.b.22",
 			dp:    map[string][]any{"a.b.22": {"a", "b", "22"}},
+			tf:    nil,
 			want:  false,
 		},
 		{
 			name:  "dp present, field exists, last component is integer",
 			field: "arr.2",
 			dp:    map[string][]any{"arr.2": {"arr", 2}},
+			tf:    nil,
 			want:  true,
 		},
 		{
 			name:  "dp present, field exists, interior int but last string",
 			field: "f2.0.2.0",
 			dp:    map[string][]any{"f2.0.2.0": {"f2", "0", 2, "0"}},
+			tf:    nil,
 			want:  false,
 		},
 		{
 			name:  "single segment",
 			field: "field",
 			dp:    nil,
+			tf:    nil,
 			want:  false,
 		},
 		{
 			name:  "dp present, field exists, empty path",
 			field: "x.0",
 			dp:    map[string][]any{"x.0": {}},
+			tf:    nil,
 			want:  false,
 		},
 		{
 			name:  "dp present, field not in dp, Atoi false",
 			field: "a.b.x",
 			dp:    map[string][]any{"other": {"x"}},
+			tf:    nil,
+			want:  false,
+		},
+		{
+			name:  "dp nil, truncated parent: real array index",
+			field: "a.2",
+			dp:    nil,
+			tf:    map[string]struct{}{"a": {}},
+			want:  true,
+		},
+		{
+			name:  "dp nil, depth 2 non-truncated parent: returns false",
+			field: "f2.0",
+			dp:    nil,
+			tf:    map[string]struct{}{"a": {}},
+			want:  false,
+		},
+		{
+			name:  "dp nil, deeply nested: numeric path returns true",
+			field: "a.2.b.3",
+			dp:    nil,
+			tf:    map[string]struct{}{"a": {}},
+			want:  true,
+		},
+		{
+			name:  "dp nil, nested truncated parent: real array index",
+			field: "f2.0.3",
+			dp:    nil,
+			tf:    map[string]struct{}{"f2.0": {}},
+			want:  true,
+		},
+		{
+			name:  "dp nil, empty truncatedFields: depth 2 returns false",
+			field: "a.1",
+			dp:    nil,
+			tf:    map[string]struct{}{},
 			want:  false,
 		},
 	}
@@ -81,9 +127,9 @@ func TestIsArrayPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := isArrayPath(tt.field, tt.dp)
+			got := isArrayPath(tt.field, tt.dp, tt.tf)
 			if got != tt.want {
-				t.Errorf("isArrayPath(%q, %v) = %v, want %v", tt.field, tt.dp, got, tt.want)
+				t.Errorf("isArrayPath(%q, %v, %v) = %v, want %v", tt.field, tt.dp, tt.tf, got, tt.want)
 			}
 		})
 	}
@@ -100,7 +146,7 @@ func TestCollectUpdateOps(t *testing.T) {
 		expectSimpleSetFor    []string // Fields that should use simple $set
 	}{
 		{
-			name: "dp nil: simple $set for all fields",
+			name: "dp nil: truncated parent uses $concatArrays, depth 2 uses $set",
 			event: &UpdateEvent{
 				UpdateDescription: UpdateDescription{
 					TruncatedArrays: []struct {
@@ -117,8 +163,8 @@ func TestCollectUpdateOps(t *testing.T) {
 				},
 			},
 			expectPipeline:        true,
-			expectConcatArraysFor: []string{},
-			expectSimpleSetFor:    []string{"a1.2", "f2.1"},
+			expectConcatArraysFor: []string{"a1"},
+			expectSimpleSetFor:    []string{"f2.1"},
 		},
 		{
 			name: "dp present: confirmed array uses $concatArrays",
