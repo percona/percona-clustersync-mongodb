@@ -30,15 +30,40 @@ test-build:
 test:
 	go test -race ./...
 
+test-integration:
+	go test -v -tags integration -count=1 -timeout 5m ./pcsm/catalog/...
+
 pytest:
 	poetry run pytest
 
 lint:
 	golangci-lint run
 
+lint-py:
+	poetry run ruff check tests/ hack/
+	poetry run ruff format --check tests/ hack/
+
+fmt-py:
+	poetry run ruff check --fix tests/ hack/
+	poetry run ruff format tests/ hack/
+
+pcsm-run: build
+	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state
+
+pcsm-start: build
+	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state --start
+
 # Clean generated files
 clean:
 	rm -rf bin/*
 	go clean -cache -testcache
 
-.PHONY: all build test-build test clean
+# Start Prometheus + Grafana metrics stack (Grafana: http://localhost:3000, Prometheus: http://localhost:9090)
+metrics-up:
+	docker compose -f hack/metrics/docker-compose.yml up -d
+
+# Stop metrics stack
+metrics-down:
+	docker compose -f hack/metrics/docker-compose.yml down
+
+.PHONY: all build test-build test test-integration pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down

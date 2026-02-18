@@ -1,394 +1,64 @@
 # Percona ClusterSync for MongoDB
 
-Percona ClusterSync for MongoDB is a tool for replicating data from a source MongoDB cluster to a target MongoDB cluster. It supports cloning data, replicating changes, and managing collections and indexes.
+[![Go Report Card](https://goreportcard.com/badge/github.com/percona/percona-clustersync-mongodb)](https://goreportcard.com/report/github.com/percona/percona-clustersync-mongodb) [![CLA assistant](https://cla-assistant.percona.com/readme/badge/percona/percona-clustersync-mongodb)](https://cla-assistant.percona.com/percona/percona-clustersync-mongodb)
 
-## Features
+Percona ClusterSync for MongoDB (PCSM) is a tool for cloning and replicating data between MongoDB clusters. It supports both replica sets and sharded clusters, handling initial data cloning followed by continuous change replication.
 
-- **Clone**: Instantly transfer existing data from a source MongoDB to a target MongoDB.
-- **Real-Time Replication**: Tail the oplog to keep your target cluster up to date.
-- **Namespace Filtering**: Specify which databases and collections to include or exclude.
-- **Automatic Index Management**: Ensure necessary indexes are created on the target.
-- **HTTP API**: Start, finalize, pause, resume, and check replication status via REST endpoints.
+For more information about PCSM and how to use it, see [Percona ClusterSync for MongoDB documentation](https://docs.percona.com/percona-clustersync-for-mongodb/).
 
-## Setup
+Percona ClusterSync for MongoDB includes the following **Features**:
 
-### Prerequisites
+- Clone data from source to target MongoDB cluster
+- Real-time change replication via [MongoDB Change Streams](https://www.mongodb.com/docs/manual/changeStreams/)
+- Support for both replica sets and sharded clusters
+- Namespace filtering (include/exclude databases and collections)
+- Automatic index management on target cluster
+- CLI tool as well as HTTP API
 
-- Go 1.24 or later
-- MongoDB 6.0 or later
-- Python 3.13 or later (for testing)
-- Poetry (for managing Python dependencies)
+## Installation
 
-### Installation
+You can install Percona ClusterSync for MongoDB in the following ways:
 
-1. Clone the repository:
+- from Percona repository (recommended)
+- build from source code
 
-    ```sh
-    git clone https://github.com/percona/percona-clustersync-mongodb.git
-    cd percona-clustersync-mongodb
-    ```
+Find the installation instructions in the [official documentation](https://docs.percona.com/percona-clustersync-for-mongodb/installation.html).
 
-2. Build the project using the Makefile:
+## API
 
-    ```sh
-    make build
-    ```
+PCSM is a CLI tool, but also exposes HTTP API as well.
 
-    Alternatively, you can install PCSM from the cloned repo using `go install`:
+For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/plm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
-    ```sh
-    go install .
-    ```
+## Submit Bug Report / Feature Request
 
-    > This will install `pcsm` into your `GOBIN` directory. If `GOBIN` is included in your `PATH`, you can run Percona ClusterSync for MongoDB by typing `pcsm` in your terminal.
+If you find a bug in Percona ClusterSync for MongoDB, submit a report to the project's [JIRA issue tracker](https://jira.percona.com/projects/PCSM).
 
-3. Run the server:
+As a general rule of thumb, please try to create bug reports that are:
 
-    ```sh
-    bin/pcsm --source <source-mongodb-uri> --target <target-mongodb-uri>
-    ```
+- Reproducible. Include steps to reproduce the problem.
+- Specific. Include as much detail as possible: which version, what environment, etc.
+- Unique. Do not duplicate existing tickets.
+- Scoped to a Single Bug. One bug per report.
 
-    Alternatively, you can use environment variables:
+When submitting a bug report or a feature, please attach the following information:
 
-    ```sh
-    export PCSM_SOURCE_URI=<source-mongodb-uri>
-    export PCSM_TARGET_URI=<target-mongodb-uri>
-    bin/pcsm
-    ```
+- The output of the `pcsm status` command
+- The output of the `pcsm logs` command
 
-## Usage
+## Licensing
 
-### Starting the Replication
+Percona is dedicated to **keeping open source open**. Whenever possible, we strive to include permissive licensing for both our software and documentation. For this project, we are using the Apache License 2.0 license.
 
-To start the replication process, you can either use the command-line interface or send a POST request to the `/start` endpoint with the desired options:
+## How to get involved
 
-#### Using Command-Line Interface
+We encourage contributions and are always looking for new members who are as dedicated to serving the community as we are.
 
-```sh
-bin/pcsm start
-```
+The [Contributing Guide](CONTRIBUTING.md) contains the guidelines for contributing.
 
-#### Using HTTP API
+## Contact
 
-```sh
-curl -X POST http://localhost:2242/start -d '{
-    "includeNamespaces": ["db1.collection1", "db2.collection2"],
-    "excludeNamespaces": ["db3.collection3", "db4.*"]
-}'
-```
+You can reach us:
 
-### Finalizing the Replication
-
-To finalize the replication process, you can either use the command-line interface or send a POST request to the `/finalize` endpoint:
-
-#### Using Command-Line Interface
-
-```sh
-bin/pcsm finalize
-```
-
-#### Using HTTP API
-
-```sh
-curl -X POST http://localhost:2242/finalize
-```
-
-### Pausing the Replication
-
-To pause the replication process, you can either use the command-line interface or send a POST request to the `/pause` endpoint:
-
-#### Using Command-Line Interface
-
-```sh
-bin/pcsm pause
-```
-
-#### Using HTTP API
-
-```sh
-curl -X POST http://localhost:2242/pause
-```
-
-### Resuming the Replication
-
-To resume the replication process, you can either use the command-line interface or send a POST request to the `/resume` endpoint:
-
-#### Using Command-Line Interface
-
-```sh
-bin/pcsm resume
-```
-
-#### Using HTTP API
-
-```sh
-curl -X POST http://localhost:2242/resume
-```
-
-### Checking the Status
-
-To check the current status of the replication process, you can either use the command-line interface or send a GET request to the `/status` endpoint:
-
-#### Using Command-Line Interface
-
-```sh
-bin/pcsm status
-```
-
-#### Using HTTP API
-
-```sh
-curl http://localhost:2242/status
-```
-
-## PCSM Options
-
-When starting the PCSM server, you can use the following options:
-
-- `--port`: The port on which the server will listen (default: 2242)
-- `--source`: The MongoDB connection string for the source cluster
-- `--target`: The MongoDB connection string for the target cluster
-- `--log-level`: The log level (default: "info")
-- `--log-json`: Output log in JSON format with disabled color
-- `--no-color`: Disable log ASCI color
-
-Example:
-
-```sh
-bin/pcsm \
-    --source <source-mongodb-uri> \
-    --target <target-mongodb-uri> \
-    --port 2242 \
-    --log-level debug \
-    --log-json
-```
-
-## Environment Variables
-
-- `PCSM_SOURCE_URI`: MongoDB connection string for the source cluster.
-- `PCSM_TARGET_URI`: MongoDB connection string for the target cluster.
-- `PCSM_MONGODB_CLI_OPERATION_TIMEOUT`: Timeout for MongoDB client operations; accepts Go durations like `30s`, `2m`, `1h` (default: `5m`).
-
-## Log JSON Fields
-
-When using the `--log-json` option, the logs will be output in JSON format with the following fields:
-
-- `time`: Unix time when the log entry was created.
-- `level`: Log level (e.g., "debug", "info", "warn", "error").
-- `message`: Log message, if any.
-- `error`: Error message, if any.
-- `s`: Scope of the log entry.
-- `ns`: Namespace (database.collection format).
-- `elapsed_secs`: The duration in seconds for the specific operation to complete.
-
-Example:
-
-```json
-{ "level": "info",
-  "s": "clone",
-  "ns": "db_1.coll_1",
-  "elapsed_secs": 0,
-  "time": "2025-02-23 11:26:03.758",
-  "message": "Cloned db_1.coll_1" }
-
-{ "level": "info",
-  "s": "pcsm",
-  "elapsed_secs": 0,
-  "time": "2025-02-23 11:26:03.857",
-  "message": "Change replication stopped at 1740335163.1740335163 source cluster time" }
-```
-
-## HTTP API
-
-### POST /start
-
-Starts the replication process.
-
-#### Request Body
-
-- `includeNamespaces` (optional): List of namespaces to include in the replication.
-- `excludeNamespaces` (optional): List of namespaces to exclude from the replication.
-
-Example:
-
-```json
-{
-    "includeNamespaces": ["dbName.*", "anotherDB.collName1", "anotherDB.collName2"],
-    "excludeNamespaces": ["dbName.collName"]
-}
-```
-
-#### Response
-
-- `ok`: Boolean indicating if the operation was successful.
-- `error` (optional): Error message if the operation failed.
-
-Example:
-
-```json
-{ "ok": true }
-```
-
-### POST /finalize
-
-Finalizes the replication process.
-
-#### Response
-
-- `ok`: Boolean indicating if the operation was successful.
-- `error` (optional): Error message if the operation failed.
-
-Example:
-
-```json
-{ "ok": true }
-```
-
-### POST /pause
-
-Pauses the replication process.
-
-#### Response
-
-- `ok`: Boolean indicating if the operation was successful.
-- `error` (optional): Error message if the operation failed.
-
-Example:
-
-```json
-{ "ok": true }
-```
-
-### POST /resume
-
-Resumes the replication process.
-
-#### Request Body
-
-- `fromFailure` (optional): Allows PCSM to resume from failed state
-
-Example:
-
-```json
-{
-    "fromFailure": true
-}
-```
-
-#### Response
-
-- `ok`: Boolean indicating if the operation was successful.
-- `error` (optional): Error message if the operation failed.
-
-Example:
-
-```json
-{ "ok": true }
-```
-
-### GET /status
-
-The /status endpoint provides the current state of the PCSM replication process, including its progress, lag, and event processing details.
-
-#### Response
-
-- `ok`: indicates if the operation was successful.
-- `state`: the current state of the replication.
-- `info`: provides additional information about the current state.
-- `error` (optional): the error message if the operation failed.
-
-- `lagTimeSeconds`: the current lag time in logical seconds between source and target clusters.
-- `eventsApplied`: the number of events applied to the target cluster.
-- `lastReplicatedOpTime`: the last replicated operation time
-- `lastReplicatedOpTime.ts`: op time timestamp
-- `lastReplicatedOpTime.isoDate`: op time ts in human-readable form
-
-
-- `initialSync.completed`: indicates if the initial sync is completed.
-- `initialSync.lagTimeSeconds`: the lag time in logical seconds until the initial sync completed.
-
-- `initialSync.cloneCompleted`: indicates if the cloning process is completed.
-- `initialSync.estimatedCloneSizeBytes`: the estimated total size of the clone.
-- `initialSync.clonedSizeBytes`: the size of the data that has been cloned.
-
-Example:
-
-```json
-{
-    "ok": true,
-    "state": "running",
-    "info": "Initial Sync",
-
-    "lagTimeSeconds": 22,
-    "eventsApplied": 5000,
-    "lastReplicatedOpTime": {
-        "ts": "1762241863.1",
-        "isoDate": "2025-11-04T07:37:43Z"
-    },
-
-    "initialSync": {
-        "completed": false,
-        "lagTimeSeconds": 5,
-
-        "cloneCompleted": false,
-        "estimatedCloneSizeBytes": 5000000000,
-        "clonedSizeBytes": 2500000000
-    }
-}
-```
-
-## Testing
-
-### Prerequisites
-
-- Install Poetry:
-
-    ```sh
-    curl -sSL https://install.python-poetry.org | python3 -
-    ```
-
-- Install the required Python packages:
-
-    ```sh
-    poetry install
-    ```
-
-### Build for Testing
-
-To build the project for testing, use the following command:
-
-```sh
-make test-build
-```
-
-### Running Tests
-
-To run the tests, use the following command:
-
-```sh
-poetry run pytest \
-    --source-uri <source-mongodb-uri> \
-    --target-uri <target-mongodb-uri> \
-    --pcsm_url http://localhost:2242 \
-    --pcsm-bin bin/pcsm_test
-```
-
-Alternatively, you can use environment variables:
-
-```sh
-export TEST_SOURCE_URI=<source-mongodb-uri>
-export TEST_TARGET_URI=<target-mongodb-uri>
-export TEST_PCSM_URL=http://localhost:2242
-export TEST_PCSM_BIN=bin/pcsm_test
-poetry run pytest
-```
-
-> The `--pcsm-bin` flag or `TEST_PCSM_BIN` environment variable specifies the path to the PCSM binary. This allows the test suite to manage the PCSM process, ensuring it starts and stops as needed during the tests. If neither the flag nor the environment variable is provided, you must run PCSM externally before running the tests.
-
-## Contributing
-
-Contributions are welcome. Please open a [JIRA](https://perconadev.atlassian.net/jira/software/c/projects/PCSM/issues) issue describing the proposed change, then submit a pull request on GitHub.
-
-## License
-
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+- on [Percona ClusterSync for MongoDB Community Forum](https://forums.percona.com/c/mongodb/percona-clustersync-mongodb-pcsm/87)
+- or [Contact Form](https://www.percona.com/about/contact)

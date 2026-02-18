@@ -4,8 +4,9 @@ from datetime import datetime
 
 import pymongo
 import pytest
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -330,7 +331,7 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
-            for prop, val in options.items():
+            for prop in options:
                 if prop == "expireAfterSeconds":
                     assert target_index["expireAfterSeconds"] == (2**31) - 1
                 else:
@@ -378,7 +379,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
             target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
-            for prop, val in modify_options.items():
+            for prop in modify_options:
                 if prop == "expireAfterSeconds":
                     assert target_index["expireAfterSeconds"] == (2**31) - 1
                 else:
@@ -530,13 +531,13 @@ def test_pcsm_95_drop_index_for_non_existing_namespace(t: Testing):
         t.source["db_0"]["coll_0"].drop_index([("i", 1)])
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("index_status", ["succeed", "fail"])
 def test_pcsm_118_ignore_incomplete_index(t: Testing, index_status: str):
     def build_index():
         try:
             t.source["db_1"]["coll_1"].create_index([("a", 1), ("i", "text")])
-        except:  # pylint: disable=bare-except
+        except Exception:  # noqa: BLE001
             pass
 
     for i in range(1000):

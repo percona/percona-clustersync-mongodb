@@ -98,7 +98,7 @@ func GetCollectionSpec(
 			err = ErrNotFound
 		}
 
-		return nil, err //nolint:wrapcheck
+		return nil, err
 	}
 
 	if len(colls) == 0 {
@@ -185,7 +185,7 @@ func ListInProgressIndexBuilds(
 	}
 
 	if len(indexBuilds) == 0 {
-		return []string(nil), nil
+		return nil, nil
 	}
 
 	names := make([]string, len(indexBuilds))
@@ -194,6 +194,63 @@ func ListInProgressIndexBuilds(
 	}
 
 	return names, nil
+}
+
+// ListInconsistentIndexes returns a list of index names that are inconsistent across shards.
+// An index is considered inconsistent if it exists on fewer shards than the _id_ index.
+// For non-sharded collections or replica sets, this returns an empty list.
+func ListInconsistentIndexes(
+	ctx context.Context,
+	m *mongo.Client,
+	db string,
+	coll string,
+) ([]string, error) {
+	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
+		{{"$indexStats", bson.D{}}},
+	})
+	if err != nil {
+		if IsIndexNotFound(err) {
+			return nil, nil
+		}
+
+		return nil, errors.Wrap(err, "$indexStats")
+	}
+
+	var indexStats []struct {
+		Name string `bson:"name"`
+	}
+
+	err = cur.All(ctx, &indexStats)
+	if err != nil {
+		return nil, errors.Wrap(err, "cursor: all")
+	}
+
+	if len(indexStats) == 0 {
+		return nil, nil
+	}
+
+	// Count occurrences of each index name (each shard reports separately)
+	indexCounts := make(map[string]int)
+	for _, stat := range indexStats {
+		indexCounts[stat.Name]++
+	}
+
+	// Get the _id_ index count as baseline (represents shards where collection exists)
+	idCount := indexCounts["_id_"]
+
+	var inconsistent []string
+
+	for name, count := range indexCounts {
+		if name == "_id_" {
+			continue
+		}
+
+		if count < idCount {
+			inconsistent = append(inconsistent, name)
+		}
+	}
+
+	return inconsistent, nil
 }
 
 type ChunkInfo struct {
@@ -249,7 +306,7 @@ func GetCollectionShardingInfo(
 	}
 	defer cur.Close(ctx)
 
-	if err := cur.Err(); err != nil { // nolint:noinlineerr
+	if err := cur.Err(); err != nil { //nolint:noinlineerr
 		return nil, errors.Wrap(err, "iterate chunks")
 	}
 

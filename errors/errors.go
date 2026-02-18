@@ -5,9 +5,6 @@ import (
 	"fmt"
 )
 
-// ErrUnsupported indicates an unsupported operation.
-var ErrUnsupported = errors.ErrUnsupported
-
 // wrappedError wraps an error with an additional message.
 type wrappedError struct {
 	cause error

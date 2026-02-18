@@ -27,7 +27,7 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(b.Context(), mongodbURI)
+	client, err := topo.Connect(b.Context(), mongodbURI, &config.Config{})
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -63,7 +63,8 @@ func BenchmarkReplaceOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(b.Context(), mongodbURI)
+	cfg := &config.Config{}
+	client, err := topo.Connect(b.Context(), mongodbURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -138,14 +139,15 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 	}
 
 	ctx := b.Context()
+	cfg := &config.Config{}
 
-	source, err := topo.Connect(ctx, sourceURI)
+	source, err := topo.Connect(ctx, sourceURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer source.Disconnect(ctx) //nolint:errcheck
 
-	target, err := topo.Connect(ctx, targetURI)
+	target, err := topo.Connect(ctx, targetURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -241,11 +243,11 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	maxReadCount := maxWriteCount
 
 	totalCopiedBytes := int64(0)
-	documentC := make(chan bson.Raw, maxWriteCount)
-	doneSig := make(chan error)
+	documentCh := make(chan bson.Raw, maxWriteCount)
+	doneCh := make(chan error)
 
 	go func() {
-		defer close(doneSig)
+		defer close(doneCh)
 
 		// b.Logf("avg_doc_size=%d max_read_count=%d max_write_size=%d max_write_count=%d",
 		// 	averageDocumentSize, maxReadCount, maxWriteSize, maxWriteCount)
@@ -256,12 +258,12 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 		batch := make([]any, 0, maxReadCount)
 		batchSize := 0
 
-		for doc := range documentC {
+		for doc := range documentCh {
 			docSize := len(doc)
 			if len(batch)+1 > cap(batch) || batchSize+docSize > maxWriteSize {
 				_, err := targetCollection.InsertMany(ctx, batch, insertOptions)
 				if err != nil {
-					doneSig <- err
+					doneCh <- err
 
 					return
 				}
@@ -283,7 +285,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 		if len(batch) != 0 {
 			_, err := targetCollection.InsertMany(ctx, batch, insertOptions)
 			if err != nil {
-				doneSig <- err
+				doneCh <- err
 
 				return
 			}
@@ -302,17 +304,17 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	defer cur.Close(ctx)
 
 	for cur.Next(ctx) {
-		documentC <- cur.Current
+		documentCh <- cur.Current
 	}
 
-	close(documentC)
+	close(documentCh)
 
 	err = cur.Err()
 	if err != nil {
 		return totalCopiedBytes, errors.Wrap(err, "cursor")
 	}
 
-	err = <-doneSig
+	err = <-doneCh
 
 	return totalCopiedBytes, errors.Wrap(err, "insert documents")
 }

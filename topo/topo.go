@@ -127,11 +127,11 @@ type DBStats struct {
 // CollStats represents the result of the [GetCollStats].
 type CollStats struct {
 	// Count is the number of documents in the collection.
-	Count int64 `bson:"count"`
+	Count int64 `bson:"count,truncate"`
 	// Size is the total size of the collection.
-	Size int64 `bson:"size"`
+	Size int64 `bson:"size,truncate"`
 	// AvgObjSize is the average size of documents in the collection.
-	AvgObjSize int64 `bson:"avgObjSize"`
+	AvgObjSize int64 `bson:"avgObjSize,truncate"`
 }
 
 // SayHello runs the db.hello() command and returns the [Hello].
@@ -156,7 +156,7 @@ func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, 
 func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollStats, error) {
 	stats, err := collStatsFromStorageStats(ctx, m, db, coll)
 	if err != nil {
-		return nil, err //nolint:wrapcheck
+		return nil, err
 	}
 
 	// If avgObjSize is 0, $collStats may have stale metadata (common with newly sharded collections).
@@ -167,7 +167,7 @@ func GetCollStats(ctx context.Context, m *mongo.Client, db, coll string) (*CollS
 
 		stats, err = collStatsFromDocsAggregation(ctx, m, db, coll)
 		if err != nil {
-			return nil, err //nolint:wrapcheck
+			return nil, err
 		}
 
 		log.Ctx(ctx).Debugf("Collection %s.%s stats from fallback: count=%d, size=%d, avgObjSize=%d",
@@ -198,6 +198,7 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 	}
 
 	defer func() {
+		//nolint:contextcheck // fresh context for cleanup
 		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
@@ -249,6 +250,7 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 	}
 
 	defer func() {
+		//nolint:contextcheck // fresh context for cleanup
 		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
@@ -298,7 +300,7 @@ func RunWithRetry(
 		}
 
 		if !IsTransient(err) {
-			return err //nolint:wrapcheck
+			return err
 		}
 
 		log.Ctx(ctx).Warnf("Transient write error: %v, retry attempt %d retrying in %s",
@@ -308,5 +310,5 @@ func RunWithRetry(
 		currentInterval *= 2
 	}
 
-	return err //nolint:wrapcheck
+	return err
 }

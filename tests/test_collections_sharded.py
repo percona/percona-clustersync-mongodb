@@ -1,11 +1,11 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 import time
-from datetime import datetime
 
 import pytest
-from pcsm import Runner
 from testing import Testing
+
+from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
@@ -96,6 +96,23 @@ def test_clone_document_sharded(t: Testing, phase: Runner.Phase):
         t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": "hashed"})
         t.source["db_1"]["coll_1"].insert_one({"name": "Alice", "age": 30})
 
+    t.compare_all_sharded()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.CLONE])
+def test_clone_document_sharded_with_varying_sizes(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
+        t.source["db_1"].create_collection("coll_1")
+        t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": "hashed"})
+        # insert documents with varying sizes to produce fractional avgObjSize
+        docs = [
+            {"_id": 1, "name": "Alice", "age": 30, "data": "x" * 15},
+            {"_id": 2, "name": "Bob", "age": 25, "data": "y" * 47},
+            {"_id": 3, "name": "Charlie", "age": 35, "data": "z" * 73},
+            {"_id": 4, "name": "Diana", "age": 28, "data": "a" * 22},
+            {"_id": 5, "name": "Eve", "age": 32, "data": "b" * 91},
+        ]
+        t.source["db_1"]["coll_1"].insert_many(docs)
     t.compare_all_sharded()
 
 
