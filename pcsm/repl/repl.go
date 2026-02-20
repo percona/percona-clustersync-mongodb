@@ -81,11 +81,11 @@ func (o *Options) applyDefaults() {
 	}
 
 	if o.EventQueueSize <= 0 {
-		o.EventQueueSize = config.DefaultReplQueueSize
+		o.EventQueueSize = config.ReplQueueSize
 	}
 
 	if o.WorkerQueueSize <= 0 {
-		o.WorkerQueueSize = config.DefaultReplQueueSize
+		o.WorkerQueueSize = config.ReplQueueSize
 	}
 
 	if o.BulkOpsSize <= 0 {
@@ -552,9 +552,10 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	defer func() {
 		r.lock.Lock()
 		r.eventsApplied += r.pool.TotalEventsApplied()
-		r.lock.Unlock()
 
 		r.pool.Stop()
+		r.pool = nil
+		r.lock.Unlock()
 
 		close(r.doneCh)
 	}()
@@ -587,13 +588,12 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
-	// Used with SafeCheckpoint() to determine if the pool is idle (equivalent of
-	// the old bulkWrite.Empty() check).
+	// Used with SafeCheckpoint() to determine if the pool is idle.
 	var lastRoutedTS bson.Timestamp
 
 	// cpTicker triggers periodic advancement of lastReplicatedOpTime based on
 	// the worker pool's SafeCheckpoint. Under sustained DML load, @tick
-	// pseudo-events may be delayed (queued behind DML in changeCh), and
+	// pseudo-events may be delayed (queued behind DML in changeEventCh), and
 	// poolIdle() returns false because workers haven't caught up yet. Without
 	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
 	// even though workers are making progress.
