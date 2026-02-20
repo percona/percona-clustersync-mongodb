@@ -68,14 +68,14 @@ func newWorker(
 ) *worker {
 	var bw bulkWriter
 	if useCollectionBulk {
-		bw = newCollectionBulkWriter(opts.bulkOpsSize(), useSimpleCollation)
+		bw = newCollectionBulkWriter(opts.BulkOpsSize, useSimpleCollation)
 	} else {
-		bw = newClientBulkWriter(opts.bulkOpsSize(), useSimpleCollation)
+		bw = newClientBulkWriter(opts.BulkOpsSize, useSimpleCollation)
 	}
 
 	return &worker{
 		id:            strconv.Itoa(id),
-		routedEventCh: make(chan *routedEvent, opts.workerQueueSize()),
+		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
 		bulkWrite:     bw,
 		target:        target,
 		barrierReq:    make(chan struct{}),
@@ -310,7 +310,6 @@ type workerPool struct {
 }
 
 // newWorkerPool creates a new worker pool with the specified number of workers.
-// If opts.NumWorkers is 0, it defaults to runtime.NumCPU().
 func newWorkerPool(
 	ctx context.Context,
 	opts *Options,
@@ -318,7 +317,7 @@ func newWorkerPool(
 	useCollectionBulk bool,
 	useSimpleCollation bool,
 ) *workerPool {
-	numWorkers := opts.numWorkers()
+	numWorkers := opts.NumWorkers
 
 	poolCtx, cancel := context.WithCancel(ctx)
 

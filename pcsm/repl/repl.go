@@ -71,44 +71,26 @@ type Options struct {
 	BulkOpsSize int
 }
 
-func (o *Options) numWorkers() int {
-	if o.NumWorkers > 0 {
-		return o.NumWorkers
+func (o *Options) applyDefaults() {
+	if o.NumWorkers <= 0 {
+		o.NumWorkers = runtime.NumCPU()
 	}
 
-	return runtime.NumCPU()
-}
-
-func (o *Options) changeStreamBatchSize() int32 {
-	if o.ChangeStreamBatchSize > 0 {
-		return int32(o.ChangeStreamBatchSize) //nolint:gosec
+	if o.ChangeStreamBatchSize <= 0 {
+		o.ChangeStreamBatchSize = config.ChangeStreamBatchSize
 	}
 
-	return config.ChangeStreamBatchSize
-}
-
-func (o *Options) eventQueueSize() int {
-	if o.EventQueueSize > 0 {
-		return o.EventQueueSize
+	if o.EventQueueSize <= 0 {
+		o.EventQueueSize = config.DefaultReplQueueSize
 	}
 
-	return config.DefaultReplQueueSize
-}
-
-func (o *Options) workerQueueSize() int {
-	if o.WorkerQueueSize > 0 {
-		return o.WorkerQueueSize
+	if o.WorkerQueueSize <= 0 {
+		o.WorkerQueueSize = config.DefaultReplQueueSize
 	}
 
-	return config.DefaultReplQueueSize
-}
-
-func (o *Options) bulkOpsSize() int {
-	if o.BulkOpsSize > 0 {
-		return o.BulkOpsSize
+	if o.BulkOpsSize <= 0 {
+		o.BulkOpsSize = config.BulkOpsSize
 	}
-
-	return config.BulkOpsSize
 }
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
@@ -176,6 +158,8 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 ) *Repl {
+	opts.applyDefaults()
+
 	return &Repl{
 		source:   source,
 		target:   target,
@@ -435,7 +419,7 @@ func (r *Repl) watchChangeEvents(
 ) error {
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
-			SetBatchSize(r.options.changeStreamBatchSize()).
+			SetBatchSize(int32(r.options.ChangeStreamBatchSize)). //nolint:gosec
 			SetMaxAwaitTime(config.ChangeStreamAwaitTime))
 	if err != nil {
 		return errors.Wrap(err, "open")
@@ -575,7 +559,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		close(r.doneCh)
 	}()
 
-	changeEventCh := make(chan *ChangeEvent, r.options.eventQueueSize())
+	changeEventCh := make(chan *ChangeEvent, r.options.EventQueueSize)
 
 	go func() {
 		defer close(changeEventCh)
