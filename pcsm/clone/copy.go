@@ -107,7 +107,7 @@ func NewCopyManager(ctx context.Context, source, target *mongo.Client, options C
 	lg.Debugf("NumReadWorkers: %d", options.NumReadWorkers)
 	lg.Debugf("NumInsertWorkers: %d", options.NumInsertWorkers)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
-		lg.Debug("SegmentSizeBytes: auto") //nolint:gosec
+		lg.Debug("SegmentSizeBytes: auto")
 	} else {
 		lg.Debugf("SegmentSizeBytes: %d (%s)", options.SegmentSizeBytes,
 			humanize.Bytes(uint64(options.SegmentSizeBytes))) //nolint:gosec
