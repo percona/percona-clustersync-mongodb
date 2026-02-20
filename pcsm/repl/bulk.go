@@ -70,7 +70,7 @@ func (cbw *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error
 
 	err := cbw.doWithRetry(ctx, m, cbw.writes)
 	if err != nil {
-		return 0, err // nolint:wrapcheck
+		return 0, err
 	}
 
 	clear(cbw.writes)
@@ -272,7 +272,7 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 
 			err := cbw.doWithRetry(grpCtx, mcoll, namespace, ops)
 			if err != nil {
-				return err // nolint:wrapcheck
+				return err
 			}
 
 			total.Add(int64(len(ops)))
@@ -283,7 +283,7 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 
 	err := grp.Wait()
 	if err != nil {
-		return 0, err // nolint:wrapcheck
+		return 0, err //nolint:wrapcheck
 	}
 
 	clear(cbw.writes)
@@ -488,7 +488,7 @@ func collectUpdateOps(event *UpdateEvent) any {
 		}
 	}
 
-	ops := make(bson.D, 0, 1) //nolint:mnd
+	ops := make(bson.D, 0, 1)
 
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
 		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
@@ -532,6 +532,11 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 		}
 	}
 
+	truncatedFields := make(map[string]struct{}, len(event.UpdateDescription.TruncatedArrays))
+	for _, ta := range event.UpdateDescription.TruncatedArrays {
+		truncatedFields[ta.Field] = struct{}{}
+	}
+
 	// Handle truncated arrays
 	for _, truncation := range event.UpdateDescription.TruncatedArrays {
 		stage := bson.D{{Key: "$set", Value: bson.D{
@@ -545,7 +550,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 
 	// Handle updated fields
 	for _, field := range event.UpdateDescription.UpdatedFields {
-		if isArrayPath(field.Key, dp) {
+		if isArrayPath(field.Key, dp, truncatedFields) {
 			parts := strings.Split(field.Key, ".")
 			fieldName := strings.Join(parts[:len(parts)-1], ".")
 			fieldIdx, _ := strconv.Atoi(parts[len(parts)-1])
@@ -588,20 +593,48 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 }
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
-func isArrayPath(field string, disambiguatedPaths map[string][]any) bool {
+func isArrayPath(field string, disambiguatedPaths map[string][]any, truncatedFields map[string]struct{}) bool {
+	// Case 1: disambiguatedPaths[field] exists → check LAST component only
 	if path, ok := disambiguatedPaths[field]; ok {
-		for _, p := range path {
-			switch p.(type) {
-			case int, int8, int16, int32, int64:
-				return true
-			}
-
-			continue
+		if len(path) == 0 {
+			return false
 		}
 
-		return false
+		lastComponent := path[len(path)-1]
+		switch lastComponent.(type) {
+		case int, int8, int16, int32, int64:
+			return true
+		default:
+			return false
+		}
 	}
 
+	// Case 2: disambiguatedPaths is nil (MongoDB <6.1) → use truncatedFields + depth heuristic
+	if disambiguatedPaths == nil {
+		parts := strings.Split(field, ".")
+		if len(parts) < 2 { //nolint:mnd
+			return false
+		}
+
+		// Check if last segment is numeric
+		_, err := strconv.Atoi(parts[len(parts)-1])
+		if err != nil {
+			return false
+		}
+
+		// If parent is in truncatedFields, definitely an array path
+		parentPath := strings.Join(parts[:len(parts)-1], ".")
+		if _, ok := truncatedFields[parentPath]; ok {
+			return true
+		}
+
+		// Parent not in truncatedFields. Use depth heuristic:
+		// - Depth > 2 (e.g., b.0.1): likely nested array, return true
+		// - Depth == 2 (e.g., f2.1): ambiguous, could be object key, return false
+		return len(parts) > 2 //nolint:mnd
+	}
+
+	// Case 3: disambiguatedPaths non-nil but field not in it → Atoi fallback (unambiguous)
 	parts := strings.Split(field, ".")
 	if len(parts) < 2 { //nolint:mnd
 		return false

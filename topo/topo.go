@@ -300,7 +300,7 @@ func RunWithRetry(
 		}
 
 		if !IsTransient(err) {
-			return err //nolint:wrapcheck
+			return err
 		}
 
 		log.Ctx(ctx).Warnf("Transient write error: %v, retry attempt %d retrying in %s",
@@ -310,5 +310,5 @@ func RunWithRetry(
 		currentInterval *= 2
 	}
 
-	return err //nolint:wrapcheck
+	return err
 }

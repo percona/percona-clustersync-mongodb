@@ -627,7 +627,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	}
 
 	if !r.bulkWrite.Empty() {
-		r.doBulkOps(ctx) //nolint:errcheck
+		r.doBulkOps(ctx)
 	}
 }
 

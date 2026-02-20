@@ -292,7 +292,7 @@ func (c *Catalog) doCreateCollection(
 		return errors.Wrapf(err, "create collection %s.%s", db, coll)
 	})
 	if err != nil && !topo.IsNamespaceExists(err) {
-		return err //nolint:wrapcheck
+		return err
 	}
 
 	log.Ctx(ctx).Debugf("Created collection %s.%s", db, coll)
@@ -327,7 +327,7 @@ func (c *Catalog) doCreateView(
 		return errors.Wrapf(err, "create view %s.%s", db, view)
 	})
 	if err != nil && !topo.IsNamespaceExists(err) {
-		return err //nolint:wrapcheck
+		return err
 	}
 
 	log.Ctx(ctx).Debugf("Created view %s.%s", db, view)
@@ -343,7 +343,7 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 		return errors.Wrapf(err, "drop collection %s.%s", db, coll)
 	})
 	if err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 
 	log.Ctx(ctx).Debugf("Dropped collection %s.%s", db, coll)
@@ -374,7 +374,7 @@ func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 				return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
 			})
 			if err != nil {
-				return err // nolint:wrapcheck
+				return err
 			}
 
 			lg.Debugf("Dropped collection %s.%s", db, coll)
@@ -636,7 +636,7 @@ func (c *Catalog) ModifyCappedCollection(
 		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
 		return errors.Wrapf(err, "modify capped collection %s.%s", db, coll)
-	}) //nolint:wrapcheck
+	})
 }
 
 // ModifyView modifies a view in the target MongoDB.
@@ -651,7 +651,7 @@ func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipel
 		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
 		return errors.Wrapf(err, "modify view %s.%s", db, view)
-	}) //nolint:wrapcheck
+	})
 }
 
 // ModifyChangeStreamPreAndPostImages modifies the changeStreamPreAndPostImages option for a collection.
@@ -670,7 +670,7 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
 		return errors.Wrapf(err, "modify changeStreamPreAndPostImages %s.%s", db, coll)
-	}) //nolint:wrapcheck
+	})
 }
 
 // ModifyValidation modifies a capped collection in the target MongoDB.
@@ -699,7 +699,7 @@ func (c *Catalog) ModifyValidation(
 		err := c.target.Database(db).RunCommand(ctx, cmd).Err()
 
 		return errors.Wrapf(err, "modify validation %s.%s", db, coll)
-	}) //nolint:wrapcheck
+	})
 }
 
 // ModifyIndex modifies an index in the target MongoDB.
@@ -719,7 +719,7 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 			return errors.Wrapf(err, "modify index %s.%s.%s", db, coll, mods.Name)
 		})
 		if err != nil {
-			return err //nolint:wrapcheck
+			return err
 		}
 	}
 
@@ -773,7 +773,7 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 			return nil
 		}
 
-		return err //nolint:wrapcheck
+		return err
 	}
 
 	lg.Debugf("Renamed collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
@@ -794,7 +794,7 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 	})
 	if err != nil {
 		if !topo.IsNamespaceNotFound(err) && !topo.IsIndexNotFound(err) {
-			return err //nolint:wrapcheck
+			return err
 		}
 
 		lg.Warn(err.Error())
@@ -1054,7 +1054,7 @@ func (c *Catalog) doModifyIndexOption(
 		}).Err()
 
 		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, index, propName)
-	}) //nolint:wrapcheck
+	})
 }
 
 // getIndexFromCatalog gets an index spec from the catalog.
@@ -1293,7 +1293,7 @@ func (c *Catalog) ShardCollection(
 		return errors.Wrap(err, "shard collection")
 	})
 	if err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 
 	log.Ctx(ctx).Debugf("Sharded collection %s.%s", db, coll)
