@@ -40,6 +40,46 @@ var (
 	})
 )
 
+// Replication pipeline metrics.
+var (
+	//nolint:gochecknoglobals
+	replEventQueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "repl_event_queue_size",
+		Help:      "Number of events in the reader-to-dispatcher queue.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	replWorkerEventQueueSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:      "repl_worker_event_queue_size",
+		Help:      "Number of events in a worker's inbound queue.",
+		Namespace: metricNamespace,
+	}, []string{"worker"})
+
+	//nolint:gochecknoglobals
+	replWorkerEventsAppliedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:      "repl_worker_events_applied_total",
+		Help:      "Total events applied by each worker.",
+		Namespace: metricNamespace,
+	}, []string{"worker"})
+
+	//nolint:gochecknoglobals
+	replWorkerFlushBatchSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:      "repl_worker_flush_batch_size",
+		Help:      "Number of operations per bulk write flush.",
+		Namespace: metricNamespace,
+		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 2500, 5000},
+	}, []string{"worker"})
+
+	//nolint:gochecknoglobals
+	replWorkerFlushDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:      "repl_worker_flush_duration_seconds",
+		Help:      "Duration of bulk write flushes in seconds.",
+		Namespace: metricNamespace,
+		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+	}, []string{"worker"})
+)
+
 // Gauges.
 var (
 	//nolint:gochecknoglobals
@@ -112,6 +152,12 @@ func Init(reg prometheus.Registerer) {
 		eventsAppliedTotal,
 		lagTimeSeconds,
 		intialSyncLagTimeSeconds,
+
+		replEventQueueSize,
+		replWorkerEventQueueSize,
+		replWorkerEventsAppliedTotal,
+		replWorkerFlushBatchSize,
+		replWorkerFlushDurationSeconds,
 	)
 }
 
@@ -170,4 +216,29 @@ func SetLagTimeSeconds(v uint32) {
 // SetInitialSyncLagTimeSeconds sets the initial sync lag time in seconds gauge.
 func SetInitialSyncLagTimeSeconds(v uint32) {
 	intialSyncLagTimeSeconds.Set(float64(v))
+}
+
+// SetReplEventQueueSize sets the current size of the reader-to-dispatcher event queue.
+func SetReplEventQueueSize(v int) {
+	replEventQueueSize.Set(float64(v))
+}
+
+// SetReplWorkerEventQueueSize sets the current size of a worker's inbound event queue.
+func SetReplWorkerEventQueueSize(worker string, v int) {
+	replWorkerEventQueueSize.WithLabelValues(worker).Set(float64(v))
+}
+
+// AddReplWorkerEventsApplied increments the per-worker events applied counter.
+func AddReplWorkerEventsApplied(worker string, v int) {
+	replWorkerEventsAppliedTotal.WithLabelValues(worker).Add(float64(v))
+}
+
+// ObserveReplWorkerFlushBatchSize records the number of operations in a worker's bulk write flush.
+func ObserveReplWorkerFlushBatchSize(worker string, v int) {
+	replWorkerFlushBatchSize.WithLabelValues(worker).Observe(float64(v))
+}
+
+// ObserveReplWorkerFlushDuration records the duration of a worker's bulk write flush.
+func ObserveReplWorkerFlushDuration(worker string, d time.Duration) {
+	replWorkerFlushDurationSeconds.WithLabelValues(worker).Observe(d.Seconds())
 }

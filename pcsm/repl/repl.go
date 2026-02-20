@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"encoding/hex"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,44 @@ type Options struct {
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
+	// NumWorkers is the number of replication workers.
+	// 0 means auto (defaults to runtime.NumCPU()).
+	NumWorkers int
+	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
+	// 0 means auto (defaults to config.ChangeStreamBatchSize).
+	ChangeStreamBatchSize int
+	// EventQueueSize is the buffer size of the channel between the change stream
+	// reader and the dispatcher.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	EventQueueSize int
+	// WorkerQueueSize is the per-worker routed event channel buffer size.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	WorkerQueueSize int
+	// BulkOpsSize is the maximum number of operations per bulk write.
+	// 0 means auto (defaults to config.BulkOpsSize).
+	BulkOpsSize int
+}
+
+func (o *Options) applyDefaults() {
+	if o.NumWorkers <= 0 {
+		o.NumWorkers = runtime.NumCPU()
+	}
+
+	if o.ChangeStreamBatchSize <= 0 {
+		o.ChangeStreamBatchSize = config.ChangeStreamBatchSize
+	}
+
+	if o.EventQueueSize <= 0 {
+		o.EventQueueSize = config.ReplQueueSize
+	}
+
+	if o.WorkerQueueSize <= 0 {
+		o.WorkerQueueSize = config.ReplQueueSize
+	}
+
+	if o.BulkOpsSize <= 0 {
+		o.BulkOpsSize = config.BulkOpsSize
+	}
 }
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
@@ -79,10 +118,10 @@ type Repl struct {
 	pauseCh chan struct{}
 	doneCh  chan struct{}
 
-	bulkWrite      bulkWrite
-	bulkToken      bson.Raw
-	bulkTS         bson.Timestamp
-	lastBulkDoneAt time.Time
+	pool *workerPool
+
+	useCollectionBulk  bool
+	useSimpleCollation bool
 }
 
 // Status represents the status of change replication.
@@ -119,6 +158,8 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 ) *Repl {
+	opts.applyDefaults()
+
 	return &Repl{
 		source:   source,
 		target:   target,
@@ -149,16 +190,19 @@ func (r *Repl) Checkpoint() *Checkpoint {
 		return nil
 	}
 
+	applied := r.eventsApplied
+	if r.pool != nil {
+		applied += r.pool.TotalEventsApplied()
+	}
+
 	cp := &Checkpoint{
 		StartTime:            r.startTime,
 		PauseTime:            r.pauseTime,
-		EventsRead:           r.eventsApplied,
-		EventsApplied:        r.eventsApplied,
+		EventsRead:           applied,
+		EventsApplied:        applied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
+		UseClientBulkWrite:   !r.useCollectionBulk,
 	}
-
-	_, ok := r.bulkWrite.(*clientBulkWrite)
-	cp.UseClientBulkWrite = ok
 
 	if r.err != nil {
 		cp.Error = r.err.Error()
@@ -195,11 +239,8 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if cp.UseClientBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	}
+	r.useCollectionBulk = !cp.UseClientBulkWrite
+	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
@@ -213,10 +254,15 @@ func (r *Repl) Status() Status {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
+	applied := r.eventsApplied
+	if r.pool != nil {
+		applied += r.pool.TotalEventsApplied()
+	}
+
 	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 		EventsRead:           r.eventsRead.Load(),
-		EventsApplied:        r.eventsApplied,
+		EventsApplied:        applied,
 
 		StartTime: r.startTime,
 		PauseTime: r.pauseTime,
@@ -258,13 +304,14 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "major version")
 	}
 
-	if topo.Support(targetVer).ClientBulkWrite() && !r.options.UseCollectionBulkWrite {
-		r.bulkWrite = newClientBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
-	} else {
-		r.bulkWrite = newCollectionBulkWrite(config.BulkOpsSize, targetVer.Major() < 8) //nolint:mnd
+	r.useCollectionBulk = !topo.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
+	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
 
+	if r.useCollectionBulk {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
+
+	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -355,6 +402,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
+	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.lastReplicatedOpTime))
 
@@ -371,7 +419,7 @@ func (r *Repl) watchChangeEvents(
 ) error {
 	cur, err := r.source.Watch(ctx, mongo.Pipeline{},
 		streamOptions.SetShowExpandedEvents(true).
-			SetBatchSize(config.ChangeStreamBatchSize).
+			SetBatchSize(int32(r.options.ChangeStreamBatchSize)). //nolint:gosec
 			SetMaxAwaitTime(config.ChangeStreamAwaitTime))
 	if err != nil {
 		return errors.Wrap(err, "open")
@@ -390,21 +438,17 @@ func (r *Repl) watchChangeEvents(
 
 	for {
 		lastEventTS := bson.Timestamp{}
-		sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-
-			log.New("watch").Error(err, "Unable to advance the source cluster time")
-		}
+		hasEvents := false
 
 		for cur.TryNext(ctx) {
+			hasEvents = true
 			r.eventsRead.Add(1)
 			metrics.IncEventsRead()
 
 			change := &ChangeEvent{}
-			err := parseChangeEvent(cur.Current, change)
+			change.RawData = append(change.RawData, cur.Current...)
+
+			err := parseEventHeader(change.RawData, &change.EventHeader)
 			if err != nil {
 				return err
 			}
@@ -423,7 +467,9 @@ func (r *Repl) watchChangeEvents(
 					metrics.IncEventsRead()
 
 					change = &ChangeEvent{}
-					err := parseChangeEvent(cur.Current, change)
+					change.RawData = append(change.RawData, cur.Current...)
+
+					err := parseEventHeader(change.RawData, &change.EventHeader)
 					if err != nil {
 						return err
 					}
@@ -477,25 +523,47 @@ func (r *Repl) watchChangeEvents(
 			return errors.Wrap(err, "cursor")
 		}
 
-		// no event available yet. progress pcsm time
-		if sourceTS.After(lastEventTS) {
-			changeCh <- &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType: advanceTimePseudoEvent,
-					ClusterTime:   sourceTS,
-				},
+		// Only advance cluster time when the cursor had no events (truly idle).
+		// Under sustained load, tryAdvanceOpTime + SafeCheckpoint keep
+		// lastReplicatedOpTime current without the appendOplogNote overhead.
+		if !hasEvents {
+			sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+
+				log.New("watch").Error(err, "Unable to advance the source cluster time")
+			}
+
+			if sourceTS.After(lastEventTS) {
+				changeCh <- &ChangeEvent{
+					EventHeader: EventHeader{
+						OperationType: advanceTimePseudoEvent,
+						ClusterTime:   sourceTS,
+					},
+				}
 			}
 		}
 	}
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
-	defer close(r.doneCh)
+	defer func() {
+		r.lock.Lock()
+		r.eventsApplied += r.pool.TotalEventsApplied()
 
-	changeChh := make(chan *ChangeEvent, config.ReplQueueSize)
+		r.pool.Stop()
+		r.pool = nil
+		r.lock.Unlock()
+
+		close(r.doneCh)
+	}()
+
+	changeEventCh := make(chan *ChangeEvent, r.options.EventQueueSize)
 
 	go func() {
-		defer close(changeChh)
+		defer close(changeEventCh)
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -505,7 +573,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeChh)
+		err := r.watchChangeEvents(ctx, opts, changeEventCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
@@ -516,16 +584,48 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	}()
 
 	uuidMap := r.catalog.UUIDMap()
-	r.lastBulkDoneAt = time.Now()
 
 	lg := log.New("repl")
 
-	for change := range changeChh {
-		if time.Since(r.lastBulkDoneAt) >= config.BulkOpsInterval && !r.bulkWrite.Empty() {
-			if !r.doBulkOps(ctx) {
+	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
+	// Used with SafeCheckpoint() to determine if the pool is idle.
+	var lastRoutedTS bson.Timestamp
+
+	// cpTicker triggers periodic advancement of lastReplicatedOpTime based on
+	// the worker pool's SafeCheckpoint. Under sustained DML load, @tick
+	// pseudo-events may be delayed (queued behind DML in changeEventCh), and
+	// poolIdle() returns false because workers haven't caught up yet. Without
+	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
+	// even though workers are making progress.
+	cpTicker := time.NewTicker(500 * time.Millisecond) //nolint:mnd
+	defer cpTicker.Stop()
+
+	// pending holds an event read ahead during transaction collection that
+	// needs to be processed in the next iteration.
+	var pending *ChangeEvent
+
+	for {
+		var change *ChangeEvent
+
+		if pending != nil {
+			change = pending
+			pending = nil
+		} else {
+			var ok bool
+
+			select {
+			case change, ok = <-changeEventCh:
+				if !ok {
+					return
+				}
+			case err := <-r.pool.Err():
+				r.setFailed(err, "Worker error")
+
 				return
 			}
 		}
+
+		metrics.SetReplEventQueueSize(len(changeEventCh))
 
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
@@ -538,69 +638,71 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 
 		if change.Namespace.Database == config.PCSMDatabase {
-			if r.bulkWrite.Empty() {
+			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsApplied++
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
+			} else {
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
 		}
 
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
-			if r.bulkWrite.Empty() {
+			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsApplied++
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
+			} else {
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
 		}
 
 		switch change.OperationType { //nolint:exhaustive
-		case Insert:
-			event := change.Event.(InsertEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Insert(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
+		case Insert, Update, Delete, Replace:
+			if change.IsTransaction() {
+				pending = r.handleTransaction(ctx, change, changeEventCh, uuidMap)
+				lastRoutedTS = bson.Timestamp{} // barrier flushed everything
+			} else {
+				ns := findNamespaceByUUID(uuidMap, change)
+				r.pool.Route(change, ns)
+				lastRoutedTS = change.ClusterTime
 
-		case Update:
-			event := change.Event.(UpdateEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Update(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		case Delete:
-			event := change.Event.(DeleteEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Delete(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		case Replace:
-			event := change.Event.(ReplaceEvent) //nolint:forcetypeassert
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.bulkWrite.Replace(ns, &event)
-			r.bulkToken = change.ID
-			r.bulkTS = change.ClusterTime
-
-		default:
-			if !r.bulkWrite.Empty() {
-				if !r.doBulkOps(ctx) {
-					return
-				}
+				r.tryAdvanceOpTime(cpTicker)
 			}
 
-			err := r.applyDDLChange(ctx, change)
+		default:
+			err := r.pool.Barrier()
 			if err != nil {
+				r.pool.ReleaseBarrier()
+				r.setFailed(err, "Worker error during barrier")
+
+				return
+			}
+
+			// DDL events need full parsing (rare path). The header is already
+			// parsed; this additionally deserializes the typed event body
+			// (e.g. CreateEvent, RenameEvent) needed by applyDDLChange.
+			err = parseChangeEvent(change.RawData, change)
+			if err != nil {
+				r.pool.ReleaseBarrier()
+				r.setFailed(err, "Parse DDL event")
+
+				return
+			}
+
+			err = r.applyDDLChange(ctx, change)
+			if err != nil {
+				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Apply change")
 
 				return
@@ -617,18 +719,128 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			case Create, Rename, Drop, DropDatabase, ShardCollection:
 				uuidMap = r.catalog.UUIDMap()
 			}
-		}
 
-		if r.bulkWrite.Full() {
-			if !r.doBulkOps(ctx) {
-				return
-			}
+			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
+			r.pool.ReleaseBarrier()
 		}
 	}
+}
 
-	if !r.bulkWrite.Empty() {
-		r.doBulkOps(ctx)
+// handleTransaction collects all events belonging to the same transaction,
+// applies them as a single ordered bulk write, and returns the first event
+// that is not part of the transaction (or nil if the channel was closed).
+func (r *Repl) handleTransaction(
+	ctx context.Context,
+	first *ChangeEvent,
+	changeCh <-chan *ChangeEvent,
+	uuidMap catalog.UUIDMap,
+) *ChangeEvent {
+	err := r.pool.Barrier()
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return nil
 	}
+
+	events := []*routedEvent{{
+		change: first,
+		ns:     findNamespaceByUUID(uuidMap, first),
+	}}
+
+	var overflow *ChangeEvent
+
+	for next := range changeCh {
+		if !first.IsSameTransaction(&next.EventHeader) {
+			overflow = next
+
+			break
+		}
+
+		// DDL events within a transaction (e.g. implicit collection create)
+		// cannot be applied via bulk write. Return them as overflow so the
+		// dispatcher routes them through the DDL handler.
+		if !isBulkWriteOperation(next.OperationType) {
+			overflow = next
+
+			break
+		}
+
+		events = append(events, &routedEvent{
+			change: next,
+			ns:     findNamespaceByUUID(uuidMap, next),
+		})
+	}
+
+	// Parse DML event bodies for all transaction events (deferred from reader).
+	// Transactions are rare, so this doesn't need to be parallelized.
+	for _, event := range events {
+		parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
+		if err != nil {
+			r.pool.ReleaseBarrier()
+			r.setFailed(err, "Parse transaction event")
+
+			return nil
+		}
+
+		event.change.Event = parsed
+		event.change.RawData = nil // release for GC
+	}
+
+	err = applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Apply transaction")
+
+		return nil
+	}
+
+	r.lock.Lock()
+	r.lastReplicatedOpTime = first.ClusterTime
+	r.eventsApplied += int64(len(events))
+	r.lock.Unlock()
+
+	metrics.AddEventsApplied(len(events))
+
+	r.pool.ReleaseBarrier()
+
+	return overflow
+}
+
+// tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
+// advances lastReplicatedOpTime to the worker pool's SafeCheckpoint. This
+// ensures lag tracking stays current during sustained DML when @tick
+// pseudo-events and poolIdle updates are insufficient.
+func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
+	select {
+	case <-cpTicker.C:
+		cp := r.pool.SafeCheckpoint()
+		if cp.IsZero() {
+			return
+		}
+
+		r.lock.Lock()
+		if cp.After(r.lastReplicatedOpTime) {
+			r.lastReplicatedOpTime = cp
+		}
+		r.lock.Unlock()
+	default:
+	}
+}
+
+// poolIdle returns true when no events are pending in the worker pool.
+// This is the equivalent of the old bulkWrite.Empty() check: it compares
+// the last routed timestamp against the minimum committed timestamp across
+// all workers (SafeCheckpoint). When SafeCheckpoint >= lastRoutedTS, all
+// routed events have been committed and the pool is idle.
+func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
+	if lastRoutedTS.IsZero() {
+		return true
+	}
+
+	cp := r.pool.SafeCheckpoint()
+
+	return !cp.IsZero() && !lastRoutedTS.After(cp)
 }
 
 //go:inline
@@ -643,34 +855,6 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	}
 
 	return ns
-}
-
-func (r *Repl) doBulkOps(ctx context.Context) bool {
-	size, err := r.bulkWrite.Do(ctx, r.target)
-	if err != nil {
-		r.setFailed(err, "Flush bulk ops")
-
-		return false
-	}
-
-	if size == 0 {
-		return true
-	}
-
-	r.lock.Lock()
-	r.lastReplicatedOpTime = r.bulkTS
-	r.eventsApplied += int64(size)
-	r.lock.Unlock()
-
-	metrics.AddEventsApplied(size)
-
-	log.New("bulk:write").
-		With(log.Int64("size", int64(size)), log.Elapsed(time.Since(r.lastBulkDoneAt))).
-		Debug("BulkOps applied")
-
-	r.lastBulkDoneAt = time.Now()
-
-	return true
 }
 
 // applyDDLChange applies a schema change to the target MongoDB.

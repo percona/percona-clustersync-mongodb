@@ -30,6 +30,7 @@ type Config struct {
 
 	UseCollectionBulkWrite bool `mapstructure:"use-collection-bulk-write"`
 
+	Repl  ReplConfig  `mapstructure:",squash"`
 	Clone CloneConfig `mapstructure:",squash"`
 
 	// hidden startup flags
@@ -49,6 +50,26 @@ type LogConfig struct {
 type MongoDBConfig struct {
 	OperationTimeout  time.Duration `mapstructure:"mongodb-operation-timeout"`
 	TargetCompressors []string      `mapstructure:"dev-target-client-compressors"`
+}
+
+// ReplConfig holds replication operation configuration.
+type ReplConfig struct {
+	// NumWorkers is the number of replication workers.
+	// 0 means auto (defaults to runtime.NumCPU()).
+	NumWorkers int `mapstructure:"repl-num-workers"`
+	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
+	// 0 means auto (defaults to config.ChangeStreamBatchSize).
+	ChangeStreamBatchSize int `mapstructure:"repl-change-stream-batch-size"`
+	// EventQueueSize is the buffer size of the channel between the change stream
+	// reader and the dispatcher.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	EventQueueSize int `mapstructure:"repl-event-queue-size"`
+	// WorkerQueueSize is the per-worker routed event channel buffer size.
+	// 0 means auto (defaults to config.ReplQueueSize).
+	WorkerQueueSize int `mapstructure:"repl-worker-queue-size"`
+	// BulkOpsSize is the maximum number of operations per bulk write.
+	// 0 means auto (defaults to config.BulkOpsSize).
+	BulkOpsSize int `mapstructure:"repl-bulk-ops-size"`
 }
 
 // CloneConfig holds clone operation configuration.
@@ -142,6 +163,12 @@ func bindEnvVars() {
 	)
 
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
+
+	_ = viper.BindEnv("repl-num-workers", "PCSM_REPL_NUM_WORKERS")
+	_ = viper.BindEnv("repl-change-stream-batch-size", "PCSM_REPL_CHANGE_STREAM_BATCH_SIZE")
+	_ = viper.BindEnv("repl-event-queue-size", "PCSM_REPL_EVENT_QUEUE_SIZE")
+	_ = viper.BindEnv("repl-worker-queue-size", "PCSM_REPL_WORKER_QUEUE_SIZE")
+	_ = viper.BindEnv("repl-bulk-ops-size", "PCSM_REPL_BULK_OPS_SIZE")
 
 	_ = viper.BindEnv("dev-target-client-compressors", "PCSM_DEV_TARGET_CLIENT_COMPRESSORS")
 

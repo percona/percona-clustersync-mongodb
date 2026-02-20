@@ -44,6 +44,9 @@ type Namespace struct {
 
 	// ShardKey is the shard key used for the collection.
 	ShardKey bson.D
+
+	// Capped indicates whether the collection is capped.
+	Capped bool
 }
 
 // String returns the string representation of the namespace.
@@ -152,6 +155,7 @@ type collectionCatalog struct {
 	Indexes  []indexCatalogEntry
 	Sharded  bool
 	ShardKey bson.D
+	Capped   bool
 }
 
 type indexCatalogEntry struct {
@@ -298,7 +302,7 @@ func (c *Catalog) doCreateCollection(
 	log.Ctx(ctx).Debugf("Created collection %s.%s", db, coll)
 
 	c.lock.Lock()
-	c.addCollectionToCatalog(ctx, db, coll)
+	c.addCollectionToCatalog(ctx, db, coll, opts.Capped != nil && *opts.Capped)
 	c.lock.Unlock()
 
 	return nil
@@ -872,6 +876,7 @@ func (c *Catalog) UUIDMap() UUIDMap {
 					Collection: coll,
 					Sharded:    collCat.Sharded,
 					ShardKey:   collCat.ShardKey,
+					Capped:     collCat.Capped,
 				}
 			}
 		}
@@ -1188,7 +1193,7 @@ func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index st
 }
 
 // addCollectionToCatalog adds a collection to the catalog.
-func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string) {
+func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string, capped bool) {
 	lg := log.Ctx(ctx)
 
 	dbCat, ok := c.Databases[db]
@@ -1204,7 +1209,7 @@ func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string) {
 		return
 	}
 
-	dbCat.Collections[coll] = collectionCatalog{}
+	dbCat.Collections[coll] = collectionCatalog{Capped: capped}
 	c.Databases[db] = dbCat
 	lg.Debugf("Collection added to catalog %s.%s", db, coll)
 }
@@ -1259,7 +1264,7 @@ func (c *Catalog) renameCollectionInCatalog(
 		return
 	}
 
-	c.addCollectionToCatalog(ctx, targetDB, targetColl)
+	c.addCollectionToCatalog(ctx, targetDB, targetColl, collectionEntry.Capped)
 	c.Databases[targetDB].Collections[targetColl] = collectionEntry
 	c.deleteCollectionFromCatalog(ctx, db, coll)
 
