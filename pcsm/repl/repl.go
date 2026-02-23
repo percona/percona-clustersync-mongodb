@@ -631,13 +631,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
 
-			if r.poolIdle(lastRoutedTS) {
-				r.lock.Lock()
-				r.lastReplicatedOpTime = change.ClusterTime
-				r.lock.Unlock()
-			} else {
-				r.tryAdvanceOpTime(cpTicker)
-			}
+			r.lock.Lock()
+			r.lastReplicatedOpTime = change.ClusterTime
+			r.lock.Unlock()
 
 			continue
 		}
@@ -834,18 +830,17 @@ func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 }
 
 // poolIdle returns true when no events are pending in the worker pool.
-// This is the equivalent of the old bulkWrite.Empty() check: it compares
-// the last routed timestamp against the minimum committed timestamp across
-// all workers (SafeCheckpoint). When SafeCheckpoint >= lastRoutedTS, all
-// routed events have been committed and the pool is idle.
+// A zero lastRoutedTS means no events have been routed since the last
+// barrier (which flushes everything), so the pool is trivially idle.
+// Otherwise, it checks each worker's committed timestamp against its
+// own last routed timestamp to determine if all dispatched events have
+// been flushed.
 func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	if lastRoutedTS.IsZero() {
 		return true
 	}
 
-	cp := r.pool.SafeCheckpoint()
-
-	return !cp.IsZero() && !lastRoutedTS.After(cp)
+	return r.pool.Idle()
 }
 
 //go:inline

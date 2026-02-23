@@ -36,6 +36,7 @@ type worker struct {
 	routedEventCh chan *routedEvent
 	bulkWrite     bulkWriter
 	lastTS        atomic.Pointer[bson.Timestamp] // last committed timestamp
+	lastRoutedTS  atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
 	pendingTS     bson.Timestamp                 // timestamp of last event in current batch
 	tickerOffset  time.Duration                  // stagger delay before starting the flush ticker
 
@@ -364,6 +365,10 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	}
 
 	w := p.workers[workerIdx]
+
+	ts := change.ClusterTime
+	w.lastRoutedTS.Store(&ts)
+
 	w.routedEventCh <- &routedEvent{
 		change: change,
 		ns:     ns,
@@ -437,6 +442,30 @@ func (p *workerPool) SafeCheckpoint() bson.Timestamp {
 	}
 
 	return minTS
+}
+
+// Idle returns true when every worker that has been routed events has
+// committed (flushed) up to its last routed timestamp. Workers that were
+// never routed an event are skipped.
+//
+// This differs from SafeCheckpoint which returns the MIN committed timestamp
+// across all workers (useful for crash recovery). Idle checks each worker
+// against its own last routed timestamp, correctly handling the case where
+// workers receive events with different timestamp ranges.
+func (p *workerPool) Idle() bool {
+	for _, w := range p.workers {
+		routed := w.lastRoutedTS.Load()
+		if routed == nil {
+			continue
+		}
+
+		committed := w.lastTS.Load()
+		if committed == nil || committed.Before(*routed) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // TotalEventsApplied returns the sum of events applied across all workers.
