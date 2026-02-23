@@ -451,6 +451,10 @@ func (p *workerPool) TotalEventsApplied() int64 {
 
 // Stop gracefully shuts down all workers.
 func (p *workerPool) Stop() {
+	// Flush all workers via barrier before canceling context.
+	// Errors are best-effort — we're shutting down.
+	_ = p.Barrier()
+
 	p.cancel()
 
 	// Close all worker event channels to signal them to exit
@@ -458,15 +462,7 @@ func (p *workerPool) Stop() {
 		close(w.routedEventCh)
 	}
 
-	// Drain barrier channels to unblock any workers waiting on barrier operations.
-	// This handles the case where Stop() is called while a barrier is in progress.
-	for _, w := range p.workers {
-		// Non-blocking drain of resumeC to unblock workers waiting for resume
-		select {
-		case w.resumeCh <- struct{}{}:
-		default:
-		}
-	}
+	p.ReleaseBarrier()
 
 	p.wg.Wait()
 

@@ -454,8 +454,9 @@ func (r *Repl) watchChangeEvents(
 			}
 
 			if !change.IsTransaction() {
+				ts := change.ClusterTime
 				changeCh <- change
-				lastEventTS = change.ClusterTime
+				lastEventTS = ts
 
 				continue
 			}
@@ -630,9 +631,13 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
 
-			r.lock.Lock()
-			r.lastReplicatedOpTime = change.ClusterTime
-			r.lock.Unlock()
+			if r.poolIdle(lastRoutedTS) {
+				r.lock.Lock()
+				r.lastReplicatedOpTime = change.ClusterTime
+				r.lock.Unlock()
+			} else {
+				r.tryAdvanceOpTime(cpTicker)
+			}
 
 			continue
 		}
