@@ -3,6 +3,7 @@ import random
 import time
 from datetime import datetime
 
+import pymongo
 import pytest
 import testing
 from bson.decimal128 import Decimal128
@@ -93,6 +94,20 @@ def test_create_capped(t: Testing, phase: Runner.Phase):
         t.source["db_1"]["coll_1"].insert_many({"i": i} for i in range(10))
 
     t.compare_all()
+
+
+def test_capped_preserves_insertion_order(t: Testing):
+    """Verify documents replicated via change stream into a capped collection
+    preserve their $natural insertion order on the target."""
+    t.source["db_1"].create_collection("coll_1", capped=True, size=10_000_000)
+
+    with t.run(Runner.Phase.APPLY):
+        for batch in range(20):
+            t.source["db_1"]["coll_1"].insert_many(
+                [{"seq": batch * 100 + i, "pad": "x" * 100} for i in range(100)]
+            )
+
+    t.compare_all(sort=[("$natural", pymongo.ASCENDING)])
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])

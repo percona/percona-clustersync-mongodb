@@ -89,6 +89,18 @@ const (
 	RefineCollectionShardKey OperationType = "refineCollectionShardKey"
 )
 
+// isBulkWriteOperation returns true if the operation type can be applied
+// via a bulk write (Insert, Update, Delete, Replace). DDL operations like
+// Create, Drop, Rename etc. return false and must be handled separately.
+func isBulkWriteOperation(op OperationType) bool {
+	switch op { //nolint:exhaustive
+	case Insert, Update, Delete, Replace:
+		return true
+	default:
+		return false
+	}
+}
+
 // InvalidateEvent occurs when an operation renders the change stream invalid. For example, a change
 // stream opened on a collection that was later dropped or renamed would cause an invalidate event.
 type InvalidateEvent struct {
@@ -519,9 +531,63 @@ func (e ParsingError) Unwrap() error {
 type ChangeEvent struct {
 	EventHeader
 
-	Event any
+	Event   any
+	RawData bson.Raw // raw BSON for deferred DML parsing by workers
 }
 
+// parseEventHeader extracts only the header fields from raw BSON.
+// Large fields like fullDocument are skipped without deserialization,
+// making this significantly cheaper than a full parseChangeEvent call.
+func parseEventHeader(data bson.Raw, header *EventHeader) error {
+	err := bson.Unmarshal(data, header)
+	if err != nil {
+		return ParsingError{cause: err}
+	}
+
+	return nil
+}
+
+// parseDMLEvent unmarshals the typed DML event body from raw BSON.
+// Called by workers after routing to parallelize the expensive
+// deserialization of fullDocument and updateDescription fields.
+func parseDMLEvent(data bson.Raw, opType OperationType) (any, error) {
+	var (
+		event any
+		err   error
+	)
+
+	switch opType { //nolint:exhaustive
+	case Insert:
+		var e InsertEvent
+		err = bson.Unmarshal(data, &e)
+		event = e
+
+	case Update:
+		var e UpdateEvent
+		err = bson.Unmarshal(data, &e)
+		event = e
+
+	case Delete:
+		var e DeleteEvent
+		err = bson.Unmarshal(data, &e)
+		event = e
+
+	case Replace:
+		var e ReplaceEvent
+		err = bson.Unmarshal(data, &e)
+		event = e
+	}
+
+	if err != nil {
+		return nil, ParsingError{cause: err}
+	}
+
+	return event, nil
+}
+
+// parseChangeEvent fully parses a change event from raw BSON, including both
+// the header and the typed event body. Used for DDL events (cold path) where
+// the dispatcher needs the typed Event before calling applyDDLChange.
 func parseChangeEvent(data bson.Raw, change *ChangeEvent) error {
 	err := bson.Unmarshal(data, &change.EventHeader)
 	if err != nil {

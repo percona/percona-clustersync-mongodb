@@ -264,7 +264,7 @@ func extractPipelineFields(t *testing.T, pipeline bson.A) (map[string]bool, map[
 func extractSetDocs(t *testing.T, doc bson.D) []bson.D {
 	t.Helper()
 
-	var docs []bson.D
+	docs := make([]bson.D, 0, len(doc))
 
 	for _, elem := range doc {
 		if elem.Key != "$set" {

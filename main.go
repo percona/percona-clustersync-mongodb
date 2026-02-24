@@ -231,6 +231,27 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				startOptions.CloneReadBatchSize = &v
 			}
 
+			if cfg.Repl.NumWorkers != 0 {
+				v := cfg.Repl.NumWorkers
+				startOptions.ReplNumWorkers = &v
+			}
+			if cfg.Repl.ChangeStreamBatchSize != 0 {
+				v := cfg.Repl.ChangeStreamBatchSize
+				startOptions.ReplChangeStreamBatchSize = &v
+			}
+			if cfg.Repl.EventQueueSize != 0 {
+				v := cfg.Repl.EventQueueSize
+				startOptions.ReplEventQueueSize = &v
+			}
+			if cfg.Repl.WorkerQueueSize != 0 {
+				v := cfg.Repl.WorkerQueueSize
+				startOptions.ReplWorkerQueueSize = &v
+			}
+			if cfg.Repl.BulkOpsSize != 0 {
+				v := cfg.Repl.BulkOpsSize
+				startOptions.ReplBulkOpsSize = &v
+			}
+
 			if cfg.UseCollectionBulkWrite {
 				v := cfg.UseCollectionBulkWrite
 				startOptions.UseCollectionBulkWrite = &v
@@ -259,6 +280,17 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 
 	cmd.Flags().String("clone-read-batch-size", "", "")
 	cmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
+
+	cmd.Flags().Int("repl-num-workers", 0,
+		"Number of replication workers (0 = auto)")
+	cmd.Flags().Int("repl-change-stream-batch-size", 0,
+		"Change stream batch size for replication (0 = auto)")
+	cmd.Flags().Int("repl-event-queue-size", 0,
+		"Event queue size between change stream reader and dispatcher (0 = auto)")
+	cmd.Flags().Int("repl-worker-queue-size", 0,
+		"Per-worker routed event queue size (0 = auto)")
+	cmd.Flags().Int("repl-bulk-ops-size", 0,
+		"Maximum number of operations per bulk write (0 = auto)")
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
@@ -729,6 +761,11 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 		PauseOnInitialSync: cfg.PauseOnInitialSync,
 		Repl: repl.Options{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
+			NumWorkers:             cfg.Repl.NumWorkers,
+			ChangeStreamBatchSize:  cfg.Repl.ChangeStreamBatchSize,
+			EventQueueSize:         cfg.Repl.EventQueueSize,
+			WorkerQueueSize:        cfg.Repl.WorkerQueueSize,
+			BulkOpsSize:            cfg.Repl.BulkOpsSize,
 		},
 		Clone: clone.Options{
 			Parallelism:   cfg.Clone.NumParallelCollections,
@@ -797,6 +834,26 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 			return nil, errors.Wrap(err, "invalid clone read batch size")
 		}
 		options.Clone.ReadBatchSizeBytes = batchSize
+	}
+
+	if params.ReplNumWorkers != nil {
+		options.Repl.NumWorkers = *params.ReplNumWorkers
+	}
+
+	if params.ReplChangeStreamBatchSize != nil {
+		options.Repl.ChangeStreamBatchSize = *params.ReplChangeStreamBatchSize
+	}
+
+	if params.ReplEventQueueSize != nil {
+		options.Repl.EventQueueSize = *params.ReplEventQueueSize
+	}
+
+	if params.ReplWorkerQueueSize != nil {
+		options.Repl.WorkerQueueSize = *params.ReplWorkerQueueSize
+	}
+
+	if params.ReplBulkOpsSize != nil {
+		options.Repl.BulkOpsSize = *params.ReplBulkOpsSize
 	}
 
 	if params.UseCollectionBulkWrite != nil {
@@ -1020,6 +1077,17 @@ type startRequest struct {
 	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
 	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
+
+	// ReplNumWorkers is the number of replication workers.
+	ReplNumWorkers *int `json:"replNumWorkers,omitempty"`
+	// ReplChangeStreamBatchSize is the change stream batch size for replication.
+	ReplChangeStreamBatchSize *int `json:"replChangeStreamBatchSize,omitempty"`
+	// ReplEventQueueSize is the event queue size between change stream reader and dispatcher.
+	ReplEventQueueSize *int `json:"replEventQueueSize,omitempty"`
+	// ReplWorkerQueueSize is the per-worker routed event queue size.
+	ReplWorkerQueueSize *int `json:"replWorkerQueueSize,omitempty"`
+	// ReplBulkOpsSize is the maximum number of operations per bulk write.
+	ReplBulkOpsSize *int `json:"replBulkOpsSize,omitempty"`
 
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write.
