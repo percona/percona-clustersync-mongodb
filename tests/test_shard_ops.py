@@ -1,6 +1,7 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
 from pymongo.errors import OperationFailure
+
 from pcsm import Runner
 
 
@@ -24,10 +25,17 @@ def test_move_primary(t, phase: Runner.Phase):
         try:
             t.source.admin.command("movePrimary", db_name, to=target_shard)
         except OperationFailure as e:
-            if "movePrimary" in str(e) or "not supported" in str(e).lower() or "command not found" in str(e).lower():
+            err_msg = str(e)
+            if (
+                "movePrimary" in err_msg
+                or "not supported" in err_msg.lower()
+                or "command not found" in err_msg.lower()
+            ):
                 pytest.skip(f"movePrimary not supported: {e}")
             raise
     db_info_after = config_db.databases.find_one({"_id": db_name})
     assert db_info_after is not None, f"Database {db_name} not found after movePrimary"
-    assert db_info_after.get("primary") == target_shard, f"Primary shard should be {target_shard}, got {db_info_after.get('primary')}"
+    assert db_info_after.get("primary") == target_shard, (
+        f"Primary shard should be {target_shard}, got {db_info_after.get('primary')}"
+    )
     t.compare_all()
