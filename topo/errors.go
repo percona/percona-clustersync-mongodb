@@ -68,7 +68,12 @@ func isMongoCommandError(err error, name string) bool {
 
 // IsTransient checks if the error is a transient error that can be retried.
 // It checks for specific MongoDB error codes that indicate transient issues.
+// Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+
 	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
