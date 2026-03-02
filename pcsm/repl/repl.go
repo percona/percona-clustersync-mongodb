@@ -122,6 +122,14 @@ type Repl struct {
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
+
+	// sourceCollExists checks if a collection exists on source.
+	// Defaults to sourceCollectionExists. Overridable for testing.
+	sourceCollExists func(ctx context.Context, db, coll string) bool
+
+	// targetCollCount returns the estimated document count on target.
+	// Defaults to targetCollectionCount. Overridable for testing.
+	targetCollCount func(ctx context.Context, db, coll string) (int64, error)
 }
 
 // Status represents the status of change replication.
@@ -160,7 +168,7 @@ func NewRepl(
 ) *Repl {
 	opts.applyDefaults()
 
-	return &Repl{
+	r := &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
@@ -169,6 +177,10 @@ func NewRepl(
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
+	r.sourceCollExists = r.sourceCollectionExists
+	r.targetCollCount = r.targetCollectionCount
+
+	return r
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -857,6 +869,23 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	return ns
 }
 
+// targetCollectionCount returns the estimated document count for a collection on the target cluster.
+func (r *Repl) targetCollectionCount(ctx context.Context, db, coll string) (int64, error) {
+	return r.target.Database(db).Collection(coll).EstimatedDocumentCount(ctx) //nolint:wrapcheck
+}
+
+// sourceCollectionExists checks whether a collection still exists on the source cluster.
+// Used to detect phantom drop events from movePrimary operations.
+func (r *Repl) sourceCollectionExists(ctx context.Context, db, coll string) bool {
+	cursor, err := r.source.Database(db).ListCollections(ctx, bson.D{{"name", coll}})
+	if err != nil {
+		return false
+	}
+	defer cursor.Close(ctx)
+
+	return cursor.Next(ctx)
+}
+
 // applyDDLChange applies a schema change to the target MongoDB.
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
@@ -871,6 +900,24 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			lg.Warn("Timeseries is not supported. skipping")
 
 			return nil
+		}
+
+		// movePrimary (MongoDB 8.0) emits drop+create events. If we skipped the
+		// drop because the collection still exists on source, the target already
+		// has the data. Just update the UUID and skip the drop+recreate.
+		if r.sourceCollExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
+			cnt, cntErr := r.targetCollCount(ctx, change.Namespace.Database, change.Namespace.Collection)
+			if cntErr == nil && cnt > 0 {
+				lg.Warnf("Collection %q already has data on target (likely movePrimary), updating UUID only",
+					change.Namespace)
+
+				r.catalog.SetCollectionUUID(ctx,
+					change.Namespace.Database,
+					change.Namespace.Collection,
+					change.CollectionUUID)
+
+				return nil
+			}
 		}
 
 		err = r.catalog.DropCollection(ctx,
@@ -900,6 +947,13 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
+		if r.sourceCollExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
+			lg.Warnf("Collection %q still exists on source after drop event (likely movePrimary), skipping drop on target",
+				change.Namespace)
+
+			return nil
+		}
+
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
