@@ -94,6 +94,14 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
+type mockNamespaceChecker struct {
+	exists bool
+}
+
+func (m *mockNamespaceChecker) CollectionExists(_ context.Context, _, _ string) bool {
+	return m.exists
+}
+
 func TestApplyDDLChange_MovePrimary(t *testing.T) {
 	t.Parallel()
 
@@ -146,10 +154,8 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 			cat := &mockCatalog{}
 
 			r := &Repl{
-				catalog: cat,
-				sourceCollExists: func(_ context.Context, _, _ string) bool {
-					return tt.sourceExists
-				},
+				catalog:       cat,
+				sourceChecker: &mockNamespaceChecker{exists: tt.sourceExists},
 			}
 
 			change := &ChangeEvent{

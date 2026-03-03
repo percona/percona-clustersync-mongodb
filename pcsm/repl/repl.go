@@ -23,6 +23,11 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
+// NamespaceChecker verifies whether a collection exists on a MongoDB cluster.
+type NamespaceChecker interface {
+	CollectionExists(ctx context.Context, db, coll string) bool
+}
+
 // Catalog defines the catalog operations required by the repl.
 type Catalog interface {
 	catalog.BaseCatalog
@@ -123,9 +128,7 @@ type Repl struct {
 	useCollectionBulk  bool
 	useSimpleCollation bool
 
-	// sourceCollExists checks if a collection exists on source.
-	// Defaults to sourceCollectionExists. Overridable for testing.
-	sourceCollExists func(ctx context.Context, db, coll string) bool
+	sourceChecker NamespaceChecker
 }
 
 // Status represents the status of change replication.
@@ -173,7 +176,7 @@ func NewRepl(
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
-	r.sourceCollExists = r.sourceCollectionExists
+	r.sourceChecker = &mongoNamespaceChecker{client: source}
 
 	return r
 }
@@ -864,10 +867,12 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	return ns
 }
 
-// sourceCollectionExists checks whether a collection still exists on the source cluster.
-// Used to detect phantom drop events from movePrimary operations.
-func (r *Repl) sourceCollectionExists(ctx context.Context, db, coll string) bool {
-	cursor, err := r.source.Database(db).ListCollections(ctx, bson.D{{"name", coll}})
+type mongoNamespaceChecker struct {
+	client *mongo.Client
+}
+
+func (c *mongoNamespaceChecker) CollectionExists(ctx context.Context, db, coll string) bool {
+	cursor, err := c.client.Database(db).ListCollections(ctx, bson.D{{"name", coll}})
 	if err != nil {
 		return false
 	}
@@ -895,7 +900,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		// movePrimary (MongoDB 8.0) emits phantom drop+create events for
 		// collections that still exist on the source. If the collection exists
 		// on source, this create is an artifact — just update the UUID.
-		if r.sourceCollExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
+		if r.sourceChecker.CollectionExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
 			lg.Warnf("Collection %q still exists on source (likely movePrimary), updating UUID only",
 				change.Namespace)
 
@@ -934,7 +939,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
-		if r.sourceCollExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
+		if r.sourceChecker.CollectionExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
 			lg.Warnf("Collection %q still exists on source after drop event (likely movePrimary), skipping drop on target",
 				change.Namespace)
 
