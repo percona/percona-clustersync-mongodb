@@ -70,6 +70,9 @@ type ReplConfig struct {
 	// BulkOpsSize is the maximum number of operations per bulk write.
 	// 0 means auto (defaults to config.BulkOpsSize).
 	BulkOpsSize int `mapstructure:"repl-bulk-ops-size"`
+	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
+	// 0 means auto (defaults to config.WorkerFlushInterval).
+	WorkerFlushInterval time.Duration `mapstructure:"repl-worker-flush-interval"`
 }
 
 // CloneConfig holds clone operation configuration.
@@ -169,6 +172,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("repl-event-queue-size", "PCSM_REPL_EVENT_QUEUE_SIZE")
 	_ = viper.BindEnv("repl-worker-queue-size", "PCSM_REPL_WORKER_QUEUE_SIZE")
 	_ = viper.BindEnv("repl-bulk-ops-size", "PCSM_REPL_BULK_OPS_SIZE")
+	_ = viper.BindEnv("repl-worker-flush-interval", "PCSM_REPL_WORKER_FLUSH_INTERVAL")
 
 	_ = viper.BindEnv("dev-target-client-compressors", "PCSM_DEV_TARGET_CLIENT_COMPRESSORS")
 

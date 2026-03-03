@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
@@ -373,6 +374,7 @@ func makeTestPoolLive(t *testing.T, bws []bulkWriter) *workerPool {
 			id:            strconv.Itoa(i),
 			routedEventCh: make(chan *routedEvent, 100),
 			bulkWrite:     bw,
+			flushInterval: config.WorkerFlushInterval,
 			barrierReq:    make(chan struct{}),
 			barrierDone:   make(chan error),
 			resumeCh:      make(chan struct{}),

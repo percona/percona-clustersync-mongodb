@@ -11,7 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
@@ -39,6 +38,7 @@ type worker struct {
 	lastRoutedTS  atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
 	pendingTS     bson.Timestamp                 // timestamp of last event in current batch
 	tickerOffset  time.Duration                  // stagger delay before starting the flush ticker
+	flushInterval time.Duration                  // maximum interval between bulk write flushes
 
 	target *mongo.Client
 
@@ -78,6 +78,7 @@ func newWorker(
 		id:            strconv.Itoa(id),
 		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
 		bulkWrite:     bw,
+		flushInterval: opts.WorkerFlushInterval,
 		target:        target,
 		barrierReq:    make(chan struct{}),
 		barrierDone:   make(chan error),
@@ -105,7 +106,7 @@ func (w *worker) run(ctx context.Context) {
 		}
 	}
 
-	ticker := time.NewTicker(config.WorkerFlushInterval)
+	ticker := time.NewTicker(w.flushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -335,7 +336,7 @@ func newWorkerPool(
 	// Create and start workers
 	for i := range numWorkers {
 		w := newWorker(i, opts, target, useCollectionBulk, useSimpleCollation, p.errCh)
-		w.tickerOffset = time.Duration(i) * config.WorkerFlushInterval / time.Duration(numWorkers)
+		w.tickerOffset = time.Duration(i) * opts.WorkerFlushInterval / time.Duration(numWorkers)
 		p.workers[i] = w
 
 		p.wg.Go(func() {

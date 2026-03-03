@@ -251,6 +251,10 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Repl.BulkOpsSize
 				startOptions.ReplBulkOpsSize = &v
 			}
+			if cfg.Repl.WorkerFlushInterval != 0 {
+				v := cfg.Repl.WorkerFlushInterval.String()
+				startOptions.ReplWorkerFlushInterval = &v
+			}
 
 			if cfg.UseCollectionBulkWrite {
 				v := cfg.UseCollectionBulkWrite
@@ -291,6 +295,8 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 		"Per-worker routed event queue size (0 = auto)")
 	cmd.Flags().Int("repl-bulk-ops-size", 0,
 		"Maximum number of operations per bulk write (0 = auto)")
+	cmd.Flags().String("repl-worker-flush-interval", "0s",
+		"Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (0 = auto)")
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
@@ -766,6 +772,7 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 			EventQueueSize:         cfg.Repl.EventQueueSize,
 			WorkerQueueSize:        cfg.Repl.WorkerQueueSize,
 			BulkOpsSize:            cfg.Repl.BulkOpsSize,
+			WorkerFlushInterval:    cfg.Repl.WorkerFlushInterval,
 		},
 		Clone: clone.Options{
 			Parallelism:   cfg.Clone.NumParallelCollections,
@@ -854,6 +861,14 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 
 	if params.ReplBulkOpsSize != nil {
 		options.Repl.BulkOpsSize = *params.ReplBulkOpsSize
+	}
+
+	if params.ReplWorkerFlushInterval != nil {
+		d, err := time.ParseDuration(*params.ReplWorkerFlushInterval)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid replWorkerFlushInterval value: %s", *params.ReplWorkerFlushInterval)
+		}
+		options.Repl.WorkerFlushInterval = d
 	}
 
 	if params.UseCollectionBulkWrite != nil {
@@ -1088,6 +1103,8 @@ type startRequest struct {
 	ReplWorkerQueueSize *int `json:"replWorkerQueueSize,omitempty"`
 	// ReplBulkOpsSize is the maximum number of operations per bulk write.
 	ReplBulkOpsSize *int `json:"replBulkOpsSize,omitempty"`
+	// ReplWorkerFlushInterval is the maximum interval between worker bulk write flushes (e.g., "1s", "500ms").
+	ReplWorkerFlushInterval *string `json:"replWorkerFlushInterval,omitempty"`
 
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write.

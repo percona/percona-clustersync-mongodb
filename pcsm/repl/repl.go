@@ -69,6 +69,9 @@ type Options struct {
 	// BulkOpsSize is the maximum number of operations per bulk write.
 	// 0 means auto (defaults to config.BulkOpsSize).
 	BulkOpsSize int
+	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
+	// 0 means auto (defaults to config.WorkerFlushInterval).
+	WorkerFlushInterval time.Duration
 }
 
 func (o *Options) applyDefaults() {
@@ -90,6 +93,10 @@ func (o *Options) applyDefaults() {
 
 	if o.BulkOpsSize <= 0 {
 		o.BulkOpsSize = config.BulkOpsSize
+	}
+
+	if o.WorkerFlushInterval <= 0 {
+		o.WorkerFlushInterval = config.WorkerFlushInterval
 	}
 }
 
