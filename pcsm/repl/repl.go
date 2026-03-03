@@ -72,6 +72,9 @@ type Options struct {
 	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
 	// 0 means auto (defaults to config.WorkerFlushInterval).
 	WorkerFlushInterval time.Duration
+	// WorkerBulkQueueSize is the number of pending bulks per worker for async writes.
+	// 0 means auto (defaults to config.WorkerBulkQueueSize).
+	WorkerBulkQueueSize int
 }
 
 func (o *Options) applyDefaults() {
@@ -97,6 +100,10 @@ func (o *Options) applyDefaults() {
 
 	if o.WorkerFlushInterval <= 0 {
 		o.WorkerFlushInterval = config.WorkerFlushInterval
+	}
+
+	if o.WorkerBulkQueueSize <= 0 {
+		o.WorkerBulkQueueSize = config.WorkerBulkQueueSize
 	}
 }
 

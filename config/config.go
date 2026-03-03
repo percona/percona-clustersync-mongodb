@@ -62,17 +62,20 @@ type ReplConfig struct {
 	ChangeStreamBatchSize int `mapstructure:"repl-change-stream-batch-size"`
 	// EventQueueSize is the buffer size of the channel between the change stream
 	// reader and the dispatcher.
-	// 0 means auto (defaults to config.ReplQueueSize).
+	// Defaults to config.ReplQueueSize.
 	EventQueueSize int `mapstructure:"repl-event-queue-size"`
 	// WorkerQueueSize is the per-worker routed event channel buffer size.
-	// 0 means auto (defaults to config.ReplQueueSize).
+	// Ddefaults to config.ReplQueueSize.
 	WorkerQueueSize int `mapstructure:"repl-worker-queue-size"`
 	// BulkOpsSize is the maximum number of operations per bulk write.
-	// 0 means auto (defaults to config.BulkOpsSize).
+	// Ddefaults to config.BulkOpsSize.
 	BulkOpsSize int `mapstructure:"repl-bulk-ops-size"`
 	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
-	// 0 means auto (defaults to config.WorkerFlushInterval).
+	// Defaults to config.WorkerFlushInterval.
 	WorkerFlushInterval time.Duration `mapstructure:"repl-worker-flush-interval"`
+	// WorkerBulkQueueSize is the number of pending bulks per worker.
+	// Defaults to config.WorkerBulkQueueSize.
+	WorkerBulkQueueSize int `mapstructure:"repl-worker-bulk-queue-size"`
 }
 
 // CloneConfig holds clone operation configuration.
@@ -173,6 +176,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("repl-worker-queue-size", "PCSM_REPL_WORKER_QUEUE_SIZE")
 	_ = viper.BindEnv("repl-bulk-ops-size", "PCSM_REPL_BULK_OPS_SIZE")
 	_ = viper.BindEnv("repl-worker-flush-interval", "PCSM_REPL_WORKER_FLUSH_INTERVAL")
+	_ = viper.BindEnv("repl-worker-bulk-queue-size", "PCSM_REPL_WORKER_BULK_QUEUE_SIZE")
 
 	_ = viper.BindEnv("dev-target-client-compressors", "PCSM_DEV_TARGET_CLIENT_COMPRESSORS")
 

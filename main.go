@@ -288,15 +288,17 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Int("repl-num-workers", 0,
 		"Number of replication workers (0 = auto)")
 	cmd.Flags().Int("repl-change-stream-batch-size", 0,
-		"Change stream batch size for replication (0 = auto)")
+		"Change stream batch size for replication (default: 10000)")
 	cmd.Flags().Int("repl-event-queue-size", 0,
-		"Event queue size between change stream reader and dispatcher (0 = auto)")
+		"Event queue size between change stream reader and dispatcher (default: 5000)")
 	cmd.Flags().Int("repl-worker-queue-size", 0,
-		"Per-worker routed event queue size (0 = auto)")
+		"Per-worker routed event queue size (default: 5000)")
 	cmd.Flags().Int("repl-bulk-ops-size", 0,
-		"Maximum number of operations per bulk write (0 = auto)")
+		"Maximum number of operations per bulk write (default: 5000)")
 	cmd.Flags().String("repl-worker-flush-interval", "0s",
-		"Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (0 = auto)")
+		"Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (default: 1s)")
+	cmd.Flags().Int("repl-worker-bulk-queue-size", 0,
+		"Number of pending bulks per worker for async writes (default: 3)")
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
@@ -773,6 +775,7 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 			WorkerQueueSize:        cfg.Repl.WorkerQueueSize,
 			BulkOpsSize:            cfg.Repl.BulkOpsSize,
 			WorkerFlushInterval:    cfg.Repl.WorkerFlushInterval,
+			WorkerBulkQueueSize:    cfg.Repl.WorkerBulkQueueSize,
 		},
 		Clone: clone.Options{
 			Parallelism:   cfg.Clone.NumParallelCollections,
