@@ -98,14 +98,12 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		operationType  OperationType
-		sourceExists   bool
-		targetCount    int64
-		targetCountErr error
-		expectDrop     bool
-		expectCreate   bool
-		expectSetUUID  bool
+		name          string
+		operationType OperationType
+		sourceExists  bool
+		expectDrop    bool
+		expectCreate  bool
+		expectSetUUID bool
 	}{
 		{
 			name:          "drop_skipped_when_source_has_collection",
@@ -124,19 +122,17 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 			expectSetUUID: false,
 		},
 		{
-			name:          "create_updates_uuid_only_when_target_has_data",
+			name:          "create_skipped_when_source_has_collection",
 			operationType: Create,
 			sourceExists:  true,
-			targetCount:   10,
 			expectDrop:    false,
 			expectCreate:  false,
 			expectSetUUID: true,
 		},
 		{
-			name:          "create_proceeds_normally_when_target_empty",
+			name:          "create_proceeds_when_source_missing_collection",
 			operationType: Create,
 			sourceExists:  false,
-			targetCount:   0,
 			expectDrop:    true,
 			expectCreate:  true,
 			expectSetUUID: true,
@@ -153,9 +149,6 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 				catalog: cat,
 				sourceCollExists: func(_ context.Context, _, _ string) bool {
 					return tt.sourceExists
-				},
-				targetCollCount: func(_ context.Context, _, _ string) (int64, error) {
-					return tt.targetCount, tt.targetCountErr
 				},
 			}
 

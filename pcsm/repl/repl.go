@@ -126,10 +126,6 @@ type Repl struct {
 	// sourceCollExists checks if a collection exists on source.
 	// Defaults to sourceCollectionExists. Overridable for testing.
 	sourceCollExists func(ctx context.Context, db, coll string) bool
-
-	// targetCollCount returns the estimated document count on target.
-	// Defaults to targetCollectionCount. Overridable for testing.
-	targetCollCount func(ctx context.Context, db, coll string) (int64, error)
 }
 
 // Status represents the status of change replication.
@@ -178,7 +174,6 @@ func NewRepl(
 		doneCh:   make(chan struct{}),
 	}
 	r.sourceCollExists = r.sourceCollectionExists
-	r.targetCollCount = r.targetCollectionCount
 
 	return r
 }
@@ -869,11 +864,6 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	return ns
 }
 
-// targetCollectionCount returns the estimated document count for a collection on the target cluster.
-func (r *Repl) targetCollectionCount(ctx context.Context, db, coll string) (int64, error) {
-	return r.target.Database(db).Collection(coll).EstimatedDocumentCount(ctx) //nolint:wrapcheck
-}
-
 // sourceCollectionExists checks whether a collection still exists on the source cluster.
 // Used to detect phantom drop events from movePrimary operations.
 func (r *Repl) sourceCollectionExists(ctx context.Context, db, coll string) bool {
@@ -902,22 +892,19 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		// movePrimary (MongoDB 8.0) emits drop+create events. If we skipped the
-		// drop because the collection still exists on source, the target already
-		// has the data. Just update the UUID and skip the drop+recreate.
+		// movePrimary (MongoDB 8.0) emits phantom drop+create events for
+		// collections that still exist on the source. If the collection exists
+		// on source, this create is an artifact — just update the UUID.
 		if r.sourceCollExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
-			cnt, cntErr := r.targetCollCount(ctx, change.Namespace.Database, change.Namespace.Collection)
-			if cntErr == nil && cnt > 0 {
-				lg.Warnf("Collection %q already has data on target (likely movePrimary), updating UUID only",
-					change.Namespace)
+			lg.Warnf("Collection %q still exists on source (likely movePrimary), updating UUID only",
+				change.Namespace)
 
-				r.catalog.SetCollectionUUID(ctx,
-					change.Namespace.Database,
-					change.Namespace.Collection,
-					change.CollectionUUID)
+			r.catalog.SetCollectionUUID(ctx,
+				change.Namespace.Database,
+				change.Namespace.Collection,
+				change.CollectionUUID)
 
-				return nil
-			}
+			return nil
 		}
 
 		err = r.catalog.DropCollection(ctx,
