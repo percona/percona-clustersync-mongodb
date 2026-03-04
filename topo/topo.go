@@ -299,6 +299,10 @@ func RunWithRetry(
 			return nil
 		}
 
+		if ctx.Err() != nil {
+			return err
+		}
+
 		if !IsTransient(err) {
 			return err
 		}
