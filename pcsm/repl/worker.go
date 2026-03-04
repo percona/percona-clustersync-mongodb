@@ -61,11 +61,9 @@ type worker struct {
 	writerDone chan struct{}     // closed when the writer goroutine exits
 	writerErr  error             // set by runWriter on failure, read after <-writerDone
 
-	// Factory params for creating fresh bulkWriters
-	bulkQueueSize      int
-	bulkOpsSize        int
-	useCollectionBulk  bool
-	useSimpleCollation bool
+	// Factory for creating fresh bulkWriters after each submit/restart.
+	bulkQueueSize int
+	newBulkWriter func() bulkWriter
 
 	// Barrier coordination
 	barrierReq  chan struct{}
@@ -93,19 +91,28 @@ func newWorker(
 	errC chan<- error,
 ) *worker {
 	w := &worker{
-		id:                 strconv.Itoa(id),
-		routedEventCh:      make(chan *routedEvent, opts.WorkerQueueSize),
-		flushInterval:      opts.WorkerFlushInterval,
-		target:             target,
-		bulkQueueSize:      opts.WorkerBulkQueueSize,
-		bulkOpsSize:        opts.BulkOpsSize,
-		useCollectionBulk:  useCollectionBulk,
-		useSimpleCollation: useSimpleCollation,
-		barrierReq:         make(chan struct{}),
-		barrierDone:        make(chan error),
-		resumeCh:           make(chan struct{}),
-		done:               make(chan struct{}),
-		errCh:              errC,
+		id:            strconv.Itoa(id),
+		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
+		flushInterval: opts.WorkerFlushInterval,
+		target:        target,
+		bulkQueueSize: opts.WorkerBulkQueueSize,
+		barrierReq:    make(chan struct{}),
+		barrierDone:   make(chan error),
+		resumeCh:      make(chan struct{}),
+		done:          make(chan struct{}),
+		errCh:         errC,
+	}
+
+	bulkOpsSize := opts.BulkOpsSize
+
+	if useCollectionBulk {
+		w.newBulkWriter = func() bulkWriter {
+			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation)
+		}
+	} else {
+		w.newBulkWriter = func() bulkWriter {
+			return newClientBulkWriter(bulkOpsSize, useSimpleCollation)
+		}
 	}
 
 	w.bulkWrite = w.newBulkWriter()
@@ -113,15 +120,6 @@ func newWorker(
 	w.writerDone = make(chan struct{})
 
 	return w
-}
-
-// newBulkWriter creates a fresh bulkWriter using the worker's factory params.
-func (w *worker) newBulkWriter() bulkWriter { //nolint:ireturn
-	if w.useCollectionBulk {
-		return newCollectionBulkWriter(w.bulkOpsSize, w.useSimpleCollation)
-	}
-
-	return newClientBulkWriter(w.bulkOpsSize, w.useSimpleCollation)
 }
 
 // runWriter is the writer goroutine. It reads sealed bulks from bulkQueue,
