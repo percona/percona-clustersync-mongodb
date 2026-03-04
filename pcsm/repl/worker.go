@@ -25,10 +25,24 @@ type routedEvent struct {
 	ns     catalog.Namespace
 }
 
+// pendingBulk is a sealed bulk ready for writing by the writer goroutine.
+// It bundles the filled bulkWriter with the checkpoint timestamp that should
+// be committed after a successful write.
+type pendingBulk struct {
+	writer     bulkWriter     // filled bulk, ready to execute
+	checkpoint bson.Timestamp // pendingTS when this bulk was sealed
+}
+
 // worker handles a subset of document writes in parallel.
 // Events are routed to workers based on document key hash to ensure
 // operations on the same document are processed by the same worker,
 // preserving per-document ordering.
+//
+// Each worker has an async writer goroutine (runWriter) that executes
+// bulk writes in the background. The main loop (run) builds bulks and
+// submits them to bulkQueue; the writer goroutine dequeues and writes
+// them. This decouples event reading from MongoDB writes, allowing the
+// worker to keep reading events while a write is in-flight.
 type worker struct {
 	id string
 
@@ -41,6 +55,17 @@ type worker struct {
 	flushInterval time.Duration                  // maximum interval between bulk write flushes
 
 	target *mongo.Client
+
+	// Async writer pipeline
+	bulkQueue  chan *pendingBulk // buffered queue of sealed bulks for the writer goroutine
+	writerDone chan struct{}     // closed when the writer goroutine exits
+	writerErr  error             // set by runWriter on failure, read after <-writerDone
+
+	// Factory params for creating fresh bulkWriters
+	bulkQueueSize      int
+	bulkOpsSize        int
+	useCollectionBulk  bool
+	useSimpleCollation bool
 
 	// Barrier coordination
 	barrierReq  chan struct{}
@@ -67,34 +92,109 @@ func newWorker(
 	useSimpleCollation bool,
 	errC chan<- error,
 ) *worker {
-	var bw bulkWriter
-	if useCollectionBulk {
-		bw = newCollectionBulkWriter(opts.BulkOpsSize, useSimpleCollation)
-	} else {
-		bw = newClientBulkWriter(opts.BulkOpsSize, useSimpleCollation)
+	w := &worker{
+		id:                 strconv.Itoa(id),
+		routedEventCh:      make(chan *routedEvent, opts.WorkerQueueSize),
+		flushInterval:      opts.WorkerFlushInterval,
+		target:             target,
+		bulkQueueSize:      opts.WorkerBulkQueueSize,
+		bulkOpsSize:        opts.BulkOpsSize,
+		useCollectionBulk:  useCollectionBulk,
+		useSimpleCollation: useSimpleCollation,
+		barrierReq:         make(chan struct{}),
+		barrierDone:        make(chan error),
+		resumeCh:           make(chan struct{}),
+		done:               make(chan struct{}),
+		errCh:              errC,
 	}
 
-	return &worker{
-		id:            strconv.Itoa(id),
-		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
-		bulkWrite:     bw,
-		flushInterval: opts.WorkerFlushInterval,
-		target:        target,
-		barrierReq:    make(chan struct{}),
-		barrierDone:   make(chan error),
-		resumeCh:      make(chan struct{}),
-		done:          make(chan struct{}),
-		errCh:         errC,
+	w.bulkWrite = w.newBulkWriter()
+	w.bulkQueue = make(chan *pendingBulk, w.bulkQueueSize)
+	w.writerDone = make(chan struct{})
+
+	return w
+}
+
+// newBulkWriter creates a fresh bulkWriter using the worker's factory params.
+func (w *worker) newBulkWriter() bulkWriter { //nolint:ireturn
+	if w.useCollectionBulk {
+		return newCollectionBulkWriter(w.bulkOpsSize, w.useSimpleCollation)
+	}
+
+	return newClientBulkWriter(w.bulkOpsSize, w.useSimpleCollation)
+}
+
+// runWriter is the writer goroutine. It reads sealed bulks from bulkQueue,
+// executes them against MongoDB, and updates the committed timestamp.
+// It exits when bulkQueue is closed (normal) or a write fails (error).
+// On exit it closes writerDone so the main loop can detect it.
+func (w *worker) runWriter(ctx context.Context) {
+	defer close(w.writerDone)
+
+	lg := log.New("repl:writer").With(log.String("id", w.id))
+
+	for pb := range w.bulkQueue {
+		start := time.Now()
+
+		size, err := pb.writer.Do(ctx, w.target)
+		if err != nil {
+			w.writerErr = errors.Wrap(err, "bulk write")
+			w.reportError(w.writerErr)
+
+			return
+		}
+
+		if size > 0 {
+			w.eventsApplied.Add(int64(size))
+			metrics.AddEventsApplied(size)
+			metrics.AddReplWorkerEventsApplied(w.id, size)
+			metrics.ObserveReplWorkerFlushBatchSize(w.id, size)
+			metrics.ObserveReplWorkerFlushDuration(w.id, time.Since(start))
+
+			ts := pb.checkpoint
+			w.lastTS.Store(&ts)
+
+			lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
+		}
 	}
 }
 
+// stopWriter closes the bulk queue and waits for the writer goroutine to
+// finish. It is safe to call even if the writer has already exited.
+func (w *worker) stopWriter() {
+	select {
+	case <-w.writerDone:
+		return // writer already exited
+	default:
+	}
+
+	close(w.bulkQueue)
+	<-w.writerDone
+}
+
+// restartWriter creates fresh async writer state and launches a new writer
+// goroutine. Called after a barrier+resume cycle to resume async writing.
+func (w *worker) restartWriter(ctx context.Context) {
+	w.writerErr = nil
+	w.bulkQueue = make(chan *pendingBulk, w.bulkQueueSize)
+	w.writerDone = make(chan struct{})
+	w.bulkWrite = w.newBulkWriter()
+
+	go w.runWriter(ctx)
+}
+
 // run is the main loop for the worker. It processes events from eventC,
-// batches them, and flushes on buffer full, time interval, or barrier signal.
+// batches them, and submits to the async writer on buffer full, time interval,
+// or barrier signal.
 func (w *worker) run(ctx context.Context) {
-	defer close(w.done) // signal Barrier/ReleaseBarrier that this worker has exited
+	defer close(w.done)  // signal Barrier/ReleaseBarrier that this worker has exited
+	defer w.stopWriter() // ensure writer goroutine is cleaned up on any exit path
 
 	lg := log.New("repl:worker").With(log.String("id", w.id))
 	lg.Debug("Worker started")
+
+	// Start the async writer goroutine.
+	go w.runWriter(ctx)
 
 	// Stagger ticker start to spread flushes evenly across the interval.
 	// Without this, all workers flush simultaneously causing write contention.
@@ -112,12 +212,16 @@ func (w *worker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush remaining ops before exit (best-effort)
-			if !w.bulkWrite.Empty() {
-				_ = w.flush(ctx, lg)
-			}
+			// Submit remaining ops before exit (best-effort)
+			_ = w.submit()
 
 			lg.Debug("Worker stopped (context done)")
+
+			return
+
+		case <-w.writerDone:
+			// Writer goroutine died (error already reported via reportError)
+			lg.Debug("Worker stopped (writer error)")
 
 			return
 
@@ -125,22 +229,27 @@ func (w *worker) run(ctx context.Context) {
 			lg.Trace("Barrier requested")
 
 			// Drain all buffered events routed before the barrier was requested.
-			err := w.drainRoutedEvents(ctx, lg)
-			if err != nil {
-				w.barrierDone <- err
+			if !w.drainRoutedEvents() {
+				w.barrierDone <- errors.Errorf("writer failed during barrier drain")
 
 				return
 			}
 
-			// Flush remaining ops and signal done.
-			if !w.bulkWrite.Empty() {
-				err = w.flush(ctx, lg)
-				if err != nil {
-					w.barrierDone <- err
-					lg.Debug("Worker stopped (flush error)")
+			// Submit remaining ops to the writer goroutine.
+			if !w.submit() {
+				w.barrierDone <- errors.Errorf("writer failed during barrier submit")
 
-					return
-				}
+				return
+			}
+
+			// Close bulkQueue and wait for the writer to finish all pending bulks.
+			close(w.bulkQueue)
+			<-w.writerDone
+
+			if w.writerErr != nil {
+				w.barrierDone <- w.writerErr
+
+				return
 			}
 
 			w.barrierDone <- nil
@@ -150,6 +259,7 @@ func (w *worker) run(ctx context.Context) {
 			select {
 			case <-w.resumeCh:
 				lg.Trace("Resumed")
+				w.restartWriter(ctx)
 			case <-ctx.Done():
 				lg.Debug("Worker stopped (context done while waiting for resume)")
 
@@ -158,9 +268,8 @@ func (w *worker) run(ctx context.Context) {
 
 		case <-ticker.C:
 			if !w.bulkWrite.Empty() {
-				flushErr := w.flush(ctx, lg)
-				if flushErr != nil {
-					lg.Debug("Worker stopped (flush error)")
+				if !w.submit() {
+					lg.Debug("Worker stopped (writer error)")
 
 					return
 				}
@@ -168,10 +277,8 @@ func (w *worker) run(ctx context.Context) {
 
 		case event, ok := <-w.routedEventCh:
 			if !ok {
-				// Channel closed, flush and exit (best-effort)
-				if !w.bulkWrite.Empty() {
-					_ = w.flush(ctx, lg)
-				}
+				// Channel closed, submit and exit (best-effort)
+				_ = w.submit()
 
 				lg.Debug("Worker stopped (channel closed)")
 
@@ -186,9 +293,8 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			if w.bulkWrite.Full() {
-				flushErr := w.flush(ctx, lg)
-				if flushErr != nil {
-					lg.Debug("Worker stopped (flush error)")
+				if !w.submit() {
+					lg.Debug("Worker stopped (writer error)")
 
 					return
 				}
@@ -238,43 +344,46 @@ func (w *worker) reportError(err error) {
 	}
 }
 
-// flush executes the bulk write and updates metrics.
-// Returns a non-nil error if the bulk write failed and the worker should stop.
-// The error is also sent to errCh via reportError so the dispatcher can detect it.
-func (w *worker) flush(ctx context.Context, lg log.Logger) error {
-	start := time.Now()
+// queueBulk sends a sealed bulk to the writer goroutine. Returns true on
+// success, false if the writer has already exited (writerDone closed).
+// Blocks when bulkQueue is full until the writer dequeues a bulk or dies.
+func (w *worker) queueBulk(pb *pendingBulk) bool {
+	select {
+	case w.bulkQueue <- pb:
+		return true
+	case <-w.writerDone:
+		return false
+	}
+}
 
-	size, err := w.bulkWrite.Do(ctx, w.target)
-	if err != nil {
-		err = errors.Wrap(err, "bulk write")
-		w.reportError(err)
-
-		return err
+// submit seals the current bulk, sends it to the writer goroutine, and
+// creates a fresh bulkWriter for the next batch. Returns true on success,
+// false if the writer goroutine has died (error already reported).
+func (w *worker) submit() bool {
+	if w.bulkWrite.Empty() {
+		return true
 	}
 
-	if size > 0 {
-		w.eventsApplied.Add(int64(size))
-		metrics.AddEventsApplied(size)
-		metrics.AddReplWorkerEventsApplied(w.id, size)
-		metrics.ObserveReplWorkerFlushBatchSize(w.id, size)
-		metrics.ObserveReplWorkerFlushDuration(w.id, time.Since(start))
-
-		// Update the last committed timestamp
-		ts := w.pendingTS
-		w.lastTS.Store(&ts)
-
-		lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
+	pb := &pendingBulk{
+		writer:     w.bulkWrite,
+		checkpoint: w.pendingTS,
 	}
 
-	return nil
+	if !w.queueBulk(pb) {
+		return false
+	}
+
+	w.bulkWrite = w.newBulkWriter()
+
+	return true
 }
 
 // drainRoutedEvents reads all buffered events from routedEventCh and adds them
-// to the current batch, flushing when the batch is full. This must be called
+// to the current batch, submitting when the batch is full. This must be called
 // when handling a barrier request to ensure all events routed before the
 // barrier are included in the bulk.
-// Returns a non-nil error if a parse or flush error occurred and the worker should stop.
-func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) error {
+// Returns true on success, false if a parse error or writer failure occurred.
+func (w *worker) drainRoutedEvents() bool {
 	for {
 		select {
 		case event := <-w.routedEventCh:
@@ -282,17 +391,16 @@ func (w *worker) drainRoutedEvents(ctx context.Context, lg log.Logger) error {
 			if err != nil {
 				w.reportError(err)
 
-				return err
+				return false
 			}
 
 			if w.bulkWrite.Full() {
-				flushErr := w.flush(ctx, lg)
-				if flushErr != nil {
-					return flushErr
+				if !w.submit() {
+					return false
 				}
 			}
 		default:
-			return nil
+			return true
 		}
 	}
 }
