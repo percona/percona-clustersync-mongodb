@@ -27,15 +27,15 @@ func TestSubmit_EmptyBulkIsNoop(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
-		bulkWrite:  &mockBulkWriter{},
-		bulkQueue:  make(chan *pendingBulk, 1),
-		writerDone: make(chan struct{}),
+		currentBulkWrite: &mockBulkWriter{},
+		pendingBulkCh:    make(chan *pendingBulk, 1),
+		writerDone:       make(chan struct{}),
 	}
 
 	ok := w.submit()
 
 	assert.True(t, ok, "submit on empty bulk should succeed")
-	assert.Empty(t, w.bulkQueue, "nothing should be queued")
+	assert.Empty(t, w.pendingBulkCh, "nothing should be queued")
 }
 
 // TestSubmit_SealsBulkAndQueues verifies that submit() seals the current
@@ -48,26 +48,26 @@ func TestSubmit_SealsBulkAndQueues(t *testing.T) {
 	ts := bson.Timestamp{T: 10, I: 1}
 
 	w := &worker{
-		bulkWrite:     mock,
-		pendingTS:     ts,
-		bulkQueue:     make(chan *pendingBulk, 1),
-		writerDone:    make(chan struct{}),
-		newBulkWriter: func() bulkWriter { return &mockBulkWriter{} },
+		currentBulkWrite: mock,
+		pendingTS:        ts,
+		pendingBulkCh:    make(chan *pendingBulk, 1),
+		writerDone:       make(chan struct{}),
+		newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
 	}
 
 	ok := w.submit()
 	require.True(t, ok, "submit should succeed")
 
 	// Verify the sealed bulk was queued with correct fields.
-	require.Len(t, w.bulkQueue, 1, "one bulk should be queued")
+	require.Len(t, w.pendingBulkCh, 1, "one bulk should be queued")
 
-	pb := <-w.bulkQueue
+	pb := <-w.pendingBulkCh
 	assert.Equal(t, mock, pb.writer, "queued writer should be the original mock")
 	assert.Equal(t, ts, pb.checkpoint, "checkpoint should match pendingTS at seal time")
 
 	// Verify a fresh bulkWriter replaced the old one.
-	assert.True(t, w.bulkWrite.Empty(), "new bulkWriter should be empty")
-	assert.NotEqual(t, mock, w.bulkWrite, "bulkWrite should be a new instance")
+	assert.True(t, w.currentBulkWrite.Empty(), "new bulkWriter should be empty")
+	assert.NotEqual(t, mock, w.currentBulkWrite, "bulkWrite should be a new instance")
 }
 
 // TestSubmit_ReturnsFalseWhenWriterDead verifies that submit() returns false
@@ -76,9 +76,9 @@ func TestSubmit_ReturnsFalseWhenWriterDead(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
-		bulkWrite:  &mockBulkWriter{count: 1}, // non-empty so submit tries to queue
-		bulkQueue:  make(chan *pendingBulk, 1),
-		writerDone: make(chan struct{}),
+		currentBulkWrite: &mockBulkWriter{count: 1}, // non-empty so submit tries to queue
+		pendingBulkCh:    make(chan *pendingBulk, 1),
+		writerDone:       make(chan struct{}),
 	}
 
 	close(w.writerDone) // simulate dead writer
@@ -93,12 +93,12 @@ func TestQueueBulk_BlocksWhenFull(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
-		bulkQueue:  make(chan *pendingBulk, 1),
-		writerDone: make(chan struct{}),
+		pendingBulkCh: make(chan *pendingBulk, 1),
+		writerDone:    make(chan struct{}),
 	}
 
 	// Fill the queue to capacity.
-	w.bulkQueue <- &pendingBulk{}
+	w.pendingBulkCh <- &pendingBulk{}
 
 	// Next queueBulk should block.
 	result := make(chan bool, 1)
@@ -115,7 +115,7 @@ func TestQueueBulk_BlocksWhenFull(t *testing.T) {
 	}
 
 	// Drain one item to unblock.
-	<-w.bulkQueue
+	<-w.pendingBulkCh
 
 	select {
 	case ok := <-result:
@@ -132,12 +132,12 @@ func TestQueueBulk_UnblocksOnWriterDone(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
-		bulkQueue:  make(chan *pendingBulk, 1),
-		writerDone: make(chan struct{}),
+		pendingBulkCh: make(chan *pendingBulk, 1),
+		writerDone:    make(chan struct{}),
 	}
 
 	// Fill the queue to capacity.
-	w.bulkQueue <- &pendingBulk{}
+	w.pendingBulkCh <- &pendingBulk{}
 
 	// queueBulk blocks on full queue.
 	result := make(chan bool, 1)

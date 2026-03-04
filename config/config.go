@@ -65,10 +65,10 @@ type ReplConfig struct {
 	// Defaults to config.ReplQueueSize.
 	EventQueueSize int `mapstructure:"repl-event-queue-size"`
 	// WorkerQueueSize is the per-worker routed event channel buffer size.
-	// Ddefaults to config.ReplQueueSize.
+	// Defaults to config.ReplQueueSize.
 	WorkerQueueSize int `mapstructure:"repl-worker-queue-size"`
 	// BulkOpsSize is the maximum number of operations per bulk write.
-	// Ddefaults to config.BulkOpsSize.
+	// Defaults to config.BulkOpsSize.
 	BulkOpsSize int `mapstructure:"repl-bulk-ops-size"`
 	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
 	// Defaults to config.WorkerFlushInterval.

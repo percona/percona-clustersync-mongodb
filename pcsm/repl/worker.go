@@ -47,7 +47,6 @@ type worker struct {
 	id string
 
 	routedEventCh chan *routedEvent
-	bulkWrite     bulkWriter
 	lastTS        atomic.Pointer[bson.Timestamp] // last committed timestamp
 	lastRoutedTS  atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
 	pendingTS     bson.Timestamp                 // timestamp of last event in current batch
@@ -57,9 +56,10 @@ type worker struct {
 	target *mongo.Client
 
 	// Async writer pipeline
-	bulkQueue  chan *pendingBulk // buffered queue of sealed bulks for the writer goroutine
-	writerDone chan struct{}     // closed when the writer goroutine exits
-	writerErr  error             // set by runWriter on failure, read after <-writerDone
+	currentBulkWrite bulkWriter        // active bulk being filled by the main loop, not safe for concurrent access
+	pendingBulkCh    chan *pendingBulk // buffered queue of sealed bulks for the writer goroutine
+	writerDone       chan struct{}     // closed when the writer goroutine exits
+	writerErr        error             // set by runWriter on failure, read after <-writerDone
 
 	// Factory for creating fresh bulkWriters after each submit/restart.
 	bulkQueueSize int
@@ -115,8 +115,8 @@ func newWorker(
 		}
 	}
 
-	w.bulkWrite = w.newBulkWriter()
-	w.bulkQueue = make(chan *pendingBulk, w.bulkQueueSize)
+	w.currentBulkWrite = w.newBulkWriter()
+	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
 
 	return w
@@ -131,7 +131,7 @@ func (w *worker) runWriter(ctx context.Context) {
 
 	lg := log.New("repl:writer").With(log.String("id", w.id))
 
-	for pb := range w.bulkQueue {
+	for pb := range w.pendingBulkCh {
 		start := time.Now()
 
 		size, err := pb.writer.Do(ctx, w.target)
@@ -166,7 +166,7 @@ func (w *worker) stopWriter() {
 	default:
 	}
 
-	close(w.bulkQueue)
+	close(w.pendingBulkCh)
 	<-w.writerDone
 }
 
@@ -174,9 +174,9 @@ func (w *worker) stopWriter() {
 // goroutine. Called after a barrier+resume cycle to resume async writing.
 func (w *worker) restartWriter(ctx context.Context) {
 	w.writerErr = nil
-	w.bulkQueue = make(chan *pendingBulk, w.bulkQueueSize)
+	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
-	w.bulkWrite = w.newBulkWriter()
+	w.currentBulkWrite = w.newBulkWriter()
 
 	go w.runWriter(ctx)
 }
@@ -241,7 +241,7 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			// Close bulkQueue and wait for the writer to finish all pending bulks.
-			close(w.bulkQueue)
+			close(w.pendingBulkCh)
 			<-w.writerDone
 
 			if w.writerErr != nil {
@@ -265,7 +265,7 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 		case <-ticker.C:
-			if !w.bulkWrite.Empty() {
+			if !w.currentBulkWrite.Empty() {
 				if !w.submit() {
 					lg.Debug("Worker stopped (writer error)")
 
@@ -283,14 +283,14 @@ func (w *worker) run(ctx context.Context) {
 				return
 			}
 
-			err := w.addToBatch(event)
+			err := w.addToCurrentBulk(event)
 			if err != nil {
 				w.reportError(err)
 
 				return
 			}
 
-			if w.bulkWrite.Full() {
+			if w.currentBulkWrite.Full() {
 				if !w.submit() {
 					lg.Debug("Worker stopped (writer error)")
 
@@ -301,11 +301,10 @@ func (w *worker) run(ctx context.Context) {
 	}
 }
 
-// addToBatch parses the deferred DML event body from raw BSON and adds
-// it to the bulk write buffer. Parsing is done here (in the worker) rather
-// than in the single-threaded reader to parallelize the expensive
-// deserialization of fullDocument across all workers.
-func (w *worker) addToBatch(event *routedEvent) error {
+// addToCurrentBulk parses the deferred DML event body from raw BSON and adds
+// it to the current bulk write.
+// Returns a non-nil error if parsing fails, which is reported to the main loop.
+func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
 	if err != nil {
 		return err
@@ -315,16 +314,16 @@ func (w *worker) addToBatch(event *routedEvent) error {
 
 	switch e := parsed.(type) { //nolint:exhaustive
 	case InsertEvent:
-		w.bulkWrite.Insert(event.ns, &e)
+		w.currentBulkWrite.Insert(event.ns, &e)
 
 	case UpdateEvent:
-		w.bulkWrite.Update(event.ns, &e)
+		w.currentBulkWrite.Update(event.ns, &e)
 
 	case DeleteEvent:
-		w.bulkWrite.Delete(event.ns, &e)
+		w.currentBulkWrite.Delete(event.ns, &e)
 
 	case ReplaceEvent:
-		w.bulkWrite.Replace(event.ns, &e)
+		w.currentBulkWrite.Replace(event.ns, &e)
 	}
 
 	// Track the timestamp of the last event in the batch
@@ -347,7 +346,7 @@ func (w *worker) reportError(err error) {
 // Blocks when bulkQueue is full until the writer dequeues a bulk or dies.
 func (w *worker) queueBulk(pb *pendingBulk) bool {
 	select {
-	case w.bulkQueue <- pb:
+	case w.pendingBulkCh <- pb:
 		return true
 	case <-w.writerDone:
 		return false
@@ -358,20 +357,22 @@ func (w *worker) queueBulk(pb *pendingBulk) bool {
 // creates a fresh bulkWriter for the next batch. Returns true on success,
 // false if the writer goroutine has died (error already reported).
 func (w *worker) submit() bool {
-	if w.bulkWrite.Empty() {
+	if w.currentBulkWrite.Empty() {
 		return true
 	}
 
 	pb := &pendingBulk{
-		writer:     w.bulkWrite,
+		writer:     w.currentBulkWrite,
 		checkpoint: w.pendingTS,
 	}
 
-	if !w.queueBulk(pb) {
+	select {
+	case w.pendingBulkCh <- pb:
+	case <-w.writerDone:
 		return false
 	}
 
-	w.bulkWrite = w.newBulkWriter()
+	w.currentBulkWrite = w.newBulkWriter()
 
 	return true
 }
@@ -385,14 +386,14 @@ func (w *worker) drainRoutedEvents() bool {
 	for {
 		select {
 		case event := <-w.routedEventCh:
-			err := w.addToBatch(event)
+			err := w.addToCurrentBulk(event)
 			if err != nil {
 				w.reportError(err)
 
 				return false
 			}
 
-			if w.bulkWrite.Full() {
+			if w.currentBulkWrite.Full() {
 				if !w.submit() {
 					return false
 				}
