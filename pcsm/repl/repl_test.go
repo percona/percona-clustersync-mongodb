@@ -12,8 +12,9 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
-// mockCatalog implements the Catalog interface with minimal tracking for tests.
 type mockCatalog struct {
+	collectionExists bool
+
 	dropCollectionCalled bool
 	dropCollectionDB     string
 	dropCollectionColl   string
@@ -25,6 +26,10 @@ type mockCatalog struct {
 	setCollectionUUIDCalled bool
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
+}
+
+func (m *mockCatalog) CollectionExists(_, _ string) bool {
+	return m.collectionExists
 }
 
 func (m *mockCatalog) DropCollection(_ context.Context, db, coll string) error {
@@ -106,12 +111,13 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		operationType OperationType
-		sourceExists  bool
-		expectDrop    bool
-		expectCreate  bool
-		expectSetUUID bool
+		name                 string
+		operationType        OperationType
+		sourceExists         bool
+		catalogHasCollection bool
+		expectDrop           bool
+		expectCreate         bool
+		expectSetUUID        bool
 	}{
 		{
 			name:          "drop_skipped_when_source_has_collection",
@@ -130,20 +136,20 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 			expectSetUUID: false,
 		},
 		{
-			name:          "create_skipped_when_source_has_collection",
-			operationType: Create,
-			sourceExists:  true,
-			expectDrop:    false,
-			expectCreate:  false,
-			expectSetUUID: true,
+			name:                 "create_skipped_when_catalog_has_collection",
+			operationType:        Create,
+			catalogHasCollection: true,
+			expectDrop:           false,
+			expectCreate:         false,
+			expectSetUUID:        true,
 		},
 		{
-			name:          "create_proceeds_when_source_missing_collection",
-			operationType: Create,
-			sourceExists:  false,
-			expectDrop:    true,
-			expectCreate:  true,
-			expectSetUUID: true,
+			name:                 "create_proceeds_when_catalog_missing_collection",
+			operationType:        Create,
+			catalogHasCollection: false,
+			expectDrop:           true,
+			expectCreate:         true,
+			expectSetUUID:        true,
 		},
 	}
 
@@ -151,7 +157,9 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cat := &mockCatalog{}
+			cat := &mockCatalog{
+				collectionExists: tt.catalogHasCollection,
+			}
 
 			r := &Repl{
 				catalog:       cat,

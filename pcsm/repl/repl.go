@@ -897,11 +897,12 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		// movePrimary (MongoDB 8.0) emits phantom drop+create events for
-		// collections that still exist on the source. If the collection exists
-		// on source, this create is an artifact — just update the UUID.
-		if r.sourceChecker.CollectionExists(ctx, change.Namespace.Database, change.Namespace.Collection) {
-			lg.Warnf("Collection %q still exists on source (likely movePrimary), updating UUID only",
+		// movePrimary emits phantom drop+create events for collections that
+		// were moved between shards. If the catalog already tracks this
+		// collection (i.e. it exists on the target), the create is a
+		// phantom — just update the UUID to reflect the post-move value.
+		if r.catalog.CollectionExists(change.Namespace.Database, change.Namespace.Collection) {
+			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID only",
 				change.Namespace)
 
 			r.catalog.SetCollectionUUID(ctx,
