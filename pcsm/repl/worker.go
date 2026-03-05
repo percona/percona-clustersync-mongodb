@@ -40,7 +40,7 @@ type pendingBulk struct {
 //
 // Each worker has an async writer goroutine (runWriter) that executes
 // bulk writes in the background. The main loop (run) builds bulks and
-// submits them to bulkQueue; the writer goroutine dequeues and writes
+// enqueues them to pendingBulkCh; the writer goroutine dequeues and writes
 // them. This decouples event reading from MongoDB writes, allowing the
 // worker to keep reading events while a write is in-flight.
 type worker struct {
@@ -61,7 +61,7 @@ type worker struct {
 	writerDone       chan struct{}     // closed when the writer goroutine exits
 	writerErr        error             // set by runWriter on failure, read after <-writerDone
 
-	// Factory for creating fresh bulkWriters after each submit/restart.
+	// Factory for creating fresh bulkWriters after each enqueueBulk/restart.
 	bulkQueueSize int
 	newBulkWriter func() bulkWriter
 
@@ -182,7 +182,7 @@ func (w *worker) restartWriter(ctx context.Context) {
 }
 
 // run is the main loop for the worker. It processes events from eventC,
-// batches them, and submits to the async writer on buffer full, time interval,
+// batches them, and enqueues bulks to the async writer on buffer full, time interval,
 // or barrier signal.
 func (w *worker) run(ctx context.Context) {
 	defer close(w.done)  // signal Barrier/ReleaseBarrier that this worker has exited
@@ -210,8 +210,8 @@ func (w *worker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Submit remaining ops before exit (best-effort)
-			_ = w.submit()
+			// Enqueue remaining ops before exit (best-effort)
+			_ = w.enqueueBulk()
 
 			lg.Debug("Worker stopped (context done)")
 
@@ -233,9 +233,9 @@ func (w *worker) run(ctx context.Context) {
 				return
 			}
 
-			// Submit remaining ops to the writer goroutine.
-			if !w.submit() {
-				w.barrierDone <- errors.Errorf("writer failed during barrier submit")
+			// Enqueue remaining ops to the writer goroutine.
+			if !w.enqueueBulk() {
+				w.barrierDone <- errors.Errorf("writer failed during barrier enqueue")
 
 				return
 			}
@@ -266,7 +266,7 @@ func (w *worker) run(ctx context.Context) {
 
 		case <-ticker.C:
 			if !w.currentBulkWrite.Empty() {
-				if !w.submit() {
+				if !w.enqueueBulk() {
 					lg.Debug("Worker stopped (writer error)")
 
 					return
@@ -275,8 +275,8 @@ func (w *worker) run(ctx context.Context) {
 
 		case event, ok := <-w.routedEventCh:
 			if !ok {
-				// Channel closed, submit and exit (best-effort)
-				_ = w.submit()
+				// Channel closed, enqueue and exit (best-effort)
+				_ = w.enqueueBulk()
 
 				lg.Debug("Worker stopped (channel closed)")
 
@@ -291,7 +291,7 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 			if w.currentBulkWrite.Full() {
-				if !w.submit() {
+				if !w.enqueueBulk() {
 					lg.Debug("Worker stopped (writer error)")
 
 					return
@@ -353,10 +353,10 @@ func (w *worker) queueBulk(pb *pendingBulk) bool {
 	}
 }
 
-// submit seals the current bulk, sends it to the writer goroutine, and
+// enqueueBulk seals the current bulk, sends it to the writer goroutine, and
 // creates a fresh bulkWriter for the next batch. Returns true on success,
 // false if the writer goroutine has died (error already reported).
-func (w *worker) submit() bool {
+func (w *worker) enqueueBulk() bool {
 	if w.currentBulkWrite.Empty() {
 		return true
 	}
@@ -378,7 +378,7 @@ func (w *worker) submit() bool {
 }
 
 // drainRoutedEvents reads all buffered events from routedEventCh and adds them
-// to the current batch, submitting when the batch is full. This must be called
+// to the current batch, enqueuing when the batch is full. This must be called
 // when handling a barrier request to ensure all events routed before the
 // barrier are included in the bulk.
 // Returns true on success, false if a parse error or writer failure occurred.
@@ -394,7 +394,7 @@ func (w *worker) drainRoutedEvents() bool {
 			}
 
 			if w.currentBulkWrite.Full() {
-				if !w.submit() {
+				if !w.enqueueBulk() {
 					return false
 				}
 			}
@@ -409,9 +409,7 @@ type workerPool struct {
 	workers    []*worker
 	numWorkers int
 
-	target             *mongo.Client
-	useCollectionBulk  bool
-	useSimpleCollation bool
+	target *mongo.Client
 
 	errCh  chan error
 	cancel context.CancelFunc
@@ -431,13 +429,11 @@ func newWorkerPool(
 	poolCtx, cancel := context.WithCancel(ctx)
 
 	p := &workerPool{
-		workers:            make([]*worker, numWorkers),
-		numWorkers:         numWorkers,
-		target:             target,
-		useCollectionBulk:  useCollectionBulk,
-		useSimpleCollation: useSimpleCollation,
-		errCh:              make(chan error, 1),
-		cancel:             cancel,
+		workers:    make([]*worker, numWorkers),
+		numWorkers: numWorkers,
+		target:     target,
+		errCh:      make(chan error, 1),
+		cancel:     cancel,
 	}
 
 	// Create and start workers

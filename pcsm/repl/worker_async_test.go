@@ -21,9 +21,9 @@ func makeInsertEventWithTS(id string, ts bson.Timestamp) *routedEvent {
 	return event
 }
 
-// TestSubmit_EmptyBulkIsNoop verifies that submit() on an empty bulk is a
+// TestEnqueueBulk_EmptyBulkIsNoop verifies that enqueueBulk() on an empty bulk is a
 // no-op: returns true without queuing anything to bulkQueue.
-func TestSubmit_EmptyBulkIsNoop(t *testing.T) {
+func TestEnqueueBulk_EmptyBulkIsNoop(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
@@ -32,16 +32,16 @@ func TestSubmit_EmptyBulkIsNoop(t *testing.T) {
 		writerDone:       make(chan struct{}),
 	}
 
-	ok := w.submit()
+	ok := w.enqueueBulk()
 
-	assert.True(t, ok, "submit on empty bulk should succeed")
+	assert.True(t, ok, "enqueueBulk on empty bulk should succeed")
 	assert.Empty(t, w.pendingBulkCh, "nothing should be queued")
 }
 
-// TestSubmit_SealsBulkAndQueues verifies that submit() seals the current
+// TestEnqueueBulk_SealsBulkAndQueues verifies that enqueueBulk() seals the current
 // bulkWriter into a pendingBulk with the correct checkpoint timestamp,
 // queues it, and replaces w.bulkWrite with a fresh writer.
-func TestSubmit_SealsBulkAndQueues(t *testing.T) {
+func TestEnqueueBulk_SealsBulkAndQueues(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockBulkWriter{count: 3}
@@ -55,8 +55,8 @@ func TestSubmit_SealsBulkAndQueues(t *testing.T) {
 		newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
 	}
 
-	ok := w.submit()
-	require.True(t, ok, "submit should succeed")
+	ok := w.enqueueBulk()
+	require.True(t, ok, "enqueueBulk should succeed")
 
 	// Verify the sealed bulk was queued with correct fields.
 	require.Len(t, w.pendingBulkCh, 1, "one bulk should be queued")
@@ -70,21 +70,21 @@ func TestSubmit_SealsBulkAndQueues(t *testing.T) {
 	assert.NotEqual(t, mock, w.currentBulkWrite, "bulkWrite should be a new instance")
 }
 
-// TestSubmit_ReturnsFalseWhenWriterDead verifies that submit() returns false
+// TestEnqueueBulk_ReturnsFalseWhenWriterDead verifies that enqueueBulk() returns false
 // when the writer goroutine has already exited (writerDone closed).
-func TestSubmit_ReturnsFalseWhenWriterDead(t *testing.T) {
+func TestEnqueueBulk_ReturnsFalseWhenWriterDead(t *testing.T) {
 	t.Parallel()
 
 	w := &worker{
-		currentBulkWrite: &mockBulkWriter{count: 1}, // non-empty so submit tries to queue
+		currentBulkWrite: &mockBulkWriter{count: 1}, // non-empty so enqueueBulk tries to queue
 		pendingBulkCh:    make(chan *pendingBulk, 1),
 		writerDone:       make(chan struct{}),
 	}
 
 	close(w.writerDone) // simulate dead writer
 
-	ok := w.submit()
-	assert.False(t, ok, "submit should fail when writer is dead")
+	ok := w.enqueueBulk()
+	assert.False(t, ok, "enqueueBulk should fail when writer is dead")
 }
 
 // TestQueueBulk_BlocksWhenFull verifies that queueBulk blocks when the
@@ -246,7 +246,7 @@ func TestAsyncPipeline_WriterErrorStopsWorker(t *testing.T) {
 	w := pool.workers[0]
 
 	// Send one event. The worker's ticker will fire (flushInterval=1s),
-	// triggering submit(). The writer goroutine calls Do() → error →
+	// triggering enqueueBulk(). The writer goroutine calls Do() → error →
 	// closes writerDone → main loop exits.
 	w.routedEventCh <- makeInsertEvent("doc-0")
 
@@ -271,7 +271,7 @@ func TestAsyncPipeline_WriterErrorStopsWorker(t *testing.T) {
 // TestAsyncPipeline_BarrierDrainsQueue verifies that a barrier correctly
 // drains all pending events through the async pipeline. Multiple events
 // per worker are sent to exercise the full drain sequence:
-// drainRoutedEvents → submit → close(bulkQueue) → writer finishes all.
+// drainRoutedEvents → enqueueBulk → close(pendingBulkCh) → writer finishes all.
 func TestAsyncPipeline_BarrierDrainsQueue(t *testing.T) {
 	t.Parallel()
 
