@@ -68,7 +68,7 @@ var (
 		Name:      "repl_worker_flush_batch_size",
 		Help:      "Number of operations per bulk write flush.",
 		Namespace: metricNamespace,
-		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 2500, 5000},
+		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000},
 	}, []string{"worker"})
 
 	//nolint:gochecknoglobals
