@@ -368,6 +368,7 @@ func (w *worker) enqueueBulk() bool {
 
 	select {
 	case w.pendingBulkCh <- pb:
+		metrics.SetReplWorkerBulkQueueSize(w.id, len(w.pendingBulkCh))
 	case <-w.writerDone:
 		return false
 	}

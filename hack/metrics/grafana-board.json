@@ -483,6 +483,106 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 27,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.6.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_repl_worker_bulk_queue_size",
+          "instant": false,
+          "legendFormat": "Worker {{worker}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Worker Bulk Queue Size",
+      "type": "timeseries",
+      "description": "Number of sealed bulks waiting in each worker's async write queue. Red line indicates max capacity (3). Sustained values near the limit mean bulk writes to the target cannot keep up with event processing."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
             "fillOpacity": 0,
             "gradientMode": "none",
             "hideFrom": {
@@ -528,7 +628,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 17
+        "y": 25
       },
       "id": 18,
       "options": {
@@ -628,7 +728,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 17
+        "y": 25
       },
       "id": 19,
       "options": {
@@ -729,7 +829,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 25
+        "y": 33
       },
       "id": 20,
       "options": {
@@ -772,7 +872,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 41
       },
       "id": 4,
       "panels": [],
@@ -843,7 +943,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 42
       },
       "id": 2,
       "options": {
@@ -959,7 +1059,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 42
       },
       "id": 12,
       "options": {
@@ -1083,7 +1183,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 50
       },
       "id": 13,
       "options": {
@@ -1206,7 +1306,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 50
       },
       "id": 14,
       "options": {
@@ -1271,7 +1371,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 58
       },
       "id": 7,
       "panels": [],
@@ -1342,7 +1442,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 51
+        "y": 59
       },
       "id": 8,
       "options": {
@@ -1442,7 +1542,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 51
+        "y": 59
       },
       "id": 9,
       "options": {
@@ -1543,7 +1643,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 51
+        "y": 59
       },
       "id": 10,
       "options": {
@@ -1644,7 +1744,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 59
+        "y": 67
       },
       "id": 22,
       "options": {
@@ -1744,7 +1844,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 59
+        "y": 67
       },
       "id": 23,
       "options": {
@@ -1844,7 +1944,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 59
+        "y": 67
       },
       "id": 24,
       "options": {
@@ -1955,7 +2055,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 75
       },
       "id": 25,
       "options": {
@@ -2069,7 +2169,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 75
       },
       "id": 26,
       "options": {
