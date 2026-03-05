@@ -292,17 +292,23 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Int("repl-num-workers", 0,
 		"Number of replication workers (0 = auto)")
 	cmd.Flags().Int("repl-change-stream-batch-size", 0,
-		"Change stream batch size for replication (default: 10000)")
+		fmt.Sprintf("Change stream batch size for replication (default: %d)",
+			config.ChangeStreamBatchSize))
 	cmd.Flags().Int("repl-event-queue-size", 0,
-		"Event queue size between change stream reader and dispatcher (default: 5000)")
+		fmt.Sprintf("Event queue size between change stream reader and dispatcher (default: %d)",
+			config.ReplQueueSize))
 	cmd.Flags().Int("repl-worker-queue-size", 0,
-		"Per-worker routed event queue size (default: 5000)")
+		fmt.Sprintf("Per-worker routed event queue size (default: %d)",
+			config.ReplQueueSize))
 	cmd.Flags().Int("repl-bulk-ops-size", 0,
-		"Maximum number of operations per bulk write (default: 5000)")
+		fmt.Sprintf("Maximum number of operations per bulk write (default: %d)",
+			config.BulkOpsSize))
 	cmd.Flags().String("repl-worker-flush-interval", "0s",
-		"Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (default: 1s)")
+		fmt.Sprintf("Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (default: %s)",
+			config.WorkerFlushInterval))
 	cmd.Flags().Int("repl-worker-bulk-queue-size", 0,
-		"Number of pending bulks per worker for async writes (default: 3)")
+		fmt.Sprintf("Number of pending bulks per worker for async writes (default: %d)",
+			config.WorkerBulkQueueSize))
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
