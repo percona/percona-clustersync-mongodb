@@ -99,45 +99,18 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
-type mockNamespaceChecker struct {
-	exists bool
-}
-
-func (m *mockNamespaceChecker) CollectionExists(_ context.Context, _, _ string) bool {
-	return m.exists
-}
-
 func TestApplyDDLChange_MovePrimary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name                 string
-		operationType        OperationType
-		sourceExists         bool
 		catalogHasCollection bool
 		expectDrop           bool
 		expectCreate         bool
 		expectSetUUID        bool
 	}{
 		{
-			name:          "drop_skipped_when_source_has_collection",
-			operationType: Drop,
-			sourceExists:  true,
-			expectDrop:    false,
-			expectCreate:  false,
-			expectSetUUID: false,
-		},
-		{
-			name:          "drop_proceeds_when_source_missing_collection",
-			operationType: Drop,
-			sourceExists:  false,
-			expectDrop:    true,
-			expectCreate:  false,
-			expectSetUUID: false,
-		},
-		{
 			name:                 "create_skipped_when_catalog_has_collection",
-			operationType:        Create,
 			catalogHasCollection: true,
 			expectDrop:           false,
 			expectCreate:         false,
@@ -145,7 +118,6 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 		},
 		{
 			name:                 "create_proceeds_when_catalog_missing_collection",
-			operationType:        Create,
 			catalogHasCollection: false,
 			expectDrop:           true,
 			expectCreate:         true,
@@ -162,13 +134,12 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 			}
 
 			r := &Repl{
-				catalog:       cat,
-				sourceChecker: &mockNamespaceChecker{exists: tt.sourceExists},
+				catalog: cat,
 			}
 
 			change := &ChangeEvent{
 				EventHeader: EventHeader{
-					OperationType: tt.operationType,
+					OperationType: Create,
 					Namespace: catalog.Namespace{
 						Database:   "testdb",
 						Collection: "testcoll",
