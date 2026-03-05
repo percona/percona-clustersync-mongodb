@@ -68,7 +68,7 @@ var (
 		Name:      "repl_worker_flush_batch_size",
 		Help:      "Number of operations per bulk write flush.",
 		Namespace: metricNamespace,
-		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 2500, 5000},
+		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000},
 	}, []string{"worker"})
 
 	//nolint:gochecknoglobals
@@ -77,6 +77,13 @@ var (
 		Help:      "Duration of bulk write flushes in seconds.",
 		Namespace: metricNamespace,
 		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+	}, []string{"worker"})
+
+	//nolint:gochecknoglobals
+	replWorkerBulkQueueSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:      "repl_worker_bulk_queue_size",
+		Help:      "Number of sealed bulks pending write in a worker's async queue.",
+		Namespace: metricNamespace,
 	}, []string{"worker"})
 )
 
@@ -158,6 +165,7 @@ func Init(reg prometheus.Registerer) {
 		replWorkerEventsAppliedTotal,
 		replWorkerFlushBatchSize,
 		replWorkerFlushDurationSeconds,
+		replWorkerBulkQueueSize,
 	)
 }
 
@@ -241,4 +249,9 @@ func ObserveReplWorkerFlushBatchSize(worker string, v int) {
 // ObserveReplWorkerFlushDuration records the duration of a worker's bulk write flush.
 func ObserveReplWorkerFlushDuration(worker string, d time.Duration) {
 	replWorkerFlushDurationSeconds.WithLabelValues(worker).Observe(d.Seconds())
+}
+
+// SetReplWorkerBulkQueueSize sets the current depth of a worker's pending bulk queue.
+func SetReplWorkerBulkQueueSize(worker string, v int) {
+	replWorkerBulkQueueSize.WithLabelValues(worker).Set(float64(v))
 }

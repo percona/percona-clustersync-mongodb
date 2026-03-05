@@ -251,6 +251,14 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Repl.BulkOpsSize
 				startOptions.ReplBulkOpsSize = &v
 			}
+			if cfg.Repl.WorkerFlushInterval != 0 {
+				v := cfg.Repl.WorkerFlushInterval.String()
+				startOptions.ReplWorkerFlushInterval = &v
+			}
+			if cfg.Repl.WorkerBulkQueueSize != 0 {
+				v := cfg.Repl.WorkerBulkQueueSize
+				startOptions.ReplWorkerBulkQueueSize = &v
+			}
 
 			if cfg.UseCollectionBulkWrite {
 				v := cfg.UseCollectionBulkWrite
@@ -284,13 +292,23 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Int("repl-num-workers", 0,
 		"Number of replication workers (0 = auto)")
 	cmd.Flags().Int("repl-change-stream-batch-size", 0,
-		"Change stream batch size for replication (0 = auto)")
+		fmt.Sprintf("Change stream batch size for replication (default: %d)",
+			config.ChangeStreamBatchSize))
 	cmd.Flags().Int("repl-event-queue-size", 0,
-		"Event queue size between change stream reader and dispatcher (0 = auto)")
+		fmt.Sprintf("Event queue size between change stream reader and dispatcher (default: %d)",
+			config.ReplQueueSize))
 	cmd.Flags().Int("repl-worker-queue-size", 0,
-		"Per-worker routed event queue size (0 = auto)")
+		fmt.Sprintf("Per-worker routed event queue size (default: %d)",
+			config.ReplQueueSize))
 	cmd.Flags().Int("repl-bulk-ops-size", 0,
-		"Maximum number of operations per bulk write (0 = auto)")
+		fmt.Sprintf("Maximum number of operations per bulk write (default: %d)",
+			config.BulkOpsSize))
+	cmd.Flags().String("repl-worker-flush-interval", "0s",
+		fmt.Sprintf("Maximum interval between worker bulk write flushes (e.g., 1s, 500ms) (default: %s)",
+			config.WorkerFlushInterval))
+	cmd.Flags().Int("repl-worker-bulk-queue-size", 0,
+		fmt.Sprintf("Number of pending bulks per worker for async writes (default: %d)",
+			config.WorkerBulkQueueSize))
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
@@ -766,6 +784,8 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 			EventQueueSize:         cfg.Repl.EventQueueSize,
 			WorkerQueueSize:        cfg.Repl.WorkerQueueSize,
 			BulkOpsSize:            cfg.Repl.BulkOpsSize,
+			WorkerFlushInterval:    cfg.Repl.WorkerFlushInterval,
+			WorkerBulkQueueSize:    cfg.Repl.WorkerBulkQueueSize,
 		},
 		Clone: clone.Options{
 			Parallelism:   cfg.Clone.NumParallelCollections,
@@ -854,6 +874,18 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 
 	if params.ReplBulkOpsSize != nil {
 		options.Repl.BulkOpsSize = *params.ReplBulkOpsSize
+	}
+
+	if params.ReplWorkerFlushInterval != nil {
+		d, err := time.ParseDuration(*params.ReplWorkerFlushInterval)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid replWorkerFlushInterval value: %s", *params.ReplWorkerFlushInterval)
+		}
+		options.Repl.WorkerFlushInterval = d
+	}
+
+	if params.ReplWorkerBulkQueueSize != nil {
+		options.Repl.WorkerBulkQueueSize = *params.ReplWorkerBulkQueueSize
 	}
 
 	if params.UseCollectionBulkWrite != nil {
@@ -1088,6 +1120,10 @@ type startRequest struct {
 	ReplWorkerQueueSize *int `json:"replWorkerQueueSize,omitempty"`
 	// ReplBulkOpsSize is the maximum number of operations per bulk write.
 	ReplBulkOpsSize *int `json:"replBulkOpsSize,omitempty"`
+	// ReplWorkerFlushInterval is the maximum interval between worker bulk write flushes (e.g., "1s", "500ms").
+	ReplWorkerFlushInterval *string `json:"replWorkerFlushInterval,omitempty"`
+	// ReplWorkerBulkQueueSize is the number of pending bulks per worker for async writes.
+	ReplWorkerBulkQueueSize *int `json:"replWorkerBulkQueueSize,omitempty"`
 
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write.
