@@ -77,7 +77,7 @@ func TestEnqueueBulk_ReturnsFalseWhenWriterDead(t *testing.T) {
 
 	w := &worker{
 		currentBulkWrite: &mockBulkWriter{count: 1}, // non-empty so enqueueBulk tries to queue
-		pendingBulkCh:    make(chan *pendingBulk, 1),
+		pendingBulkCh:    make(chan *pendingBulk),   // unbuffered: send always blocks (no receiver), so select picks writerDone
 		writerDone:       make(chan struct{}),
 	}
 

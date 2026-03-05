@@ -62,19 +62,19 @@ type ReplConfig struct {
 	ChangeStreamBatchSize int `mapstructure:"repl-change-stream-batch-size"`
 	// EventQueueSize is the buffer size of the channel between the change stream
 	// reader and the dispatcher.
-	// Defaults to config.ReplQueueSize.
+	// Defaults to [ReplQueueSize].
 	EventQueueSize int `mapstructure:"repl-event-queue-size"`
 	// WorkerQueueSize is the per-worker routed event channel buffer size.
-	// Defaults to config.ReplQueueSize.
+	// Defaults to [ReplQueueSize].
 	WorkerQueueSize int `mapstructure:"repl-worker-queue-size"`
 	// BulkOpsSize is the maximum number of operations per bulk write.
-	// Defaults to config.BulkOpsSize.
+	// Defaults to [BulkOpsSize].
 	BulkOpsSize int `mapstructure:"repl-bulk-ops-size"`
 	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
-	// Defaults to config.WorkerFlushInterval.
+	// Defaults to [WorkerFlushInterval].
 	WorkerFlushInterval time.Duration `mapstructure:"repl-worker-flush-interval"`
 	// WorkerBulkQueueSize is the number of pending bulks per worker.
-	// Defaults to config.WorkerBulkQueueSize.
+	// Defaults to [WorkerBulkQueueSize].
 	WorkerBulkQueueSize int `mapstructure:"repl-worker-bulk-queue-size"`
 }
 
