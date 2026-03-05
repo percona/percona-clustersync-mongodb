@@ -255,6 +255,10 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Repl.WorkerFlushInterval.String()
 				startOptions.ReplWorkerFlushInterval = &v
 			}
+			if cfg.Repl.WorkerBulkQueueSize != 0 {
+				v := cfg.Repl.WorkerBulkQueueSize
+				startOptions.ReplWorkerBulkQueueSize = &v
+			}
 
 			if cfg.UseCollectionBulkWrite {
 				v := cfg.UseCollectionBulkWrite
@@ -874,6 +878,10 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Repl.WorkerFlushInterval = d
 	}
 
+	if params.ReplWorkerBulkQueueSize != nil {
+		options.Repl.WorkerBulkQueueSize = *params.ReplWorkerBulkQueueSize
+	}
+
 	if params.UseCollectionBulkWrite != nil {
 		options.Repl.UseCollectionBulkWrite = *params.UseCollectionBulkWrite
 	}
@@ -1108,6 +1116,8 @@ type startRequest struct {
 	ReplBulkOpsSize *int `json:"replBulkOpsSize,omitempty"`
 	// ReplWorkerFlushInterval is the maximum interval between worker bulk write flushes (e.g., "1s", "500ms").
 	ReplWorkerFlushInterval *string `json:"replWorkerFlushInterval,omitempty"`
+	// ReplWorkerBulkQueueSize is the number of pending bulks per worker for async writes.
+	ReplWorkerBulkQueueSize *int `json:"replWorkerBulkQueueSize,omitempty"`
 
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write.
