@@ -70,12 +70,13 @@ docker exec rs10 mongosh --port 30100 --quiet --eval "rs.status().ok"
 ## Commands
 
 ```bash
-make build       # Production build
-make test-build  # Debug build with race detection
-make test        # Run Go tests with race detection
-make lint        # Run golangci-lint (formats code automatically)
-make pytest      # Run Python E2E tests
-make clean       # Remove binaries and caches
+make build            # Production build
+make test-build       # Debug build with race detection
+make test             # Run Go unit tests with race detection
+make test-integration # Run Go integration tests (uses testcontainers, requires Docker)
+make lint             # Run golangci-lint (formats code automatically)
+make pytest           # Run Python E2E tests
+make clean            # Remove binaries and caches
 ```
 
 Start local MongoDB clusters for testing:
@@ -89,8 +90,9 @@ Start local MongoDB clusters for testing:
 
 Single test:
 
-- `go test -race -run TestName ./package`
-- `poetry run pytest tests/test_file.py::test_name` (requires MongoDB containers running)
+- `go test -race -run TestName ./package` (unit tests)
+- `go test -v -tags integration -run TestName ./pcsm/catalog/...` (integration tests, requires Docker)
+- `.venv/bin/pytest tests/test_file.py::test_name` (requires MongoDB containers running; use `poetry run pytest` if poetry works)
 - manually execute binary from `./bin` for cases not covered by tests (requires MongoDB containers running)
 
 Cleanup test environments:
@@ -174,8 +176,9 @@ Use sparingly with justification. Common cases:
 When modifying code, always finish with:
 
 1. `make lint` - must pass with no new issues
-2. `make test` - all Go tests must pass
-3. `make pytest` - all E2E tests must pass (if available)
+2. `make test` - all Go unit tests must pass
+3. `make test-integration` - all Go integration tests must pass (requires Docker)
+4. `make pytest` - all E2E tests must pass (if available)
 
 These checks must be the final tasks before considering work complete.
 
@@ -369,7 +372,7 @@ export TEST_TARGET_URI="mongodb://rs10:30100"
 Run tests including slow tests (disabled by default):
 
 ```bash
-poetry run pytest --runslow
+.venv/bin/pytest --runslow
 ```
 
 ## Monitoring & Debugging

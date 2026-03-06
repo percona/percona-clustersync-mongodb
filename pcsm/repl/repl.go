@@ -873,6 +873,22 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
+		// movePrimary emits a phantom create event (via mongos change stream)
+		// for collections moved between shards. If the catalog already tracks
+		// this collection, the create is a phantom — just update the UUID to
+		// reflect the post-move value.
+		if r.catalog.CollectionExists(change.Namespace.Database, change.Namespace.Collection) {
+			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID only",
+				change.Namespace)
+
+			r.catalog.SetCollectionUUID(ctx,
+				change.Namespace.Database,
+				change.Namespace.Collection,
+				change.CollectionUUID)
+
+			return nil
+		}
+
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
