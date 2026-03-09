@@ -66,6 +66,10 @@ const (
 	BulkOpsSize = 5_000
 	// WorkerFlushInterval is the maximum interval between worker bulk write flushes.
 	WorkerFlushInterval = time.Second
+	// WorkerBulkQueueSize is the number of pending bulks that can be queued per worker
+	// while a bulk write is in-flight. Higher values increase throughput by
+	// allowing more pre-population but use more memory.
+	WorkerBulkQueueSize = 3
 	// InitialSyncCheckInterval is the interval for checking the initial sync status.
 	InitialSyncCheckInterval = 10 * time.Second
 	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.
