@@ -129,6 +129,7 @@ type ModifyIndexOption struct {
 
 // BaseCatalog defines the shared collection-level operations used by clone and repl packages.
 type BaseCatalog interface {
+	CollectionExists(db, coll string) bool
 	DropCollection(ctx context.Context, db, coll string) error
 	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
 	CreateIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification) error
@@ -835,6 +836,21 @@ func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, t
 	collectionEntry.AddedAt = ts
 	databaseEntry.Collections[coll] = collectionEntry
 	c.Databases[db] = databaseEntry
+}
+
+// CollectionExists checks whether a collection is tracked in the catalog.
+func (c *Catalog) CollectionExists(db, coll string) bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	dbEntry, ok := c.Databases[db]
+	if !ok {
+		return false
+	}
+
+	_, ok = dbEntry.Collections[coll]
+
+	return ok
 }
 
 // SetCollectionUUID sets the UUID for a collection in the catalog.
