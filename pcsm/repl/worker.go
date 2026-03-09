@@ -122,9 +122,9 @@ func newWorker(
 	return w
 }
 
-// runWriter is the writer goroutine. It reads sealed bulks from bulkQueue,
+// runWriter is the writer goroutine. It reads sealed bulks from pendingBulkCh,
 // executes them against MongoDB, and updates the committed timestamp.
-// It exits when bulkQueue is closed (normal) or a write fails (error).
+// It exits when pendingBulkCh is closed (normal) or a write fails (error).
 // On exit it closes writerDone so the main loop can detect it.
 func (w *worker) runWriter(ctx context.Context) {
 	defer close(w.writerDone)
@@ -228,19 +228,19 @@ func (w *worker) run(ctx context.Context) {
 
 			// Drain all buffered events routed before the barrier was requested.
 			if !w.drainRoutedEvents() {
-				w.barrierDone <- errors.Errorf("writer failed during barrier drain")
+				w.barrierDone <- errors.Wrap(w.writerErr, "writer failed during barrier drain")
 
 				return
 			}
 
 			// Enqueue remaining ops to the writer goroutine.
 			if !w.enqueueBulk() {
-				w.barrierDone <- errors.Errorf("writer failed during barrier enqueue")
+				w.barrierDone <- errors.Wrap(w.writerErr, "writer failed during barrier enqueue")
 
 				return
 			}
 
-			// Close bulkQueue and wait for the writer to finish all pending bulks.
+			// Close pendingBulkCh and wait for the writer to finish all pending bulks.
 			close(w.pendingBulkCh)
 			<-w.writerDone
 
@@ -338,18 +338,6 @@ func (w *worker) reportError(err error) {
 	case w.errCh <- err:
 	default:
 		// Error channel full, another error already reported
-	}
-}
-
-// queueBulk sends a sealed bulk to the writer goroutine. Returns true on
-// success, false if the writer has already exited (writerDone closed).
-// Blocks when bulkQueue is full until the writer dequeues a bulk or dies.
-func (w *worker) queueBulk(pb *pendingBulk) bool {
-	select {
-	case w.pendingBulkCh <- pb:
-		return true
-	case <-w.writerDone:
-		return false
 	}
 }
 

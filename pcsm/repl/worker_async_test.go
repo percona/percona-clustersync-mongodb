@@ -77,91 +77,16 @@ func TestEnqueueBulk_ReturnsFalseWhenWriterDead(t *testing.T) {
 
 	w := &worker{
 		currentBulkWrite: &mockBulkWriter{count: 1}, // non-empty so enqueueBulk tries to queue
-		pendingBulkCh:    make(chan *pendingBulk),   // unbuffered: send always blocks (no receiver), so select picks writerDone
-		writerDone:       make(chan struct{}),
+		// unbuffered: send always blocks (no receiver),
+		// so select picks writerDone
+		pendingBulkCh: make(chan *pendingBulk),
+		writerDone:    make(chan struct{}),
 	}
 
 	close(w.writerDone) // simulate dead writer
 
 	ok := w.enqueueBulk()
 	assert.False(t, ok, "enqueueBulk should fail when writer is dead")
-}
-
-// TestQueueBulk_BlocksWhenFull verifies that queueBulk blocks when the
-// bulkQueue channel is at capacity, and unblocks once a slot is freed.
-func TestQueueBulk_BlocksWhenFull(t *testing.T) {
-	t.Parallel()
-
-	w := &worker{
-		pendingBulkCh: make(chan *pendingBulk, 1),
-		writerDone:    make(chan struct{}),
-	}
-
-	// Fill the queue to capacity.
-	w.pendingBulkCh <- &pendingBulk{}
-
-	// Next queueBulk should block.
-	result := make(chan bool, 1)
-
-	go func() {
-		result <- w.queueBulk(&pendingBulk{})
-	}()
-
-	select {
-	case <-result:
-		t.Fatal("queueBulk should block when queue is full")
-	case <-time.After(50 * time.Millisecond):
-		// Expected: blocked.
-	}
-
-	// Drain one item to unblock.
-	<-w.pendingBulkCh
-
-	select {
-	case ok := <-result:
-		assert.True(t, ok, "queueBulk should succeed after space freed")
-	case <-time.After(barrierTimeout):
-		t.Fatal("queueBulk did not unblock after draining queue")
-	}
-}
-
-// TestQueueBulk_UnblocksOnWriterDone verifies that queueBulk returns false
-// when the writer goroutine dies (writerDone closed) while blocked on a
-// full queue.
-func TestQueueBulk_UnblocksOnWriterDone(t *testing.T) {
-	t.Parallel()
-
-	w := &worker{
-		pendingBulkCh: make(chan *pendingBulk, 1),
-		writerDone:    make(chan struct{}),
-	}
-
-	// Fill the queue to capacity.
-	w.pendingBulkCh <- &pendingBulk{}
-
-	// queueBulk blocks on full queue.
-	result := make(chan bool, 1)
-
-	go func() {
-		result <- w.queueBulk(&pendingBulk{})
-	}()
-
-	select {
-	case <-result:
-		t.Fatal("queueBulk should block when queue is full")
-	case <-time.After(50 * time.Millisecond):
-		// Expected: blocked.
-	}
-
-	// Close writerDone to simulate writer death.
-	close(w.writerDone)
-
-	select {
-	case ok := <-result:
-		assert.False(t, ok, "queueBulk should return false when writer dies")
-	case <-time.After(barrierTimeout):
-		t.Fatal("queueBulk did not unblock after writerDone closed")
-	}
 }
 
 // TestAsyncPipeline_EventsApplied verifies the end-to-end async pipeline:
