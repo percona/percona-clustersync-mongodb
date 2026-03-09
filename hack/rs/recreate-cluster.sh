@@ -64,7 +64,7 @@ if $SOURCE; then
     echo "  Waiting for MongoDB..."
     sleep 3
     echo "  Initializing replica set..."
-    docker exec rs00 mongosh --port 30000 --quiet /cfg/scripts/rs0.js
+    docker exec rs00 mongosh --port 50000 --quiet /cfg/scripts/rs0.js
 fi
 
 if $TARGET; then
@@ -88,7 +88,7 @@ if $TARGET; then
     echo "  Waiting for MongoDB..."
     sleep 3
     echo "  Initializing replica set..."
-    docker exec rs10 mongosh --port 30100 --quiet /cfg/scripts/rs1.js
+    docker exec rs10 mongosh --port 50100 --quiet /cfg/scripts/rs1.js
 fi
 
 echo "Done."

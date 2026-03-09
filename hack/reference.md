@@ -1,18 +1,16 @@
-
 ## PMM External Sources
 
 Metrics Endpoint for PMM in a docker and PCSM on a local host:
+
 ```
 host.docker.internal:2242/metrics
 ```
 
-
 ## PCSM CLI
 
 ```shell
-go install . && pcsm --source="mongodb://rs00:30000" --target="mongodb://rs10:30100" --reset-state --log-level="debug"
+go install . && pcsm --source="mongodb://rs00:50000" --target="mongodb://rs10:50100" --reset-state --log-level="debug"
 ```
-
 
 ## PCSM Server
 
@@ -30,7 +28,6 @@ curl -H 'Content-Type: application/json' \
 curl localhost:2242/status
 ```
 
-
 ## Poetry
 
 ```shell
@@ -41,9 +38,8 @@ poetry run pytest -v -s tests/test_collections.py
 poetry run pytest -v -s tests/test_collections.py::test_rename
 ```
 
-
 ## oplog operations
 
 ```javascript
-db.oplog.rs.find({ op: "c" }).sort({ wall: 1 }).limit(10) //find 10 op:c operations logs sorted by wall field
+db.oplog.rs.find({ op: "c" }).sort({ wall: 1 }).limit(10); //find 10 op:c operations logs sorted by wall field
 ```

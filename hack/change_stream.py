@@ -7,7 +7,7 @@ Useful for debugging and monitoring replication.
 
 Usage:
     python hack/change_stream.py -u "mongodb://localhost:27017"
-    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+    python hack/change_stream.py --uri "mongodb://rs00:50000" --show-checkpoints
 
 Options:
     -u, --uri               MongoDB connection string (required)
@@ -28,7 +28,7 @@ def parse_args():
         epilog="""
 Examples:
     python hack/change_stream.py -u "mongodb://localhost:27017"
-    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+    python hack/change_stream.py --uri "mongodb://rs00:50000" --show-checkpoints
         """,
     )
     parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")

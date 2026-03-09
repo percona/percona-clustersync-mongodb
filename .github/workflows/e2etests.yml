@@ -57,8 +57,8 @@ jobs:
 
       - name: Run tests (pytest)
         run: |
-          export TEST_SOURCE_URI=mongodb://rs00:30000
-          export TEST_TARGET_URI=mongodb://rs10:30100
+          export TEST_SOURCE_URI=mongodb://rs00:50000
+          export TEST_TARGET_URI=mongodb://rs10:50100
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
