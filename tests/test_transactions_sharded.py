@@ -136,3 +136,31 @@ def test_in_progress_aborted(t: Testing):
     assert t.source["db_1"]["coll_1"].count_documents({}) == 0
 
     t.compare_all()
+
+
+def test_cross_shard(t: Testing):
+    t.source["db_1"].create_collection("coll_1")
+    t.source.admin.command("shardCollection", "db_1.coll_1", key={"_id": "hashed"})
+
+    num_docs = 20
+    expected = num_docs + 1
+
+    with t.run(phase=Runner.Phase.APPLY):
+        with t.source.start_session() as sess:
+            sess.start_transaction()
+            t.source["db_1"]["coll_1"].insert_many(
+                [{"i": i} for i in range(num_docs)], session=sess
+            )
+            sess.commit_transaction()
+
+        t.source["db_1"]["coll_1"].insert_one({"i": num_docs})
+
+        # Poll target until all documents are replicated. On sharded clusters with
+        # multi-shard transactions, PCSM's optime tracking (used by wait_for_current_optime)
+        # can advance past events that haven't been read from all shards yet. Polling the
+        # actual target count avoids that race.
+        t.wait_target_count("db_1", "coll_1", expected)
+
+    assert t.source["db_1"]["coll_1"].count_documents({}) == expected
+
+    t.compare_all_sharded()
