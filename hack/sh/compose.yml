@@ -6,7 +6,12 @@ services:
     container_name: src-mongos
     hostname: src-mongos
     mem_limit: 512m
-    memswap_limit: 512m
+    memswap_limit: 4g
+    environment:
+      # MongoDB 8.0+ on AMD Zen 5 (Shadow Stacks / user_shstk): mongod SIGSEGV at ~30s
+      # due to C++ coroutine stack pivoting triggering hardware CET trap (MongoDB BugID 3392546).
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["27017:27017"]
     volumes: ["./mongo/:/cfg:ro"]
     command:
@@ -23,7 +28,10 @@ services:
     container_name: src-cfg0
     hostname: src-cfg0
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["27000:27000"]
     volumes: ["src-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -42,7 +50,10 @@ services:
     container_name: src-rs00
     hostname: src-rs00
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["30000:30000"]
     volumes: ["src-rs00:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -61,7 +72,10 @@ services:
     container_name: src-rs10
     hostname: src-rs10
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["30100:30100"]
     volumes: ["src-rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -80,7 +94,10 @@ services:
     container_name: src-rs20
     hostname: src-rs20
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["30200:30200"]
     volumes: ["src-rs20:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -100,7 +117,10 @@ services:
     container_name: tgt-mongos
     hostname: tgt-mongos
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["29017:27017"]
     volumes: ["./mongo/:/cfg:ro"]
     command:
@@ -117,7 +137,10 @@ services:
     container_name: tgt-cfg0
     hostname: tgt-cfg0
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["28000:28000"]
     volumes: ["tgt-cfg0:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -136,7 +159,10 @@ services:
     container_name: tgt-rs00
     hostname: tgt-rs00
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["40000:40000"]
     volumes: ["tgt-rs00:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -155,7 +181,10 @@ services:
     container_name: tgt-rs10
     hostname: tgt-rs10
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["40100:40100"]
     volumes: ["tgt-rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
@@ -174,7 +203,10 @@ services:
     container_name: tgt-rs20
     hostname: tgt-rs20
     mem_limit: 2g
-    memswap_limit: 2g
+    memswap_limit: 4g
+    environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
+      - PERCONA_TELEMETRY_DISABLE=1
     ports: ["40200:40200"]
     volumes: ["tgt-rs20:/data/db", "./mongo/:/cfg:ro"]
     command:

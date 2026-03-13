@@ -446,10 +446,6 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
-	// txnOps stores transaction operations during processing.
-	// This buffer is reused to minimize memory allocations.
-	var txnOps []*ChangeEvent
-
 	for {
 		lastEventTS := bson.Timestamp{}
 		hasEvents := false
@@ -467,70 +463,9 @@ func (r *Repl) watchChangeEvents(
 				return err
 			}
 
-			if !change.IsTransaction() {
-				ts := change.ClusterTime
-				changeCh <- change
-				lastEventTS = ts
-
-				continue
-			}
-
-			txn0 := change // the first transaction operation
-			for txn0 != nil {
-				for cur.TryNext(ctx) {
-					r.eventsRead.Add(1)
-					metrics.IncEventsRead()
-
-					change = &ChangeEvent{}
-					change.RawData = append(change.RawData, cur.Current...)
-
-					err := parseEventHeader(change.RawData, &change.EventHeader)
-					if err != nil {
-						return err
-					}
-
-					if txn0.IsSameTransaction(&change.EventHeader) {
-						txnOps = append(txnOps, change)
-
-						continue
-					}
-
-					// send the entire transaction for replication
-					changeCh <- txn0
-					for _, txn := range txnOps {
-						changeCh <- txn
-					}
-					clear(txnOps)
-					txnOps = txnOps[:0]
-
-					if !change.IsTransaction() {
-						changeCh <- change
-						txn0 = nil // no more transaction
-
-						break // return to non-transactional processing
-					}
-
-					txn0 = change // process the new transaction
-				}
-
-				err := cur.Err()
-				if err != nil || cur.ID() == 0 {
-					return errors.Wrap(err, "cursor")
-				}
-
-				if txn0 == nil {
-					continue
-				}
-
-				// no event available. the entire transaction is received
-				changeCh <- txn0
-				for _, txn := range txnOps {
-					changeCh <- txn
-				}
-				clear(txnOps)
-				txnOps = txnOps[:0]
-				txn0 = nil // return to non-transactional processing
-			}
+			ts := change.ClusterTime
+			changeCh <- change
+			lastEventTS = ts
 		}
 
 		err = cur.Err()
@@ -615,29 +550,20 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	cpTicker := time.NewTicker(500 * time.Millisecond) //nolint:mnd
 	defer cpTicker.Stop()
 
-	// pending holds an event read ahead during transaction collection that
-	// needs to be processed in the next iteration.
-	var pending *ChangeEvent
-
 	for {
 		var change *ChangeEvent
 
-		if pending != nil {
-			change = pending
-			pending = nil
-		} else {
-			var ok bool
+		var ok bool
 
-			select {
-			case change, ok = <-changeEventCh:
-				if !ok {
-					return
-				}
-			case err := <-r.pool.Err():
-				r.setFailed(err, "Worker error")
-
+		select {
+		case change, ok = <-changeEventCh:
+			if !ok {
 				return
 			}
+		case err := <-r.pool.Err():
+			r.setFailed(err, "Worker error")
+
+			return
 		}
 
 		metrics.SetReplEventQueueSize(len(changeEventCh))
@@ -684,16 +610,11 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
-			if change.IsTransaction() {
-				pending = r.handleTransaction(ctx, change, changeEventCh, uuidMap)
-				lastRoutedTS = bson.Timestamp{} // barrier flushed everything
-			} else {
-				ns := findNamespaceByUUID(uuidMap, change)
-				r.pool.Route(change, ns)
-				lastRoutedTS = change.ClusterTime
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.pool.Route(change, ns)
+			lastRoutedTS = change.ClusterTime
 
-				r.tryAdvanceOpTime(cpTicker)
-			}
+			r.tryAdvanceOpTime(cpTicker)
 
 		default:
 			err := r.pool.Barrier()
@@ -739,87 +660,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.pool.ReleaseBarrier()
 		}
 	}
-}
-
-// handleTransaction collects all events belonging to the same transaction,
-// applies them as a single ordered bulk write, and returns the first event
-// that is not part of the transaction (or nil if the channel was closed).
-func (r *Repl) handleTransaction(
-	ctx context.Context,
-	first *ChangeEvent,
-	changeCh <-chan *ChangeEvent,
-	uuidMap catalog.UUIDMap,
-) *ChangeEvent {
-	err := r.pool.Barrier()
-	if err != nil {
-		r.pool.ReleaseBarrier()
-		r.setFailed(err, "Worker error during barrier")
-
-		return nil
-	}
-
-	events := []*routedEvent{{
-		change: first,
-		ns:     findNamespaceByUUID(uuidMap, first),
-	}}
-
-	var overflow *ChangeEvent
-
-	for next := range changeCh {
-		if !first.IsSameTransaction(&next.EventHeader) {
-			overflow = next
-
-			break
-		}
-
-		// DDL events within a transaction (e.g. implicit collection create)
-		// cannot be applied via bulk write. Return them as overflow so the
-		// dispatcher routes them through the DDL handler.
-		if !isBulkWriteOperation(next.OperationType) {
-			overflow = next
-
-			break
-		}
-
-		events = append(events, &routedEvent{
-			change: next,
-			ns:     findNamespaceByUUID(uuidMap, next),
-		})
-	}
-
-	// Parse DML event bodies for all transaction events (deferred from reader).
-	// Transactions are rare, so this doesn't need to be parallelized.
-	for _, event := range events {
-		parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
-		if err != nil {
-			r.pool.ReleaseBarrier()
-			r.setFailed(err, "Parse transaction event")
-
-			return nil
-		}
-
-		event.change.Event = parsed
-		event.change.RawData = nil // release for GC
-	}
-
-	err = applyTransaction(ctx, r.target, events, r.useCollectionBulk, r.useSimpleCollation)
-	if err != nil {
-		r.pool.ReleaseBarrier()
-		r.setFailed(err, "Apply transaction")
-
-		return nil
-	}
-
-	r.lock.Lock()
-	r.lastReplicatedOpTime = first.ClusterTime
-	r.eventsApplied += int64(len(events))
-	r.lock.Unlock()
-
-	metrics.AddEventsApplied(len(events))
-
-	r.pool.ReleaseBarrier()
-
-	return overflow
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,

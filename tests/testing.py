@@ -1,5 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import hashlib
+import time
 
 import bson
 from pymongo import ASCENDING, MongoClient
@@ -69,6 +70,16 @@ class Testing:
                     assert src_unique == tgt_unique, f"{db}.{coll}: unique mismatch"
 
                 compare_namespace(self.source, self.target, db, coll, sort)
+
+    def wait_target_count(self, db: str, coll: str, expected: int, timeout: int = 30):
+        for _ in range(timeout * 2):
+            if self.target[db][coll].count_documents({}) >= expected:
+                return
+            time.sleep(0.5)
+        actual = self.target[db][coll].count_documents({})
+        raise AssertionError(
+            f"target {db}.{coll}: expected {expected} docs, got {actual} after {timeout}s"
+        )
 
 
 def drop_all_database(source: MongoClient):
