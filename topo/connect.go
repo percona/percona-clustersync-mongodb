@@ -49,6 +49,10 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 		opts.SetCompressors(cfg.MongoDB.TargetCompressors)
 	}
 
+	if uri == cfg.Source {
+		opts.SetCompressors([]string{"zstd"})
+	}
+
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().
 			SetSink(log.MongoLogger(ctx)).
