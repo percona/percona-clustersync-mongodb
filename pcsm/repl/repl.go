@@ -136,6 +136,28 @@ type Repl struct {
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
+
+	// movePrimaryDrop tracks namespaces where a phantom create was detected
+	// (movePrimary). Prior to MongoDB 8.0 movePrimary emits create→drop;
+	// the drop must be suppressed to avoid wiping target data.
+	// nil when source is 8.0+
+	movePrimaryDrop map[string]struct{}
+}
+
+// initMovePrimaryDrop enables phantom drop suppression on sharded clusters
+// running MongoDB <8.0. On those versions, movePrimary emits create→drop
+// through the change stream and the drop must be skipped.
+func (r *Repl) initMovePrimaryDrop(ctx context.Context, sourceVer topo.ServerVersion) {
+	if sourceVer.Major() >= 8 { //nolint:mnd
+		return
+	}
+
+	hello, err := topo.SayHello(ctx, r.source)
+	if err != nil || !hello.IsMongos() {
+		return
+	}
+
+	r.movePrimaryDrop = make(map[string]struct{})
 }
 
 // Status represents the status of change replication.
@@ -250,11 +272,18 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 
 	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
-		return errors.Wrap(err, "major version")
+		return errors.Wrap(err, "target version")
+	}
+
+	sourceVer, err := topo.Version(ctx, r.source)
+	if err != nil {
+		return errors.Wrap(err, "source version")
 	}
 
 	r.useCollectionBulk = !cp.UseClientBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
+
+	r.initMovePrimaryDrop(ctx, sourceVer)
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
@@ -315,11 +344,18 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 
 	targetVer, err := topo.Version(ctx, r.target)
 	if err != nil {
-		return errors.Wrap(err, "major version")
+		return errors.Wrap(err, "target version")
+	}
+
+	sourceVer, err := topo.Version(ctx, r.source)
+	if err != nil {
+		return errors.Wrap(err, "source version")
 	}
 
 	r.useCollectionBulk = !topo.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
+
+	r.initMovePrimaryDrop(ctx, sourceVer)
 
 	if r.useCollectionBulk {
 		log.New("repl").Debug("Use collection-level bulk write")
@@ -740,6 +776,10 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 				change.Namespace.Collection,
 				change.CollectionUUID)
 
+			if r.movePrimaryDrop != nil {
+				r.movePrimaryDrop[change.Namespace.String()] = struct{}{}
+			}
+
 			return nil
 		}
 
@@ -770,6 +810,16 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
+		if r.movePrimaryDrop != nil {
+			ns := change.Namespace.String()
+			if _, ok := r.movePrimaryDrop[ns]; ok {
+				delete(r.movePrimaryDrop, ns)
+				lg.Warnf("Skipping phantom drop for %q (movePrimary)", change.Namespace)
+
+				return nil
+			}
+		}
+
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)

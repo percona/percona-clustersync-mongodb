@@ -75,7 +75,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mongo_version: ["8.0"] # when in matrix sharded tests are failing due to PCSM-255
+        include:
+          # 6.0/7.0: sharded-specific tests only (full suite blocked by PCSM-255)
+          - mongo_version: "6.0"
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py
+          - mongo_version: "7.0"
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py
+          - mongo_version: "8.0"
+            test_scope: ""
 
     env:
       MONGO_VERSION: ${{ matrix.mongo_version }}
@@ -123,7 +130,7 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest
+          poetry run pytest ${{ matrix.test_scope }}
 
       - name: Teardown Docker Compose
         if: always()
