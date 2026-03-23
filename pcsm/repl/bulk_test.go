@@ -1,10 +1,13 @@
 package repl //nolint:testpackage
 
 import (
+	"strconv"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+const setOp = "$set"
 
 func TestIsArrayPath(t *testing.T) {
 	t.Parallel()
@@ -241,6 +244,266 @@ func TestCollectUpdateOps(t *testing.T) {
 	}
 }
 
+func TestCollectUpdateOps_NoFalsePositiveConflict(t *testing.T) {
+	t.Parallel()
+
+	// "items_count" should NOT conflict with truncated array "items"
+	// because "items_count" is a separate field, not a sub-path of "items".
+	tests := []struct {
+		name           string
+		truncField     string
+		updateKey      string
+		expectPipeline bool
+	}{
+		{
+			name:           "prefix match is not a conflict: items_count vs items",
+			truncField:     "items",
+			updateKey:      "items_count",
+			expectPipeline: false,
+		},
+		{
+			name:           "prefix match is not a conflict: data vs database",
+			truncField:     "data",
+			updateKey:      "database",
+			expectPipeline: false,
+		},
+		{
+			name:           "exact match is a conflict",
+			truncField:     "items",
+			updateKey:      "items",
+			expectPipeline: true,
+		},
+		{
+			name:           "dot-separated sub-path is a conflict",
+			truncField:     "items",
+			updateKey:      "items.2",
+			expectPipeline: true,
+		},
+		{
+			name:           "deeply nested sub-path is a conflict",
+			truncField:     "items",
+			updateKey:      "items.2.name",
+			expectPipeline: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			event := &UpdateEvent{
+				UpdateDescription: UpdateDescription{
+					TruncatedArrays: []struct {
+						Field   string `bson:"field"`
+						NewSize int32  `bson:"newSize"`
+					}{
+						{Field: tt.truncField, NewSize: 3},
+					},
+					UpdatedFields: bson.D{
+						{Key: tt.updateKey, Value: "val"},
+					},
+				},
+			}
+
+			result := collectUpdateOps(event)
+
+			_, isPipeline := result.(bson.A)
+			if isPipeline != tt.expectPipeline {
+				t.Errorf("collectUpdateOps() returned pipeline=%v, want pipeline=%v", isPipeline, tt.expectPipeline)
+			}
+		})
+	}
+}
+
+func TestCollectUpdateOpsWithPipeline_BatchesSetStages(t *testing.T) {
+	t.Parallel()
+
+	// Many non-array fields should be batched into a single $set stage,
+	// not one $set stage per field.
+	updatedFields := make(bson.D, 0, 2000)
+	for i := range 2000 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "field_" + strconv.Itoa(i),
+			Value: "value",
+		})
+	}
+
+	// Add one real array path field to ensure array paths still get individual stages
+	updatedFields = append(updatedFields, bson.E{Key: "arr.2", Value: "arrval"})
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 5},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	result := collectUpdateOpsWithPipeline(event)
+
+	// Count $set stages
+	setStageCount := 0
+	var batchedSetStage bson.D
+
+	for _, stage := range result {
+		stageDoc, ok := stage.(bson.D)
+		if !ok {
+			continue
+		}
+
+		for _, elem := range stageDoc {
+			if elem.Key == setOp {
+				setStageCount++
+
+				setDoc, ok := elem.Value.(bson.D)
+				if !ok {
+					continue
+				}
+
+				// The batched stage will have many fields; the array stage has 1
+				if len(setDoc) > 1 {
+					batchedSetStage = setDoc
+				}
+			}
+		}
+	}
+
+	// Should have: 1 truncation stage + 1 array $concatArrays stage + 1 batched $set stage = 3 $set stages total
+	expectedSetStages := 3
+	if setStageCount != expectedSetStages {
+		t.Errorf("Expected %d $set stages (truncation + array + batched), got %d", expectedSetStages, setStageCount)
+	}
+
+	// The batched stage must contain all 2000 non-array fields
+	if len(batchedSetStage) != 2000 {
+		t.Errorf("Expected batched $set stage to contain 2000 fields, got %d", len(batchedSetStage))
+	}
+
+	// Total pipeline stages must be well under 1000
+	if len(result) > 1000 {
+		t.Errorf("Pipeline has %d stages, exceeds MongoDB's 1000 stage limit", len(result))
+	}
+}
+
+func TestCollectUpdateOpsWithPipeline_SliceUsesMaxForPositive(t *testing.T) {
+	t.Parallel()
+
+	// The $slice third argument must always be positive.
+	// Verify the pipeline uses $max to guarantee this.
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 0}, // Array truncated to size 0
+			},
+			UpdatedFields: bson.D{
+				{Key: "arr.0", Value: "new_val"},
+			},
+		},
+	}
+
+	result := collectUpdateOpsWithPipeline(event)
+
+	// Find the $concatArrays stage for "arr"
+	found := false
+
+	for _, stage := range result {
+		stageDoc, ok := stage.(bson.D)
+		if !ok {
+			continue
+		}
+
+		for _, elem := range stageDoc {
+			if elem.Key != setOp {
+				continue
+			}
+
+			setDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				continue
+			}
+
+			for _, setField := range setDoc {
+				if setField.Key != "arr" {
+					continue
+				}
+
+				arrDoc, ok := setField.Value.(bson.D)
+				if !ok {
+					continue
+				}
+
+				for _, arrElem := range arrDoc {
+					if arrElem.Key != "$concatArrays" {
+						continue
+					}
+
+					concatArr, ok := arrElem.Value.(bson.A)
+					if !ok || len(concatArr) != 3 {
+						t.Fatalf("Expected $concatArrays with 3 elements, got %v", arrElem.Value)
+					}
+
+					// Third element is the trailing $slice
+					sliceDoc, ok := concatArr[2].(bson.D)
+					if !ok {
+						t.Fatalf("Expected third $concatArrays element to be bson.D, got %T", concatArr[2])
+					}
+
+					for _, sliceElem := range sliceDoc {
+						if sliceElem.Key != "$slice" {
+							continue
+						}
+
+						sliceArgs, ok := sliceElem.Value.(bson.A)
+						if !ok || len(sliceArgs) != 3 {
+							t.Fatalf("Expected $slice with 3 args, got %v", sliceElem.Value)
+						}
+
+						// Third arg should be bson.D{{"$max", bson.A{1, ...}}}
+						maxDoc, ok := sliceArgs[2].(bson.D)
+						if !ok {
+							t.Fatalf("Expected $slice third arg to be bson.D, got %T", sliceArgs[2])
+						}
+
+						hasMax := false
+						for _, maxElem := range maxDoc {
+							if maxElem.Key == "$max" {
+								hasMax = true
+
+								maxArr, ok := maxElem.Value.(bson.A)
+								if !ok || len(maxArr) != 2 {
+									t.Fatalf("Expected $max with 2 elements, got %v", maxElem.Value)
+								}
+
+								minVal, ok := maxArr[0].(int)
+								if !ok || minVal != 1 {
+									t.Errorf("Expected $max minimum to be 1, got %v", maxArr[0])
+								}
+							}
+						}
+
+						if !hasMax {
+							t.Error("$slice third argument does not use $max to guarantee positive value")
+						}
+
+						found = true
+					}
+				}
+			}
+		}
+	}
+
+	if !found {
+		t.Error("Could not find $concatArrays with $slice in pipeline")
+	}
+}
+
 func extractPipelineFields(t *testing.T, pipeline bson.A) (map[string]bool, map[string]bool) {
 	t.Helper()
 
@@ -267,7 +530,7 @@ func extractSetDocs(t *testing.T, doc bson.D) []bson.D {
 	docs := make([]bson.D, 0, len(doc))
 
 	for _, elem := range doc {
-		if elem.Key != "$set" {
+		if elem.Key != setOp {
 			continue
 		}
 
