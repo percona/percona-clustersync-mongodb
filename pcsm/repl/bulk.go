@@ -482,7 +482,7 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 func collectUpdateOps(event *UpdateEvent) any {
 	for _, trunc := range event.UpdateDescription.TruncatedArrays {
 		for _, update := range event.UpdateDescription.UpdatedFields {
-			if strings.HasPrefix(update.Key, trunc.Field) {
+			if update.Key == trunc.Field || strings.HasPrefix(update.Key, trunc.Field+".") {
 				return collectUpdateOpsWithPipeline(event) // there is conflict field update
 			}
 		}
@@ -549,6 +549,8 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 	}
 
 	// Handle updated fields
+	var batchedSetFields bson.D
+
 	for _, field := range event.UpdateDescription.UpdatedFields {
 		if isArrayPath(field.Key, dp, truncatedFields) {
 			parts := strings.Split(field.Key, ".")
@@ -564,7 +566,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 							bson.A{field.Value},
 							bson.D{{
 								"$slice",
-								bson.A{fieldExpr, fieldIdx + 1, bson.D{{"$size", fieldExpr}}},
+								bson.A{fieldExpr, fieldIdx + 1, bson.D{{"$max", bson.A{1, bson.D{{"$size", fieldExpr}}}}}},
 							}},
 						}},
 					}},
@@ -573,12 +575,12 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 
 			pipeline = append(pipeline, stage)
 		} else {
-			stage := bson.D{{Key: "$set", Value: bson.D{
-				{Key: field.Key, Value: field.Value},
-			}}}
-
-			pipeline = append(pipeline, stage)
+			batchedSetFields = append(batchedSetFields, bson.E{Key: field.Key, Value: field.Value})
 		}
+	}
+
+	if len(batchedSetFields) > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$set", Value: batchedSetFields}})
 	}
 
 	// Handle removed fields
