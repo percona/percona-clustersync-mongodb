@@ -135,6 +135,12 @@ func newRootCmd() *cobra.Command {
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+
+	rootCmd.Flags().StringSlice("source-client-compressors", nil,
+		"Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy)")
+	rootCmd.Flags().StringSlice("target-client-compressors", nil,
+		"Compressors for the target MongoDB client (comma-separated: zstd,zlib,snappy)")
+
 	rootCmd.Flags().Bool("start", false, "")
 	rootCmd.Flags().MarkHidden("start") //nolint:errcheck
 
