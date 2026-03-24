@@ -98,6 +98,13 @@ type Hello struct {
 	Tags bson.M `bson:"tags"`
 	// Me is the address of the node.
 	Me string `bson:"me"`
+	// Msg is set to "isdbgrid" when connected to a mongos.
+	Msg string `bson:"msg"`
+}
+
+// IsMongos returns true if the hello response is from a mongos.
+func (h Hello) IsMongos() bool {
+	return h.Msg == "isdbgrid"
 }
 
 // DBStats represents the result of the [GetDBStats].
