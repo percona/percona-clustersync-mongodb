@@ -189,20 +189,20 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 
 		cat := &mockCatalog{collectionExists: true}
 		r := &Repl{
-			catalog:         cat,
-			movePrimaryDrop: make(map[string]struct{}),
+			catalog:             cat,
+			pendingPhantomDrops: make(map[string]struct{}),
 		}
 
 		err := r.applyDDLChange(context.Background(), createEvent)
 		require.NoError(t, err)
-		assert.Contains(t, r.movePrimaryDrop, ns.String())
+		assert.Contains(t, r.pendingPhantomDrops, ns.String())
 
 		cat.collectionExists = false
 
 		err = r.applyDDLChange(context.Background(), dropEvent)
 		require.NoError(t, err)
 		assert.False(t, cat.dropCollectionCalled, "drop should be suppressed")
-		assert.NotContains(t, r.movePrimaryDrop, ns.String())
+		assert.NotContains(t, r.pendingPhantomDrops, ns.String())
 	})
 
 	t.Run("v8_phantom_create_no_tracking", func(t *testing.T) {
@@ -210,13 +210,13 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 
 		cat := &mockCatalog{collectionExists: true}
 		r := &Repl{
-			catalog:         cat,
-			movePrimaryDrop: nil,
+			catalog:             cat,
+			pendingPhantomDrops: nil,
 		}
 
 		err := r.applyDDLChange(context.Background(), createEvent)
 		require.NoError(t, err)
-		assert.Nil(t, r.movePrimaryDrop)
+		assert.Nil(t, r.pendingPhantomDrops)
 	})
 
 	t.Run("pre8_real_drop_not_suppressed", func(t *testing.T) {
@@ -224,8 +224,8 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 
 		cat := &mockCatalog{collectionExists: false}
 		r := &Repl{
-			catalog:         cat,
-			movePrimaryDrop: make(map[string]struct{}),
+			catalog:             cat,
+			pendingPhantomDrops: make(map[string]struct{}),
 		}
 
 		err := r.applyDDLChange(context.Background(), dropEvent)
