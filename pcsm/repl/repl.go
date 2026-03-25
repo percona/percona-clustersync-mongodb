@@ -196,6 +196,16 @@ func NewRepl(
 ) *Repl {
 	opts.applyDefaults()
 
+	lg := log.New("repl")
+	lg.Infof("Config: NumWorkers: %d", opts.NumWorkers)
+	lg.Infof("Config: UseCollectionBulkWrite: %t", opts.UseCollectionBulkWrite)
+	lg.Infof("Config: ChangeStreamBatchSize: %d", opts.ChangeStreamBatchSize)
+	lg.Infof("Config: EventQueueSize: %d", opts.EventQueueSize)
+	lg.Infof("Config: WorkerQueueSize: %d", opts.WorkerQueueSize)
+	lg.Infof("Config: BulkOpsSize: %d", opts.BulkOpsSize)
+	lg.Infof("Config: WorkerFlushInterval: %s", opts.WorkerFlushInterval)
+	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
+
 	return &Repl{
 		source:   source,
 		target:   target,

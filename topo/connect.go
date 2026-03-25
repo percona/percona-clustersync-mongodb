@@ -55,6 +55,13 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 		compressors = cfg.MongoDB.TargetCompressors
 	}
 
+	role := "source"
+	if uri == cfg.Target {
+		role = "target"
+	}
+
+	log.New("connect").Infof("Config: %s client compressors: %v", role, compressors)
+
 	opts.SetCompressors(compressors)
 
 	if config.MongoLogEnabled {

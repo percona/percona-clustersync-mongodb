@@ -104,15 +104,15 @@ func NewCopyManager(ctx context.Context, source, target *mongo.Client, options C
 	}
 
 	lg := log.New("copy")
-	lg.Debugf("NumReadWorkers: %d", options.NumReadWorkers)
-	lg.Debugf("NumInsertWorkers: %d", options.NumInsertWorkers)
+	lg.Infof("Config: NumReadWorkers: %d", options.NumReadWorkers)
+	lg.Infof("Config: NumInsertWorkers: %d", options.NumInsertWorkers)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
-		lg.Debug("SegmentSizeBytes: auto")
+		lg.Info("Config: SegmentSizeBytes: auto")
 	} else {
-		lg.Debugf("SegmentSizeBytes: %d (%s)", options.SegmentSizeBytes,
+		lg.Infof("Config: SegmentSizeBytes: %d (%s)", options.SegmentSizeBytes,
 			humanize.Bytes(uint64(options.SegmentSizeBytes))) //nolint:gosec
 	}
-	lg.Debugf("ReadBatchSizeBytes: %d (%s)", options.ReadBatchSizeBytes,
+	lg.Infof("Config: ReadBatchSizeBytes: %d (%s)", options.ReadBatchSizeBytes,
 		humanize.Bytes(uint64(options.ReadBatchSizeBytes))) //nolint:gosec
 
 	insertCtx, cancelInsert := context.WithCancel(ctx)
