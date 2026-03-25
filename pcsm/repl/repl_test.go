@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	retry "github.com/avast/retry-go/v4"
 	"github.com/stretchr/testify/assert"
@@ -290,23 +290,34 @@ func TestWatchWithRetry_UnrecoverableError(t *testing.T) {
 func TestWatchWithRetry_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
 
-	r := &Repl{
-		watchFn: func(ctx context.Context, _ *options.ChangeStreamOptionsBuilder, _ chan<- *ChangeEvent) error {
-			<-ctx.Done()
+		r := &Repl{
+			watchFn: func(ctx context.Context, _ *options.ChangeStreamOptionsBuilder, _ chan<- *ChangeEvent) error {
+				<-ctx.Done()
 
-			return ctx.Err()
-		},
-	}
+				return ctx.Err()
+			},
+		}
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
+		changeCh := make(chan *ChangeEvent, 1)
+
+		var err error
+
+		go func() {
+			err = r.watchWithRetry(ctx, options.ChangeStream(), changeCh)
+		}()
+
+		// Wait for watchFn to block on <-ctx.Done().
+		synctest.Wait()
+
 		cancel()
-	}()
 
-	changeCh := make(chan *ChangeEvent, 1)
-	err := r.watchWithRetry(ctx, options.ChangeStream(), changeCh, noDelayOpts()...)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.NoError(t, r.err, "Repl must not be in failed state on context cancellation")
+		// Wait for watchWithRetry to propagate the cancellation and return.
+		synctest.Wait()
+
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NoError(t, r.err, "Repl must not be in failed state on context cancellation")
+	})
 }
