@@ -137,9 +137,11 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
-		"Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy)")
+		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
+			strings.Join(config.DefaultClientCompressors, ",")))
 	rootCmd.Flags().StringSlice("target-client-compressors", nil,
-		"Compressors for the target MongoDB client (comma-separated: zstd,zlib,snappy)")
+		fmt.Sprintf("Compressors for the target MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
+			strings.Join(config.DefaultClientCompressors, ",")))
 
 	rootCmd.Flags().Bool("start", false, "")
 	rootCmd.Flags().MarkHidden("start") //nolint:errcheck
