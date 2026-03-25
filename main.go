@@ -49,6 +49,8 @@ var (
 	BuildTime = ""       //nolint:gochecknoglobals
 )
 
+var errDowngrade = errors.New("downgrade not supported") //nolint:gochecknoglobals
+
 func buildVersion() string {
 	return Version + " " + GitCommit + " " + BuildTime
 }
@@ -564,6 +566,11 @@ type server struct {
 
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
+
+	// sourceVersion is the MongoDB version of the source cluster.
+	sourceVersion topo.ServerVersion
+	// targetVersion is the MongoDB version of the target cluster.
+	targetVersion topo.ServerVersion
 }
 
 // createServer creates a new server with the given options.
@@ -620,6 +627,14 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
+	if sourceVersion.Major() > targetVersion.Major() {
+		return nil, errors.Wrapf(errDowngrade, "source %s > target %s", sourceVersion, targetVersion)
+	}
+
+	if sourceVersion.Major() < targetVersion.Major() {
+		lg.Warnf("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
+	}
+
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "heartbeat")
@@ -653,6 +668,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		pcsm:          pcs,
 		stopHeartbeat: stopHeartbeat,
 		promRegistry:  promRegistry,
+		sourceVersion: sourceVersion,
+		targetVersion: targetVersion,
 	}
 
 	return s, nil

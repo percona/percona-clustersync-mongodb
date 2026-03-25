@@ -32,11 +32,13 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 
 ### Environment Variables
 
-| Variable        | Default | Description                                            |
-| --------------- | ------- | ------------------------------------------------------ |
-| `MONGO_VERSION` | `8.0`   | MongoDB image version for test clusters                |
-| `SRC_SHARDS`    | `2`     | Number of source shards (sharded topology only, max 3) |
-| `TGT_SHARDS`    | `2`     | Number of target shards (sharded topology only, max 3) |
+| Variable            | Default            | Description                                                                |
+| ------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `MONGO_VERSION`     | `8.0`              | MongoDB image version fallback for both source and target test clusters    |
+| `SRC_MONGO_VERSION` | `${MONGO_VERSION}` | MongoDB image version for source test cluster; falls back to MONGO_VERSION |
+| `TGT_MONGO_VERSION` | `${MONGO_VERSION}` | MongoDB image version for target test cluster; falls back to MONGO_VERSION |
+| `SRC_SHARDS`        | `2`                | Number of source shards (sharded topology only, max 3)                     |
+| `TGT_SHARDS`        | `2`                | Number of target shards (sharded topology only, max 3)                     |
 
 ## Cluster Topology
 
@@ -48,6 +50,8 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 | RS       | `mongodb://rs00:30000`       | `mongodb://rs10:30100`       |
 
 **IMPORTANT**: Use these URIs exactly as shown. Do NOT append query parameters like `?replicaSet=rs0` or `?directConnection=true` — PCSM rejects `directConnection` and discovers topology automatically.
+
+**Version guardrails**: PCSM validates MongoDB versions at startup. Source major version must be ≤ target major version (downgrade is blocked). FCV is queried and validated on both clusters.
 
 ### Health Verification
 
@@ -367,6 +371,13 @@ For RS topology, substitute the URIs:
 export TEST_SOURCE_URI="mongodb://rs00:30000"
 export TEST_TARGET_URI="mongodb://rs10:30100"
 # TEST_PCSM_URL and TEST_PCSM_BIN remain the same as sharded
+```
+
+Cross-version example (7.0 source → 8.0 target, RS):
+
+```bash
+export SRC_MONGO_VERSION=7.0
+export TGT_MONGO_VERSION=8.0
 ```
 
 Run tests including slow tests (disabled by default):
