@@ -2,11 +2,17 @@ package repl //nolint
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	retry "github.com/avast/retry-go/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
@@ -232,4 +238,75 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, cat.dropCollectionCalled, "real drop should proceed")
 	})
+}
+
+func noDelayOpts() []retry.Option {
+	return []retry.Option{retry.Delay(0), retry.MaxDelay(0)}
+}
+
+func TestWatchWithRetry_TransientError(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+
+	r := &Repl{
+		watchFn: func(_ context.Context, _ *options.ChangeStreamOptionsBuilder, _ chan<- *ChangeEvent) error {
+			n := calls.Add(1)
+			if n == 1 {
+				return fmt.Errorf("transient: %w", mongo.CommandError{Code: 91, Name: "ShutdownInProgress"})
+			}
+
+			return nil
+		},
+	}
+
+	changeCh := make(chan *ChangeEvent, 1)
+	err := r.watchWithRetry(context.Background(), options.ChangeStream(), changeCh, noDelayOpts()...)
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), calls.Load(), "expected exactly 2 calls: 1 transient fail + 1 success")
+	assert.NoError(t, r.err, "Repl must not be in failed state")
+}
+
+func TestWatchWithRetry_UnrecoverableError(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+
+	r := &Repl{
+		watchFn: func(_ context.Context, _ *options.ChangeStreamOptionsBuilder, _ chan<- *ChangeEvent) error {
+			calls.Add(1)
+
+			return mongo.CommandError{Code: 0, Name: "ChangeStreamHistoryLost"}
+		},
+	}
+
+	changeCh := make(chan *ChangeEvent, 1)
+	err := r.watchWithRetry(context.Background(), options.ChangeStream(), changeCh, noDelayOpts()...)
+	require.Error(t, err)
+	assert.True(t, topo.IsChangeStreamHistoryLost(err), "error must be ChangeStreamHistoryLost")
+	assert.Equal(t, int32(1), calls.Load(), "unrecoverable error must not be retried")
+}
+
+func TestWatchWithRetry_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	r := &Repl{
+		watchFn: func(ctx context.Context, _ *options.ChangeStreamOptionsBuilder, _ chan<- *ChangeEvent) error {
+			<-ctx.Done()
+
+			return ctx.Err()
+		},
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	changeCh := make(chan *ChangeEvent, 1)
+	err := r.watchWithRetry(ctx, options.ChangeStream(), changeCh, noDelayOpts()...)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NoError(t, r.err, "Repl must not be in failed state on context cancellation")
 }

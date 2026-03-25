@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	retry "github.com/avast/retry-go/v4"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -142,6 +143,10 @@ type Repl struct {
 	// create→drop; the drop must be suppressed to avoid wiping target data.
 	// nil when source is 8.0+
 	pendingPhantomDrops map[string]struct{}
+
+	// watchFn is the function used to watch change events.
+	// Defaults to watchChangeEvents. Override in tests.
+	watchFn func(ctx context.Context, opts *options.ChangeStreamOptionsBuilder, changeCh chan<- *ChangeEvent) error
 }
 
 // initPendingPhantomDrops enables phantom drop suppression on sharded clusters
@@ -196,7 +201,7 @@ func NewRepl(
 ) *Repl {
 	opts.applyDefaults()
 
-	return &Repl{
+	r := &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
@@ -205,6 +210,9 @@ func NewRepl(
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
+	r.watchFn = r.watchChangeEvents
+
+	return r
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -462,6 +470,50 @@ func (r *Repl) Resume(ctx context.Context) error {
 	return nil
 }
 
+func (r *Repl) watchWithRetry(
+	ctx context.Context,
+	opts *options.ChangeStreamOptionsBuilder,
+	changeCh chan<- *ChangeEvent,
+	extraOpts ...retry.Option,
+) error {
+	lg := log.New("repl")
+	currentOpts := opts
+
+	baseOpts := make([]retry.Option, 0, 6+len(extraOpts)) //nolint:mnd
+	baseOpts = append(baseOpts,
+		retry.Context(ctx),
+		retry.Attempts(0),
+		retry.Delay(time.Second),
+		retry.MaxDelay(30*time.Second), //nolint:mnd
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			lg.Warnf("Change stream error (attempt %d): %v", n+1, err)
+		}),
+	)
+
+	return retry.Do( //nolint:wrapcheck
+		func() error {
+			err := r.watchFn(ctx, currentOpts, changeCh)
+			if err == nil {
+				return nil
+			}
+
+			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
+				return retry.Unrecoverable(err)
+			}
+
+			r.lock.Lock()
+			lastOpTime := r.lastReplicatedOpTime
+			r.lock.Unlock()
+
+			currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
+
+			return err
+		},
+		append(baseOpts, extraOpts...)...,
+	)
+}
+
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
 	streamOptions *options.ChangeStreamOptionsBuilder,
@@ -559,7 +611,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeEventCh)
+		err := r.watchWithRetry(ctx, opts, changeEventCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost

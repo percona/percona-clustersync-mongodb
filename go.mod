@@ -3,6 +3,7 @@ module github.com/percona/percona-clustersync-mongodb
 go 1.25.0
 
 require (
+	github.com/avast/retry-go/v4 v4.7.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/prometheus/client_golang v1.23.2
