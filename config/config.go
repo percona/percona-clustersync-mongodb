@@ -49,7 +49,8 @@ type LogConfig struct {
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
 	OperationTimeout  time.Duration `mapstructure:"mongodb-operation-timeout"`
-	TargetCompressors []string      `mapstructure:"dev-target-client-compressors"`
+	SourceCompressors []string      `mapstructure:"source-client-compressors"`
+	TargetCompressors []string      `mapstructure:"target-client-compressors"`
 }
 
 // ReplConfig holds replication operation configuration.
@@ -123,6 +124,7 @@ func Load(cmd *cobra.Command, cfg *Config) error {
 		return errors.Wrap(err, "unmarshal config")
 	}
 
+	cfg.MongoDB.SourceCompressors = filterCompressors(cfg.MongoDB.SourceCompressors)
 	cfg.MongoDB.TargetCompressors = filterCompressors(cfg.MongoDB.TargetCompressors)
 
 	if viper.GetBool("no-color") {
@@ -178,7 +180,8 @@ func bindEnvVars() {
 	_ = viper.BindEnv("repl-worker-flush-interval", "PCSM_REPL_WORKER_FLUSH_INTERVAL")
 	_ = viper.BindEnv("repl-worker-bulk-queue-size", "PCSM_REPL_WORKER_BULK_QUEUE_SIZE")
 
-	_ = viper.BindEnv("dev-target-client-compressors", "PCSM_DEV_TARGET_CLIENT_COMPRESSORS")
+	_ = viper.BindEnv("source-client-compressors", "PCSM_SOURCE_CLIENT_COMPRESSORS")
+	_ = viper.BindEnv("target-client-compressors", "PCSM_TARGET_CLIENT_COMPRESSORS")
 
 	_ = viper.BindEnv("clone-num-parallel-collections", "PCSM_CLONE_NUM_PARALLEL_COLLECTIONS")
 	_ = viper.BindEnv("clone-num-read-workers", "PCSM_CLONE_NUM_READ_WORKERS")
