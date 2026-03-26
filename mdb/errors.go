@@ -83,6 +83,11 @@ func IsTransient(err error) bool {
 		return true
 	}
 
+	var re interface{ Retryable() bool }
+	if errors.As(err, &re) && re.Retryable() {
+		return true
+	}
+
 	transientErrorCodes := map[int]struct{}{
 		11602: {}, // InterruptedDueToReplStateChange
 		91:    {}, // ShutdownInProgress

@@ -94,12 +94,12 @@ func (cbw *clientBulkWrite) doWithRetry(
 
 	var bulkErr error
 
-	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+	err := mdb.RetryWithBackoff(ctx, func() error {
 		_, err := m.BulkWrite(ctx, bulkWrites, clientBulkOptions)
 		bulkErr = err
 
 		return errors.Wrap(err, "bulk write")
-	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+	}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
 	if err == nil {
 		return nil
 	}
@@ -308,12 +308,12 @@ func (cbw *collectionBulkWrite) doWithRetry(
 
 	var bulkErr error
 
-	err := mdb.RunWithRetry(ctx, func(_ context.Context) error {
+	err := mdb.RetryWithBackoff(ctx, func() error {
 		_, err := coll.BulkWrite(ctx, bulkWrites, collectionBulkOptions)
 		bulkErr = err
 
 		return errors.Wrapf(err, "bulk write %q", ns)
-	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+	}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
 	if err == nil {
 		return nil
 	}

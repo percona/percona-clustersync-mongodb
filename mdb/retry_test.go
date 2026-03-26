@@ -151,7 +151,8 @@ func TestRetryWithBackoff_MaxRetriesExhausted(t *testing.T) {
 	}
 
 	err := RetryWithBackoff(t.Context(), fn, nil, time.Millisecond, time.Millisecond, 3)
-	require.ErrorIs(t, err, retryableErr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max retries exhausted")
 	assert.Equal(t, int32(3), calls.Load())
 }
 
@@ -179,4 +180,23 @@ func TestRetryWithBackoff_ContextCanceled(t *testing.T) {
 
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+func TestRetryWithBackoff_UnlimitedRetriesUntilSuccess(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	retryableErr := errors.New("retryable") //nolint:err113
+
+	fn := func() error {
+		if calls.Add(1) < 10 {
+			return retryableErr
+		}
+
+		return nil
+	}
+
+	err := RetryWithBackoff(t.Context(), fn, nil, time.Millisecond, time.Millisecond, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), calls.Load())
 }

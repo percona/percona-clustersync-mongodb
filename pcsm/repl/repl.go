@@ -484,7 +484,7 @@ func (r *Repl) watchWithRetry(
 
 		return err
 	}, isChangeStreamUnrecoverable,
-		mdb.DefaultRetryInterval, maxWatchDelay, mdb.DefaultMaxRetries,
+		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
 }
 
@@ -492,7 +492,14 @@ func isChangeStreamUnrecoverable(err error) bool {
 	return mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err)
 }
 
-const maxWatchDelay = 30 * time.Second
+const (
+	maxWatchDelay      = 30 * time.Second
+	maxWriteRetryDelay = 30 * time.Second
+)
+
+func isNonTransient(err error) bool {
+	return !mdb.IsTransient(err)
+}
 
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
@@ -709,7 +716,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				return
 			}
 
-			err = r.applyDDLChange(ctx, change)
+			err = mdb.RetryWithBackoff(ctx, func() error {
+				return r.applyDDLChange(ctx, change)
+			}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
 			if err != nil {
 				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Apply change")

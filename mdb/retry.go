@@ -56,9 +56,10 @@ func RunWithRetry(
 	return err
 }
 
-// RetryWithBackoff retries fn with exponential backoff up to maxRetries times.
-// It stops early on context cancellation or when isUnrecoverable classifies the
-// error as permanent.
+// RetryWithBackoff retries fn with exponential backoff. When maxRetries > 0 it
+// stops after that many attempts. When maxRetries <= 0 it retries indefinitely
+// until the context is canceled or isUnrecoverable classifies the error as
+// permanent.
 func RetryWithBackoff(
 	ctx context.Context,
 	fn func() error,
@@ -68,18 +69,15 @@ func RetryWithBackoff(
 	maxRetries int,
 ) error {
 	delay := initialDelay
+	unlimited := maxRetries <= 0
 
-	var err error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		err = fn()
+	for attempt := 1; unlimited || attempt <= maxRetries; attempt++ {
+		err := fn()
 		if err == nil {
 			return nil
 		}
 
-		if ctx.Err() != nil ||
-			errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			return err
 		}
 
@@ -87,10 +85,15 @@ func RetryWithBackoff(
 			return err
 		}
 
-		log.Ctx(ctx).Warnf("Retryable error (attempt %d/%d): %v, retrying in %s",
-			attempt, maxRetries, err, delay)
+		if unlimited {
+			log.Ctx(ctx).Warnf("Retryable error (attempt %d): %v, retrying in %s",
+				attempt, err, delay)
+		} else {
+			log.Ctx(ctx).Warnf("Retryable error (attempt %d/%d): %v, retrying in %s",
+				attempt, maxRetries, err, delay)
+		}
 
-		if attempt < maxRetries {
+		if unlimited || attempt < maxRetries {
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -101,5 +104,5 @@ func RetryWithBackoff(
 		}
 	}
 
-	return err
+	return errors.New("max retries exhausted")
 }
