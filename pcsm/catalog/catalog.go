@@ -16,7 +16,6 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/topo"
-	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 // ErrTimeseriesUnsupported is returned when a timeseries collection is encountered.
@@ -1336,8 +1335,5 @@ func runWithRetry(
 	ctx context.Context,
 	fn func(context.Context) error,
 ) error {
-	//nolint:wrapcheck
-	return util.RunWithRetry(
-		ctx, fn, topo.IsTransient, util.DefaultRetryInterval, util.DefaultMaxRetries,
-	)
+	return topo.RunWithRetry(ctx, fn, topo.DefaultRetryInterval, topo.DefaultMaxRetries) //nolint:wrapcheck
 }

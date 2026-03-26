@@ -196,7 +196,7 @@ func NewRepl(
 ) *Repl {
 	opts.applyDefaults()
 
-	r := &Repl{
+	return &Repl{
 		source:   source,
 		target:   target,
 		nsFilter: nsFilter,
@@ -205,8 +205,6 @@ func NewRepl(
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
-
-	return r
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -471,7 +469,7 @@ func (r *Repl) watchWithRetry(
 ) error {
 	currentOpts := opts
 
-	return util.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
+	return retryWatchWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil
@@ -484,11 +482,54 @@ func (r *Repl) watchWithRetry(
 		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
 
 		return err
-	}, isChangeStreamUnrecoverable, time.Second, 30*time.Second) //nolint:mnd
+	}, isChangeStreamUnrecoverable)
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
 	return topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err)
+}
+
+const maxWatchDelay = 30 * time.Second
+
+func retryWatchWithBackoff(
+	ctx context.Context,
+	fn func() error,
+	isUnrecoverable func(error) bool,
+) error {
+	delay := topo.DefaultRetryInterval
+
+	var err error
+
+	for attempt := 1; attempt <= topo.DefaultMaxRetries; attempt++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+
+		if ctx.Err() != nil ||
+			errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+
+		if isUnrecoverable != nil && isUnrecoverable(err) {
+			return err
+		}
+
+		log.Ctx(ctx).Warnf("Retryable error (attempt %d): %v, retrying in %s", attempt, err, delay)
+
+		if attempt < topo.DefaultMaxRetries {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return errors.Wrap(ctx.Err(), "retry wait")
+			}
+
+			delay = min(delay*2, maxWatchDelay) //nolint:mnd
+		}
+	}
+
+	return err
 }
 
 func (r *Repl) watchChangeEvents(
