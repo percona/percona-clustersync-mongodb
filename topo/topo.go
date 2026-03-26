@@ -323,3 +323,44 @@ func RunWithRetry(
 
 	return err
 }
+
+// RetryWithBackoff retries fn indefinitely with exponential backoff until it
+// succeeds, the context is canceled, or isUnrecoverable classifies the error
+// as permanent. Context errors (Canceled, DeadlineExceeded) always stop retries.
+func RetryWithBackoff(
+	ctx context.Context,
+	fn func() error,
+	isUnrecoverable func(error) bool,
+	initialDelay time.Duration,
+	maxDelay time.Duration,
+) error {
+	delay := initialDelay
+
+	for attempt := 1; ; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+
+		if ctx.Err() != nil ||
+			errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+
+		if isUnrecoverable != nil && isUnrecoverable(err) {
+			return err
+		}
+
+		log.Ctx(ctx).Warnf("Retryable error (attempt %d): %v, retrying in %s",
+			attempt, err, delay)
+
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return errors.Wrap(ctx.Err(), "retry wait")
+		}
+
+		delay = min(delay*2, maxDelay) //nolint:mnd
+	}
+}

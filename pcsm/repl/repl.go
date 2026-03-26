@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	retry "github.com/avast/retry-go/v4"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -143,10 +142,6 @@ type Repl struct {
 	// create→drop; the drop must be suppressed to avoid wiping target data.
 	// nil when source is 8.0+
 	pendingPhantomDrops map[string]struct{}
-
-	// watchFn is the function used to watch change events.
-	// Defaults to watchChangeEvents. Override in tests.
-	watchFn func(ctx context.Context, opts *options.ChangeStreamOptionsBuilder, changeCh chan<- *ChangeEvent) error
 }
 
 // initPendingPhantomDrops enables phantom drop suppression on sharded clusters
@@ -210,7 +205,6 @@ func NewRepl(
 		pauseCh:  make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
-	r.watchFn = r.watchChangeEvents
 
 	return r
 }
@@ -474,45 +468,27 @@ func (r *Repl) watchWithRetry(
 	ctx context.Context,
 	opts *options.ChangeStreamOptionsBuilder,
 	changeCh chan<- *ChangeEvent,
-	extraOpts ...retry.Option,
 ) error {
-	lg := log.New("repl")
 	currentOpts := opts
 
-	baseOpts := make([]retry.Option, 0, 6+len(extraOpts)) //nolint:mnd
-	baseOpts = append(baseOpts,
-		retry.Context(ctx),
-		retry.Attempts(0),
-		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second), //nolint:mnd
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			lg.Warnf("Change stream error (attempt %d): %v", n+1, err)
-		}),
-	)
+	return topo.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
+		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
+		if err == nil {
+			return nil
+		}
 
-	return retry.Do( //nolint:wrapcheck
-		func() error {
-			err := r.watchFn(ctx, currentOpts, changeCh)
-			if err == nil {
-				return nil
-			}
+		r.lock.Lock()
+		lastOpTime := r.lastReplicatedOpTime
+		r.lock.Unlock()
 
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-				topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
-				return retry.Unrecoverable(err)
-			}
+		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
 
-			r.lock.Lock()
-			lastOpTime := r.lastReplicatedOpTime
-			r.lock.Unlock()
+		return err
+	}, isChangeStreamUnrecoverable, time.Second, 30*time.Second) //nolint:mnd
+}
 
-			currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
-
-			return err
-		},
-		append(baseOpts, extraOpts...)...,
-	)
+func isChangeStreamUnrecoverable(err error) bool {
+	return topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err)
 }
 
 func (r *Repl) watchChangeEvents(
