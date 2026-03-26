@@ -498,7 +498,8 @@ func (r *Repl) watchWithRetry(
 				return nil
 			}
 
-			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+				topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
 				return retry.Unrecoverable(err)
 			}
 
