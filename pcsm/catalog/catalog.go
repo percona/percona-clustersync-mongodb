@@ -15,7 +15,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
-	"github.com/percona/percona-clustersync-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
 // ErrTimeseriesUnsupported is returned when a timeseries collection is encountered.
@@ -132,7 +132,7 @@ type BaseCatalog interface {
 	CollectionExists(db, coll string) bool
 	DropCollection(ctx context.Context, db, coll string) error
 	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
-	CreateIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification) error
+	CreateIndexes(ctx context.Context, db, coll string, indexes []*mdb.IndexSpecification) error
 	ShardCollection(ctx context.Context, db, coll string, shardKey bson.D, unique bool) error
 	SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary)
 }
@@ -160,7 +160,7 @@ type collectionCatalog struct {
 }
 
 type indexCatalogEntry struct {
-	*topo.IndexSpecification
+	*mdb.IndexSpecification
 
 	Incomplete   bool `bson:"incomplete"`
 	Failed       bool `bson:"failed"`
@@ -296,7 +296,7 @@ func (c *Catalog) doCreateCollection(
 
 		return errors.Wrapf(err, "create collection %s.%s", db, coll)
 	})
-	if err != nil && !topo.IsNamespaceExists(err) {
+	if err != nil && !mdb.IsNamespaceExists(err) {
 		return err
 	}
 
@@ -331,7 +331,7 @@ func (c *Catalog) doCreateView(
 
 		return errors.Wrapf(err, "create view %s.%s", db, view)
 	})
-	if err != nil && !topo.IsNamespaceExists(err) {
+	if err != nil && !mdb.IsNamespaceExists(err) {
 		return err
 	}
 
@@ -364,7 +364,7 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 	lg := log.Ctx(ctx)
 
-	colls, err := topo.ListCollectionNames(ctx, c.target, db)
+	colls, err := mdb.ListCollectionNames(ctx, c.target, db)
 	if err != nil {
 		return errors.Wrap(err, "list collection names")
 	}
@@ -400,7 +400,7 @@ func (c *Catalog) CreateIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []*mdb.IndexSpecification,
 ) error {
 	lg := log.Ctx(ctx)
 
@@ -410,7 +410,7 @@ func (c *Catalog) CreateIndexes(
 		return nil
 	}
 
-	idxs := make([]*topo.IndexSpecification, 0, len(indexes)-1) // -1 for ID index
+	idxs := make([]*mdb.IndexSpecification, 0, len(indexes)-1) // -1 for ID index
 
 	for _, index := range indexes {
 		if index.Name == IDIndex {
@@ -494,7 +494,7 @@ func (c *Catalog) CreateIndexes(
 	successfulIdxs := make([]indexCatalogEntry, 0, len(processedIdxs))
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 
-	failedIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+	failedIdxs := make([]*mdb.IndexSpecification, 0, len(processedIdxs))
 
 	var idxErrors []error
 
@@ -533,7 +533,7 @@ func (c *Catalog) AddIncompleteIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []*mdb.IndexSpecification,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -564,7 +564,7 @@ func (c *Catalog) AddFailedIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []*mdb.IndexSpecification,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -595,7 +595,7 @@ func (c *Catalog) AddInconsistentIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
-	indexes []*topo.IndexSpecification,
+	indexes []*mdb.IndexSpecification,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -772,7 +772,7 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 		return errors.Wrapf(err, "rename collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
 	})
 	if err != nil {
-		if topo.IsNamespaceNotFound(err) {
+		if mdb.IsNamespaceNotFound(err) {
 			lg.Errorf(err, "")
 
 			return nil
@@ -798,7 +798,7 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 		return errors.Wrapf(err, "drop index %s.%s.%s", db, coll, index)
 	})
 	if err != nil {
-		if !topo.IsNamespaceNotFound(err) && !topo.IsIndexNotFound(err) {
+		if !mdb.IsNamespaceNotFound(err) && !mdb.IsIndexNotFound(err) {
 			return err
 		}
 
@@ -1079,7 +1079,7 @@ func (c *Catalog) doModifyIndexOption(
 }
 
 // getIndexFromCatalog gets an index spec from the catalog.
-func (c *Catalog) getIndexFromCatalog(db, coll, index string) *topo.IndexSpecification {
+func (c *Catalog) getIndexFromCatalog(db, coll, index string) *mdb.IndexSpecification {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
@@ -1335,5 +1335,5 @@ func runWithRetry(
 	ctx context.Context,
 	fn func(context.Context) error,
 ) error {
-	return topo.RunWithRetry(ctx, fn, topo.DefaultRetryInterval, topo.DefaultMaxRetries) //nolint:wrapcheck
+	return mdb.RunWithRetry(ctx, fn, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries) //nolint:wrapcheck
 }

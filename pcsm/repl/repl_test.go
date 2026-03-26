@@ -10,8 +10,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 type mockCatalog struct {
@@ -54,7 +54,7 @@ func (m *mockCatalog) SetCollectionUUID(_ context.Context, db, coll string, _ *b
 	m.setCollectionUUIDColl = coll
 }
 
-func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*topo.IndexSpecification) error {
+func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.IndexSpecification) error {
 	return nil
 }
 

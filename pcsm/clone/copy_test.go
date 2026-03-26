@@ -18,8 +18,8 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 func getNamespace() catalog.Namespace {
@@ -93,13 +93,13 @@ func BenchmarkRead(b *testing.B) {
 	ctx := b.Context()
 
 	ns := getNamespace()
-	mc, err := topo.Connect(ctx, getSourceURI(), &config.Config{})
+	mc, err := mdb.Connect(ctx, getSourceURI(), &config.Config{})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer mc.Disconnect(ctx) //nolint:errcheck
 
-	stats, _ := topo.GetCollStats(ctx, mc, ns.Database, ns.Collection)
+	stats, _ := mdb.GetCollStats(ctx, mc, ns.Database, ns.Collection)
 	b.Logf("read size %s\n", humanize.Bytes(uint64(stats.Size))) //nolint:gosec
 
 	if stats.AvgObjSize == 0 {
@@ -147,7 +147,7 @@ func BenchmarkInsert(b *testing.B) {
 	ctx := b.Context()
 
 	ns := getNamespace()
-	mc, err := topo.Connect(ctx, getTargetURI(), &config.Config{})
+	mc, err := mdb.Connect(ctx, getTargetURI(), &config.Config{})
 	if err != nil {
 		b.Fatal(err)
 	}

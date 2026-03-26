@@ -17,18 +17,18 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 // Catalog defines the catalog operations required by the clone.
 type Catalog interface {
 	catalog.BaseCatalog
 
-	AddIncompleteIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
-	AddInconsistentIndexes(ctx context.Context, db, coll string, indexes []*topo.IndexSpecification)
+	AddIncompleteIndexes(ctx context.Context, db, coll string, indexes []*mdb.IndexSpecification)
+	AddInconsistentIndexes(ctx context.Context, db, coll string, indexes []*mdb.IndexSpecification)
 	SetCollectionTimestamp(ctx context.Context, db, coll string, ts bson.Timestamp)
 }
 
@@ -273,7 +273,7 @@ func (c *Clone) run(ctx context.Context) error {
 	lg := log.New("clone")
 	ctx = lg.WithContext(ctx)
 
-	startTS, err := topo.ClusterTime(ctx, c.source)
+	startTS, err := mdb.ClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "startTS: get source cluster time")
 	}
@@ -313,7 +313,7 @@ func (c *Clone) run(ctx context.Context) error {
 		lg.Warn("No collection to clone")
 	}
 
-	finishTS, err := topo.ClusterTime(ctx, c.source)
+	finishTS, err := mdb.ClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "finishTS: get source cluster time")
 	}
@@ -364,9 +364,9 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 					return nil
 				}
 
-				name, err := topo.GetCollectionNameByUUID(ctx, c.source, ns.Database, *ns.UUID)
+				name, err := mdb.GetCollectionNameByUUID(ctx, c.source, ns.Database, *ns.UUID)
 				if err != nil {
-					if errors.Is(err, topo.ErrNotFound) { // dropped
+					if errors.Is(err, mdb.ErrNotFound) { // dropped
 						lg.Warnf("Collection %s not found", ns.Namespace)
 
 						return nil
@@ -436,21 +436,21 @@ func (c *Clone) doCollectionClone(
 
 	startedAt = time.Now()
 
-	capturedAt, err := topo.ClusterTime(ctx, c.source)
+	capturedAt, err := mdb.ClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "get source cluster time")
 	}
 
-	spec, err := topo.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
+	spec, err := mdb.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
-		if errors.Is(err, topo.ErrNotFound) {
+		if errors.Is(err, mdb.ErrNotFound) {
 			return NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
 		return errors.Wrap(err, "$collStats")
 	}
 
-	if spec.Type == topo.TypeTimeseries {
+	if spec.Type == mdb.TypeTimeseries {
 		return catalog.ErrTimeseriesUnsupported
 	}
 
@@ -463,7 +463,7 @@ func (c *Clone) doCollectionClone(
 		return errors.Wrap(err, "createCollection")
 	}
 
-	if spec.Type == topo.TypeCollection {
+	if spec.Type == mdb.TypeCollection {
 		err = c.createIndexes(ctx, ns)
 		if err != nil {
 			return errors.Wrap(err, "create indexes")
@@ -472,8 +472,8 @@ func (c *Clone) doCollectionClone(
 
 	lg.Infof("Collection %q created", ns.String())
 
-	shInfo, err := topo.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !errors.Is(err, topo.ErrNotFound) {
+	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
 		return errors.Wrap(err, "get sharding info")
 	}
 
@@ -500,7 +500,7 @@ func (c *Clone) doCollectionClone(
 		err := progressUpdate.Err
 		if err != nil {
 			switch {
-			case topo.IsCollectionDropped(err):
+			case mdb.IsCollectionDropped(err):
 				lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
 
 				err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
@@ -522,7 +522,7 @@ func (c *Clone) doCollectionClone(
 				copyLogger.With(log.Size(totalSize)).
 					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
 
-			case topo.IsCollectionRenamed(err):
+			case mdb.IsCollectionRenamed(err):
 				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
 
 			case errors.Is(err, catalog.ErrTimeseriesUnsupported):
@@ -611,7 +611,7 @@ type sizeMapElem struct {
 func (c *Clone) collectSizeMap(ctx context.Context) error {
 	lg := log.Ctx(ctx)
 
-	databases, err := topo.ListDatabaseNames(ctx, c.source)
+	databases, err := mdb.ListDatabaseNames(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "list database names")
 	}
@@ -629,7 +629,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 		}
 
 		dbGrp.Go(func() error {
-			collSpecs, err := topo.ListCollectionSpecs(dbGrpCtx, c.source, db)
+			collSpecs, err := mdb.ListCollectionSpecs(dbGrpCtx, c.source, db)
 			if err != nil {
 				return errors.Wrap(err, "listCollections")
 			}
@@ -638,7 +638,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 			collGrp.SetLimit(runtime.NumCPU() * 2) //nolint:mnd
 
 			for _, spec := range collSpecs {
-				if spec.Type == topo.TypeTimeseries {
+				if spec.Type == mdb.TypeTimeseries {
 					lg.With(log.NS(db, spec.Name)).
 						Warnf("Timeseries is not supported: %q. skipping", db+"."+spec.Name)
 
@@ -655,7 +655,7 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 
 				collGrp.Go(func() error {
 					ns := db + "." + spec.Name
-					if spec.Type == topo.TypeView {
+					if spec.Type == mdb.TypeView {
 						mu.Lock()
 						sm[ns] = sizeMapElem{}
 						mu.Unlock()
@@ -663,9 +663,9 @@ func (c *Clone) collectSizeMap(ctx context.Context) error {
 						return nil
 					}
 
-					stats, err := topo.GetCollStats(collGrpCtx, c.source, db, spec.Name)
+					stats, err := mdb.GetCollStats(collGrpCtx, c.source, db, spec.Name)
 					if err != nil {
-						if errors.Is(err, topo.ErrNotFound) {
+						if errors.Is(err, mdb.ErrNotFound) {
 							return nil
 						}
 
@@ -749,9 +749,9 @@ func (e NamespaceNotFoundError) Error() string {
 func (c *Clone) createCollection(
 	ctx context.Context,
 	ns catalog.Namespace,
-	spec *topo.CollectionSpecification,
+	spec *mdb.CollectionSpecification,
 ) error {
-	if spec.Type == topo.TypeTimeseries {
+	if spec.Type == mdb.TypeTimeseries {
 		return catalog.ErrTimeseriesUnsupported
 	}
 
@@ -776,18 +776,18 @@ func (c *Clone) createCollection(
 }
 
 func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
-	indexes, err := topo.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
+	indexes, err := mdb.ListIndexes(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")
 	}
 
-	unfinishedBuilds, err := topo.ListInProgressIndexBuilds(ctx,
+	unfinishedBuilds, err := mdb.ListInProgressIndexBuilds(ctx,
 		c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list in-progress index builds")
 	}
 
-	inconsistentIndexes, err := topo.ListInconsistentIndexes(ctx,
+	inconsistentIndexes, err := mdb.ListInconsistentIndexes(ctx,
 		c.source, ns.Database, ns.Collection)
 	if err != nil {
 		return errors.Wrap(err, "list inconsistent indexes")
@@ -807,9 +807,9 @@ func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
 
 	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds)-len(inconsistentIndexes), 0)
 
-	builtIndexes := make([]*topo.IndexSpecification, 0, builtIndexesCap)
-	incompleteIndexes := make([]*topo.IndexSpecification, 0, len(unfinishedBuilds))
-	inconsistentIdxSpecs := make([]*topo.IndexSpecification, 0, len(inconsistentIndexes))
+	builtIndexes := make([]*mdb.IndexSpecification, 0, builtIndexesCap)
+	incompleteIndexes := make([]*mdb.IndexSpecification, 0, len(unfinishedBuilds))
+	inconsistentIdxSpecs := make([]*mdb.IndexSpecification, 0, len(inconsistentIndexes))
 
 	for _, index := range indexes {
 		switch {

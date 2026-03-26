@@ -15,7 +15,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
-	"github.com/percona/percona-clustersync-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
 var seed = time.Now().Unix() //nolint:gochecknoglobals
@@ -27,7 +27,7 @@ func BenchmarkInsertOne(b *testing.B) {
 		b.Fatal("no MongoDB URI provided")
 	}
 
-	client, err := topo.Connect(b.Context(), mongodbURI, &config.Config{})
+	client, err := mdb.Connect(b.Context(), mongodbURI, &config.Config{})
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -64,7 +64,7 @@ func BenchmarkReplaceOne(b *testing.B) {
 	}
 
 	cfg := &config.Config{}
-	client, err := topo.Connect(b.Context(), mongodbURI, cfg)
+	client, err := mdb.Connect(b.Context(), mongodbURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -141,13 +141,13 @@ func performIndexTest(b *testing.B, opts performIndexTestOptions) {
 	ctx := b.Context()
 	cfg := &config.Config{}
 
-	source, err := topo.Connect(ctx, sourceURI, cfg)
+	source, err := mdb.Connect(ctx, sourceURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer source.Disconnect(ctx) //nolint:errcheck
 
-	target, err := topo.Connect(ctx, targetURI, cfg)
+	target, err := mdb.Connect(ctx, targetURI, cfg)
 	if err != nil {
 		b.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
@@ -227,7 +227,7 @@ func copyDocuments(b *testing.B, source, target *mongo.Client, db, coll string) 
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
-	collStats, err := topo.GetCollStats(ctx, source, db, coll)
+	collStats, err := mdb.GetCollStats(ctx, source, db, coll)
 	if err != nil {
 		return 0, errors.Wrap(err, "collStats")
 	}

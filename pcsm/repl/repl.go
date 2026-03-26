@@ -16,10 +16,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -147,12 +147,12 @@ type Repl struct {
 // initPendingPhantomDrops enables phantom drop suppression on sharded clusters
 // running MongoDB <8.0. On those versions, movePrimary emits create→drop
 // through the change stream and the drop must be skipped.
-func (r *Repl) initPendingPhantomDrops(ctx context.Context, sourceVer topo.ServerVersion) {
+func (r *Repl) initPendingPhantomDrops(ctx context.Context, sourceVer mdb.ServerVersion) {
 	if sourceVer.Major() >= 8 { //nolint:mnd
 		return
 	}
 
-	hello, err := topo.SayHello(ctx, r.source)
+	hello, err := mdb.SayHello(ctx, r.source)
 	if err != nil || !hello.IsMongos() {
 		return
 	}
@@ -270,12 +270,12 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
-	targetVer, err := topo.Version(ctx, r.target)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := topo.Version(ctx, r.source)
+	sourceVer, err := mdb.Version(ctx, r.source)
 	if err != nil {
 		return errors.Wrap(err, "source version")
 	}
@@ -342,17 +342,17 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.New("already started")
 	}
 
-	targetVer, err := topo.Version(ctx, r.target)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := topo.Version(ctx, r.source)
+	sourceVer, err := mdb.Version(ctx, r.source)
 	if err != nil {
 		return errors.Wrap(err, "source version")
 	}
 
-	r.useCollectionBulk = !topo.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
+	r.useCollectionBulk = !mdb.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
 
 	r.initPendingPhantomDrops(ctx, sourceVer)
@@ -469,7 +469,7 @@ func (r *Repl) watchWithRetry(
 ) error {
 	currentOpts := opts
 
-	return retryWatchWithBackoff(ctx, func() error { //nolint:wrapcheck
+	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil
@@ -482,55 +482,16 @@ func (r *Repl) watchWithRetry(
 		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
 
 		return err
-	}, isChangeStreamUnrecoverable)
+	}, isChangeStreamUnrecoverable,
+		mdb.DefaultRetryInterval, maxWatchDelay, mdb.DefaultMaxRetries,
+	)
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
-	return topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err)
+	return mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err)
 }
 
 const maxWatchDelay = 30 * time.Second
-
-func retryWatchWithBackoff(
-	ctx context.Context,
-	fn func() error,
-	isUnrecoverable func(error) bool,
-) error {
-	delay := topo.DefaultRetryInterval
-
-	var err error
-
-	for attempt := 1; attempt <= topo.DefaultMaxRetries; attempt++ {
-		err = fn()
-		if err == nil {
-			return nil
-		}
-
-		if ctx.Err() != nil ||
-			errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-
-		if isUnrecoverable != nil && isUnrecoverable(err) {
-			return err
-		}
-
-		log.Ctx(ctx).Warnf("Retryable error (attempt %d): %v, retrying in %s", attempt, err, delay)
-
-		if attempt < topo.DefaultMaxRetries {
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return errors.Wrap(ctx.Err(), "retry wait")
-			}
-
-			delay = min(delay*2, maxWatchDelay) //nolint:mnd
-		}
-	}
-
-	return err
-}
 
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
@@ -583,7 +544,7 @@ func (r *Repl) watchChangeEvents(
 		// Under sustained load, tryAdvanceOpTime + SafeCheckpoint keep
 		// lastReplicatedOpTime current without the appendOplogNote overhead.
 		if !hasEvents {
-			sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
+			sourceTS, err := mdb.AdvanceClusterTime(ctx, r.source)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
@@ -631,7 +592,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		err := r.watchWithRetry(ctx, opts, changeEventCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
+			if mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
 			}
 
