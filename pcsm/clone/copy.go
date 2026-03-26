@@ -362,11 +362,11 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection)
 
-	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+	err := util.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := collection.InsertMany(ctx, task.Documents, insertOptions)
 
 		return errors.Wrapf(err, "insert batch: id %d, doc count %d", task.ID, len(task.Documents))
-	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	}, topo.IsTransient, util.DefaultRetryInterval, util.DefaultMaxRetries)
 
 	count := len(task.Documents)
 

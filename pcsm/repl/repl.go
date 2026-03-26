@@ -471,7 +471,7 @@ func (r *Repl) watchWithRetry(
 ) error {
 	currentOpts := opts
 
-	return topo.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
+	return util.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil

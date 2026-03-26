@@ -16,6 +16,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/topo"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 //nolint:gochecknoglobals
@@ -94,12 +95,12 @@ func (cbw *clientBulkWrite) doWithRetry(
 
 	var bulkErr error
 
-	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+	err := util.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := m.BulkWrite(ctx, bulkWrites, clientBulkOptions)
 		bulkErr = err
 
 		return errors.Wrap(err, "bulk write")
-	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	}, topo.IsTransient, util.DefaultRetryInterval, util.DefaultMaxRetries)
 	if err == nil {
 		return nil
 	}
@@ -308,12 +309,12 @@ func (cbw *collectionBulkWrite) doWithRetry(
 
 	var bulkErr error
 
-	err := topo.RunWithRetry(ctx, func(_ context.Context) error {
+	err := util.RunWithRetry(ctx, func(_ context.Context) error {
 		_, err := coll.BulkWrite(ctx, bulkWrites, collectionBulkOptions)
 		bulkErr = err
 
 		return errors.Wrapf(err, "bulk write %q", ns)
-	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	}, topo.IsTransient, util.DefaultRetryInterval, util.DefaultMaxRetries)
 	if err == nil {
 		return nil
 	}
