@@ -16,6 +16,7 @@ import (
 
 type mockCatalog struct {
 	collectionExists bool
+	collectionUUID   *bson.Binary
 
 	dropCollectionCalled bool
 	dropCollectionDB     string
@@ -32,6 +33,10 @@ type mockCatalog struct {
 
 func (m *mockCatalog) CollectionExists(_, _ string) bool {
 	return m.collectionExists
+}
+
+func (m *mockCatalog) CollectionUUID(_, _ string) *bson.Binary {
+	return m.collectionUUID
 }
 
 func (m *mockCatalog) DropCollection(_ context.Context, db, coll string) error {
@@ -101,29 +106,45 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
-func TestApplyDDLChange_MovePrimary(t *testing.T) {
+func TestApplyDDLChange_Create(t *testing.T) {
 	t.Parallel()
+
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
 
 	tests := []struct {
 		name                 string
 		catalogHasCollection bool
+		catalogUUID          *bson.Binary
 		expectDrop           bool
 		expectCreate         bool
 		expectSetUUID        bool
+		expectPhantomDrop    bool
 	}{
 		{
-			name:                 "create_skipped_when_catalog_has_collection",
-			catalogHasCollection: true,
-			expectDrop:           false,
-			expectCreate:         false,
-			expectSetUUID:        true,
-		},
-		{
-			name:                 "create_proceeds_when_catalog_missing_collection",
+			name:                 "new_collection",
 			catalogHasCollection: false,
 			expectDrop:           true,
 			expectCreate:         true,
 			expectSetUUID:        true,
+		},
+		{
+			name:                 "replayed_create_same_uuid_skipped",
+			catalogHasCollection: true,
+			catalogUUID:          eventUUID,
+			expectDrop:           false,
+			expectCreate:         false,
+			expectSetUUID:        false,
+			expectPhantomDrop:    false,
+		},
+		{
+			name:                 "movePrimary_different_uuid_updates",
+			catalogHasCollection: true,
+			catalogUUID:          differentUUID,
+			expectDrop:           false,
+			expectCreate:         false,
+			expectSetUUID:        true,
+			expectPhantomDrop:    true,
 		},
 	}
 
@@ -133,10 +154,12 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 
 			cat := &mockCatalog{
 				collectionExists: tt.catalogHasCollection,
+				collectionUUID:   tt.catalogUUID,
 			}
 
 			r := &Repl{
-				catalog: cat,
+				catalog:             cat,
+				pendingPhantomDrops: make(map[string]struct{}),
 			}
 
 			change := &ChangeEvent{
@@ -146,7 +169,7 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 						Database:   "testdb",
 						Collection: "testcoll",
 					},
-					CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")},
+					CollectionUUID: eventUUID,
 				},
 				Event: CreateEvent{},
 			}
@@ -154,9 +177,12 @@ func TestApplyDDLChange_MovePrimary(t *testing.T) {
 			err := r.applyDDLChange(context.Background(), change)
 			require.NoError(t, err)
 
-			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled, "DropCollection called mismatch")
-			assert.Equal(t, tt.expectCreate, cat.createCollectionCalled, "CreateCollection called mismatch")
-			assert.Equal(t, tt.expectSetUUID, cat.setCollectionUUIDCalled, "SetCollectionUUID called mismatch")
+			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
+			assert.Equal(t, tt.expectCreate, cat.createCollectionCalled)
+			assert.Equal(t, tt.expectSetUUID, cat.setCollectionUUIDCalled)
+
+			_, hasPhantom := r.pendingPhantomDrops["testdb.testcoll"]
+			assert.Equal(t, tt.expectPhantomDrop, hasPhantom)
 		})
 	}
 }
@@ -189,7 +215,10 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 	t.Run("pre8_phantom_create_then_drop_suppressed", func(t *testing.T) {
 		t.Parallel()
 
-		cat := &mockCatalog{collectionExists: true}
+		cat := &mockCatalog{
+			collectionExists: true,
+			collectionUUID:   &bson.Binary{Subtype: 4, Data: []byte("different_uuid__!")},
+		}
 		r := &Repl{
 			catalog:             cat,
 			pendingPhantomDrops: make(map[string]struct{}),
@@ -210,7 +239,10 @@ func TestApplyDDLChange_MovePrimaryDropSuppression(t *testing.T) {
 	t.Run("v8_phantom_create_no_tracking", func(t *testing.T) {
 		t.Parallel()
 
-		cat := &mockCatalog{collectionExists: true}
+		cat := &mockCatalog{
+			collectionExists: true,
+			collectionUUID:   &bson.Binary{Subtype: 4, Data: []byte("different_uuid__!")},
+		}
 		r := &Repl{
 			catalog:             cat,
 			pendingPhantomDrops: nil,

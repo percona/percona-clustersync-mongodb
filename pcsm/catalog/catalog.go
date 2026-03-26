@@ -130,6 +130,7 @@ type ModifyIndexOption struct {
 // BaseCatalog defines the shared collection-level operations used by clone and repl packages.
 type BaseCatalog interface {
 	CollectionExists(db, coll string) bool
+	CollectionUUID(db, coll string) *bson.Binary
 	DropCollection(ctx context.Context, db, coll string) error
 	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
 	CreateIndexes(ctx context.Context, db, coll string, indexes []*mdb.IndexSpecification) error
@@ -851,6 +852,23 @@ func (c *Catalog) CollectionExists(db, coll string) bool {
 	_, ok = dbEntry.Collections[coll]
 
 	return ok
+}
+
+func (c *Catalog) CollectionUUID(db, coll string) *bson.Binary {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	dbEntry, ok := c.Databases[db]
+	if !ok {
+		return nil
+	}
+
+	entry, ok := dbEntry.Collections[coll]
+	if !ok {
+		return nil
+	}
+
+	return entry.UUID
 }
 
 // SetCollectionUUID sets the UUID for a collection in the catalog.

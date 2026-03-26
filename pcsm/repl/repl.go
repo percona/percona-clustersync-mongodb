@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"runtime"
@@ -571,6 +572,11 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
 		r.pool.Stop()
+
+		if cp := r.pool.SafeCheckpoint(); cp.After(r.lastReplicatedOpTime) {
+			r.lastReplicatedOpTime = cp
+		}
+
 		r.pool = nil
 		r.lock.Unlock()
 
@@ -794,12 +800,15 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		// movePrimary emits a phantom create event (via mongos change stream)
-		// for collections moved between shards. If the catalog already tracks
-		// this collection, the create is a phantom — just update the UUID to
-		// reflect the post-move value.
 		if r.catalog.CollectionExists(change.Namespace.Database, change.Namespace.Collection) {
-			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID only",
+			existingUUID := r.catalog.CollectionUUID(change.Namespace.Database, change.Namespace.Collection)
+			if uuidEqual(existingUUID, change.CollectionUUID) {
+				lg.Infof("Skipping replayed create for %q (UUID unchanged)", change.Namespace)
+
+				return nil
+			}
+
+			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID",
 				change.Namespace)
 
 			r.catalog.SetCollectionUUID(ctx,
@@ -807,8 +816,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 				change.Namespace.Collection,
 				change.CollectionUUID)
 
-			// On <8.0 movePrimary emits create→drop. Record the namespace so
-			// the subsequent phantom drop is suppressed instead of replayed.
 			if r.pendingPhantomDrops != nil {
 				r.pendingPhantomDrops[change.Namespace.String()] = struct{}{}
 			}
@@ -1001,6 +1008,14 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 	case opts.ChangeStreamPreAndPostImages != nil:
 		log.Ctx(ctx).Warn("changeStreamPreAndPostImages is not supported")
 	}
+}
+
+func uuidEqual(a, b *bson.Binary) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.Subtype == b.Subtype && bytes.Equal(a.Data, b.Data)
 }
 
 func loggerForEvent(change *ChangeEvent) log.Logger {
