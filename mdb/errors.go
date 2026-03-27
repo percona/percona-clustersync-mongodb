@@ -88,6 +88,10 @@ func IsTransient(err error) bool {
 		return true
 	}
 
+	if isAuthKeyNotFound(err) {
+		return true
+	}
+
 	transientErrorCodes := map[int]struct{}{
 		11602: {}, // InterruptedDueToReplStateChange
 		91:    {}, // ShutdownInProgress
@@ -119,4 +123,8 @@ func IsTransient(err error) bool {
 	}
 
 	return false
+}
+
+func isAuthKeyNotFound(err error) bool {
+	return strings.Contains(err.Error(), "KeyNotFound")
 }
