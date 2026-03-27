@@ -1,7 +1,6 @@
 package repl
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"runtime"
@@ -137,28 +136,6 @@ type Repl struct {
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
-
-	// pendingPhantomDrops tracks namespaces where a phantom create was
-	// detected (movePrimary). Prior to MongoDB 8.0 movePrimary emits
-	// create→drop; the drop must be suppressed to avoid wiping target data.
-	// nil when source is 8.0+
-	pendingPhantomDrops map[string]struct{}
-}
-
-// initPendingPhantomDrops enables phantom drop suppression on sharded clusters
-// running MongoDB <8.0. On those versions, movePrimary emits create→drop
-// through the change stream and the drop must be skipped.
-func (r *Repl) initPendingPhantomDrops(ctx context.Context, sourceVer mdb.ServerVersion) {
-	if sourceVer.Major() >= 8 { //nolint:mnd
-		return
-	}
-
-	hello, err := mdb.SayHello(ctx, r.source)
-	if err != nil || !hello.IsMongos() {
-		return
-	}
-
-	r.pendingPhantomDrops = make(map[string]struct{})
 }
 
 // Status represents the status of change replication.
@@ -276,15 +253,8 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := mdb.Version(ctx, r.source)
-	if err != nil {
-		return errors.Wrap(err, "source version")
-	}
-
 	r.useCollectionBulk = !cp.UseClientBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
-
-	r.initPendingPhantomDrops(ctx, sourceVer)
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
@@ -348,15 +318,8 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := mdb.Version(ctx, r.source)
-	if err != nil {
-		return errors.Wrap(err, "source version")
-	}
-
 	r.useCollectionBulk = !mdb.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
-
-	r.initPendingPhantomDrops(ctx, sourceVer)
 
 	if r.useCollectionBulk {
 		log.New("repl").Debug("Use collection-level bulk write")
@@ -809,29 +772,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		if r.catalog.CollectionExists(change.Namespace.Database, change.Namespace.Collection) {
-			existingUUID := r.catalog.CollectionUUID(change.Namespace.Database, change.Namespace.Collection)
-			if uuidEqual(existingUUID, change.CollectionUUID) {
-				lg.Infof("Skipping replayed create for %q (UUID unchanged)", change.Namespace)
-
-				return nil
-			}
-
-			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID",
-				change.Namespace)
-
-			r.catalog.SetCollectionUUID(ctx,
-				change.Namespace.Database,
-				change.Namespace.Collection,
-				change.CollectionUUID)
-
-			if r.pendingPhantomDrops != nil {
-				r.pendingPhantomDrops[change.Namespace.String()] = struct{}{}
-			}
-
-			return nil
-		}
-
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
@@ -859,16 +799,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
-		if r.pendingPhantomDrops != nil {
-			ns := change.Namespace.String()
-			if _, ok := r.pendingPhantomDrops[ns]; ok {
-				delete(r.pendingPhantomDrops, ns)
-				lg.Warnf("Skipping phantom drop for %q (movePrimary)", change.Namespace)
-
-				return nil
-			}
-		}
-
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
@@ -1017,14 +947,6 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 	case opts.ChangeStreamPreAndPostImages != nil:
 		log.Ctx(ctx).Warn("changeStreamPreAndPostImages is not supported")
 	}
-}
-
-func uuidEqual(a, b *bson.Binary) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-
-	return a.Subtype == b.Subtype && bytes.Equal(a.Data, b.Data)
 }
 
 func loggerForEvent(change *ChangeEvent) log.Logger {
