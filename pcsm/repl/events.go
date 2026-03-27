@@ -7,8 +7,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 type OperationType string
@@ -249,7 +249,7 @@ type CreateIndexesEvent struct {
 
 // createIndexesOpDesc represents the description of the create indexes operation.
 type createIndexesOpDesc struct {
-	Indexes []*topo.IndexSpecification `bson:"indexes"`
+	Indexes []*mdb.IndexSpecification `bson:"indexes"`
 }
 
 // DropIndexesEvent occurs when an index is dropped from the collection and the change stream has
