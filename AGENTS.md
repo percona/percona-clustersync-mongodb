@@ -32,13 +32,11 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 
 ### Environment Variables
 
-| Variable            | Default            | Description                                                                |
-| ------------------- | ------------------ | -------------------------------------------------------------------------- |
-| `MONGO_VERSION`     | `8.0`              | MongoDB image version fallback for both source and target test clusters    |
-| `SRC_MONGO_VERSION` | `${MONGO_VERSION}` | MongoDB image version for source test cluster; falls back to MONGO_VERSION |
-| `TGT_MONGO_VERSION` | `${MONGO_VERSION}` | MongoDB image version for target test cluster; falls back to MONGO_VERSION |
-| `SRC_SHARDS`        | `2`                | Number of source shards (sharded topology only, max 3)                     |
-| `TGT_SHARDS`        | `2`                | Number of target shards (sharded topology only, max 3)                     |
+| Variable        | Default | Description                                            |
+| --------------- | ------- | ------------------------------------------------------ |
+| `MONGO_VERSION` | `8.0`   | MongoDB image version for test clusters                |
+| `SRC_SHARDS`    | `2`     | Number of source shards (sharded topology only, max 3) |
+| `TGT_SHARDS`    | `2`     | Number of target shards (sharded topology only, max 3) |
 
 ## Cluster Topology
 
@@ -50,8 +48,6 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 | RS       | `mongodb://rs00:30000`       | `mongodb://rs10:30100`       |
 
 **IMPORTANT**: Use these URIs exactly as shown. Do NOT append query parameters like `?replicaSet=rs0` or `?directConnection=true` — PCSM rejects `directConnection` and discovers topology automatically.
-
-**Version guardrails**: PCSM validates MongoDB versions at startup. Source major version must be ≤ target major version (downgrade is blocked). FCV is queried and validated on both clusters.
 
 ### Health Verification
 
@@ -191,7 +187,7 @@ These checks must be the final tasks before considering work complete.
 | Package   | Purpose                          |
 | --------- | -------------------------------- |
 | `pcsm/`   | Core replication (Clone, Repl)   |
-| `topo/`   | MongoDB topology and connections |
+| `mdb/`    | MongoDB topology and connections |
 | `sel/`    | Namespace filtering              |
 | `config/` | Configuration constants          |
 | `errors/` | Custom error handling            |
@@ -373,13 +369,6 @@ export TEST_TARGET_URI="mongodb://rs10:30100"
 # TEST_PCSM_URL and TEST_PCSM_BIN remain the same as sharded
 ```
 
-Cross-version example (7.0 source → 8.0 target, RS):
-
-```bash
-export SRC_MONGO_VERSION=7.0
-export TGT_MONGO_VERSION=8.0
-```
-
 Run tests including slow tests (disabled by default):
 
 ```bash
@@ -410,6 +399,17 @@ Monitor write operations per second on a cluster:
 ```bash
 poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ```
+
+## QA Test Branch Override
+
+The CI workflow (`.github/workflows/ci.yml`) extracts the first `PCSM-XXX` ticket key from the PR title and checks if a branch with that name exists in `Percona-QA/psmdb-testing`. If found, the CI checks out that branch instead of `main` for the QA tests.
+
+This is useful when QA tests need changes to pass on a PCSM PR. Push the test fixes to a branch named after the ticket (e.g. `PCSM-286`) in the QA repo, and the PCSM CI picks them up automatically.
+
+- No PR needed on the QA repo, just the branch.
+- Only the first `PCSM-XXX` match from the PR title is used (`grep -oE 'PCSM-[0-9]+' | head -1`).
+- Falls back to `main` if no matching branch exists or no ticket key is found in the title.
+- Can also be overridden manually via the `tests_ver` workflow dispatch input.
 
 ## External References
 
