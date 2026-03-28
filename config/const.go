@@ -53,7 +53,9 @@ const (
 // The order defines preference: the driver uses the first compressor supported by the server.
 //
 //nolint:gochecknoglobals
-var DefaultClientCompressors = []string{"snappy", "zstd", "zlib"}
+func DefaultClientCompressors() []string {
+    return []string{"snappy", "zstd", "zlib"}
+}
 
 // Change stream and replication settings.
 const (
