@@ -45,7 +45,7 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 		SetWriteConcern(writeconcern.Majority()).
 		SetTimeout(cfg.MongoDB.OperationTimeout)
 
-	compressors := config.DefaultClientCompressors
+	compressors := config.DefaultClientCompressors()
 
 	if uri == cfg.Source && len(cfg.MongoDB.SourceCompressors) > 0 {
 		compressors = cfg.MongoDB.SourceCompressors

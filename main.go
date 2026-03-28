@@ -138,10 +138,10 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
 		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
-			strings.Join(config.DefaultClientCompressors, ",")))
+			strings.Join(config.DefaultClientCompressors(), ",")))
 	rootCmd.Flags().StringSlice("target-client-compressors", nil,
 		fmt.Sprintf("Compressors for the target MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
-			strings.Join(config.DefaultClientCompressors, ",")))
+			strings.Join(config.DefaultClientCompressors(), ",")))
 
 	rootCmd.Flags().Bool("start", false, "")
 	rootCmd.Flags().MarkHidden("start") //nolint:errcheck
