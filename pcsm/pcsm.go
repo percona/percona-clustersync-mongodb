@@ -25,12 +25,12 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 	"github.com/percona/percona-clustersync-mongodb/sel"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 )
 
 // State represents the state of the PCSM.
@@ -282,7 +282,7 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 		return s
 	}
 
-	sourceTime, err := topo.ClusterTime(ctx, p.source)
+	sourceTime, err := mdb.ClusterTime(ctx, p.source)
 	if err != nil {
 		// Do not block status if source cluster is lost
 		log.New("pcsm").Error(err, "Status: get source cluster time")
@@ -513,7 +513,7 @@ func (p *PCSM) monitorLagTime(ctx context.Context) {
 		case <-t.C:
 		}
 
-		sourceTS, err := topo.ClusterTime(ctx, p.source)
+		sourceTS, err := mdb.ClusterTime(ctx, p.source)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return

@@ -187,7 +187,7 @@ These checks must be the final tasks before considering work complete.
 | Package   | Purpose                          |
 | --------- | -------------------------------- |
 | `pcsm/`   | Core replication (Clone, Repl)   |
-| `topo/`   | MongoDB topology and connections |
+| `mdb/`    | MongoDB topology and connections |
 | `sel/`    | Namespace filtering              |
 | `config/` | Configuration constants          |
 | `errors/` | Custom error handling            |

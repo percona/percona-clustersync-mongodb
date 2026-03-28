@@ -365,7 +365,7 @@ func TestStatus(t *testing.T) {
 		assert.False(t, status.InitialSyncCompleted)
 	})
 
-	// Note: Tests below use StateFailed because Status() calls topo.ClusterTime()
+	// Note: Tests below use StateFailed because Status() calls mdb.ClusterTime()
 	// for non-Idle/non-Failed states, which requires a real MongoDB client.
 	// Using StateFailed allows testing status fields without calling ClusterTime().
 
@@ -564,6 +564,6 @@ func TestStatus(t *testing.T) {
 		assert.False(t, status.InitialSyncCompleted)
 	})
 
-	// Note: TotalLagTimeSeconds calculation requires topo.ClusterTime() with real MongoDB.
+	// Note: TotalLagTimeSeconds calculation requires mdb.ClusterTime() with real MongoDB.
 	// This is tested via E2E tests.
 }
