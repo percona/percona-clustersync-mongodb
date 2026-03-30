@@ -570,9 +570,9 @@ type server struct {
 	promRegistry *prometheus.Registry
 
 	// sourceVersion is the MongoDB version of the source cluster.
-	sourceVersion topo.ServerVersion
+	sourceVersion mdb.ServerVersion
 	// targetVersion is the MongoDB version of the target cluster.
-	targetVersion topo.ServerVersion
+	targetVersion mdb.ServerVersion
 }
 
 // createServer creates a new server with the given options.

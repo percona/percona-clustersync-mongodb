@@ -1064,7 +1064,7 @@ func (c *Catalog) doModifyIndexOption(
 	indexName string,
 	propName string,
 	value any,
-	spec *topo.IndexSpecification,
+	spec *mdb.IndexSpecification,
 ) error {
 	err := runWithRetry(ctx, func(ctx context.Context) error {
 		err := c.target.Database(db).RunCommand(ctx, bson.D{
@@ -1077,7 +1077,7 @@ func (c *Catalog) doModifyIndexOption(
 
 		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, indexName, propName)
 	})
-	if topo.IsIndexOptionsConflict(err) {
+	if mdb.IsIndexOptionsConflict(err) {
 		return c.dropAndRecreateIndex(ctx, db, coll, indexName, spec)
 	}
 
@@ -1089,7 +1089,7 @@ func (c *Catalog) dropAndRecreateIndex(
 	db string,
 	coll string,
 	indexName string,
-	spec *topo.IndexSpecification,
+	spec *mdb.IndexSpecification,
 ) error {
 	if spec == nil {
 		return errors.New("cannot recreate index: spec is nil for " + db + "." + coll + "." + indexName)

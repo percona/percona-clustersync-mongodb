@@ -23,6 +23,12 @@ func IsNamespaceNotFound(err error) bool {
 	return isMongoCommandError(err, "NamespaceNotFound")
 }
 
+// IsInvalidOptions checks if an error is an invalid options error (e.g. collMod on
+// a non-existent or incompatible collection).
+func IsInvalidOptions(err error) bool {
+	return isMongoCommandError(err, "InvalidOptions")
+}
+
 func IsNamespaceExists(err error) bool {
 	return isMongoCommandError(err, "NamespaceExists")
 }

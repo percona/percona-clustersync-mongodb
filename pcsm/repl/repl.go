@@ -893,7 +893,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	}
 
 	if err != nil {
-		if topo.IsNamespaceNotFound(err) {
+		if mdb.IsNamespaceNotFound(err) || mdb.IsIndexNotFound(err) || mdb.IsInvalidOptions(err) {
 			lg.Warn(err.Error())
 
 			return nil
