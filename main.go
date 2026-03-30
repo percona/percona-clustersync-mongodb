@@ -1257,8 +1257,9 @@ func NewClient(port int) PCSMClient {
 }
 
 // Status sends a request to get the status of the cluster replication.
+// It always prints the full JSON response.
 func (c PCSMClient) Status(ctx context.Context) error {
-	return doClientRequest[statusResponse](ctx, c.port, http.MethodGet, "status", nil)
+	return doStatusRequest(ctx, c.port)
 }
 
 // Start sends a request to start the cluster replication.
@@ -1322,4 +1323,42 @@ func doClientRequest[T clientResponse](ctx context.Context, port int, method, pa
 	err = j.Encode(resp)
 
 	return errors.Wrap(err, "print response")
+}
+
+func doStatusRequest(ctx context.Context, port int) error {
+	url := fmt.Sprintf("http://localhost:%d/status", port)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return errors.Wrap(err, "build request")
+	}
+
+	log.Ctx(ctx).Debugf("GET /status")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "request")
+	}
+	defer res.Body.Close()
+
+	var resp statusResponse
+
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return errors.Wrap(err, "decode response")
+	}
+
+	j := json.NewEncoder(os.Stdout)
+	j.SetIndent("", "  ")
+
+	err = j.Encode(resp)
+	if err != nil {
+		return errors.Wrap(err, "print response")
+	}
+
+	if !resp.IsOk() {
+		return errors.New(resp.GetError())
+	}
+
+	return nil
 }
