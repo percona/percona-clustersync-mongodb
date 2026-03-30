@@ -81,38 +81,43 @@ type CopyManagerOptions struct {
 	ReadBatchSizeBytes int32
 }
 
-func NewCopyManager(ctx context.Context, source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
-	if options.NumReadWorkers < 1 {
-		options.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
-	}
-	if options.NumInsertWorkers < 1 {
-		options.NumInsertWorkers = runtime.NumCPU() * 2 //nolint:mnd
+func (o *CopyManagerOptions) applyDefaults() {
+	if o.NumReadWorkers < 1 {
+		o.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
 	}
 
-	if options.SegmentSizeBytes < 0 {
-		options.SegmentSizeBytes = config.AutoCloneSegmentSize
-	} else if options.SegmentSizeBytes > 0 {
-		options.SegmentSizeBytes = max(options.SegmentSizeBytes, config.MinCloneSegmentSizeBytes)
-		options.SegmentSizeBytes = min(options.SegmentSizeBytes, config.MaxCloneSegmentSizeBytes)
+	if o.NumInsertWorkers < 1 {
+		o.NumInsertWorkers = runtime.NumCPU() * 2 //nolint:mnd
 	}
 
-	if options.ReadBatchSizeBytes == 0 {
-		options.ReadBatchSizeBytes = config.DefaultCloneReadBatchSizeBytes
+	if o.SegmentSizeBytes < 0 {
+		o.SegmentSizeBytes = config.AutoCloneSegmentSize
+	} else if o.SegmentSizeBytes > 0 {
+		o.SegmentSizeBytes = max(o.SegmentSizeBytes, config.MinCloneSegmentSizeBytes)
+		o.SegmentSizeBytes = min(o.SegmentSizeBytes, config.MaxCloneSegmentSizeBytes)
+	}
+
+	if o.ReadBatchSizeBytes == 0 {
+		o.ReadBatchSizeBytes = config.DefaultCloneReadBatchSizeBytes
 	} else {
-		options.ReadBatchSizeBytes = max(options.ReadBatchSizeBytes, config.MinCloneReadBatchSizeBytes)
-		options.ReadBatchSizeBytes = min(options.ReadBatchSizeBytes, config.MaxCloneReadBatchSizeBytes)
+		o.ReadBatchSizeBytes = max(o.ReadBatchSizeBytes, config.MinCloneReadBatchSizeBytes)
+		o.ReadBatchSizeBytes = min(o.ReadBatchSizeBytes, config.MaxCloneReadBatchSizeBytes)
 	}
+}
+
+func NewCopyManager(ctx context.Context, source, target *mongo.Client, options CopyManagerOptions) *CopyManager {
+	options.applyDefaults()
 
 	lg := log.New("copy")
-	lg.Debugf("NumReadWorkers: %d", options.NumReadWorkers)
-	lg.Debugf("NumInsertWorkers: %d", options.NumInsertWorkers)
+	lg.Infof("Config: NumReadWorkers: %d", options.NumReadWorkers)
+	lg.Infof("Config: NumInsertWorkers: %d", options.NumInsertWorkers)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
-		lg.Debug("SegmentSizeBytes: auto")
+		lg.Info("Config: SegmentSizeBytes: auto (per collection)")
 	} else {
-		lg.Debugf("SegmentSizeBytes: %d (%s)", options.SegmentSizeBytes,
+		lg.Infof("Config: SegmentSizeBytes: %d (%s)", options.SegmentSizeBytes,
 			humanize.Bytes(uint64(options.SegmentSizeBytes))) //nolint:gosec
 	}
-	lg.Debugf("ReadBatchSizeBytes: %d (%s)", options.ReadBatchSizeBytes,
+	lg.Infof("Config: ReadBatchSizeBytes: %d (%s)", options.ReadBatchSizeBytes,
 		humanize.Bytes(uint64(options.ReadBatchSizeBytes))) //nolint:gosec
 
 	insertCtx, cancelInsert := context.WithCancel(ctx)

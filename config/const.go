@@ -49,6 +49,14 @@ const (
 	DefaultMongoDBOperationTimeout = 5 * time.Minute
 )
 
+// DefaultClientCompressors is the default compressor list for MongoDB clients.
+// The order defines preference: the driver uses the first compressor supported by the server.
+//
+//nolint:gochecknoglobals
+func DefaultClientCompressors() []string {
+	return []string{"snappy", "zstd", "zlib"}
+}
+
 // Change stream and replication settings.
 const (
 	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
