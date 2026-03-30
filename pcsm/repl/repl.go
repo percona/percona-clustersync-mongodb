@@ -16,10 +16,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/sel"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -136,28 +136,6 @@ type Repl struct {
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
-
-	// pendingPhantomDrops tracks namespaces where a phantom create was
-	// detected (movePrimary). Prior to MongoDB 8.0 movePrimary emits
-	// create→drop; the drop must be suppressed to avoid wiping target data.
-	// nil when source is 8.0+
-	pendingPhantomDrops map[string]struct{}
-}
-
-// initPendingPhantomDrops enables phantom drop suppression on sharded clusters
-// running MongoDB <8.0. On those versions, movePrimary emits create→drop
-// through the change stream and the drop must be skipped.
-func (r *Repl) initPendingPhantomDrops(ctx context.Context, sourceVer topo.ServerVersion) {
-	if sourceVer.Major() >= 8 { //nolint:mnd
-		return
-	}
-
-	hello, err := topo.SayHello(ctx, r.source)
-	if err != nil || !hello.IsMongos() {
-		return
-	}
-
-	r.pendingPhantomDrops = make(map[string]struct{})
 }
 
 // Status represents the status of change replication.
@@ -280,20 +258,13 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 
-	targetVer, err := topo.Version(ctx, r.target)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := topo.Version(ctx, r.source)
-	if err != nil {
-		return errors.Wrap(err, "source version")
-	}
-
 	r.useCollectionBulk = !cp.UseClientBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
-
-	r.initPendingPhantomDrops(ctx, sourceVer)
 
 	if cp.Error != "" {
 		r.err = errors.New(cp.Error)
@@ -352,20 +323,13 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.New("already started")
 	}
 
-	targetVer, err := topo.Version(ctx, r.target)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}
 
-	sourceVer, err := topo.Version(ctx, r.source)
-	if err != nil {
-		return errors.Wrap(err, "source version")
-	}
-
-	r.useCollectionBulk = !topo.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
+	r.useCollectionBulk = !mdb.Support(targetVer).ClientBulkWrite() || r.options.UseCollectionBulkWrite
 	r.useSimpleCollation = targetVer.Major() < 8 //nolint:mnd
-
-	r.initPendingPhantomDrops(ctx, sourceVer)
 
 	if r.useCollectionBulk {
 		log.New("repl").Debug("Use collection-level bulk write")
@@ -472,6 +436,44 @@ func (r *Repl) Resume(ctx context.Context) error {
 	return nil
 }
 
+func (r *Repl) watchWithRetry(
+	ctx context.Context,
+	opts *options.ChangeStreamOptionsBuilder,
+	changeCh chan<- *ChangeEvent,
+) error {
+	currentOpts := opts
+
+	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
+		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
+		if err == nil {
+			return nil
+		}
+
+		r.lock.Lock()
+		lastOpTime := r.lastReplicatedOpTime
+		r.lock.Unlock()
+
+		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
+
+		return err
+	}, isChangeStreamUnrecoverable,
+		mdb.DefaultRetryInterval, maxWatchDelay, 0,
+	)
+}
+
+func isChangeStreamUnrecoverable(err error) bool {
+	return mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err)
+}
+
+const (
+	maxWatchDelay      = 30 * time.Second
+	maxWriteRetryDelay = 30 * time.Second
+)
+
+func isNonTransient(err error) bool {
+	return !mdb.IsTransient(err)
+}
+
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
 	streamOptions *options.ChangeStreamOptionsBuilder,
@@ -523,7 +525,7 @@ func (r *Repl) watchChangeEvents(
 		// Under sustained load, tryAdvanceOpTime + SafeCheckpoint keep
 		// lastReplicatedOpTime current without the appendOplogNote overhead.
 		if !hasEvents {
-			sourceTS, err := topo.AdvanceClusterTime(ctx, r.source)
+			sourceTS, err := mdb.AdvanceClusterTime(ctx, r.source)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
@@ -550,6 +552,11 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
 		r.pool.Stop()
+
+		if cp := r.pool.SafeCheckpoint(); cp.After(r.lastReplicatedOpTime) {
+			r.lastReplicatedOpTime = cp
+		}
+
 		r.pool = nil
 		r.lock.Unlock()
 
@@ -569,9 +576,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			cancel()
 		}()
 
-		err := r.watchChangeEvents(ctx, opts, changeEventCh)
+		err := r.watchWithRetry(ctx, opts, changeEventCh)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			if topo.IsChangeStreamHistoryLost(err) || topo.IsCappedPositionLost(err) {
+			if mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
 			}
 
@@ -682,7 +689,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				return
 			}
 
-			err = r.applyDDLChange(ctx, change)
+			err = mdb.RetryWithBackoff(ctx, func() error {
+				return r.applyDDLChange(ctx, change)
+			}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
 			if err != nil {
 				r.pool.ReleaseBarrier()
 				r.setFailed(err, "Apply change")
@@ -773,28 +782,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		// movePrimary emits a phantom create event (via mongos change stream)
-		// for collections moved between shards. If the catalog already tracks
-		// this collection, the create is a phantom — just update the UUID to
-		// reflect the post-move value.
-		if r.catalog.CollectionExists(change.Namespace.Database, change.Namespace.Collection) {
-			lg.Warnf("Collection %q already exists in catalog (likely movePrimary), updating UUID only",
-				change.Namespace)
-
-			r.catalog.SetCollectionUUID(ctx,
-				change.Namespace.Database,
-				change.Namespace.Collection,
-				change.CollectionUUID)
-
-			// On <8.0 movePrimary emits create→drop. Record the namespace so
-			// the subsequent phantom drop is suppressed instead of replayed.
-			if r.pendingPhantomDrops != nil {
-				r.pendingPhantomDrops[change.Namespace.String()] = struct{}{}
-			}
-
-			return nil
-		}
-
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)
@@ -822,16 +809,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
-		if r.pendingPhantomDrops != nil {
-			ns := change.Namespace.String()
-			if _, ok := r.pendingPhantomDrops[ns]; ok {
-				delete(r.pendingPhantomDrops, ns)
-				lg.Warnf("Skipping phantom drop for %q (movePrimary)", change.Namespace)
-
-				return nil
-			}
-		}
-
 		err = r.catalog.DropCollection(ctx,
 			change.Namespace.Database,
 			change.Namespace.Collection)

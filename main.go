@@ -25,11 +25,11 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -413,7 +413,7 @@ func newResetRecoveryCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
-			target, err := topo.Connect(ctx, cfg.Target, cfg)
+			target, err := mdb.Connect(ctx, cfg.Target, cfg)
 			if err != nil {
 				return errors.Wrap(err, "connect")
 			}
@@ -445,7 +445,7 @@ func newResetHeartbeatCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
-			target, err := topo.Connect(ctx, cfg.Target, cfg)
+			target, err := mdb.Connect(ctx, cfg.Target, cfg)
 			if err != nil {
 				return errors.Wrap(err, "connect")
 			}
@@ -470,7 +470,7 @@ func newResetHeartbeatCmd(cfg *config.Config) *cobra.Command {
 }
 
 func resetState(ctx context.Context, cfg *config.Config) error {
-	target, err := topo.Connect(ctx, cfg.Target, cfg)
+	target, err := mdb.Connect(ctx, cfg.Target, cfg)
 	if err != nil {
 		return errors.Wrap(err, "connect")
 	}
@@ -572,7 +572,7 @@ type server struct {
 func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
-	source, err := topo.Connect(ctx, cfg.Source, cfg)
+	source, err := mdb.Connect(ctx, cfg.Source, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to source cluster")
 	}
@@ -588,7 +588,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		}
 	}()
 
-	sourceVersion, err := topo.Version(ctx, source)
+	sourceVersion, err := mdb.Version(ctx, source)
 	if err != nil {
 		return nil, errors.Wrap(err, "source version")
 	}
@@ -597,7 +597,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
 		sourceVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	target, err := topo.Connect(ctx, cfg.Target, cfg)
+	target, err := mdb.Connect(ctx, cfg.Target, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "connect to target cluster")
 	}
@@ -613,7 +613,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		}
 	}()
 
-	targetVersion, err := topo.Version(ctx, target)
+	targetVersion, err := mdb.Version(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "target version")
 	}

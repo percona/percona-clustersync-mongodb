@@ -361,9 +361,9 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 	t.Parallel()
 
 	// Note: Only StateFailed can be tested without a MongoDB client because Status()
-	// returns early for StateFailed before calling topo.ClusterTime(). Other validation
+	// returns early for StateFailed before calling mdb.ClusterTime(). Other validation
 	// paths (clone not finished, repl not started, initial sync not completed) require
-	// Status() to call topo.ClusterTime() which needs a real MongoDB client.
+	// Status() to call mdb.ClusterTime() which needs a real MongoDB client.
 	// Those paths are covered by E2E tests.
 
 	tests := []struct {

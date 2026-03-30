@@ -18,9 +18,9 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
-	"github.com/percona/percona-clustersync-mongodb/topo"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -47,7 +47,7 @@ type CopyManager struct {
 
 // CopyGetCollSpecFunc defines a function type that retrieves a collection's specification,
 // including its type and options, required during the clone operation.
-type CopyGetCollSpecFunc func(ctx context.Context) (*topo.CollectionSpecification, error)
+type CopyGetCollSpecFunc func(ctx context.Context) (*mdb.CollectionSpecification, error)
 
 // CopyProgressUpdate represents the result of a clone operation update, including any error,
 // the size of data transferred in bytes, and the number of documents processed.
@@ -172,7 +172,7 @@ func (cm *CopyManager) Close() {
 func (cm *CopyManager) Start(
 	ctx context.Context,
 	namespace catalog.Namespace,
-	spec *topo.CollectionSpecification,
+	spec *mdb.CollectionSpecification,
 ) <-chan CopyProgressUpdate {
 	progressUpdateCh := make(chan CopyProgressUpdate)
 
@@ -299,13 +299,13 @@ func (cm *CopyManager) runInsertDispatcher(
 func (cm *CopyManager) copyCollection(
 	ctx context.Context,
 	namespace catalog.Namespace,
-	spec *topo.CollectionSpecification,
+	spec *mdb.CollectionSpecification,
 	progressUpdateCh chan<- CopyProgressUpdate,
 ) error {
 	switch spec.Type {
-	case topo.TypeTimeseries:
+	case mdb.TypeTimeseries:
 		return catalog.ErrTimeseriesUnsupported
-	case topo.TypeView:
+	case mdb.TypeView:
 		return nil
 	}
 
@@ -367,11 +367,11 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection)
 
-	err := topo.RunWithRetry(ctx, func(ctx context.Context) error {
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := collection.InsertMany(ctx, task.Documents, insertOptions)
 
 		return errors.Wrapf(err, "insert batch: id %d, doc count %d", task.ID, len(task.Documents))
-	}, topo.DefaultRetryInterval, topo.DefaultMaxRetries)
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 
 	count := len(task.Documents)
 
@@ -633,9 +633,9 @@ func NewSegmenter(
 	ns catalog.Namespace,
 	options SegmentOptions,
 ) (*Segmenter, error) {
-	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
+	stats, err := mdb.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
-		if errors.Is(err, topo.ErrNotFound) {
+		if errors.Is(err, mdb.ErrNotFound) {
 			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
@@ -931,9 +931,9 @@ func NewCappedSegmenter(
 	ns catalog.Namespace,
 	batchSizeBytes int32,
 ) (*CappedSegmenter, error) {
-	stats, err := topo.GetCollStats(ctx, m, ns.Database, ns.Collection)
+	stats, err := mdb.GetCollStats(ctx, m, ns.Database, ns.Collection)
 	if err != nil {
-		if errors.Is(err, topo.ErrNotFound) {
+		if errors.Is(err, mdb.ErrNotFound) {
 			return nil, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 

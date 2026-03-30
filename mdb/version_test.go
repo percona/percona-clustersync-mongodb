@@ -1,4 +1,4 @@
-package topo //nolint:testpackage
+package mdb //nolint:testpackage
 
 import (
 	"testing"
