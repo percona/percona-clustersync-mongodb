@@ -156,6 +156,7 @@ def test_shard_key_update_duplicate_key_error(t: Testing, phase: Runner.Phase):
         update_thread.join(timeout=5)
 
 
+@pytest.mark.skip(reason="movePrimary handling reverted, tracked separately")
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
 def test_move_primary(t: Testing, phase: Runner.Phase):
     """

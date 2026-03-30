@@ -1,4 +1,4 @@
-package topo
+package mdb
 
 import (
 	"context"
@@ -45,13 +45,24 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 		SetWriteConcern(writeconcern.Majority()).
 		SetTimeout(cfg.MongoDB.OperationTimeout)
 
+	compressors := config.DefaultClientCompressors()
+
 	if uri == cfg.Source && len(cfg.MongoDB.SourceCompressors) > 0 {
-		opts.SetCompressors(cfg.MongoDB.SourceCompressors)
+		compressors = cfg.MongoDB.SourceCompressors
 	}
 
 	if uri == cfg.Target && len(cfg.MongoDB.TargetCompressors) > 0 {
-		opts.SetCompressors(cfg.MongoDB.TargetCompressors)
+		compressors = cfg.MongoDB.TargetCompressors
 	}
+
+	role := "source"
+	if uri == cfg.Target {
+		role = "target"
+	}
+
+	log.New("connect").Infof("Config: %s client compressors: %v", role, compressors)
+
+	opts.SetCompressors(compressors)
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().

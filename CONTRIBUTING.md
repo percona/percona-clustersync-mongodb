@@ -55,8 +55,8 @@ If the bug hasn't been reported / addressed, or we've agreed on the enhancement 
 
 To build Percona ClusterSync for MongoDB from source code, you require the following:
 
-* Go 1.25 or above. See [Installing and setting up Go tools](https://golang.org/doc/install) for more information
-* make
+- Go 1.25 or above. See [Installing and setting up Go tools](https://golang.org/doc/install) for more information
+- make
 
 To build the project, run the following commands:
 
@@ -145,7 +145,7 @@ For example:
 
 ```sh
 go test -race -run TestFilter ./sel
-go test -race -v -run TestSanitizeConnString ./topo
+go test -race -v -run TestSanitizeConnString ./mdb
 ```
 
 ### Python E2E Tests
@@ -154,8 +154,8 @@ Python E2E tests require MongoDB clusters to be running and PCSM to be available
 
 #### Requirements
 
-* Python 3.13 or above
-* [Poetry](https://python-poetry.org/docs/#installation) for dependency management
+- Python 3.13 or above
+- [Poetry](https://python-poetry.org/docs/#installation) for dependency management
 
 Install the Python dependencies:
 
