@@ -568,11 +568,6 @@ type server struct {
 
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
-
-	// sourceVersion is the MongoDB version of the source cluster.
-	sourceVersion mdb.ServerVersion
-	// targetVersion is the MongoDB version of the target cluster.
-	targetVersion mdb.ServerVersion
 }
 
 // createServer creates a new server with the given options.
@@ -670,8 +665,6 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		pcsm:          pcs,
 		stopHeartbeat: stopHeartbeat,
 		promRegistry:  promRegistry,
-		sourceVersion: sourceVersion,
-		targetVersion: targetVersion,
 	}
 
 	return s, nil

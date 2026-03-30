@@ -934,7 +934,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				case index.Unique != nil && *index.Unique:
 					nsLg.Info("Convert index to prepareUnique: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true, index.IndexSpecification)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
@@ -944,7 +944,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
 
-					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true, index.IndexSpecification)
+					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to unique: "+index.Name))
@@ -955,7 +955,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				case index.PrepareUnique != nil && *index.PrepareUnique:
 					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true, index.IndexSpecification)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
@@ -968,7 +968,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
 
 					err := c.doModifyIndexOption(ctx,
-						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds, index.IndexSpecification)
+						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
@@ -980,7 +980,7 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 				if index.Hidden != nil {
 					nsLg.Info("Modify index hidden: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden, index.IndexSpecification)
+					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify hidden: "+index.Name))
@@ -1064,7 +1064,6 @@ func (c *Catalog) doModifyIndexOption(
 	indexName string,
 	propName string,
 	value any,
-	spec *mdb.IndexSpecification,
 ) error {
 	err := runWithRetry(ctx, func(ctx context.Context) error {
 		err := c.target.Database(db).RunCommand(ctx, bson.D{
@@ -1078,7 +1077,7 @@ func (c *Catalog) doModifyIndexOption(
 		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, indexName, propName)
 	})
 	if mdb.IsIndexOptionsConflict(err) {
-		return c.dropAndRecreateIndex(ctx, db, coll, indexName, spec)
+		return c.dropAndRecreateIndex(ctx, db, coll, indexName)
 	}
 
 	return err
@@ -1089,8 +1088,8 @@ func (c *Catalog) dropAndRecreateIndex(
 	db string,
 	coll string,
 	indexName string,
-	spec *mdb.IndexSpecification,
 ) error {
+	spec := c.getIndexFromCatalog(db, coll, indexName)
 	if spec == nil {
 		return errors.New("cannot recreate index: spec is nil for " + db + "." + coll + "." + indexName)
 	}

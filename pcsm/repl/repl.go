@@ -647,9 +647,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
-			lg.With(log.NS(change.Namespace.Database, change.Namespace.Collection)).
-				Infof("Namespace %q excluded", change.Namespace.Database+"."+change.Namespace.Collection)
-
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
