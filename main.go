@@ -49,8 +49,6 @@ var (
 	BuildTime = ""       //nolint:gochecknoglobals
 )
 
-var errDowngrade = errors.New("downgrade not supported") //nolint:gochecknoglobals
-
 func buildVersion() string {
 	return Version + " " + GitCommit + " " + BuildTime
 }
@@ -624,11 +622,12 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
-	if sourceVersion.Major() > targetVersion.Major() {
-		return nil, errors.Wrapf(errDowngrade, "source %s > target %s", sourceVersion, targetVersion)
+	crossVersion, err := mdb.CheckVersionCompat(sourceVersion, targetVersion)
+	if err != nil {
+		return nil, errors.Wrap(err, "version check")
 	}
 
-	if sourceVersion.Major() < targetVersion.Major() {
+	if crossVersion {
 		lg.Warnf("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 

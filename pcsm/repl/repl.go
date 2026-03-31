@@ -890,6 +890,13 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	}
 
 	if err != nil {
+		// During concurrent clone and change stream replay, DDL events can arrive
+		// for collections whose state has changed on the target (dropped, recreated
+		// as non-capped, etc.). These errors are benign because the final state
+		// converges regardless — the clone phase applies the definitive state, and
+		// stale DDL events from the change stream are safely skippable.
+		// IsInvalidOptions covers collMod on collections that no longer match the
+		// expected type (e.g. collMod capped on a non-capped collection).
 		if mdb.IsNamespaceNotFound(err) || mdb.IsIndexNotFound(err) || mdb.IsInvalidOptions(err) {
 			lg.Warn(err.Error())
 

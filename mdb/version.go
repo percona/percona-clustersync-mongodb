@@ -105,6 +105,19 @@ func parseServerVersion(s string) (ServerVersion, error) {
 	return version, nil
 }
 
+var ErrDowngrade = errors.New("downgrade not supported") //nolint:gochecknoglobals
+
+// CheckVersionCompat validates source and target MongoDB major versions.
+// Returns ErrDowngrade if source major > target major (downgrade).
+// Sets crossVersion=true if source major < target major (upgrade).
+func CheckVersionCompat(source, target ServerVersion) (bool, error) {
+	if source.Major() > target.Major() {
+		return false, errors.Wrapf(ErrDowngrade, "source %s > target %s", source, target)
+	}
+
+	return source.Major() < target.Major(), nil
+}
+
 type Support ServerVersion
 
 func (s Support) ClientBulkWrite() bool {

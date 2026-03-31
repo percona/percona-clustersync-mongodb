@@ -106,6 +106,79 @@ func TestServerVersion(t *testing.T) {
 	})
 }
 
+func TestCheckVersionCompat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		source       string
+		target       string
+		crossVersion bool
+		wantErr      bool
+	}{
+		{
+			name:   "same major version",
+			source: "8.0.4", target: "8.0.4",
+		},
+		{
+			name:   "same major, different patch",
+			source: "8.0.2", target: "8.0.6",
+		},
+		{
+			name:   "upgrade 7.0 to 8.0",
+			source: "7.0.0", target: "8.0.0",
+			crossVersion: true,
+		},
+		{
+			name:   "upgrade 6.0 to 8.0",
+			source: "6.0.3", target: "8.0.4",
+			crossVersion: true,
+		},
+		{
+			name:   "downgrade 8.0 to 7.0",
+			source: "8.0.4", target: "7.0.0",
+			wantErr: true,
+		},
+		{
+			name:   "downgrade 8.0 to 6.0",
+			source: "8.0.0", target: "6.0.3",
+			wantErr: true,
+		},
+		{
+			name:   "PSMDB upgrade",
+			source: "7.0.4-2", target: "8.0.4-2",
+			crossVersion: true,
+		},
+		{
+			name:   "PSMDB downgrade",
+			source: "8.0.4-2", target: "7.0.4-2",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			source, err := parseServerVersion(tt.source)
+			require.NoError(t, err)
+
+			target, err := parseServerVersion(tt.target)
+			require.NoError(t, err)
+
+			crossVersion, err := CheckVersionCompat(source, target)
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrDowngrade)
+				assert.False(t, crossVersion)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.crossVersion, crossVersion)
+			}
+		})
+	}
+}
+
 func assertAs(t *testing.T, expected any) func(any, error) {
 	t.Helper()
 
