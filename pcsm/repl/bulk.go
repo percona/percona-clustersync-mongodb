@@ -34,6 +34,11 @@ var collectionBulkOptions = options.BulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
 
+// maxFieldsPerSetStage limits the number of non-array fields per $set stage in a pipeline
+// update. This prevents MongoDB's BufBuilder overflow (error 13548) when many dotted-path
+// $set operations are applied to a large document within a single aggregation pipeline stage.
+const maxFieldsPerSetStage = 25 //nolint:mnd
+
 type bulkWriter interface {
 	Full() bool
 	Empty() bool
@@ -579,8 +584,14 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 		}
 	}
 
-	if len(batchedSetFields) > 0 {
-		pipeline = append(pipeline, bson.D{{Key: "$set", Value: batchedSetFields}})
+	// Emit non-array $set fields in chunked stages to avoid MongoDB's BufBuilder overflow
+	// (error 13548). The pipeline executor accumulates ~1-2MB of intermediate BSON per
+	// dotted-path $set within a single stage. With many fields on a large document, a single
+	// $set stage can exceed the 125MB BufBuilder limit. Chunking to maxFieldsPerSetStage
+	// fields per stage keeps the peak at ~64MB even for maximum-size (16MB) documents.
+	for i := 0; i < len(batchedSetFields); i += maxFieldsPerSetStage {
+		end := min(i+maxFieldsPerSetStage, len(batchedSetFields))
+		pipeline = append(pipeline, bson.D{{Key: "$set", Value: batchedSetFields[i:end]}})
 	}
 
 	// Handle removed fields

@@ -315,13 +315,16 @@ func TestCollectUpdateOps_NoFalsePositiveConflict(t *testing.T) {
 	}
 }
 
-func TestCollectUpdateOpsWithPipeline_BatchesSetStages(t *testing.T) {
+func TestCollectUpdateOpsWithPipeline_ChunksSetStages(t *testing.T) {
 	t.Parallel()
 
-	// Many non-array fields should be batched into a single $set stage,
-	// not one $set stage per field.
-	updatedFields := make(bson.D, 0, 2000)
-	for i := range 2000 {
+	// Many non-array fields should be chunked into multiple $set stages
+	// (maxFieldsPerSetStage fields each) to avoid BufBuilder overflow,
+	// not emitted as one giant $set stage.
+	const numFields = 2000
+
+	updatedFields := make(bson.D, 0, numFields+1)
+	for i := range numFields {
 		updatedFields = append(updatedFields, bson.E{
 			Key:   "field_" + strconv.Itoa(i),
 			Value: "value",
@@ -345,9 +348,12 @@ func TestCollectUpdateOpsWithPipeline_BatchesSetStages(t *testing.T) {
 
 	result := collectUpdateOpsWithPipeline(event)
 
-	// Count $set stages
-	setStageCount := 0
-	var batchedSetStage bson.D
+	// Collect all $set stages, separating array ($concatArrays) from chunked non-array stages
+	var concatArraysStages int
+
+	var chunkedStages []bson.D
+
+	var truncationStages int
 
 	for _, stage := range result {
 		stageDoc, ok := stage.(bson.D)
@@ -356,36 +362,126 @@ func TestCollectUpdateOpsWithPipeline_BatchesSetStages(t *testing.T) {
 		}
 
 		for _, elem := range stageDoc {
-			if elem.Key == setOp {
-				setStageCount++
+			if elem.Key != setOp {
+				continue
+			}
 
-				setDoc, ok := elem.Value.(bson.D)
-				if !ok {
-					continue
-				}
+			setDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				continue
+			}
 
-				// The batched stage will have many fields; the array stage has 1
-				if len(setDoc) > 1 {
-					batchedSetStage = setDoc
+			switch {
+			case len(setDoc) == 1 && hasConcatArrays(setDoc[0].Value):
+				concatArraysStages++
+			case len(setDoc) == 1 && hasSlice(setDoc[0].Value):
+				truncationStages++
+			default:
+				chunkedStages = append(chunkedStages, setDoc)
+			}
+		}
+	}
+
+	if concatArraysStages != 1 {
+		t.Errorf("Expected 1 $concatArrays stage, got %d", concatArraysStages)
+	}
+
+	if truncationStages != 1 {
+		t.Errorf("Expected 1 truncation stage, got %d", truncationStages)
+	}
+
+	// Each chunked stage must have at most maxFieldsPerSetStage fields
+	expectedChunks := (numFields + maxFieldsPerSetStage - 1) / maxFieldsPerSetStage
+	if len(chunkedStages) != expectedChunks {
+		t.Errorf("Expected %d chunked $set stages, got %d", expectedChunks, len(chunkedStages))
+	}
+
+	totalFields := 0
+
+	for i, chunk := range chunkedStages {
+		if len(chunk) > maxFieldsPerSetStage {
+			t.Errorf("Chunk %d has %d fields, exceeds max %d", i, len(chunk), maxFieldsPerSetStage)
+		}
+
+		totalFields += len(chunk)
+	}
+
+	if totalFields != numFields {
+		t.Errorf("Expected %d total fields across chunks, got %d", numFields, totalFields)
+	}
+
+	// Total pipeline stages must be well under MongoDB's 1000-stage limit
+	if len(result) > 1000 {
+		t.Errorf("Pipeline has %d stages, exceeds MongoDB's 1000 stage limit", len(result))
+	}
+}
+
+func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	// Field ordering must be preserved across chunks to avoid breaking
+	// exact-match queries on embedded documents (MongoDB compares embedded
+	// documents by BSON byte order, so field reordering changes query semantics).
+	const numFields = 60 // spans 3 chunks of 25
+
+	updatedFields := make(bson.D, 0, numFields)
+	expectedOrder := make([]string, 0, numFields)
+
+	for i := range numFields {
+		key := "field_" + strconv.Itoa(i)
+		updatedFields = append(updatedFields, bson.E{Key: key, Value: i})
+		expectedOrder = append(expectedOrder, key)
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 5},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	result := collectUpdateOpsWithPipeline(event)
+
+	// Collect all non-array $set fields in pipeline order
+	var gotOrder []string
+
+	for _, stage := range result {
+		stageDoc, ok := stage.(bson.D)
+		if !ok {
+			continue
+		}
+
+		for _, elem := range stageDoc {
+			if elem.Key != setOp {
+				continue
+			}
+
+			setDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				continue
+			}
+
+			for _, f := range setDoc {
+				if !hasConcatArrays(f.Value) && !hasSlice(f.Value) {
+					gotOrder = append(gotOrder, f.Key)
 				}
 			}
 		}
 	}
 
-	// Should have: 1 truncation stage + 1 array $concatArrays stage + 1 batched $set stage = 3 $set stages total
-	expectedSetStages := 3
-	if setStageCount != expectedSetStages {
-		t.Errorf("Expected %d $set stages (truncation + array + batched), got %d", expectedSetStages, setStageCount)
+	if len(gotOrder) != len(expectedOrder) {
+		t.Fatalf("Expected %d fields, got %d", len(expectedOrder), len(gotOrder))
 	}
 
-	// The batched stage must contain all 2000 non-array fields
-	if len(batchedSetStage) != 2000 {
-		t.Errorf("Expected batched $set stage to contain 2000 fields, got %d", len(batchedSetStage))
-	}
-
-	// Total pipeline stages must be well under 1000
-	if len(result) > 1000 {
-		t.Errorf("Pipeline has %d stages, exceeds MongoDB's 1000 stage limit", len(result))
+	for i := range expectedOrder {
+		if gotOrder[i] != expectedOrder[i] {
+			t.Errorf("Field at position %d: got %q, want %q", i, gotOrder[i], expectedOrder[i])
+		}
 	}
 }
 
@@ -569,6 +665,21 @@ func hasConcatArrays(v any) bool {
 
 	for _, elem := range valueDoc {
 		if elem.Key == "$concatArrays" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasSlice(v any) bool {
+	valueDoc, ok := v.(bson.D)
+	if !ok {
+		return false
+	}
+
+	for _, elem := range valueDoc {
+		if elem.Key == "$slice" {
 			return true
 		}
 	}
