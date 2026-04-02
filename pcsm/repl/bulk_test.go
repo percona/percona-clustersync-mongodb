@@ -106,11 +106,13 @@ func TestIsArrayPath(t *testing.T) {
 			want:  false,
 		},
 		{
-			name:  "dp nil, deeply nested: numeric path returns true",
+			// "a.2.b.3": last="3" numeric, direct parent="a.2.b" not in truncatedFields
+			// → standard $set (no $concatArrays needed; only direct parent matters)
+			name:  "dp nil, deeply nested: direct parent not truncated returns false",
 			field: "a.2.b.3",
 			dp:    nil,
 			tf:    map[string]struct{}{"a": {}},
-			want:  true,
+			want:  false,
 		},
 		{
 			name:  "dp nil, nested truncated parent: real array index",
@@ -125,6 +127,26 @@ func TestIsArrayPath(t *testing.T) {
 			dp:    nil,
 			tf:    map[string]struct{}{},
 			want:  false,
+		},
+		{
+			// "arr.0.10": last="10" numeric, direct parent="arr.0" not in truncatedFields
+			// ("arr" is truncated but "arr.0" is not) → standard $set to avoid data corruption
+			// from misidentifying "10" (a document field name) as an array index.
+			// This is the slice_zero scenario on MongoDB <6.1 without disambiguatedPaths.
+			name:  "dp nil, slice_zero scenario: numeric string field name not direct parent",
+			field: "arr.0.10",
+			dp:    nil,
+			tf:    map[string]struct{}{"arr": {}},
+			want:  false,
+		},
+		{
+			// "arr.0": last="0" numeric, direct parent="arr" IS in truncatedFields
+			// → $concatArrays needed (genuine array element replacement under truncated array)
+			name:  "dp nil, direct array element under truncated array returns true",
+			field: "arr.0",
+			dp:    nil,
+			tf:    map[string]struct{}{"arr": {}},
+			want:  true,
 		},
 	}
 

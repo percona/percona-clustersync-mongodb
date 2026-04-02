@@ -694,7 +694,19 @@ func isArrayPath(field string, disambiguatedPaths map[string][]any, truncatedFie
 		}
 	}
 
-	// Case 2: disambiguatedPaths is nil (MongoDB <6.1) → use truncatedFields + depth heuristic
+	// Case 2: disambiguatedPaths is nil (MongoDB <6.1) → use truncatedFields only.
+	//
+	// Without disambiguatedPaths, a path like "arr.0.10" is ambiguous: "10" could be
+	// an array index (→ $concatArrays needed) or a document field name (→ standard $set).
+	// The previous depth heuristic (len > 2 → assume array index) caused data corruption
+	// for documents with numeric-string field names inside array elements.
+	//
+	// The only reliable indicator available without disambiguatedPaths is whether the
+	// direct parent path is in truncatedFields. $concatArrays is needed precisely when
+	// the truncated array is the direct parent of the updated index — e.g., "arr.5" when
+	// "arr" was truncated. For deeper paths like "arr.0.10", the parent "arr.0" was not
+	// truncated, so standard $set handles it correctly regardless of whether "10" is an
+	// index or a field name.
 	if disambiguatedPaths == nil {
 		parts := strings.Split(field, ".")
 		if len(parts) < 2 { //nolint:mnd
@@ -707,16 +719,11 @@ func isArrayPath(field string, disambiguatedPaths map[string][]any, truncatedFie
 			return false
 		}
 
-		// If parent is in truncatedFields, definitely an array path
+		// Only use $concatArrays when the direct parent was truncated.
 		parentPath := strings.Join(parts[:len(parts)-1], ".")
-		if _, ok := truncatedFields[parentPath]; ok {
-			return true
-		}
+		_, ok := truncatedFields[parentPath]
 
-		// Parent not in truncatedFields. Use depth heuristic:
-		// - Depth > 2 (e.g., b.0.1): likely nested array, return true
-		// - Depth == 2 (e.g., f2.1): ambiguous, could be object key, return false
-		return len(parts) > 2 //nolint:mnd
+		return ok
 	}
 
 	// Case 3: disambiguatedPaths non-nil but field not in it → Atoi fallback (unambiguous)
