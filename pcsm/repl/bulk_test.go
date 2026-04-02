@@ -2,8 +2,10 @@ package repl //nolint:testpackage
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -214,9 +216,9 @@ func TestCollectUpdateOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := collectUpdateOps(tt.event)
+			ops := collectUpdateOps(tt.event)
 
-			switch v := result.(type) {
+			switch v := ops.primary.(type) {
 			case bson.A:
 				if !tt.expectPipeline {
 					t.Errorf("Expected simple update doc (bson.D), got pipeline (bson.A)")
@@ -225,6 +227,20 @@ func TestCollectUpdateOps(t *testing.T) {
 				}
 
 				foundConcatArrays, foundSimpleSet := extractPipelineFields(t, v)
+
+				// Non-array fields may be in follow-up standard $set ops, collect those too.
+				for _, fu := range ops.followUp {
+					for _, elem := range fu {
+						if elem.Key == "$set" {
+							if setDoc, ok := elem.Value.(bson.D); ok {
+								for _, f := range setDoc {
+									foundSimpleSet[f.Key] = true
+								}
+							}
+						}
+					}
+				}
+
 				assertFieldsPresent(t, foundConcatArrays, tt.expectConcatArraysFor, "$concatArrays")
 				assertFieldsPresent(t, foundSimpleSet, tt.expectSimpleSetFor, "simple $set")
 
@@ -238,7 +254,7 @@ func TestCollectUpdateOps(t *testing.T) {
 				verifySimpleUpdateDoc(t, v, tt.expectSimpleSetFor)
 
 			default:
-				t.Errorf("Unexpected result type: %T", result)
+				t.Errorf("Unexpected result type: %T", ops.primary)
 			}
 		})
 	}
@@ -305,9 +321,9 @@ func TestCollectUpdateOps_NoFalsePositiveConflict(t *testing.T) {
 				},
 			}
 
-			result := collectUpdateOps(event)
+			ops := collectUpdateOps(event)
 
-			_, isPipeline := result.(bson.A)
+			_, isPipeline := ops.primary.(bson.A)
 			if isPipeline != tt.expectPipeline {
 				t.Errorf("collectUpdateOps() returned pipeline=%v, want pipeline=%v", isPipeline, tt.expectPipeline)
 			}
@@ -315,13 +331,14 @@ func TestCollectUpdateOps_NoFalsePositiveConflict(t *testing.T) {
 	}
 }
 
-func TestCollectUpdateOpsWithPipeline_ChunksSetStages(t *testing.T) {
+func TestCollectUpdateOpsWithPipeline_ChunksSmallFields(t *testing.T) {
 	t.Parallel()
 
-	// Many non-array fields should be chunked into multiple $set stages
-	// (maxFieldsPerSetStage fields each) to avoid BufBuilder overflow,
-	// not emitted as one giant $set stage.
-	const numFields = 2000
+	// Many small fields should be chunked by field count (maxFieldsPerSetOp),
+	// since their total byte size is well under maxBytesPerSetOp.
+	// With 250 small fields: first 100 go into the primary pipeline, remaining 150
+	// are split into follow-up pipeline operations (100 + 50).
+	const numFields = 250
 
 	updatedFields := make(bson.D, 0, numFields+1)
 	for i := range numFields {
@@ -331,7 +348,6 @@ func TestCollectUpdateOpsWithPipeline_ChunksSetStages(t *testing.T) {
 		})
 	}
 
-	// Add one real array path field to ensure array paths still get individual stages
 	updatedFields = append(updatedFields, bson.E{Key: "arr.2", Value: "arrval"})
 
 	event := &UpdateEvent{
@@ -346,16 +362,91 @@ func TestCollectUpdateOpsWithPipeline_ChunksSetStages(t *testing.T) {
 		},
 	}
 
-	result := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithPipeline(event)
 
-	// Collect all $set stages, separating array ($concatArrays) from chunked non-array stages
-	var concatArraysStages int
+	pipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+	}
 
-	var chunkedStages []bson.D
+	concatArraysStages, truncationStages := classifySetStages(t, pipeline)
 
-	var truncationStages int
+	assert.Equal(t, 1, concatArraysStages, "$concatArrays stages")
+	assert.Equal(t, 1, truncationStages, "truncation stages")
 
-	for _, stage := range result {
+	// Count all $set fields across primary pipeline and follow-ups
+	totalFields := countAllSetFields(t, ops)
+
+	assert.Equal(t, numFields, totalFields, "total fields across primary + follow-ups")
+
+	// All batched fields go to follow-ups: 250 / 100 = 3 follow-ups (100, 100, 50)
+	expectedFollowUps := (numFields + maxFieldsPerSetOp - 1) / maxFieldsPerSetOp
+
+	assert.Len(t, ops.followUp, expectedFollowUps, "follow-up operations")
+}
+
+func TestCollectUpdateOpsWithPipeline_ChunksLargeFields(t *testing.T) {
+	t.Parallel()
+
+	// Large fields (~20KB each) should be chunked by byte size (maxBytesPerSetOp),
+	// producing follow-up pipeline operations. This is the BufBuilder overflow scenario.
+	const numFields = 100
+	largeValue := strings.Repeat("X", 20_000)
+
+	updatedFields := make(bson.D, 0, numFields+1)
+	for i := range numFields {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i) + ".d",
+			Value: largeValue,
+		})
+	}
+
+	updatedFields = append(updatedFields, bson.E{Key: "meta.updated", Value: true})
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 250},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+
+	pipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+	}
+
+	concatArraysStages, _ := classifySetStages(t, pipeline)
+
+	assert.Equal(t, 0, concatArraysStages, "$concatArrays stages (all fields should be batched)")
+
+	// Must have follow-ups since 100 × 20KB = 2MB >> 512KB limit
+	assert.NotEmpty(t, ops.followUp, "should have follow-up operations due to byte size")
+
+	// Each follow-up must be a standard update (bson.D) with a single $set operator
+	for i, fu := range ops.followUp {
+		assert.Len(t, fu, 1, "follow-up %d should have exactly 1 operator ($set)", i)
+		assert.Equal(t, "$set", fu[0].Key, "follow-up %d operator key", i)
+	}
+
+	// Count total fields across everything
+	totalFields := countAllSetFields(t, ops)
+	assert.Equal(t, numFields+1, totalFields, "total fields across primary + follow-ups (100 arr + 1 meta)")
+}
+
+// classifySetStages counts $concatArrays and truncation $set stages in a pipeline.
+func classifySetStages(t *testing.T, pipeline bson.A) (int, int) {
+	t.Helper()
+
+	var concatArrays, truncation int
+
+	for _, stage := range pipeline {
 		stageDoc, ok := stage.(bson.D)
 		if !ok {
 			continue
@@ -373,47 +464,81 @@ func TestCollectUpdateOpsWithPipeline_ChunksSetStages(t *testing.T) {
 
 			switch {
 			case len(setDoc) == 1 && hasConcatArrays(setDoc[0].Value):
-				concatArraysStages++
+				concatArrays++
 			case len(setDoc) == 1 && hasSlice(setDoc[0].Value):
-				truncationStages++
-			default:
-				chunkedStages = append(chunkedStages, setDoc)
+				truncation++
 			}
 		}
 	}
 
-	if concatArraysStages != 1 {
-		t.Errorf("Expected 1 $concatArrays stage, got %d", concatArraysStages)
-	}
+	return concatArrays, truncation
+}
 
-	if truncationStages != 1 {
-		t.Errorf("Expected 1 truncation stage, got %d", truncationStages)
-	}
+// extractSetFieldsFromPipeline collects non-array $set field keys from a pipeline in order.
+func extractSetFieldsFromPipeline(t *testing.T, pipeline bson.A) []string {
+	t.Helper()
 
-	// Each chunked stage must have at most maxFieldsPerSetStage fields
-	expectedChunks := (numFields + maxFieldsPerSetStage - 1) / maxFieldsPerSetStage
-	if len(chunkedStages) != expectedChunks {
-		t.Errorf("Expected %d chunked $set stages, got %d", expectedChunks, len(chunkedStages))
-	}
+	var keys []string
 
-	totalFields := 0
-
-	for i, chunk := range chunkedStages {
-		if len(chunk) > maxFieldsPerSetStage {
-			t.Errorf("Chunk %d has %d fields, exceeds max %d", i, len(chunk), maxFieldsPerSetStage)
+	for _, stage := range pipeline {
+		stageDoc, ok := stage.(bson.D)
+		if !ok {
+			continue
 		}
 
-		totalFields += len(chunk)
+		for _, elem := range stageDoc {
+			if elem.Key != setOp {
+				continue
+			}
+
+			setDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				continue
+			}
+
+			for _, f := range setDoc {
+				if !hasConcatArrays(f.Value) && !hasSlice(f.Value) {
+					keys = append(keys, f.Key)
+				}
+			}
+		}
 	}
 
-	if totalFields != numFields {
-		t.Errorf("Expected %d total fields across chunks, got %d", numFields, totalFields)
+	return keys
+}
+
+// collectSetFieldKeys collects all non-array $set field keys from primary + follow-ups in order.
+func collectSetFieldKeys(t *testing.T, ops updateOps) []string {
+	t.Helper()
+
+	pipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
 	}
 
-	// Total pipeline stages must be well under MongoDB's 1000-stage limit
-	if len(result) > 1000 {
-		t.Errorf("Pipeline has %d stages, exceeds MongoDB's 1000 stage limit", len(result))
+	keys := extractSetFieldsFromPipeline(t, pipeline)
+
+	// Follow-ups are standard $set (bson.D), not pipelines
+	for _, fu := range ops.followUp {
+		for _, elem := range fu {
+			if elem.Key == "$set" {
+				if setDoc, ok := elem.Value.(bson.D); ok {
+					for _, f := range setDoc {
+						keys = append(keys, f.Key)
+					}
+				}
+			}
+		}
 	}
+
+	return keys
+}
+
+// countAllSetFields counts all non-array $set fields across primary pipeline + follow-ups.
+func countAllSetFields(t *testing.T, ops updateOps) int {
+	t.Helper()
+
+	return len(collectSetFieldKeys(t, ops))
 }
 
 func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
@@ -422,7 +547,7 @@ func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
 	// Field ordering must be preserved across chunks to avoid breaking
 	// exact-match queries on embedded documents (MongoDB compares embedded
 	// documents by BSON byte order, so field reordering changes query semantics).
-	const numFields = 60 // spans 3 chunks of 25
+	const numFields = 250 // spans multiple chunks of maxFieldsPerSetStage
 
 	updatedFields := make(bson.D, 0, numFields)
 	expectedOrder := make([]string, 0, numFields)
@@ -445,34 +570,10 @@ func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
 		},
 	}
 
-	result := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithPipeline(event)
 
-	// Collect all non-array $set fields in pipeline order
-	var gotOrder []string
-
-	for _, stage := range result {
-		stageDoc, ok := stage.(bson.D)
-		if !ok {
-			continue
-		}
-
-		for _, elem := range stageDoc {
-			if elem.Key != setOp {
-				continue
-			}
-
-			setDoc, ok := elem.Value.(bson.D)
-			if !ok {
-				continue
-			}
-
-			for _, f := range setDoc {
-				if !hasConcatArrays(f.Value) && !hasSlice(f.Value) {
-					gotOrder = append(gotOrder, f.Key)
-				}
-			}
-		}
-	}
+	// Collect all non-array $set fields in order: primary pipeline first, then follow-ups
+	gotOrder := collectSetFieldKeys(t, ops)
 
 	if len(gotOrder) != len(expectedOrder) {
 		t.Fatalf("Expected %d fields, got %d", len(expectedOrder), len(gotOrder))
@@ -504,12 +605,17 @@ func TestCollectUpdateOpsWithPipeline_SliceUsesMaxForPositive(t *testing.T) {
 		},
 	}
 
-	result := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithPipeline(event)
+
+	pipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+	}
 
 	// Find the $concatArrays stage for "arr"
 	found := false
 
-	for _, stage := range result {
+	for _, stage := range pipeline {
 		stageDoc, ok := stage.(bson.D)
 		if !ok {
 			continue

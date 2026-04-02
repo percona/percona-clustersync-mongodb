@@ -34,10 +34,32 @@ var collectionBulkOptions = options.BulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
 
-// maxFieldsPerSetStage limits the number of non-array fields per $set stage in a pipeline
-// update. This prevents MongoDB's BufBuilder overflow (error 13548) when many dotted-path
-// $set operations are applied to a large document within a single aggregation pipeline stage.
-const maxFieldsPerSetStage = 25 //nolint:mnd
+// Pipeline $set operation limits to prevent MongoDB's BufBuilder overflow (error 13548).
+// MongoDB's BufBuilder accumulates across ALL stages within a single pipeline, so splitting
+// into multiple $set stages within one pipeline has no effect. Instead, when the batched $set
+// fields exceed these limits, they are emitted as separate pipeline updateOne operations
+// (each with its own BufBuilder). maxBytesPerSetOp is the primary guard; maxFieldsPerSetOp
+// is a secondary guard against degenerate cases with many tiny fields.
+const (
+	maxFieldsPerSetOp = 100        //nolint:mnd
+	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512KB
+)
+
+// updateOps holds the result of building update operations from a change stream event.
+// When pipeline $set fields exceed size limits, they are split into follow-up standard
+// (non-pipeline) $set operations to prevent MongoDB's BufBuilder overflow (error 13548).
+// Follow-ups use standard $set (bson.D) because pipeline $set treats numeric path
+// components as document field names rather than array indices (e.g. "arr.0.d" in a
+// pipeline creates field "0" in each element instead of navigating to arr[0].d).
+// Standard $set correctly navigates array indices via dotted paths.
+type updateOps struct {
+	// primary is the main update: either bson.D (simple update) or bson.A (pipeline).
+	primary any
+	// followUp contains additional standard $set operations for fields that were split
+	// out of the primary pipeline to avoid BufBuilder overflow. Each element is a
+	// standard update document (bson.D) with a single $set operator. nil when not needed.
+	followUp []bson.D
+}
 
 type bulkWriter interface {
 	Full() bool
@@ -182,22 +204,38 @@ func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 }
 
 func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
+	ops := collectUpdateOps(event)
+
 	m := &mongo.ClientUpdateOneModel{
 		Filter: event.DocumentKey,
-		Update: collectUpdateOps(event),
+		Update: ops.primary,
 	}
 
 	if ns.Sharded && cbw.useSimpleCollation {
 		m.Collation = simpleCollation
 	}
 
-	bw := mongo.ClientBulkWrite{
-		Database:   ns.Database,
-		Collection: ns.Collection,
-		Model:      m,
-	}
+	cbw.writes = append(cbw.writes, mongo.ClientBulkWrite{
+		Database: ns.Database, Collection: ns.Collection, Model: m,
+	})
 
-	cbw.writes = append(cbw.writes, bw)
+	// Follow-up pipeline operations for $set fields split out due to BufBuilder limits.
+	// Each follow-up is a separate pipeline (bson.A) to reset MongoDB's BufBuilder and
+	// preserve field ordering. Ordered bulk writes guarantee sequential execution.
+	for _, followUpPipeline := range ops.followUp {
+		fm := &mongo.ClientUpdateOneModel{
+			Filter: event.DocumentKey,
+			Update: followUpPipeline,
+		}
+
+		if ns.Sharded && cbw.useSimpleCollation {
+			fm.Collation = simpleCollation
+		}
+
+		cbw.writes = append(cbw.writes, mongo.ClientBulkWrite{
+			Database: ns.Database, Collection: ns.Collection, Model: fm,
+		})
+	}
 }
 
 func (cbw *clientBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
@@ -396,9 +434,11 @@ func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent)
 }
 
 func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
+	ops := collectUpdateOps(event)
+
 	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
-		Update: collectUpdateOps(event),
+		Update: ops.primary,
 	}
 
 	if ns.Sharded && cbw.useSimpleCollation {
@@ -406,8 +446,22 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 	}
 
 	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
-
 	cbw.count++
+
+	// Follow-up pipeline operations for $set fields split out due to BufBuilder limits.
+	for _, followUpPipeline := range ops.followUp {
+		fm := &mongo.UpdateOneModel{
+			Filter: event.DocumentKey,
+			Update: followUpPipeline,
+		}
+
+		if ns.Sharded && cbw.useSimpleCollation {
+			fm.Collation = simpleCollation
+		}
+
+		cbw.writes[ns.String()] = append(cbw.writes[ns.String()], fm)
+		cbw.count++
+	}
 }
 
 func (cbw *collectionBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
@@ -484,7 +538,7 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	return nil
 }
 
-func collectUpdateOps(event *UpdateEvent) any {
+func collectUpdateOps(event *UpdateEvent) updateOps {
 	for _, trunc := range event.UpdateDescription.TruncatedArrays {
 		for _, update := range event.UpdateDescription.UpdatedFields {
 			if update.Key == trunc.Field || strings.HasPrefix(update.Key, trunc.Field+".") {
@@ -519,10 +573,10 @@ func collectUpdateOps(event *UpdateEvent) any {
 		ops = append(ops, bson.E{"$push", fields})
 	}
 
-	return ops
+	return updateOps{primary: ops}
 }
 
-func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
+func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	s := len(event.UpdateDescription.UpdatedFields) +
 		len(event.UpdateDescription.RemovedFields) +
 		len(event.UpdateDescription.TruncatedArrays)
@@ -584,14 +638,32 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 		}
 	}
 
-	// Emit non-array $set fields in chunked stages to avoid MongoDB's BufBuilder overflow
-	// (error 13548). The pipeline executor accumulates ~1-2MB of intermediate BSON per
-	// dotted-path $set within a single stage. With many fields on a large document, a single
-	// $set stage can exceed the 125MB BufBuilder limit. Chunking to maxFieldsPerSetStage
-	// fields per stage keeps the peak at ~64MB even for maximum-size (16MB) documents.
-	for i := 0; i < len(batchedSetFields); i += maxFieldsPerSetStage {
-		end := min(i+maxFieldsPerSetStage, len(batchedSetFields))
-		pipeline = append(pipeline, bson.D{{Key: "$set", Value: batchedSetFields[i:end]}})
+	// Emit non-array $set fields as separate standard (non-pipeline) $set operations.
+	// They MUST NOT go into the primary pipeline for two reasons:
+	// 1. MongoDB's BufBuilder accumulates across ALL stages within a single pipeline,
+	//    so even a single $set stage with many large dotted-path values can overflow.
+	// 2. Pipeline $set treats numeric dotted-path components as document field names
+	//    rather than array indices (e.g. "arr.0.d" creates field "0" in each element
+	//    instead of navigating to arr[0].d). Standard $set handles this correctly.
+	// Fields are chunked by size/count to keep individual updates manageable.
+	var followUp []bson.D
+
+	chunkStart := 0
+	chunkBytes := 0
+
+	for i := range batchedSetFields {
+		b, _ := bson.Marshal(bson.D{batchedSetFields[i]})
+		chunkBytes += len(b)
+
+		if chunkBytes >= maxBytesPerSetOp || (i-chunkStart+1) >= maxFieldsPerSetOp {
+			followUp = append(followUp, bson.D{{Key: "$set", Value: batchedSetFields[chunkStart : i+1]}})
+			chunkStart = i + 1
+			chunkBytes = 0
+		}
+	}
+
+	if chunkStart < len(batchedSetFields) {
+		followUp = append(followUp, bson.D{{Key: "$set", Value: batchedSetFields[chunkStart:]}})
 	}
 
 	// Handle removed fields
@@ -602,7 +674,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) bson.A {
 		)
 	}
 
-	return pipeline
+	return updateOps{primary: pipeline, followUp: followUp}
 }
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").
