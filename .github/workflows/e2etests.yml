@@ -62,7 +62,7 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py
+          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py
 
       - name: Teardown Docker Compose
         if: always()
@@ -78,9 +78,9 @@ jobs:
         include:
           # 6.0/7.0: sharded-specific tests only (full suite blocked by PCSM-255)
           - mongo_version: "6.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - mongo_version: "7.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - mongo_version: "8.0"
             test_scope: ""
 
