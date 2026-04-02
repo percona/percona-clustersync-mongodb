@@ -1,6 +1,7 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-import pytest
 import time
+
+import pytest
 from testing import Testing
 
 from pcsm import Runner
