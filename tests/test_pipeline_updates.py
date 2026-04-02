@@ -170,6 +170,10 @@ def test_pipeline_update_regression(t: Testing, scenario_name: str):
     with t.run(Runner.Phase.APPLY, wait_timeout=60):
         t.source[db][coll_name].insert_one(doc)
         t.source[db][coll_name].update_one({"_id": 1}, update)
+        # Poll target BEFORE finalization to ensure the change stream has delivered
+        # the events. On MongoDB 6.0 sharded clusters, the optime-based barrier in
+        # wait_for_current_optime() may return before events are fully flushed.
+        _wait_for_target_doc(t.target, db, coll_name, 1)
     src_doc = t.source[db][coll_name].find_one({"_id": 1})
-    dst_doc = _wait_for_target_doc(t.target, db, coll_name, 1)
+    dst_doc = t.target[db][coll_name].find_one({"_id": 1})
     _assert_docs_equal(src_doc, dst_doc, f"{db}.{coll_name}")
