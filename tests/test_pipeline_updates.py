@@ -1,5 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import pytest
+import time
 from testing import Testing
 
 from pcsm import Runner
@@ -141,6 +142,22 @@ def _assert_docs_equal(src_doc, dst_doc, ns):
     pytest.fail("\n".join(lines))
 
 
+def _wait_for_target_doc(target, db, coll_name, doc_id, timeout=30):
+    """Poll target until the document appears or timeout.
+
+    On some MongoDB versions (notably 6.0 sharded clusters), the optime-based
+    synchronization barrier in wait_for_current_optime() may return before the
+    change stream events have been fully flushed to the target. This polling
+    loop provides a reliable data-level verification.
+    """
+    for _ in range(timeout * 2):
+        doc = target[db][coll_name].find_one({"_id": doc_id})
+        if doc is not None:
+            return doc
+        time.sleep(0.5)
+    return None
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("scenario_name", ["stage_limit", "bufbuilder", "slice_zero"])
 def test_pipeline_update_regression(t: Testing, scenario_name: str):
@@ -154,5 +171,5 @@ def test_pipeline_update_regression(t: Testing, scenario_name: str):
         t.source[db][coll_name].insert_one(doc)
         t.source[db][coll_name].update_one({"_id": 1}, update)
     src_doc = t.source[db][coll_name].find_one({"_id": 1})
-    dst_doc = t.target[db][coll_name].find_one({"_id": 1})
+    dst_doc = _wait_for_target_doc(t.target, db, coll_name, 1)
     _assert_docs_equal(src_doc, dst_doc, f"{db}.{coll_name}")
