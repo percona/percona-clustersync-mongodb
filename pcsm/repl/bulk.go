@@ -613,6 +613,8 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	for _, field := range event.UpdateDescription.UpdatedFields {
 		if !isArrayPath(field.Key, dp, truncatedFields) {
 			nonArrayFields = append(nonArrayFields, bson.E{Key: field.Key, Value: field.Value})
+
+			continue
 		}
 
 		parts := strings.Split(field.Key, ".")
