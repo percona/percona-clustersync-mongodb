@@ -358,8 +358,7 @@ func TestCollectUpdateOpsWithPipeline_ChunksSmallFields(t *testing.T) {
 
 	// Many small fields should be chunked by field count (maxFieldsPerSetOp),
 	// since their total byte size is well under maxBytesPerSetOp.
-	// With 250 small fields: first 100 go into the primary pipeline, remaining 150
-	// are split into follow-up pipeline operations (100 + 50).
+	// All 250 non-array fields go to follow-up standard $set operations: 3 chunks of (100, 100, 50).
 	const numFields = 250
 
 	updatedFields := make(bson.D, 0, numFields+1)
@@ -411,7 +410,7 @@ func TestCollectUpdateOpsWithPipeline_ChunksLargeFields(t *testing.T) {
 	t.Parallel()
 
 	// Large fields (~20KB each) should be chunked by byte size (maxBytesPerSetOp),
-	// producing follow-up pipeline operations. This is the BufBuilder overflow scenario.
+	// producing follow-up standard $set operations. This is the BufBuilder overflow scenario.
 	const numFields = 100
 	largeValue := strings.Repeat("X", 20_000)
 

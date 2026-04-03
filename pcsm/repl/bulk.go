@@ -37,9 +37,9 @@ var collectionBulkOptions = options.BulkWrite().
 // Pipeline $set operation limits to prevent MongoDB's BufBuilder overflow (error 13548).
 // MongoDB's BufBuilder accumulates across ALL stages within a single pipeline, so splitting
 // into multiple $set stages within one pipeline has no effect. Instead, when the batched $set
-// fields exceed these limits, they are emitted as separate pipeline updateOne operations
-// (each with its own BufBuilder). maxBytesPerSetOp is the primary guard; maxFieldsPerSetOp
-// is a secondary guard against degenerate cases with many tiny fields.
+// fields exceed these limits, they are emitted as separate standard (non-pipeline) updateOne
+// operations, each with its own BufBuilder. maxBytesPerSetOp is the primary guard;
+// maxFieldsPerSetOp is a secondary guard against degenerate cases with many tiny fields.
 const (
 	maxFieldsPerSetOp = 100        //nolint:mnd
 	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512KB
@@ -219,13 +219,13 @@ func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 		Database: ns.Database, Collection: ns.Collection, Model: m,
 	})
 
-	// Follow-up pipeline operations for $set fields split out due to BufBuilder limits.
-	// Each follow-up is a separate pipeline (bson.A) to reset MongoDB's BufBuilder and
-	// preserve field ordering. Ordered bulk writes guarantee sequential execution.
-	for _, followUpPipeline := range ops.followUp {
+	// Follow-up standard $set operations for fields split out due to BufBuilder limits.
+	// Each is a separate updateOne (bson.D) so MongoDB resets its BufBuilder per operation.
+	// Ordered bulk writes guarantee sequential execution.
+	for _, followUp := range ops.followUp {
 		fm := &mongo.ClientUpdateOneModel{
 			Filter: event.DocumentKey,
-			Update: followUpPipeline,
+			Update: followUp,
 		}
 
 		if ns.Sharded && cbw.useSimpleCollation {
@@ -448,11 +448,11 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 	cbw.count++
 
-	// Follow-up pipeline operations for $set fields split out due to BufBuilder limits.
-	for _, followUpPipeline := range ops.followUp {
+	// Follow-up standard $set operations for fields split out due to BufBuilder limits.
+	for _, followUp := range ops.followUp {
 		fm := &mongo.UpdateOneModel{
 			Filter: event.DocumentKey,
-			Update: followUpPipeline,
+			Update: followUp,
 		}
 
 		if ns.Sharded && cbw.useSimpleCollation {
@@ -608,34 +608,34 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	}
 
 	// Handle updated fields
-	var batchedSetFields bson.D
+	var nonArrayFields bson.D
 
 	for _, field := range event.UpdateDescription.UpdatedFields {
-		if isArrayPath(field.Key, dp, truncatedFields) {
-			parts := strings.Split(field.Key, ".")
-			fieldName := strings.Join(parts[:len(parts)-1], ".")
-			fieldIdx, _ := strconv.Atoi(parts[len(parts)-1])
-			fieldExpr := "$" + fieldName
+		if !isArrayPath(field.Key, dp, truncatedFields) {
+			nonArrayFields = append(nonArrayFields, bson.E{Key: field.Key, Value: field.Value})
+		}
 
-			stage := bson.D{{
-				"$set", bson.D{
-					{fieldName, bson.D{
-						{"$concatArrays", bson.A{
-							bson.D{{"$slice", bson.A{fieldExpr, fieldIdx}}},
-							bson.A{field.Value},
-							bson.D{{
-								"$slice",
-								bson.A{fieldExpr, fieldIdx + 1, bson.D{{"$max", bson.A{1, bson.D{{"$size", fieldExpr}}}}}},
-							}},
+		parts := strings.Split(field.Key, ".")
+		fieldName := strings.Join(parts[:len(parts)-1], ".")
+		fieldIdx, _ := strconv.Atoi(parts[len(parts)-1])
+		fieldExpr := "$" + fieldName
+
+		stage := bson.D{{
+			"$set", bson.D{
+				{fieldName, bson.D{
+					{"$concatArrays", bson.A{
+						bson.D{{"$slice", bson.A{fieldExpr, fieldIdx}}},
+						bson.A{field.Value},
+						bson.D{{
+							"$slice",
+							bson.A{fieldExpr, fieldIdx + 1, bson.D{{"$max", bson.A{1, bson.D{{"$size", fieldExpr}}}}}},
 						}},
 					}},
-				},
-			}}
+				}},
+			},
+		}}
 
-			pipeline = append(pipeline, stage)
-		} else {
-			batchedSetFields = append(batchedSetFields, bson.E{Key: field.Key, Value: field.Value})
-		}
+		pipeline = append(pipeline, stage)
 	}
 
 	// Emit non-array $set fields as separate standard (non-pipeline) $set operations.
@@ -651,19 +651,19 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	chunkStart := 0
 	chunkBytes := 0
 
-	for i := range batchedSetFields {
-		b, _ := bson.Marshal(bson.D{batchedSetFields[i]})
+	for i := range nonArrayFields {
+		b, _ := bson.Marshal(bson.D{nonArrayFields[i]})
 		chunkBytes += len(b)
 
 		if chunkBytes >= maxBytesPerSetOp || (i-chunkStart+1) >= maxFieldsPerSetOp {
-			followUp = append(followUp, bson.D{{Key: "$set", Value: batchedSetFields[chunkStart : i+1]}})
+			followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart : i+1]}})
 			chunkStart = i + 1
 			chunkBytes = 0
 		}
 	}
 
-	if chunkStart < len(batchedSetFields) {
-		followUp = append(followUp, bson.D{{Key: "$set", Value: batchedSetFields[chunkStart:]}})
+	if chunkStart < len(nonArrayFields) {
+		followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart:]}})
 	}
 
 	// Handle removed fields
