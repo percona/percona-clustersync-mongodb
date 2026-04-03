@@ -1,0 +1,7 @@
+# CVE-2026-34040: docker/docker AuthZ plugin bypass (HIGH)
+# Transitive test-only dependency via testcontainers-go v0.41.0.
+# Docker v29.3.1 (which contains the fix) uses a new Go module structure
+# and is not available under the old +incompatible import path.
+# Tracked upstream: https://github.com/testcontainers/testcontainers-go/issues/3614
+# Remove this entry once testcontainers-go releases a version with docker v29.
+CVE-2026-34040
