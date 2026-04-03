@@ -67,7 +67,17 @@ type mockResponse struct {
 	Ok             bool   `json:"ok"`
 	Error          string `json:"error,omitempty"`
 	State          string `json:"state,omitempty"`
+	Info           string `json:"info,omitempty"`
 	LagTimeSeconds int64  `json:"lagTimeSeconds,omitempty"`
+	EventsRead     int64  `json:"eventsRead,omitempty"`
+	EventsApplied  int64  `json:"eventsApplied,omitempty"`
+
+	InitialSync *mockInitialSync `json:"initialSync,omitempty"`
+}
+
+type mockInitialSync struct {
+	Completed      bool `json:"completed"`
+	CloneCompleted bool `json:"cloneCompleted"`
 }
 
 type mockServer struct {
@@ -185,6 +195,7 @@ func TestStatusCommandStates(t *testing.T) {
 		name             string
 		response         mockResponse
 		expectedInOutput []string
+		expectError      bool
 	}{
 		{
 			name:             "idle state",
@@ -202,9 +213,25 @@ func TestStatusCommandStates(t *testing.T) {
 			expectedInOutput: []string{`"ok": true`, `"state": "paused"`},
 		},
 		{
-			name:             "failed state with error",
-			response:         mockResponse{Ok: true, State: "failed", Error: "replication error occurred"},
-			expectedInOutput: []string{`"ok": true`, `"state": "failed"`, `"error": "replication error occurred"`},
+			name: "failed state with error",
+			response: mockResponse{
+				Ok:            false,
+				State:         "failed",
+				Info:          "Failed",
+				Error:         "replication error occurred",
+				EventsRead:    100007,
+				EventsApplied: 100005,
+				InitialSync:   &mockInitialSync{Completed: true, CloneCompleted: true},
+			},
+			expectedInOutput: []string{
+				`"ok": false`,
+				`"state": "failed"`,
+				`"error": "replication error occurred"`,
+				`"eventsRead": 100007`,
+				`"eventsApplied": 100005`,
+				`"initialSync"`,
+			},
+			expectError: true,
 		},
 		{
 			name:             "finalizing state",
@@ -227,7 +254,13 @@ func TestStatusCommandStates(t *testing.T) {
 
 			port := extractPort(server.URL)
 			stdout, stderr, err := runPCSM(t, []string{"--port", port, "status"}, nil)
-			require.NoError(t, err, "stderr: %s", stderr)
+
+			if tt.expectError {
+				require.Error(t, err, "expected non-zero exit")
+				assert.Contains(t, stderr, tt.response.Error)
+			} else {
+				require.NoError(t, err, "stderr: %s", stderr)
+			}
 
 			captured := server.request
 
@@ -235,7 +268,8 @@ func TestStatusCommandStates(t *testing.T) {
 			assert.Equal(t, "/status", captured.Path)
 
 			for _, expected := range tt.expectedInOutput {
-				assert.Contains(t, stdout, expected)
+				assert.Contains(t, stdout, expected,
+					"stdout should contain %q regardless of ok field", expected)
 			}
 		})
 	}
