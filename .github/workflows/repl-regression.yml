@@ -8,20 +8,10 @@ on:
       - 'metrics/**'
       - 'main.go'
       - 'Makefile'
-      - 'hack/repro_bufbuilder_fix.py'
       - '.github/workflows/repl-regression.yml'
   schedule:
     - cron: '20 3 * * *'
   workflow_dispatch:
-    inputs:
-      old_ref:
-        description: "Old reference for reproducibility comparison (e.g. v0.8.0)"
-        required: false
-        default: "v0.8.0"
-      new_ref:
-        description: "New reference for reproducibility comparison (e.g. HEAD)"
-        required: false
-        default: "HEAD"
 
 permissions:
   contents: read
@@ -51,28 +41,3 @@ jobs:
         run: make test-repl-regression-chaos
       - name: Chunking benchmark snapshot
         run: make bench-repl-chunking
-
-  ref-compare:
-    name: Old vs New Repro Comparison
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Run deterministic old-vs-new comparator
-        run: |
-          python3 hack/repro_bufbuilder_fix.py compare-refs \
-            --repo-root . \
-            --old-ref "${{ github.event.inputs.old_ref }}" \
-            --new-ref "${{ github.event.inputs.new_ref }}" \
-            --output ./bufbuilder_repro_compare.json
-      - name: Upload comparison report
-        uses: actions/upload-artifact@v4
-        with:
-          name: bufbuilder-repro-compare
-          path: ./bufbuilder_repro_compare.json

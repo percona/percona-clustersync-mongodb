@@ -7,7 +7,6 @@ This document defines the final confidence workflow for the BufBuilder / pipelin
 This guide covers:
 
 - CI/CD regression gates
-- deterministic old-vs-new reproducibility
 - staging (Atlas/mongos) validation
 - dashboard and alerting recommendations
 - operator interpretation of chunking/follow-up safety signals
@@ -49,39 +48,7 @@ Workflow:
 
 - `.github/workflows/repl-regression.yml` (`repl-chaos-gate`)
 
-## 2. Deterministic Old-vs-New Reproducibility
-
-Use the Python comparator to run the same deterministic regression suite on two refs.
-
-```bash
-python3 hack/repro_bufbuilder_fix.py compare-refs \
-  --repo-root . \
-  --old-ref v0.8.0 \
-  --new-ref <new-ref-or-commit> \
-  --output /tmp/pcsm_repro_compare.json
-```
-
-What it does:
-
-1. Creates temporary worktrees for old and new refs
-2. Runs deterministic high-risk regression tests
-3. Runs high-repeat chaos regression tests
-4. Runs chunking micro-benchmarks
-5. Extracts pathological chunk stats snapshot from test logs
-6. Emits structured JSON for comparison and CI artifacting
-
-What it proves:
-
-- whether the target ref passes critical BufBuilder/chunking regression tests
-- whether follow-up chunking behavior is present in pathological synthetic events
-- rough before-vs-after performance trend for chunking logic (`ns/op`, allocs)
-
-What it does not prove:
-
-- full production behavior under live Atlas/mongos network variance
-- exact server-side AST memory behavior for every real customer workload
-
-## 3. Staging Validation (Atlas/mongos)
+## 2. Staging Validation (Atlas/mongos)
 
 Run existing pytest integration suites in staging topology (replicaset + sharded).
 
@@ -103,7 +70,7 @@ For each run, capture:
 - `/metrics` snapshots
 - logs for chunking warnings and overflow action behavior
 
-## 4. Metrics to Watch
+## 3. Metrics to Watch
 
 Chunking/overflow metrics:
 
@@ -115,7 +82,7 @@ Chunking/overflow metrics:
 - `percona_clustersync_mongodb_repl_update_array_chunks_per_event`
 - `percona_clustersync_mongodb_repl_update_array_max_stages_per_chunk`
 
-## 5. Alerting Recommendations
+## 4. Alerting Recommendations
 
 Example PromQL alert ideas:
 
@@ -146,7 +113,7 @@ histogram_quantile(
 increase(percona_clustersync_mongodb_repl_update_chunk_limit_hits_total{reason="stages"}[15m]) > <threshold>
 ```
 
-## 6. New Safety Valve
+## 5. New Safety Valve
 
 Optional hard cap for pathological events:
 
@@ -161,14 +128,12 @@ Recommended rollout policy:
 2. Move to `fail` in production for strict guardrails
 3. Tune threshold only after observing real metrics distribution
 
-## 7. Final Confidence Checklist
+## 6. Final Confidence Checklist
 
 Before production rollout:
 
 - fast gate green on PR
 - chaos gate green in nightly/manual run
-- old-vs-new comparator report generated and archived
 - staging runs completed on Atlas/mongos with `test_pipeline_updates.py`
 - alert rules configured and tested
 - overflow counter verified at zero under expected workload profile
-
