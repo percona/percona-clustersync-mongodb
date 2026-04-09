@@ -77,6 +77,12 @@ type ReplConfig struct {
 	// WorkerBulkQueueSize is the number of pending bulks per worker.
 	// Defaults to [WorkerBulkQueueSize].
 	WorkerBulkQueueSize int `mapstructure:"repl-worker-bulk-queue-size"`
+	// MaxFollowUpOpsPerEvent sets an optional hard limit for generated follow-up
+	// update operations per update event. 0 disables this safeguard.
+	MaxFollowUpOpsPerEvent int `mapstructure:"repl-max-follow-up-ops-per-event"`
+	// FollowUpOverflowAction controls behavior when MaxFollowUpOpsPerEvent is exceeded.
+	// Allowed values: "fail", "warn".
+	FollowUpOverflowAction string `mapstructure:"repl-follow-up-overflow-action"`
 }
 
 // CloneConfig holds clone operation configuration.
@@ -179,6 +185,8 @@ func bindEnvVars() {
 	_ = viper.BindEnv("repl-bulk-ops-size", "PCSM_REPL_BULK_OPS_SIZE")
 	_ = viper.BindEnv("repl-worker-flush-interval", "PCSM_REPL_WORKER_FLUSH_INTERVAL")
 	_ = viper.BindEnv("repl-worker-bulk-queue-size", "PCSM_REPL_WORKER_BULK_QUEUE_SIZE")
+	_ = viper.BindEnv("repl-max-follow-up-ops-per-event", "PCSM_REPL_MAX_FOLLOW_UP_OPS_PER_EVENT")
+	_ = viper.BindEnv("repl-follow-up-overflow-action", "PCSM_REPL_FOLLOW_UP_OVERFLOW_ACTION")
 
 	_ = viper.BindEnv("source-client-compressors", "PCSM_SOURCE_CLIENT_COMPRESSORS")
 	_ = viper.BindEnv("target-client-compressors", "PCSM_TARGET_CLIENT_COMPRESSORS")

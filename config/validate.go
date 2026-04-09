@@ -1,6 +1,8 @@
 package config
 
 import (
+	"strings"
+
 	"github.com/dustin/go-humanize"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -29,6 +31,14 @@ func Validate(cfg *Config) error {
 		return errors.New("target URI is empty")
 	case cfg.Source == cfg.Target:
 		return errors.New("source URI and target URI are identical")
+	}
+
+	if cfg.Repl.FollowUpOverflowAction != "" {
+		switch strings.ToLower(cfg.Repl.FollowUpOverflowAction) {
+		case "fail", "warn":
+		default:
+			return errors.New("repl-follow-up-overflow-action must be one of: fail, warn")
+		}
 	}
 
 	return nil

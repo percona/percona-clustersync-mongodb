@@ -15,6 +15,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
@@ -33,6 +34,16 @@ var clientBulkOptions = options.ClientBulkWrite().
 var collectionBulkOptions = options.BulkWrite().
 	SetOrdered(true).
 	SetBypassDocumentValidation(false)
+
+const (
+	followUpOverflowActionFail = "fail"
+	followUpOverflowActionWarn = "warn"
+)
+
+type followUpGuard struct {
+	maxOps int
+	action string
+}
 
 // Pipeline $set operation limits to prevent MongoDB's BufBuilder overflow (error 13548).
 // MongoDB's BufBuilder accumulates across ALL stages within a single pipeline, so splitting
@@ -55,10 +66,31 @@ const (
 type updateOps struct {
 	// primary is the main update: either bson.D (simple update) or bson.A (pipeline).
 	primary any
-	// followUp contains additional standard $set operations for fields that were split
-	// out of the primary pipeline to avoid BufBuilder overflow. Each element is a
-	// standard update document (bson.D) with a single $set operator. nil when not needed.
-	followUp []bson.D
+	// followUp contains additional update operations split out of the primary update to
+	// avoid BufBuilder/AST overflow risks. Each element is either:
+	//   - bson.D (standard $set update)
+	//   - bson.A (pipeline update with bounded $concatArrays stages)
+	// Ordered bulk writes guarantee these follow-up operations execute sequentially.
+	followUp []any
+	// stats captures chunking/follow-up diagnostics for observability.
+	stats updateOpStats
+}
+
+type updateOpStats struct {
+	followUpTotal    int
+	followUpStandard int
+	followUpPipeline int
+
+	arrayChunks             int
+	arrayChunkLimitByBytes  int
+	arrayChunkLimitByStages int
+	arrayMaxStagesPerChunk  int
+
+	nonArrayChunks             int
+	nonArrayChunkLimitByBytes  int
+	nonArrayChunkLimitByStages int
+
+	chunkingTriggered bool
 }
 
 type bulkWriter interface {
@@ -74,12 +106,15 @@ type bulkWriter interface {
 
 type clientBulkWrite struct {
 	useSimpleCollation bool
+	guard              followUpGuard
+	pendingErr         error
 	writes             []mongo.ClientBulkWrite
 }
 
-func newClientBulkWriter(size int, useSimpleCollation bool) *clientBulkWrite {
+func newClientBulkWriter(size int, useSimpleCollation bool, guard followUpGuard) *clientBulkWrite {
 	return &clientBulkWrite{
 		useSimpleCollation: useSimpleCollation,
+		guard:              guard,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
 	}
 }
@@ -93,6 +128,10 @@ func (cbw *clientBulkWrite) Empty() bool {
 }
 
 func (cbw *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
+	if cbw.pendingErr != nil {
+		return 0, cbw.pendingErr
+	}
+
 	totalSize := len(cbw.writes)
 
 	err := cbw.doWithRetry(ctx, m, cbw.writes)
@@ -205,6 +244,12 @@ func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 
 func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	ops := collectUpdateOps(event)
+	observeUpdateOpStats(ops.stats)
+	logLargeUpdateChunking(ns, ops.stats)
+	if err := checkFollowUpGuard(cbw.guard, ns, ops.stats); err != nil {
+		cbw.pendingErr = err
+		return
+	}
 
 	m := &mongo.ClientUpdateOneModel{
 		Filter: event.DocumentKey,
@@ -219,7 +264,7 @@ func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 		Database: ns.Database, Collection: ns.Collection, Model: m,
 	})
 
-	// Follow-up standard $set operations for fields split out due to BufBuilder limits.
+	// Follow-up operations for fields split out due to BufBuilder/AST limits.
 	// Each is a separate updateOne (bson.D) so MongoDB resets its BufBuilder per operation.
 	// Ordered bulk writes guarantee sequential execution.
 	for _, followUp := range ops.followUp {
@@ -277,14 +322,17 @@ func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 
 type collectionBulkWrite struct {
 	useSimpleCollation bool
+	guard              followUpGuard
+	pendingErr         error
 	max                int
 	count              int
 	writes             map[string][]mongo.WriteModel
 }
 
-func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
+func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool, guard followUpGuard) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,
+		guard:              guard,
 		max:                size,
 		writes:             make(map[string][]mongo.WriteModel),
 	}
@@ -299,6 +347,10 @@ func (cbw *collectionBulkWrite) Empty() bool {
 }
 
 func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
+	if cbw.pendingErr != nil {
+		return 0, cbw.pendingErr
+	}
+
 	var total atomic.Int64
 
 	grp, grpCtx := errgroup.WithContext(ctx)
@@ -435,6 +487,12 @@ func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent)
 
 func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	ops := collectUpdateOps(event)
+	observeUpdateOpStats(ops.stats)
+	logLargeUpdateChunking(ns, ops.stats)
+	if err := checkFollowUpGuard(cbw.guard, ns, ops.stats); err != nil {
+		cbw.pendingErr = err
+		return
+	}
 
 	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
@@ -448,7 +506,7 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 	cbw.count++
 
-	// Follow-up standard $set operations for fields split out due to BufBuilder limits.
+	// Follow-up operations for fields split out due to BufBuilder/AST limits.
 	for _, followUp := range ops.followUp {
 		fm := &mongo.UpdateOneModel{
 			Filter: event.DocumentKey,
@@ -608,6 +666,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	}
 
 	// Handle updated fields
+	var arrayStages []bson.D
 	var nonArrayFields bson.D
 
 	for _, field := range event.UpdateDescription.UpdatedFields {
@@ -637,7 +696,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 			},
 		}}
 
-		pipeline = append(pipeline, stage)
+		arrayStages = append(arrayStages, stage)
 	}
 
 	// Emit non-array $set fields as separate standard (non-pipeline) $set operations.
@@ -648,7 +707,10 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 	//    rather than array indices (e.g. "arr.0.d" creates field "0" in each element
 	//    instead of navigating to arr[0].d). Standard $set handles this correctly.
 	// Fields are chunked by size/count to keep individual updates manageable.
-	var followUp []bson.D
+	var (
+		followUp []any
+		stats    updateOpStats
+	)
 
 	chunkStart := 0
 	chunkBytes := 0
@@ -657,15 +719,46 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 		b, _ := bson.Marshal(bson.D{nonArrayFields[i]})
 		chunkBytes += len(b)
 
-		if chunkBytes >= maxBytesPerSetOp || (i-chunkStart+1) >= maxFieldsPerSetOp {
-			followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart : i+1]}})
-			chunkStart = i + 1
-			chunkBytes = 0
+		limitByBytes := chunkBytes >= maxBytesPerSetOp
+		limitByStages := (i - chunkStart + 1) >= maxFieldsPerSetOp
+		if !limitByBytes && !limitByStages {
+			continue
 		}
+
+		followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart : i+1]}})
+		stats.nonArrayChunks++
+		if limitByBytes {
+			stats.nonArrayChunkLimitByBytes++
+		}
+
+		if limitByStages {
+			stats.nonArrayChunkLimitByStages++
+		}
+
+		chunkStart = i + 1
+		chunkBytes = 0
 	}
 
 	if chunkStart < len(nonArrayFields) {
 		followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart:]}})
+		stats.nonArrayChunks++
+	}
+
+	// Split array-path $concatArrays stages into bounded pipeline operations. This
+	// prevents building one very large pipeline AST for updates with many array index
+	// updates in a single oplog event.
+	arrayChunks, chunkStats := chunkPipelineStages(arrayStages)
+	stats.arrayChunks = len(arrayChunks)
+	stats.arrayChunkLimitByBytes = chunkStats.limitByBytes
+	stats.arrayChunkLimitByStages = chunkStats.limitByStages
+	stats.arrayMaxStagesPerChunk = chunkStats.maxStagesPerChunk
+	if len(arrayChunks) > 0 {
+		// Keep the first chunk in the primary pipeline and emit remaining chunks as
+		// follow-up pipeline updates (ordered execution).
+		pipeline = append(pipeline, toPipelineArray(arrayChunks[0])...)
+		for i := 1; i < len(arrayChunks); i++ {
+			followUp = append(followUp, toPipelineArray(arrayChunks[i]))
+		}
 	}
 
 	// Handle removed fields
@@ -676,7 +769,177 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 		)
 	}
 
-	return updateOps{primary: pipeline, followUp: followUp}
+	for _, op := range followUp {
+		switch op.(type) {
+		case bson.D:
+			stats.followUpStandard++
+		case bson.A:
+			stats.followUpPipeline++
+		}
+	}
+
+	stats.followUpTotal = len(followUp)
+	stats.chunkingTriggered = stats.followUpTotal > 0
+
+	return updateOps{primary: pipeline, followUp: followUp, stats: stats}
+}
+
+type pipelineChunkStats struct {
+	limitByBytes      int
+	limitByStages     int
+	maxStagesPerChunk int
+}
+
+func chunkPipelineStages(stages []bson.D) ([][]bson.D, pipelineChunkStats) {
+	if len(stages) == 0 {
+		return nil, pipelineChunkStats{}
+	}
+
+	stats := pipelineChunkStats{}
+	chunks := make([][]bson.D, 0, len(stages)/maxFieldsPerSetOp+1)
+	start := 0
+	chunkBytes := 0
+
+	for i := range stages {
+		b, _ := bson.Marshal(stages[i])
+		chunkBytes += len(b)
+
+		limitByBytes := chunkBytes >= maxBytesPerSetOp
+		limitByStages := (i - start + 1) >= maxFieldsPerSetOp
+		if !limitByBytes && !limitByStages {
+			continue
+		}
+
+		if limitByBytes {
+			stats.limitByBytes++
+		}
+
+		if limitByStages {
+			stats.limitByStages++
+		}
+
+		stagesInChunk := i - start + 1
+		if stagesInChunk > stats.maxStagesPerChunk {
+			stats.maxStagesPerChunk = stagesInChunk
+		}
+
+		if limitByBytes || limitByStages {
+			chunks = append(chunks, stages[start:i+1])
+			start = i + 1
+			chunkBytes = 0
+		}
+	}
+
+	if start < len(stages) {
+		remaining := stages[start:]
+		chunks = append(chunks, remaining)
+		if len(remaining) > stats.maxStagesPerChunk {
+			stats.maxStagesPerChunk = len(remaining)
+		}
+	}
+
+	return chunks, stats
+}
+
+func toPipelineArray(stages []bson.D) bson.A {
+	pipeline := make(bson.A, 0, len(stages))
+	for _, stage := range stages {
+		pipeline = append(pipeline, stage)
+	}
+
+	return pipeline
+}
+
+func observeUpdateOpStats(stats updateOpStats) {
+	if !stats.chunkingTriggered {
+		return
+	}
+
+	metrics.IncReplUpdateChunkingTriggered()
+	metrics.ObserveReplUpdateFollowUpPerEvent(stats.followUpTotal)
+	metrics.ObserveReplUpdateArrayChunksPerEvent(stats.arrayChunks)
+
+	if stats.arrayMaxStagesPerChunk > 0 {
+		metrics.ObserveReplUpdateArrayMaxStagesPerChunk(stats.arrayMaxStagesPerChunk)
+	}
+
+	if stats.followUpStandard > 0 {
+		metrics.AddReplUpdateFollowUpOps("standard", stats.followUpStandard)
+	}
+
+	if stats.followUpPipeline > 0 {
+		metrics.AddReplUpdateFollowUpOps("pipeline", stats.followUpPipeline)
+	}
+
+	if stats.nonArrayChunkLimitByBytes > 0 {
+		metrics.AddReplUpdateChunkLimitHits("non_array_set", "bytes", stats.nonArrayChunkLimitByBytes)
+	}
+
+	if stats.nonArrayChunkLimitByStages > 0 {
+		metrics.AddReplUpdateChunkLimitHits("non_array_set", "stages", stats.nonArrayChunkLimitByStages)
+	}
+
+	if stats.arrayChunkLimitByBytes > 0 {
+		metrics.AddReplUpdateChunkLimitHits("array_pipeline", "bytes", stats.arrayChunkLimitByBytes)
+	}
+
+	if stats.arrayChunkLimitByStages > 0 {
+		metrics.AddReplUpdateChunkLimitHits("array_pipeline", "stages", stats.arrayChunkLimitByStages)
+	}
+}
+
+func logLargeUpdateChunking(ns catalog.Namespace, stats updateOpStats) {
+	if !stats.chunkingTriggered {
+		return
+	}
+
+	// Log only pathological events to keep production logs quiet.
+	if stats.followUpTotal < 10 && stats.arrayChunks < 8 {
+		return
+	}
+
+	log.New("repl:bulk").
+		With(
+			log.NS(ns.Database, ns.Collection),
+			log.Int64("follow_up_total", int64(stats.followUpTotal)),
+			log.Int64("follow_up_standard", int64(stats.followUpStandard)),
+			log.Int64("follow_up_pipeline", int64(stats.followUpPipeline)),
+			log.Int64("array_chunks", int64(stats.arrayChunks)),
+			log.Int64("array_max_stages_per_chunk", int64(stats.arrayMaxStagesPerChunk)),
+			log.Int64("array_limit_hits_bytes", int64(stats.arrayChunkLimitByBytes)),
+			log.Int64("array_limit_hits_stages", int64(stats.arrayChunkLimitByStages)),
+			log.Int64("non_array_limit_hits_bytes", int64(stats.nonArrayChunkLimitByBytes)),
+			log.Int64("non_array_limit_hits_stages", int64(stats.nonArrayChunkLimitByStages)),
+		).
+		Warn("Large update event was split into multiple follow-up operations")
+}
+
+func checkFollowUpGuard(guard followUpGuard, ns catalog.Namespace, stats updateOpStats) error {
+	if guard.maxOps <= 0 || stats.followUpTotal <= guard.maxOps {
+		return nil
+	}
+
+	metrics.IncReplUpdateFollowUpOverflow(guard.action)
+
+	msg := errors.Errorf(
+		"follow-up operation limit exceeded for %s.%s: got %d (max %d)",
+		ns.Database,
+		ns.Collection,
+		stats.followUpTotal,
+		guard.maxOps,
+	)
+
+	switch guard.action {
+	case followUpOverflowActionWarn:
+		log.New("repl:bulk").With(
+			log.NS(ns.Database, ns.Collection),
+			log.Int64("follow_up_total", int64(stats.followUpTotal)),
+			log.Int64("follow_up_limit", int64(guard.maxOps)),
+		).Warn("Follow-up operation count exceeded configured limit (warn mode)")
+		return nil
+	default:
+		return msg
+	}
 }
 
 // isArrayPath checks if the path is an path to an array index (e.g. "a.b.1").

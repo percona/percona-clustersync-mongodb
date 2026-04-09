@@ -267,6 +267,14 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Repl.WorkerBulkQueueSize
 				startOptions.ReplWorkerBulkQueueSize = &v
 			}
+			if cfg.Repl.MaxFollowUpOpsPerEvent != 0 {
+				v := cfg.Repl.MaxFollowUpOpsPerEvent
+				startOptions.ReplMaxFollowUpOpsPerEvent = &v
+			}
+			if cfg.Repl.FollowUpOverflowAction != "" {
+				v := cfg.Repl.FollowUpOverflowAction
+				startOptions.ReplFollowUpOverflowAction = &v
+			}
 
 			if cfg.UseCollectionBulkWrite {
 				v := cfg.UseCollectionBulkWrite
@@ -317,6 +325,10 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().Int("repl-worker-bulk-queue-size", 0,
 		fmt.Sprintf("Number of pending bulks per worker for async writes (default: %d)",
 			config.WorkerBulkQueueSize))
+	cmd.Flags().Int("repl-max-follow-up-ops-per-event", 0,
+		"Optional max follow-up update operations per update event (0 = disabled)")
+	cmd.Flags().String("repl-follow-up-overflow-action", "",
+		"Behavior when follow-up op limit is exceeded: fail|warn (default: fail)")
 
 	cmd.Flags().Bool("use-collection-bulk-write", false,
 		"Use collection-level bulk write instead of client bulk write")
@@ -794,6 +806,8 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 			BulkOpsSize:            cfg.Repl.BulkOpsSize,
 			WorkerFlushInterval:    cfg.Repl.WorkerFlushInterval,
 			WorkerBulkQueueSize:    cfg.Repl.WorkerBulkQueueSize,
+			MaxFollowUpOpsPerEvent: cfg.Repl.MaxFollowUpOpsPerEvent,
+			FollowUpOverflowAction: cfg.Repl.FollowUpOverflowAction,
 		},
 		Clone: clone.Options{
 			Parallelism:   cfg.Clone.NumParallelCollections,
@@ -894,6 +908,12 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 
 	if params.ReplWorkerBulkQueueSize != nil {
 		options.Repl.WorkerBulkQueueSize = *params.ReplWorkerBulkQueueSize
+	}
+	if params.ReplMaxFollowUpOpsPerEvent != nil {
+		options.Repl.MaxFollowUpOpsPerEvent = *params.ReplMaxFollowUpOpsPerEvent
+	}
+	if params.ReplFollowUpOverflowAction != nil {
+		options.Repl.FollowUpOverflowAction = *params.ReplFollowUpOverflowAction
 	}
 
 	if params.UseCollectionBulkWrite != nil {
@@ -1132,6 +1152,12 @@ type startRequest struct {
 	ReplWorkerFlushInterval *string `json:"replWorkerFlushInterval,omitempty"`
 	// ReplWorkerBulkQueueSize is the number of pending bulks per worker for async writes.
 	ReplWorkerBulkQueueSize *int `json:"replWorkerBulkQueueSize,omitempty"`
+	// ReplMaxFollowUpOpsPerEvent is an optional hard limit for generated follow-up update
+	// operations per update event. 0 disables this safeguard.
+	ReplMaxFollowUpOpsPerEvent *int `json:"replMaxFollowUpOpsPerEvent,omitempty"`
+	// ReplFollowUpOverflowAction controls behavior when follow-up limit is exceeded.
+	// Allowed values: fail, warn.
+	ReplFollowUpOverflowAction *string `json:"replFollowUpOverflowAction,omitempty"`
 
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write.

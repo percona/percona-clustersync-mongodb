@@ -75,6 +75,12 @@ type Options struct {
 	// WorkerBulkQueueSize is the number of pending bulks per worker for async writes.
 	// 0 means auto (defaults to config.WorkerBulkQueueSize).
 	WorkerBulkQueueSize int
+	// MaxFollowUpOpsPerEvent sets an optional hard limit for generated follow-up update
+	// operations per update event. 0 disables this safeguard.
+	MaxFollowUpOpsPerEvent int
+	// FollowUpOverflowAction controls behavior when MaxFollowUpOpsPerEvent is exceeded.
+	// Allowed values: "fail", "warn". Empty defaults to "fail".
+	FollowUpOverflowAction string
 }
 
 func (o *Options) applyDefaults() {
@@ -104,6 +110,15 @@ func (o *Options) applyDefaults() {
 
 	if o.WorkerBulkQueueSize <= 0 {
 		o.WorkerBulkQueueSize = config.WorkerBulkQueueSize
+	}
+
+	switch strings.ToLower(o.FollowUpOverflowAction) {
+	case "":
+		o.FollowUpOverflowAction = followUpOverflowActionFail
+	case followUpOverflowActionFail, followUpOverflowActionWarn:
+		o.FollowUpOverflowAction = strings.ToLower(o.FollowUpOverflowAction)
+	default:
+		o.FollowUpOverflowAction = followUpOverflowActionFail
 	}
 }
 
@@ -183,6 +198,8 @@ func NewRepl(
 	lg.Infof("Config: BulkOpsSize: %d", opts.BulkOpsSize)
 	lg.Infof("Config: WorkerFlushInterval: %s", opts.WorkerFlushInterval)
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
+	lg.Infof("Config: MaxFollowUpOpsPerEvent: %d", opts.MaxFollowUpOpsPerEvent)
+	lg.Infof("Config: FollowUpOverflowAction: %s", opts.FollowUpOverflowAction)
 
 	return &Repl{
 		source:   source,

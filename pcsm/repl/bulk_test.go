@@ -1,12 +1,16 @@
 package repl //nolint:testpackage
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
 const setOp = "$set"
@@ -252,14 +256,13 @@ func TestCollectUpdateOps(t *testing.T) {
 
 				// Non-array fields may be in follow-up standard $set ops, collect those too.
 				for _, fu := range ops.followUp {
-					for _, elem := range fu {
-						if elem.Key == "$set" {
-							if setDoc, ok := elem.Value.(bson.D); ok {
-								for _, f := range setDoc {
-									foundSimpleSet[f.Key] = true
-								}
-							}
-						}
+					setDoc, ok := followUpSetDoc(fu)
+					if !ok {
+						continue
+					}
+
+					for _, f := range setDoc {
+						foundSimpleSet[f.Key] = true
 					}
 				}
 
@@ -452,8 +455,13 @@ func TestCollectUpdateOpsWithPipeline_ChunksLargeFields(t *testing.T) {
 
 	// Each follow-up must be a standard update (bson.D) with a single $set operator
 	for i, fu := range ops.followUp {
-		assert.Len(t, fu, 1, "follow-up %d should have exactly 1 operator ($set)", i)
-		assert.Equal(t, "$set", fu[0].Key, "follow-up %d operator key", i)
+		doc, ok := fu.(bson.D)
+		if !ok {
+			t.Fatalf("follow-up %d expected bson.D, got %T", i, fu)
+		}
+
+		assert.Len(t, doc, 1, "follow-up %d should have exactly 1 operator ($set)", i)
+		assert.Equal(t, "$set", doc[0].Key, "follow-up %d operator key", i)
 	}
 
 	// Count total fields across everything
@@ -541,14 +549,13 @@ func collectSetFieldKeys(t *testing.T, ops updateOps) []string {
 
 	// Follow-ups are standard $set (bson.D), not pipelines
 	for _, fu := range ops.followUp {
-		for _, elem := range fu {
-			if elem.Key == "$set" {
-				if setDoc, ok := elem.Value.(bson.D); ok {
-					for _, f := range setDoc {
-						keys = append(keys, f.Key)
-					}
-				}
-			}
+		setDoc, ok := followUpSetDoc(fu)
+		if !ok {
+			continue
+		}
+
+		for _, f := range setDoc {
+			keys = append(keys, f.Key)
 		}
 	}
 
@@ -560,6 +567,28 @@ func countAllSetFields(t *testing.T, ops updateOps) int {
 	t.Helper()
 
 	return len(collectSetFieldKeys(t, ops))
+}
+
+func followUpSetDoc(followUp any) (bson.D, bool) {
+	doc, ok := followUp.(bson.D)
+	if !ok {
+		return nil, false
+	}
+
+	for _, elem := range doc {
+		if elem.Key != "$set" {
+			continue
+		}
+
+		setDoc, ok := elem.Value.(bson.D)
+		if !ok {
+			return nil, false
+		}
+
+		return setDoc, true
+	}
+
+	return nil, false
 }
 
 func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
@@ -725,6 +754,400 @@ func TestCollectUpdateOpsWithPipeline_SliceUsesMaxForPositive(t *testing.T) {
 	if !found {
 		t.Error("Could not find $concatArrays with $slice in pipeline")
 	}
+}
+
+func TestCollectUpdateOpsWithPipeline_ChunksArrayStagesIntoFollowUpPipelines(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 220
+	updatedFields := make(bson.D, 0, numArrayUpdates)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: "v" + strconv.Itoa(i),
+		})
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 500},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+
+	primaryPipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+	}
+
+	primaryConcat, _ := classifySetStages(t, primaryPipeline)
+	assert.Greater(t, primaryConcat, 0, "primary pipeline should include some array stages")
+	assert.NotEmpty(t, ops.followUp, "expected follow-up pipeline chunks for large array updates")
+
+	totalConcat := primaryConcat
+	pipelineFollowUps := 0
+
+	for i, followUp := range ops.followUp {
+		switch v := followUp.(type) {
+		case bson.A:
+			pipelineFollowUps++
+			concat, _ := classifySetStages(t, v)
+			assert.Greater(t, concat, 0, "pipeline follow-up %d should contain array stages", i)
+			totalConcat += concat
+		case bson.D:
+			t.Fatalf("did not expect standard $set follow-up in this test, got bson.D at %d", i)
+		default:
+			t.Fatalf("unexpected follow-up type %T at %d", followUp, i)
+		}
+	}
+
+	assert.Greater(t, pipelineFollowUps, 0, "expected at least one pipeline follow-up")
+	assert.Equal(t, numArrayUpdates, totalConcat, "all array updates must be represented across chunks")
+}
+
+func TestCollectionBulkWriterUpdate_MixedFollowUpsAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	updatedFields := make(bson.D, 0, 520)
+	for i := range 220 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: i,
+		})
+	}
+
+	for i := range 300 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "meta.f_" + strconv.Itoa(i),
+			Value: "v",
+		})
+	}
+
+	event := &UpdateEvent{
+		DocumentKey: bson.D{{Key: "_id", Value: "doc-1"}},
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	cbw := newCollectionBulkWriter(10_000, false, followUpGuard{})
+	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+
+	cbw.Update(ns, event)
+
+	models := cbw.writes[ns.String()]
+	assert.NotEmpty(t, models, "expected primary + follow-up update operations")
+
+	var (
+		pipelineCount int
+		docCount      int
+	)
+
+	for i, model := range models {
+		um, ok := model.(*mongo.UpdateOneModel)
+		if !ok {
+			t.Fatalf("write model %d expected *mongo.UpdateOneModel, got %T", i, model)
+		}
+
+		switch um.Update.(type) {
+		case bson.A:
+			pipelineCount++
+		case bson.D:
+			docCount++
+		default:
+			t.Fatalf("write model %d unexpected update type %T", i, um.Update)
+		}
+	}
+
+	assert.Greater(t, pipelineCount, 1, "expected primary + follow-up pipeline chunks")
+	assert.Greater(t, docCount, 0, "expected standard $set follow-up chunks for non-array updates")
+}
+
+func TestCollectUpdateOpsWithPipeline_StatsTrackStageLimitChunking(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 220
+	updatedFields := make(bson.D, 0, numArrayUpdates)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: "v" + strconv.Itoa(i),
+		})
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+
+	assert.True(t, ops.stats.chunkingTriggered, "chunking should be reported")
+	assert.Greater(t, ops.stats.arrayChunks, 1, "array stages should be split into multiple chunks")
+	assert.Greater(t, ops.stats.arrayChunkLimitByStages, 0, "stage-count limit should be hit")
+	assert.Equal(t, maxFieldsPerSetOp, ops.stats.arrayMaxStagesPerChunk, "max stage count should respect cap")
+	assert.Equal(t, len(ops.followUp), ops.stats.followUpTotal, "follow-up total should match emitted follow-ups")
+	assert.Greater(t, ops.stats.followUpPipeline, 0, "pipeline follow-ups should be present")
+}
+
+func TestCollectUpdateOpsWithPipeline_StatsTrackByteLimitChunking(t *testing.T) {
+	t.Parallel()
+
+	largeValue := strings.Repeat("X", 20_000)
+	updatedFields := make(bson.D, 0, 60)
+	for i := range 60 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "meta.field_" + strconv.Itoa(i),
+			Value: largeValue,
+		})
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+
+	assert.True(t, ops.stats.chunkingTriggered, "chunking should be reported")
+	assert.Greater(t, ops.stats.nonArrayChunks, 1, "non-array fields should split by size")
+	assert.Greater(t, ops.stats.nonArrayChunkLimitByBytes, 0, "byte limit should be hit")
+	assert.Greater(t, ops.stats.followUpStandard, 0, "standard follow-ups should be present")
+}
+
+func TestCollectionBulkWriterUpdate_FollowUpGuardFailFast(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 220
+	updatedFields := make(bson.D, 0, numArrayUpdates)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: i,
+		})
+	}
+
+	event := &UpdateEvent{
+		DocumentKey: bson.D{{Key: "_id", Value: "doc-guard-fail"}},
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	cbw := newCollectionBulkWriter(10_000, false, followUpGuard{
+		maxOps: 1,
+		action: followUpOverflowActionFail,
+	})
+	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+
+	cbw.Update(ns, event)
+	assert.Error(t, cbw.pendingErr, "guard should set pending error in fail mode")
+
+	size, err := cbw.Do(t.Context(), nil)
+	assert.Equal(t, 0, size)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "follow-up operation limit exceeded")
+}
+
+func TestCollectionBulkWriterUpdate_FollowUpGuardWarnMode(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 220
+	updatedFields := make(bson.D, 0, numArrayUpdates)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: i,
+		})
+	}
+
+	event := &UpdateEvent{
+		DocumentKey: bson.D{{Key: "_id", Value: "doc-guard-warn"}},
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	cbw := newCollectionBulkWriter(10_000, false, followUpGuard{
+		maxOps: 1,
+		action: followUpOverflowActionWarn,
+	})
+	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+
+	cbw.Update(ns, event)
+	assert.NoError(t, cbw.pendingErr, "warn mode should not fail replication path")
+	assert.Greater(t, cbw.count, 0, "operations should still be queued in warn mode")
+}
+
+func TestChunkPipelineStages_BoundaryAtMaxFields(t *testing.T) {
+	t.Parallel()
+
+	stages := make([]bson.D, 0, maxFieldsPerSetOp)
+	for i := range maxFieldsPerSetOp {
+		stages = append(stages, bson.D{{Key: "$set", Value: bson.D{
+			{Key: "arr", Value: bson.D{{Key: "$concatArrays", Value: bson.A{
+				bson.D{{Key: "$slice", Value: bson.A{"$arr", i}}},
+				bson.A{i},
+				bson.D{{Key: "$slice", Value: bson.A{"$arr", i + 1, bson.D{{Key: "$max", Value: bson.A{1, 2}}}}}},
+			}}}},
+		}}})
+	}
+
+	chunks, stats := chunkPipelineStages(stages)
+	assert.Len(t, chunks, 1, "exactly max stages should fit in one chunk")
+	assert.Equal(t, maxFieldsPerSetOp, len(chunks[0]))
+	assert.Greater(t, stats.limitByStages, 0, "stage limit should trigger at exact boundary")
+	assert.Equal(t, maxFieldsPerSetOp, stats.maxStagesPerChunk)
+}
+
+func TestChunkPipelineStages_BoundaryAboveMaxFields(t *testing.T) {
+	t.Parallel()
+
+	stages := make([]bson.D, 0, maxFieldsPerSetOp+1)
+	for i := range maxFieldsPerSetOp + 1 {
+		stages = append(stages, bson.D{{Key: "$set", Value: bson.D{
+			{Key: "arr", Value: bson.D{{Key: "$concatArrays", Value: bson.A{
+				bson.D{{Key: "$slice", Value: bson.A{"$arr", i}}},
+				bson.A{i},
+				bson.D{{Key: "$slice", Value: bson.A{"$arr", i + 1, bson.D{{Key: "$max", Value: bson.A{1, 2}}}}}},
+			}}}},
+		}}})
+	}
+
+	chunks, stats := chunkPipelineStages(stages)
+	assert.Len(t, chunks, 2, "one stage above max should split into two chunks")
+	assert.Equal(t, maxFieldsPerSetOp, len(chunks[0]))
+	assert.Equal(t, 1, len(chunks[1]))
+	assert.Greater(t, stats.limitByStages, 0)
+	assert.Equal(t, maxFieldsPerSetOp, stats.maxStagesPerChunk)
+}
+
+func TestCollectUpdateOpsWithPipeline_ExtremeArrayUpdate_10k(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 10_000
+	updatedFields := make(bson.D, 0, numArrayUpdates)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: i,
+		})
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 20_000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+	assert.True(t, ops.stats.chunkingTriggered, "chunking should trigger for extreme array updates")
+	assert.Greater(t, ops.stats.arrayChunks, 1, "array updates should split into many chunks")
+	assert.Greater(t, ops.stats.followUpPipeline, 0, "pipeline follow-ups should be generated")
+
+	primaryPipeline, ok := ops.primary.(bson.A)
+	if !ok {
+		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+	}
+
+	totalConcat, _ := classifySetStages(t, primaryPipeline)
+	for i, followUp := range ops.followUp {
+		pipeline, ok := followUp.(bson.A)
+		if !ok {
+			t.Fatalf("follow-up %d expected pipeline bson.A, got %T", i, followUp)
+		}
+
+		concat, _ := classifySetStages(t, pipeline)
+		totalConcat += concat
+	}
+
+	assert.Equal(t, numArrayUpdates, totalConcat, "all array updates should be represented")
+}
+
+func TestCollectUpdateOpsWithPipeline_PathologicalStatsSnapshot(t *testing.T) {
+	t.Parallel()
+
+	const numArrayUpdates = 2000
+	updatedFields := make(bson.D, 0, numArrayUpdates+200)
+	for i := range numArrayUpdates {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: i,
+		})
+	}
+
+	largeValue := strings.Repeat("X", 10_000)
+	for i := range 200 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "meta.big_" + strconv.Itoa(i),
+			Value: largeValue,
+		})
+	}
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 20_000},
+			},
+			UpdatedFields: updatedFields,
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+	assert.True(t, ops.stats.chunkingTriggered)
+
+	payload, err := json.Marshal(ops.stats)
+	assert.NoError(t, err)
+
+	t.Logf("CHUNK_STATS: %s", payload)
 }
 
 func extractPipelineFields(t *testing.T, pipeline bson.A) (map[string]bool, map[string]bool) {

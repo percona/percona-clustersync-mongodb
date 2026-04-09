@@ -107,6 +107,30 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: "source URI and target URI are identical",
 		},
+		{
+			name: "valid repl follow-up overflow action",
+			cfg: &config.Config{
+				Port:   8080,
+				Source: "mongodb://source:27017",
+				Target: "mongodb://target:27017",
+				Repl: config.ReplConfig{
+					FollowUpOverflowAction: "warn",
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid repl follow-up overflow action",
+			cfg: &config.Config{
+				Port:   8080,
+				Source: "mongodb://source:27017",
+				Target: "mongodb://target:27017",
+				Repl: config.ReplConfig{
+					FollowUpOverflowAction: "drop",
+				},
+			},
+			wantErr: "repl-follow-up-overflow-action must be one of: fail, warn",
+		},
 	}
 
 	for _, tt := range tests {

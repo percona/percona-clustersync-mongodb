@@ -41,7 +41,7 @@ type Options struct {
 	// Default: auto (0 = runtime.NumCPU()/4)
 	ReadWorkers int
 	// InsertWorkers is the number of insert workers during clone.
-	// Default: auto (0 = runtime.NumCPU()*2)
+	// Default: auto (0 = min(max(runtime.NumCPU(), 2), 16))
 	InsertWorkers int
 	// SegmentSizeBytes is the segment size for clone operations in bytes.
 	// Default: auto (0 = calculated per collection)

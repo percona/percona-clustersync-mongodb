@@ -30,6 +30,15 @@ test-build:
 test:
 	go test -race ./...
 
+test-repl-regression-fast:
+	go test ./pcsm/repl -count=1 -run 'Test(CollectUpdateOpsWithPipeline_ChunksArrayStagesIntoFollowUpPipelines|CollectUpdateOpsWithPipeline_StatsTrackStageLimitChunking|CollectUpdateOpsWithPipeline_StatsTrackByteLimitChunking|CollectionBulkWriterUpdate_MixedFollowUpsAreAccepted|CollectionBulkWriterUpdate_FollowUpGuardFailFast|CollectionBulkWriterUpdate_FollowUpGuardWarnMode|Worker_EndToEndLargeMixedUpdateEvent_ChunkingAndFlush|ChunkPipelineStages_BoundaryAtMaxFields|ChunkPipelineStages_BoundaryAboveMaxFields|CollectUpdateOpsWithPipeline_ExtremeArrayUpdate_10k|OptionsApplyDefaults_FollowUpOverflowAction)'
+
+test-repl-regression-chaos:
+	go test ./pcsm/repl -count=25 -run 'Test(CollectUpdateOpsWithPipeline_ChunksArrayStagesIntoFollowUpPipelines|CollectUpdateOpsWithPipeline_StatsTrackStageLimitChunking|CollectUpdateOpsWithPipeline_StatsTrackByteLimitChunking|CollectionBulkWriterUpdate_MixedFollowUpsAreAccepted|CollectionBulkWriterUpdate_FollowUpGuardFailFast|CollectionBulkWriterUpdate_FollowUpGuardWarnMode|Worker_EndToEndLargeMixedUpdateEvent_ChunkingAndFlush|ChunkPipelineStages_BoundaryAtMaxFields|ChunkPipelineStages_BoundaryAboveMaxFields|CollectUpdateOpsWithPipeline_ExtremeArrayUpdate_10k)'
+
+bench-repl-chunking:
+	go test ./pcsm/repl -run '^$$' -bench BenchmarkCollectUpdateOpsWithPipeline_ -benchmem -count=1
+
 test-integration:
 	go test -v -tags integration -count=1 -timeout 5m ./pcsm/catalog/...
 
@@ -66,4 +75,4 @@ metrics-up:
 metrics-down:
 	docker compose -f hack/metrics/docker-compose.yml down
 
-.PHONY: all build test-build test test-integration pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down
+.PHONY: all build test-build test test-repl-regression-fast test-repl-regression-chaos bench-repl-chunking test-integration pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down

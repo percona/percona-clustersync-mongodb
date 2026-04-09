@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,6 +334,45 @@ func (m *mockBulkWriter) Update(_ catalog.Namespace, _ *UpdateEvent)   { m.count
 func (m *mockBulkWriter) Replace(_ catalog.Namespace, _ *ReplaceEvent) { m.count++ }
 func (m *mockBulkWriter) Delete(_ catalog.Namespace, _ *DeleteEvent)   { m.count++ }
 
+type chunkingProbeStats struct {
+	eventsSeen        atomic.Int64
+	chunkedEvents     atomic.Int64
+	followUpOps       atomic.Int64
+	arrayLimitHits    atomic.Int64
+	nonArrayLimitHits atomic.Int64
+}
+
+type chunkingProbeBulkWriter struct {
+	count  int
+	fullAt int
+	stats  *chunkingProbeStats
+}
+
+func (m *chunkingProbeBulkWriter) Full() bool  { return m.fullAt > 0 && m.count >= m.fullAt }
+func (m *chunkingProbeBulkWriter) Empty() bool { return m.count == 0 }
+func (m *chunkingProbeBulkWriter) Do(_ context.Context, _ *mongo.Client) (int, error) {
+	n := m.count
+	m.count = 0
+
+	return n, nil
+}
+func (m *chunkingProbeBulkWriter) Insert(_ catalog.Namespace, _ *InsertEvent)   { m.count++ }
+func (m *chunkingProbeBulkWriter) Replace(_ catalog.Namespace, _ *ReplaceEvent) { m.count++ }
+func (m *chunkingProbeBulkWriter) Delete(_ catalog.Namespace, _ *DeleteEvent)   { m.count++ }
+func (m *chunkingProbeBulkWriter) Update(_ catalog.Namespace, event *UpdateEvent) {
+	ops := collectUpdateOps(event)
+	m.count += 1 + len(ops.followUp)
+
+	m.stats.eventsSeen.Add(1)
+	if ops.stats.chunkingTriggered {
+		m.stats.chunkedEvents.Add(1)
+	}
+
+	m.stats.followUpOps.Add(int64(ops.stats.followUpTotal))
+	m.stats.arrayLimitHits.Add(int64(ops.stats.arrayChunkLimitByBytes + ops.stats.arrayChunkLimitByStages))
+	m.stats.nonArrayLimitHits.Add(int64(ops.stats.nonArrayChunkLimitByBytes + ops.stats.nonArrayChunkLimitByStages))
+}
+
 // makeInsertEvent creates a valid routedEvent with an insert ChangeEvent.
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
 func makeInsertEvent(id string) *routedEvent {
@@ -549,5 +590,105 @@ func TestReleaseBarrier_WorkerDead(t *testing.T) {
 	case <-time.After(barrierTimeout):
 		t.Fatal("ReleaseBarrier() deadlocked: dead worker can't receive on resumeCh, " +
 			"ReleaseBarrier blocks forever on send")
+	}
+}
+
+func TestWorker_EndToEndLargeMixedUpdateEvent_ChunkingAndFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	stats := &chunkingProbeStats{}
+	newWriter := func() bulkWriter {
+		return &chunkingProbeBulkWriter{
+			fullAt: 100_000,
+			stats:  stats,
+		}
+	}
+
+	w := &worker{
+		id:               "0",
+		routedEventCh:    make(chan *routedEvent, 10),
+		currentBulkWrite: newWriter(),
+		flushInterval:    time.Hour,
+		pendingBulkCh:    make(chan *pendingBulk, config.WorkerBulkQueueSize),
+		writerDone:       make(chan struct{}),
+		bulkQueueSize:    config.WorkerBulkQueueSize,
+		newBulkWriter:    newWriter,
+		barrierReq:       make(chan struct{}),
+		barrierDone:      make(chan error),
+		resumeCh:         make(chan struct{}),
+		done:             make(chan struct{}),
+		errCh:            errCh,
+	}
+
+	go w.run(ctx)
+
+	for i := range 3 {
+		w.routedEventCh <- makeLargeMixedUpdateRoutedEvent(i)
+	}
+	close(w.routedEventCh)
+
+	select {
+	case <-w.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not finish in time")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("worker reported unexpected error: %v", err)
+	default:
+	}
+
+	assert.EqualValues(t, 3, stats.eventsSeen.Load(), "all synthetic update events should be processed")
+	assert.Greater(t, stats.chunkedEvents.Load(), int64(0), "chunking should trigger for large mixed updates")
+	assert.Greater(t, stats.followUpOps.Load(), int64(0), "follow-up operations should be generated")
+	assert.Greater(t, stats.arrayLimitHits.Load(), int64(0), "array chunk limits should be hit")
+	assert.Greater(t, stats.nonArrayLimitHits.Load(), int64(0), "non-array chunk limits should be hit")
+}
+
+func makeLargeMixedUpdateRoutedEvent(seed int) *routedEvent {
+	updatedFields := make(bson.D, 0, 320)
+	for i := range 220 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "arr." + strconv.Itoa(i),
+			Value: fmt.Sprintf("arrv_%d_%d", seed, i),
+		})
+	}
+
+	largeValue := strings.Repeat("X", 12_000)
+	for i := range 100 {
+		updatedFields = append(updatedFields, bson.E{
+			Key:   "meta.field_" + strconv.Itoa(i),
+			Value: largeValue,
+		})
+	}
+
+	raw, err := bson.Marshal(bson.D{
+		{Key: "documentKey", Value: bson.D{{Key: "_id", Value: fmt.Sprintf("doc-%d", seed)}}},
+		{Key: "updateDescription", Value: bson.D{
+			{Key: "truncatedArrays", Value: bson.A{
+				bson.D{{Key: "field", Value: "arr"}, {Key: "newSize", Value: int32(20_000)}},
+			}},
+			{Key: "updatedFields", Value: updatedFields},
+			{Key: "removedFields", Value: bson.A{"legacy.field", "legacy.other"}},
+		}},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal update event: %v", err))
+	}
+
+	return &routedEvent{
+		change: &ChangeEvent{
+			EventHeader: EventHeader{
+				OperationType: Update,
+				ClusterTime:   bson.Timestamp{T: 1, I: uint32(seed + 1)},
+			},
+			RawData: bson.Raw(raw),
+		},
+		ns: catalog.Namespace{Database: "db", Collection: "coll"},
 	}
 }
