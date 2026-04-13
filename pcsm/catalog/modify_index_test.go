@@ -164,4 +164,38 @@ func TestDoModifyIndexOption(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("converts non-unique to unique via prepareUnique", func(t *testing.T) {
+		unique := true
+		uniqueSpec := &mdb.IndexSpecification{
+			Name:         indexName,
+			KeysDocument: mustMarshal(t, bson.D{{"modified_at", 1}}),
+			Version:      2,
+			Unique:       &unique,
+		}
+		seedIndex(t, cat, db, coll, uniqueSpec)
+
+		// Two-step conversion matching production flow (catalog.go:934-953):
+		// MongoDB requires prepareUnique=true before unique=true.
+		err := cat.doModifyIndexOption(ctx, db, coll, indexName, "prepareUnique", true)
+		require.NoError(t, err)
+
+		err = cat.doModifyIndexOption(ctx, db, coll, indexName, "unique", true)
+		require.NoError(t, err)
+
+		cursor, err := client.Database(db).Collection(coll).Indexes().List(ctx)
+		require.NoError(t, err)
+
+		var indexes []bson.M
+		require.NoError(t, cursor.All(ctx, &indexes))
+
+		found := false
+		for _, idx := range indexes {
+			if idx["name"] == indexName {
+				found = true
+				assert.Equal(t, true, idx["unique"])
+			}
+		}
+		assert.True(t, found, "index %q should exist after unique modification", indexName)
+	})
 }

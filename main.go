@@ -628,7 +628,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	}
 
 	if crossVersion {
-		lg.Warnf("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
+		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
 	stopHeartbeat, err := RunHeartbeat(ctx, target)

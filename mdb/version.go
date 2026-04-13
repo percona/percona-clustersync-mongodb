@@ -109,7 +109,7 @@ var ErrDowngrade = errors.New("downgrade not supported") //nolint:gochecknogloba
 
 // CheckVersionCompat validates source and target MongoDB major versions.
 // Returns ErrDowngrade if source major > target major (downgrade).
-// Sets crossVersion=true if source major < target major (upgrade).
+// Returns true if source major < target major (lower-to-higher replication).
 func CheckVersionCompat(source, target ServerVersion) (bool, error) {
 	if source.Major() > target.Major() {
 		return false, errors.Wrapf(ErrDowngrade, "source %s > target %s", source, target)
