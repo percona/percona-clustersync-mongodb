@@ -1,0 +1,213 @@
+name: jira-create
+
+"on":
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: jira-create-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  create-jira:
+    if: contains(github.event.comment.body, '/jira')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check maintainer permission
+        id: check-permission
+        run: |
+          set -euo pipefail
+          ACTOR="${{ github.event.comment.user.login }}"
+          PERM=$(gh api repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/collaborators/$ACTOR/permission --jq '.permission' 2>/dev/null || echo "none")
+          if [[ "$PERM" != "write" && "$PERM" != "admin" ]]; then
+            gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+              -f body="@$ACTOR Sorry, the \`/jira\` command is restricted to maintainers." 2>/dev/null || true
+            echo "NOT_MAINTAINER=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check existing Jira link
+        id: check-duplicate
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true'
+        run: |
+          set -euo pipefail
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments --jq '.[].body')
+          if echo "$COMMENTS" | grep -q "<!-- jira:PCSM-"; then
+            TICKET=$(printf '%s\n' "$COMMENTS" | grep -oE '<!-- jira:PCSM-[0-9]+ -->' | head -1 | sed -E 's/<!-- jira:([^ ]+) -->/\1/')
+            gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+              -f body="Jira ticket already exists: [$TICKET](${{ secrets.JIRA_BASE_URL }}/browse/$TICKET)" || true
+            echo "ALREADY_LINKED=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get issue content
+        id: get-issue
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        run: |
+          set -euo pipefail
+          ISSUE=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }})
+          TITLE=$(echo "$ISSUE" | jq -r '.title')
+          BODY=$(echo "$ISSUE" | jq -r '.body // ""')
+          ISSUE_URL=$(echo "$ISSUE" | jq -r '.html_url')
+          {
+            echo 'TITLE<<EOF'
+            printf '%s\n' "$TITLE"
+            echo 'EOF'
+            echo 'BODY<<EOF'
+            printf '%s\n' "$BODY"
+            echo 'EOF'
+            echo 'ISSUE_URL<<EOF'
+            printf '%s\n' "$ISSUE_URL"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate Jira description
+        id: generate-description
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        env:
+          TITLE: ${{ steps.get-issue.outputs.TITLE }}
+          BODY: ${{ steps.get-issue.outputs.BODY }}
+          ISSUE_URL: ${{ steps.get-issue.outputs.ISSUE_URL }}
+        run: |
+          set -euo pipefail
+          REQUEST=$(jq -n \
+            --arg title "$TITLE" \
+            --arg body "$BODY" \
+            --arg issue_url "$ISSUE_URL" \
+            '{
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1024,
+              messages: [
+                {
+                  role: "user",
+                  content: (
+                    "Create a structured Jira ticket description from this GitHub issue. Use professional technical language. Format: Summary section, Steps to Reproduce (if bug), Expected Behavior, Additional Context. Include link to GitHub issue: "
+                    + $issue_url
+                    + ". Do not use AI-slop phrases. Issue title: "
+                    + $title
+                    + "\n\nIssue body:\n"
+                    + $body
+                  )
+                }
+              ]
+            }')
+          RESPONSE=$(curl --fail --silent --show-error https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$REQUEST")
+          DESCRIPTION_TEXT=$(echo "$RESPONSE" | jq -r '[.content[] | select(.type == "text") | .text] | join("\n\n")')
+          test -n "$DESCRIPTION_TEXT"
+          {
+            echo 'DESCRIPTION_TEXT<<EOF'
+            printf '%s\n' "$DESCRIPTION_TEXT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Jira ticket
+        id: create-jira
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        env:
+          TITLE: ${{ steps.get-issue.outputs.TITLE }}
+          DESCRIPTION_TEXT: ${{ steps.generate-description.outputs.DESCRIPTION_TEXT }}
+        run: |
+          set -euo pipefail
+          ADF_DESCRIPTION=$(python3 <<'PY'
+          import json
+          import os
+
+          text = os.environ.get("DESCRIPTION_TEXT", "").strip()
+          paragraphs = []
+          for block in text.split("\n\n"):
+              block = block.strip()
+              if not block:
+                  continue
+              paragraphs.append(
+                  {
+                      "type": "paragraph",
+                      "content": [
+                          {
+                              "type": "text",
+                              "text": block.replace("\n", " "),
+                          }
+                      ],
+                  }
+              )
+
+          if not paragraphs:
+              paragraphs = [
+                  {
+                      "type": "paragraph",
+                      "content": [{"type": "text", "text": text or "GitHub issue imported."}],
+                  }
+              ]
+
+          print(json.dumps({"type": "doc", "version": 1, "content": paragraphs}))
+          PY
+          )
+          AUTH=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
+          PAYLOAD=$(jq -n \
+            --arg summary "$TITLE" \
+            --argjson description "$ADF_DESCRIPTION" \
+            '{
+              fields: {
+                project: {key: "PCSM"},
+                summary: $summary,
+                description: $description,
+                issuetype: {name: "Task"},
+                labels: ["github-issue"]
+              }
+            }')
+          JIRA_RESPONSE=$(curl --fail --silent --show-error -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
+            -H "Authorization: Basic $AUTH" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          TICKET_KEY=$(echo "$JIRA_RESPONSE" | jq -r '.key')
+          if [[ -z "$TICKET_KEY" || "$TICKET_KEY" == "null" ]]; then
+            echo "$JIRA_RESPONSE"
+            exit 1
+          fi
+          echo "TICKET_KEY=$TICKET_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Comment with Jira link
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        env:
+          TICKET_KEY: ${{ steps.create-jira.outputs.TICKET_KEY }}
+        run: |
+          set -euo pipefail
+          COMMENT_BODY=$(printf 'Jira ticket created: [%s](%s/browse/%s)\n<!-- jira:%s -->' "$TICKET_KEY" "$JIRA_BASE_URL" "$TICKET_KEY" "$TICKET_KEY")
+          gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+            -f body="$COMMENT_BODY"
+
+      - name: Add Jira remote link
+        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        env:
+          TICKET_KEY: ${{ steps.create-jira.outputs.TICKET_KEY }}
+          TITLE: ${{ steps.get-issue.outputs.TITLE }}
+          ISSUE_URL: ${{ steps.get-issue.outputs.ISSUE_URL }}
+        run: |
+          set -euo pipefail
+          AUTH=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
+          PAYLOAD=$(jq -n \
+            --arg issue_url "$ISSUE_URL" \
+            --arg title "$TITLE" \
+            '{
+              object: {
+                url: $issue_url,
+                title: ("GitHub Issue: " + $title),
+                icon: {url16x16: "https://github.com/favicon.ico"}
+              }
+            }')
+          curl --fail --silent --show-error -X POST "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_KEY/remotelink" \
+            -H "Authorization: Basic $AUTH" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
