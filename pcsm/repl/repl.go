@@ -625,7 +625,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
 
 			r.lock.Lock()
-			r.lastReplicatedOpTime = change.ClusterTime
+			r.advanceOpTime(change.ClusterTime)
 			r.lock.Unlock()
 
 			continue
@@ -634,7 +634,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
-				r.lastReplicatedOpTime = change.ClusterTime
+				r.advanceOpTime(change.ClusterTime)
 				r.eventsApplied++
 				r.lock.Unlock()
 
@@ -649,7 +649,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
-				r.lastReplicatedOpTime = change.ClusterTime
+				r.advanceOpTime(change.ClusterTime)
 				r.eventsApplied++
 				r.lock.Unlock()
 
@@ -700,7 +700,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			}
 
 			r.lock.Lock()
-			r.lastReplicatedOpTime = change.ClusterTime
+			r.advanceOpTime(change.ClusterTime)
 			r.eventsApplied++
 			r.lock.Unlock()
 
@@ -735,6 +735,14 @@ func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 		}
 		r.lock.Unlock()
 	default:
+	}
+}
+
+// advanceOpTime updates lastReplicatedOpTime only if ts is strictly greater.
+// Caller must hold r.lock.
+func (r *Repl) advanceOpTime(ts bson.Timestamp) {
+	if ts.After(r.lastReplicatedOpTime) {
+		r.lastReplicatedOpTime = ts
 	}
 }
 
