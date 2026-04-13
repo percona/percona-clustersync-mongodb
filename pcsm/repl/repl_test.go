@@ -200,7 +200,9 @@ func TestAdvanceOpTime(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := &Repl{lastReplicatedOpTime: tt.current}
+			r.lock.Lock()
 			r.advanceOpTime(tt.input)
+			r.lock.Unlock()
 			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
 		})
 	}

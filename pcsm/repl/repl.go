@@ -552,10 +552,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
 		r.pool.Stop()
-
-		if cp := r.pool.SafeCheckpoint(); cp.After(r.lastReplicatedOpTime) {
-			r.lastReplicatedOpTime = cp
-		}
+		r.advanceOpTime(r.pool.SafeCheckpoint())
 
 		r.pool = nil
 		r.lock.Unlock()
@@ -730,9 +727,7 @@ func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 		}
 
 		r.lock.Lock()
-		if cp.After(r.lastReplicatedOpTime) {
-			r.lastReplicatedOpTime = cp
-		}
+		r.advanceOpTime(cp)
 		r.lock.Unlock()
 	default:
 	}
