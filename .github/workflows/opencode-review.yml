@@ -1,0 +1,48 @@
+name: opencode-review
+
+"on":
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: opencode-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: OpenCode Go review
+        uses: anomalyco/opencode/github@latest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          model: anthropic/claude-opus-4-20250514
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Review only new code ('+' lines in diff). Pre-existing issues are out of scope.
+            Read AGENTS.md for project-specific patterns: errors.Wrap/Wrapf, util.CtxWithTimeout, log.New("scope"), testify assertions, race flag.
+
+            Categories to evaluate:
+            1. CORRECTNESS & ERROR HANDLING: error wrapping (use errors.Wrap not fmt.Errorf), nil safety, resource leaks (defer close), type assertion guards, panic recovery
+            2. CONCURRENCY: goroutine lifecycle (leaks), race conditions, channel correctness, sync primitives (Mutex vs RWMutex), context cancellation propagation
+            3. PERFORMANCE: unnecessary allocations (slice capacity hints, string builder vs +), interface boxing overhead, struct layout (field alignment), map pre-sizing
+            4. IDIOMATIC GO: naming (receiver names, unexported fields, acronyms), control flow (early return, no else after return), declaration style (short var where possible), function design (small/focused)
+            5. COMMENT QUALITY: exported API docs (godoc format), why-comments (not what), flag: misleading/stale/obvious comments
+            6. ALTERNATIVE PATTERNS: table-driven tests, functional options, errgroup for parallel work, sync.Once for init
+
+            References: Go Wiki CodeReviewComments, Uber Go Style Guide, Effective Go
+
+            Output format:
+            ## Verdict: APPROVE | APPROVE WITH SUGGESTIONS | NEEDS WORK
+            ### Critical Issues (blocking)
+            ### Performance
+            ### Concurrency
+            ### Idiomatic
+            ### Comment Quality
+            ### Suggested Alternatives
