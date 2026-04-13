@@ -2,7 +2,11 @@ name: opencode-review
 
 "on":
   pull_request:
-    types: [opened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -11,19 +15,19 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
-    concurrency:
-      group: opencode-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      pull-requests: read
+      issues: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - name: OpenCode Go review
         uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          model: anthropic/claude-opus-4-20250514
-          token: ${{ secrets.GITHUB_TOKEN }}
+          model: anthropic/claude-opus-4-6
           prompt: |
             Review only new code ('+' lines in diff). Pre-existing issues are out of scope.
             Read AGENTS.md for project-specific patterns: errors.Wrap/Wrapf, util.CtxWithTimeout, log.New("scope"), testify assertions, race flag.
