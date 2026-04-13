@@ -1,0 +1,132 @@
+name: OpenCode PR summary
+
+"on":
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+concurrency:
+  group: pr-summary-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sync-summary:
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+      TMP_DIR: ./tmp/opencode-pr-summary
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get PR commits
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMP_DIR"
+          OWNER="${REPOSITORY%/*}"
+          REPO="${REPOSITORY#*/}"
+          gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/commits" > "$TMP_DIR/commits.json"
+
+      - name: Get current PR description
+        run: |
+          set -euo pipefail
+          OWNER="${REPOSITORY%/*}"
+          REPO="${REPOSITORY#*/}"
+          gh api "repos/$OWNER/$REPO/pulls/$PR_NUM" > "$TMP_DIR/pull-request.json"
+
+      - name: Generate PR summary
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import pathlib
+          import re
+
+          tmp_dir = pathlib.Path("./tmp/opencode-pr-summary")
+          commits = json.loads((tmp_dir / "commits.json").read_text())
+          pr = json.loads((tmp_dir / "pull-request.json").read_text())
+
+          start_marker = "<!-- opencode-summary-start -->"
+          end_marker = "<!-- opencode-summary-end -->"
+          body = pr.get("body") or ""
+          outside = re.sub(
+              re.escape(start_marker) + r".*?" + re.escape(end_marker),
+              "",
+              body,
+              flags=re.S,
+          ).strip()
+
+          commit_messages = []
+          for commit in commits:
+              message = (commit.get("commit") or {}).get("message", "").strip()
+              if message:
+                  commit_messages.append(f"- {message}")
+
+          prompt = "\n".join(
+              [
+                  "Generate a concise PR summary from these commit messages. Use Problem/Solution format if commits suggest a bug fix. Otherwise use a descriptive format. Keep it professional and terse. If the PR already has content outside the markers, match its tone.",
+                  "Return markdown only. No code fences. No commentary outside summary.",
+                  "",
+                  "Existing PR description outside summary markers:",
+                  outside or "(empty)",
+                  "",
+                  "Commit messages:",
+                  "\n".join(commit_messages) or "- No commit messages available",
+              ]
+          )
+
+          payload = {
+              "model": "claude-sonnet-4-20250514",
+              "max_tokens": 400,
+              "messages": [{"role": "user", "content": prompt}],
+          }
+          (tmp_dir / "anthropic-request.json").write_text(json.dumps(payload))
+          PY
+          curl --fail --silent --show-error https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            --data @"$TMP_DIR/anthropic-request.json" \
+            > "$TMP_DIR/anthropic-response.json"
+          jq -r '.content[] | select(.type == "text") | .text' "$TMP_DIR/anthropic-response.json" > "$TMP_DIR/summary.md"
+          test -s "$TMP_DIR/summary.md"
+
+      - name: Update PR description
+        run: |
+          set -euo pipefail
+          OWNER="${REPOSITORY%/*}"
+          REPO="${REPOSITORY#*/}"
+          python3 <<'PY'
+          import json
+          import pathlib
+
+          tmp_dir = pathlib.Path("./tmp/opencode-pr-summary")
+          pr = json.loads((tmp_dir / "pull-request.json").read_text())
+          summary = (tmp_dir / "summary.md").read_text().strip()
+          body = pr.get("body") or ""
+
+          start_marker = "<!-- opencode-summary-start -->"
+          end_marker = "<!-- opencode-summary-end -->"
+          block = f"{start_marker}\n{summary}\n{end_marker}"
+
+          if not body.strip():
+              updated = block
+          else:
+              start = body.find(start_marker)
+              end = body.find(end_marker)
+              if start != -1 and end != -1 and start < end:
+                  end += len(end_marker)
+                  updated = body[:start] + block + body[end:]
+              else:
+                  updated = f"{block}\n\n{body}"
+
+          (tmp_dir / "pull-request-update.json").write_text(json.dumps({"body": updated}))
+          PY
+          gh api --method PATCH "repos/$OWNER/$REPO/pulls/$PR_NUM" --input "$TMP_DIR/pull-request-update.json"
