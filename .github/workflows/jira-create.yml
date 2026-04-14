@@ -1,4 +1,4 @@
-name: jira-create
+name: Jira Create
 
 "on":
   issue_comment:
@@ -21,42 +21,44 @@ jobs:
       JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
       JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      REPO_FULL: ${{ github.repository }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ACTOR: ${{ github.event.comment.user.login }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Check maintainer permission
-        id: check-permission
         run: |
           set -euo pipefail
-          ACTOR="${{ github.event.comment.user.login }}"
-          PERM=$(gh api repos/${{ github.repository_owner }}/${{ github.event.repository.name }}/collaborators/$ACTOR/permission --jq '.permission' 2>/dev/null || echo "none")
+          PERM=$(gh api "repos/$REPO_OWNER/$REPO_NAME/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
           if [[ "$PERM" != "write" && "$PERM" != "admin" ]]; then
-            gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+            gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" \
               -f body="@$ACTOR Sorry, the \`/jira\` command is restricted to maintainers." 2>/dev/null || true
-            echo "NOT_MAINTAINER=true" >> "$GITHUB_OUTPUT"
+            echo "SKIP=true" >> "$GITHUB_ENV"
           fi
 
       - name: Check existing Jira link
-        id: check-duplicate
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true'
+        if: env.SKIP != 'true'
         run: |
           set -euo pipefail
-          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments --jq '.[].body')
+          COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
           if echo "$COMMENTS" | grep -q "<!-- jira:PCSM-"; then
             TICKET=$(printf '%s\n' "$COMMENTS" | grep -oE '<!-- jira:PCSM-[0-9]+ -->' | head -1 | sed -E 's/<!-- jira:([^ ]+) -->/\1/')
-            gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
-              -f body="Jira ticket already exists: [$TICKET](${{ secrets.JIRA_BASE_URL }}/browse/$TICKET)" || true
-            echo "ALREADY_LINKED=true" >> "$GITHUB_OUTPUT"
+            gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" \
+              -f body="Jira ticket already exists: [$TICKET]($JIRA_BASE_URL/browse/$TICKET)" || true
+            echo "SKIP=true" >> "$GITHUB_ENV"
           fi
 
       - name: Get issue content
         id: get-issue
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        if: env.SKIP != 'true'
         run: |
           set -euo pipefail
-          ISSUE=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }})
+          ISSUE=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER")
           TITLE=$(echo "$ISSUE" | jq -r '.title')
           BODY=$(echo "$ISSUE" | jq -r '.body // ""')
           ISSUE_URL=$(echo "$ISSUE" | jq -r '.html_url')
@@ -74,7 +76,7 @@ jobs:
 
       - name: Generate Jira description
         id: generate-description
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        if: env.SKIP != 'true'
         env:
           TITLE: ${{ steps.get-issue.outputs.TITLE }}
           BODY: ${{ steps.get-issue.outputs.BODY }}
@@ -117,7 +119,7 @@ jobs:
 
       - name: Create Jira ticket
         id: create-jira
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        if: env.SKIP != 'true'
         env:
           TITLE: ${{ steps.get-issue.outputs.TITLE }}
           DESCRIPTION_TEXT: ${{ steps.generate-description.outputs.DESCRIPTION_TEXT }}
@@ -181,17 +183,17 @@ jobs:
           echo "TICKET_KEY=$TICKET_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Comment with Jira link
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        if: env.SKIP != 'true'
         env:
           TICKET_KEY: ${{ steps.create-jira.outputs.TICKET_KEY }}
         run: |
           set -euo pipefail
           COMMENT_BODY=$(printf 'Jira ticket created: [%s](%s/browse/%s)\n<!-- jira:%s -->' "$TICKET_KEY" "$JIRA_BASE_URL" "$TICKET_KEY" "$TICKET_KEY")
-          gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+          gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" \
             -f body="$COMMENT_BODY"
 
       - name: Add Jira remote link
-        if: steps.check-permission.outputs.NOT_MAINTAINER != 'true' && steps.check-duplicate.outputs.ALREADY_LINKED != 'true'
+        if: env.SKIP != 'true'
         env:
           TICKET_KEY: ${{ steps.create-jira.outputs.TICKET_KEY }}
           TITLE: ${{ steps.get-issue.outputs.TITLE }}

@@ -1,4 +1,4 @@
-name: OpenCode PR summary
+name: OpenCode PR Summary
 
 "on":
   pull_request:

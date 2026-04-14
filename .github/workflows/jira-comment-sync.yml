@@ -1,4 +1,4 @@
-name: Jira comment sync
+name: Jira Comment Sync
 
 "on":
   issue_comment:
@@ -7,6 +7,7 @@ name: Jira comment sync
 permissions:
   contents: read
   issues: read
+  pull-requests: read
 
 concurrency:
   group: jira-sync-${{ github.event.issue.number }}-${{ github.event.comment.id }}
@@ -21,6 +22,12 @@ jobs:
       JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
       JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      REPO_FULL: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+      COMMENT_URL: ${{ github.event.comment.html_url }}
+      COMMENT_TIMESTAMP: ${{ github.event.comment.created_at }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -28,12 +35,9 @@ jobs:
 
       - name: Filter command comments
         id: filter-commands
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
         shell: bash
         run: |
-          BODY="$COMMENT_BODY"
-          if [[ "$BODY" == /jira* || "$BODY" == /oc* || "$BODY" == /opencode* ]]; then
+          if [[ "$COMMENT_BODY" == /jira* || "$COMMENT_BODY" == /oc* || "$COMMENT_BODY" == /opencode* ]]; then
             echo "SKIP=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -44,7 +48,7 @@ jobs:
         run: |
           set -eu
 
-          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments --jq '.[].body')
+          COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
           JIRA_MARKER=$(printf '%s\n' "$COMMENTS" | grep -oP '<!-- jira:PCSM-[^>]+' | head -1 | tr -d ' ')
           TICKET_KEY=$(printf '%s\n' "$JIRA_MARKER" | grep -oP '(?<=<!-- jira:)PCSM-[^>]+' | head -1 | tr -d ' ')
 
@@ -57,24 +61,18 @@ jobs:
       - name: Post comment to Jira
         if: steps.filter-commands.outputs.SKIP != 'true' && steps.find-ticket.outputs.NO_TICKET != 'true'
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
+          TICKET_KEY: ${{ steps.find-ticket.outputs.TICKET_KEY }}
         shell: bash
         run: |
           set -euo pipefail
 
-          AUTHOR="${{ github.event.comment.user.login }}"
-          COMMENT_URL="${{ github.event.comment.html_url }}"
-          ISSUE_NUM="${{ github.event.issue.number }}"
-          TIMESTAMP="${{ github.event.comment.created_at }}"
-          BODY="$COMMENT_BODY"
-          TICKET_KEY="${{ steps.find-ticket.outputs.TICKET_KEY }}"
           AUTH_HEADER=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
           PAYLOAD=$(jq -n \
-            --arg issue_num "$ISSUE_NUM" \
-            --arg author "$AUTHOR" \
+            --arg issue_num "$ISSUE_NUMBER" \
+            --arg author "$COMMENT_AUTHOR" \
             --arg comment_url "$COMMENT_URL" \
-            --arg timestamp "$TIMESTAMP" \
-            --arg body "$BODY" \
+            --arg timestamp "$COMMENT_TIMESTAMP" \
+            --arg body "$COMMENT_BODY" \
             '{body:{type:"doc",version:1,content:[{"type":"paragraph","content":[{"type":"text","text":("Via GitHub issue #" + $issue_num + " (" + $author + " at " + $timestamp + "): " + $comment_url),"marks":[{"type":"em"}]}]},{"type":"paragraph","content":[{"type":"text","text":$body}]}]}}')
 
           curl -fsS -X POST "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_KEY/comment" \
