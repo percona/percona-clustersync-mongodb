@@ -49,8 +49,7 @@ jobs:
           set -eu
 
           COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
-          JIRA_MARKER=$(printf '%s\n' "$COMMENTS" | grep -oP '<!-- jira:PCSM-[^>]+' | head -1 | tr -d ' ')
-          TICKET_KEY=$(printf '%s\n' "$JIRA_MARKER" | grep -oP '(?<=<!-- jira:)PCSM-[^>]+' | head -1 | tr -d ' ')
+          TICKET_KEY=$(printf '%s\n' "$COMMENTS" | grep -oP '(?<=<!-- jira:)PCSM-\d+' | head -1)
 
           if [[ -z "$TICKET_KEY" ]]; then
             echo "NO_TICKET=true" >> "$GITHUB_OUTPUT"

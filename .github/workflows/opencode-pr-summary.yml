@@ -20,6 +20,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: claude-sonnet-4-20250514
       REPOSITORY: ${{ github.repository }}
       PR_NUM: ${{ github.event.pull_request.number }}
       TMP_DIR: ./tmp/opencode-pr-summary
@@ -48,10 +49,11 @@ jobs:
           set -euo pipefail
           python3 <<'PY'
           import json
+          import os
           import pathlib
           import re
 
-          tmp_dir = pathlib.Path("./tmp/opencode-pr-summary")
+          tmp_dir = pathlib.Path(os.environ["TMP_DIR"])
           commits = json.loads((tmp_dir / "commits.json").read_text())
           pr = json.loads((tmp_dir / "pull-request.json").read_text())
 
@@ -85,7 +87,7 @@ jobs:
           )
 
           payload = {
-              "model": "claude-sonnet-4-20250514",
+              "model": os.environ["ANTHROPIC_MODEL"],
               "max_tokens": 400,
               "messages": [{"role": "user", "content": prompt}],
           }
@@ -97,6 +99,10 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             --data @"$TMP_DIR/anthropic-request.json" \
             > "$TMP_DIR/anthropic-response.json"
+          if jq -e '.error' "$TMP_DIR/anthropic-response.json" >/dev/null 2>&1; then
+            echo "Anthropic API error: $(jq -r '.error.message' "$TMP_DIR/anthropic-response.json")"
+            exit 1
+          fi
           jq -r '.content[] | select(.type == "text") | .text' "$TMP_DIR/anthropic-response.json" > "$TMP_DIR/summary.md"
           test -s "$TMP_DIR/summary.md"
 
@@ -107,9 +113,10 @@ jobs:
           REPO="${REPOSITORY#*/}"
           python3 <<'PY'
           import json
+          import os
           import pathlib
 
-          tmp_dir = pathlib.Path("./tmp/opencode-pr-summary")
+          tmp_dir = pathlib.Path(os.environ["TMP_DIR"])
           pr = json.loads((tmp_dir / "pull-request.json").read_text())
           summary = (tmp_dir / "summary.md").read_text().strip()
           body = pr.get("body") or ""
