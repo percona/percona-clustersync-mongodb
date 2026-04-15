@@ -1109,6 +1109,59 @@ func TestCollectUpdateOpsWithPipeline_ExtremeArrayUpdate_10k(t *testing.T) {
 	assert.Equal(t, numArrayUpdates, totalConcat, "all array updates should be represented")
 }
 
+func TestCollectUpdateOpsWithPipeline_NestedTruncationNumericPath_UsesStandardOps(t *testing.T) {
+	t.Parallel()
+
+	updated := make(bson.D, 0, 5)
+	for i := 383; i <= 387; i++ {
+		updated = append(updated, bson.E{
+			Key:   "attributes.4.value." + strconv.Itoa(i),
+			Value: "v" + strconv.Itoa(i),
+		})
+	}
+
+	updated = append(updated, bson.E{Key: "attributes.4.count", Value: 388})
+	updated = append(updated, bson.E{Key: "signature", Value: "sig"})
+
+	event := &UpdateEvent{
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "attributes.4.value", NewSize: 388},
+			},
+			UpdatedFields: updated,
+			RemovedFields: []string{"legacy"},
+		},
+	}
+
+	ops := collectUpdateOpsWithPipeline(event)
+
+	primary, ok := ops.primary.(bson.D)
+	if !ok {
+		t.Fatalf("Expected primary standard update (bson.D), got %T", ops.primary)
+	}
+
+	assert.NotEmpty(t, primary)
+	assert.Equal(t, "$push", primary[0].Key, "nested truncation should be applied with standard $push/$slice")
+
+	// Follow-ups should all be standard updates for this safety path.
+	for i, fu := range ops.followUp {
+		doc, ok := fu.(bson.D)
+		if !ok {
+			t.Fatalf("follow-up %d expected bson.D, got %T", i, fu)
+		}
+
+		assert.NotEmpty(t, doc)
+		switch doc[0].Key {
+		case "$set", "$unset":
+		default:
+			t.Fatalf("unexpected follow-up operator %q", doc[0].Key)
+		}
+	}
+}
+
 func TestCollectUpdateOpsWithPipeline_PathologicalStatsSnapshot(t *testing.T) {
 	t.Parallel()
 

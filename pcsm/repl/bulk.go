@@ -634,7 +634,105 @@ func collectUpdateOps(event *UpdateEvent) updateOps {
 	return updateOps{primary: ops}
 }
 
+func hasNumericPathComponent(path string) bool {
+	for _, part := range strings.Split(path, ".") {
+		if part == "" {
+			continue
+		}
+
+		if _, err := strconv.Atoi(part); err == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+// collectUpdateOpsNestedTruncationSafe rebuilds truncation+update conflicts as an ordered
+// sequence of standard update modifiers (no pipeline stages). This avoids pipeline numeric-path
+// ambiguity for nested paths like "attributes.4.value", and avoids large pipeline expression trees
+// under high-rate replay.
+func collectUpdateOpsNestedTruncationSafe(event *UpdateEvent) updateOps {
+	var (
+		primary  any
+		followUp []any
+		stats    updateOpStats
+	)
+
+	if len(event.UpdateDescription.TruncatedArrays) != 0 {
+		fields := make(bson.D, len(event.UpdateDescription.TruncatedArrays))
+		for i, field := range event.UpdateDescription.TruncatedArrays {
+			fields[i].Key = field.Field
+			fields[i].Value = bson.D{{"$each", bson.A{}}, {"$slice", field.NewSize}}
+		}
+
+		primary = bson.D{{Key: "$push", Value: fields}}
+	}
+
+	if len(event.UpdateDescription.UpdatedFields) != 0 {
+		setChunks, chunkStats := chunkSetFields(event.UpdateDescription.UpdatedFields)
+		stats.arrayChunks = len(setChunks)
+		stats.arrayChunkLimitByBytes = chunkStats.limitByBytes
+		stats.arrayChunkLimitByStages = chunkStats.limitByStages
+		stats.arrayMaxStagesPerChunk = chunkStats.maxFieldsPerChunk
+		stats.nonArrayChunks = len(setChunks)
+		stats.nonArrayChunkLimitByBytes = chunkStats.limitByBytes
+		stats.nonArrayChunkLimitByStages = chunkStats.limitByStages
+
+		start := 0
+		if primary == nil && len(setChunks) > 0 {
+			primary = bson.D{{Key: "$set", Value: setChunks[0]}}
+			start = 1
+		}
+
+		for i := start; i < len(setChunks); i++ {
+			followUp = append(followUp, bson.D{{Key: "$set", Value: setChunks[i]}})
+		}
+	}
+
+	if len(event.UpdateDescription.RemovedFields) != 0 {
+		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
+		for i, field := range event.UpdateDescription.RemovedFields {
+			fields[i].Key = field
+			fields[i].Value = 1
+		}
+
+		if primary == nil {
+			primary = bson.D{{Key: "$unset", Value: fields}}
+		} else {
+			followUp = append(followUp, bson.D{{Key: "$unset", Value: fields}})
+		}
+	}
+
+	if primary == nil {
+		primary = bson.D{}
+	}
+
+	for _, op := range followUp {
+		switch op.(type) {
+		case bson.D:
+			stats.followUpStandard++
+		case bson.A:
+			stats.followUpPipeline++
+		}
+	}
+
+	stats.followUpTotal = len(followUp)
+	stats.chunkingTriggered = stats.followUpTotal > 0
+
+	return updateOps{primary: primary, followUp: followUp, stats: stats}
+}
+
 func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
+	// Nested truncation paths with numeric components (e.g. "attributes.4.value") are unsafe
+	// in pipeline $set form because numeric path components are interpreted with aggregation
+	// semantics. Replay these conflicts as ordered standard modifiers instead.
+	for _, ta := range event.UpdateDescription.TruncatedArrays {
+		if hasNumericPathComponent(ta.Field) {
+			return collectUpdateOpsNestedTruncationSafe(event)
+		}
+	}
+
 	s := len(event.UpdateDescription.UpdatedFields) +
 		len(event.UpdateDescription.RemovedFields) +
 		len(event.UpdateDescription.TruncatedArrays)
@@ -667,6 +765,7 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 
 	// Handle updated fields
 	var arrayStages []bson.D
+	var arrayFields bson.D
 	var nonArrayFields bson.D
 
 	for _, field := range event.UpdateDescription.UpdatedFields {
@@ -675,6 +774,8 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 
 			continue
 		}
+
+		arrayFields = append(arrayFields, bson.E{Key: field.Key, Value: field.Value})
 
 		parts := strings.Split(field.Key, ".")
 		fieldName := strings.Join(parts[:len(parts)-1], ".")
@@ -712,52 +813,71 @@ func collectUpdateOpsWithPipeline(event *UpdateEvent) updateOps {
 		stats    updateOpStats
 	)
 
-	chunkStart := 0
-	chunkBytes := 0
-
-	for i := range nonArrayFields {
-		b, _ := bson.Marshal(bson.D{nonArrayFields[i]})
-		chunkBytes += len(b)
-
-		limitByBytes := chunkBytes >= maxBytesPerSetOp
-		limitByStages := (i - chunkStart + 1) >= maxFieldsPerSetOp
-		if !limitByBytes && !limitByStages {
-			continue
-		}
-
-		followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart : i+1]}})
-		stats.nonArrayChunks++
-		if limitByBytes {
-			stats.nonArrayChunkLimitByBytes++
-		}
-
-		if limitByStages {
-			stats.nonArrayChunkLimitByStages++
-		}
-
-		chunkStart = i + 1
-		chunkBytes = 0
+	nonArraySetChunks, nonArrayChunkStats := chunkSetFields(nonArrayFields)
+	for _, setChunk := range nonArraySetChunks {
+		followUp = append(followUp, bson.D{{Key: "$set", Value: setChunk}})
 	}
 
-	if chunkStart < len(nonArrayFields) {
-		followUp = append(followUp, bson.D{{Key: "$set", Value: nonArrayFields[chunkStart:]}})
-		stats.nonArrayChunks++
+	stats.nonArrayChunks = len(nonArraySetChunks)
+	stats.nonArrayChunkLimitByBytes = nonArrayChunkStats.limitByBytes
+	stats.nonArrayChunkLimitByStages = nonArrayChunkStats.limitByStages
+
+	// For nested truncation-conflict events (e.g. "attributes.4.value" + "attributes.4.value.N"),
+	// avoid applying array index updates via pipeline $concatArrays stages. In production we
+	// observed this shape can still hit target-side BufBuilder/AST limits under load.
+	//
+	// Ordered bulk writes preserve deterministic operation order:
+	//   1) truncation pipeline stage(s)
+	//   2) standard $set chunks for array index updates
+	useStandardArrayFollowUps := false
+	if len(arrayFields) > 0 {
+		for _, ta := range event.UpdateDescription.TruncatedArrays {
+			// Keep legacy behavior for top-level arrays like "arr.N" to avoid broad semantic
+			// changes. Apply safer standard follow-ups for nested truncated arrays only.
+			if !strings.Contains(ta.Field, ".") {
+				continue
+			}
+
+			prefix := ta.Field + "."
+			for _, af := range arrayFields {
+				if strings.HasPrefix(af.Key, prefix) {
+					useStandardArrayFollowUps = true
+					break
+				}
+			}
+
+			if useStandardArrayFollowUps {
+				break
+			}
+		}
 	}
 
-	// Split array-path $concatArrays stages into bounded pipeline operations. This
-	// prevents building one very large pipeline AST for updates with many array index
-	// updates in a single oplog event.
-	arrayChunks, chunkStats := chunkPipelineStages(arrayStages)
-	stats.arrayChunks = len(arrayChunks)
-	stats.arrayChunkLimitByBytes = chunkStats.limitByBytes
-	stats.arrayChunkLimitByStages = chunkStats.limitByStages
-	stats.arrayMaxStagesPerChunk = chunkStats.maxStagesPerChunk
-	if len(arrayChunks) > 0 {
-		// Keep the first chunk in the primary pipeline and emit remaining chunks as
-		// follow-up pipeline updates (ordered execution).
-		pipeline = append(pipeline, toPipelineArray(arrayChunks[0])...)
-		for i := 1; i < len(arrayChunks); i++ {
-			followUp = append(followUp, toPipelineArray(arrayChunks[i]))
+	if useStandardArrayFollowUps {
+		arraySetChunks, arrayChunkStats := chunkSetFields(arrayFields)
+		for _, setChunk := range arraySetChunks {
+			followUp = append(followUp, bson.D{{Key: "$set", Value: setChunk}})
+		}
+
+		stats.arrayChunks = len(arraySetChunks)
+		stats.arrayChunkLimitByBytes = arrayChunkStats.limitByBytes
+		stats.arrayChunkLimitByStages = arrayChunkStats.limitByStages
+		stats.arrayMaxStagesPerChunk = arrayChunkStats.maxFieldsPerChunk
+	} else {
+		// Split array-path $concatArrays stages into bounded pipeline operations. This
+		// prevents building one very large pipeline AST for updates with many array index
+		// updates in a single oplog event.
+		arrayChunks, chunkStats := chunkPipelineStages(arrayStages)
+		stats.arrayChunks = len(arrayChunks)
+		stats.arrayChunkLimitByBytes = chunkStats.limitByBytes
+		stats.arrayChunkLimitByStages = chunkStats.limitByStages
+		stats.arrayMaxStagesPerChunk = chunkStats.maxStagesPerChunk
+		if len(arrayChunks) > 0 {
+			// Keep the first chunk in the primary pipeline and emit remaining chunks as
+			// follow-up pipeline updates (ordered execution).
+			pipeline = append(pipeline, toPipelineArray(arrayChunks[0])...)
+			for i := 1; i < len(arrayChunks); i++ {
+				followUp = append(followUp, toPipelineArray(arrayChunks[i]))
+			}
 		}
 	}
 
@@ -788,6 +908,61 @@ type pipelineChunkStats struct {
 	limitByBytes      int
 	limitByStages     int
 	maxStagesPerChunk int
+}
+
+type setChunkStats struct {
+	limitByBytes      int
+	limitByStages     int
+	maxFieldsPerChunk int
+}
+
+func chunkSetFields(fields bson.D) ([]bson.D, setChunkStats) {
+	if len(fields) == 0 {
+		return nil, setChunkStats{}
+	}
+
+	stats := setChunkStats{}
+	chunks := make([]bson.D, 0, len(fields)/maxFieldsPerSetOp+1)
+	start := 0
+	chunkBytes := 0
+
+	for i := range fields {
+		b, _ := bson.Marshal(bson.D{fields[i]})
+		chunkBytes += len(b)
+
+		limitByBytes := chunkBytes >= maxBytesPerSetOp
+		limitByStages := (i - start + 1) >= maxFieldsPerSetOp
+		if !limitByBytes && !limitByStages {
+			continue
+		}
+
+		if limitByBytes {
+			stats.limitByBytes++
+		}
+
+		if limitByStages {
+			stats.limitByStages++
+		}
+
+		chunk := fields[start : i+1]
+		chunks = append(chunks, chunk)
+		if len(chunk) > stats.maxFieldsPerChunk {
+			stats.maxFieldsPerChunk = len(chunk)
+		}
+
+		start = i + 1
+		chunkBytes = 0
+	}
+
+	if start < len(fields) {
+		chunk := fields[start:]
+		chunks = append(chunks, chunk)
+		if len(chunk) > stats.maxFieldsPerChunk {
+			stats.maxFieldsPerChunk = len(chunk)
+		}
+	}
+
+	return chunks, stats
 }
 
 func chunkPipelineStages(stages []bson.D) ([][]bson.D, pipelineChunkStats) {
