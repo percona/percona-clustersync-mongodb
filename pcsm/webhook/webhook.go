@@ -159,7 +159,9 @@ func (n *Notifier) send(event Event, message string) {
 
 func (n *Notifier) marshalPayload(event Event, message string) ([]byte, error) {
 	if n.cfg.Target == TargetSlack {
-		text := "[" + string(event) + "] " + message
+		text := "*PCSM*\n*Event:* `" + string(event) +
+			"`\n*Message:* " + message +
+			"\n*Time:* " + time.Now().UTC().Format(time.RFC3339)
 
 		return json.Marshal(slackPayload{Text: text}) //nolint:wrapcheck
 	}

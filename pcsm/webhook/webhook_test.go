@@ -170,9 +170,14 @@ func TestSend_SlackPayload(t *testing.T) {
 	err := json.Unmarshal(gotBody, &payload)
 	require.NoError(t, err)
 
-	assert.Equal(t, "[replication:failed] change stream error", payload["text"])
+	text, ok := payload["text"].(string)
+	require.True(t, ok)
+
+	assert.Contains(t, text, "*PCSM*")
+	assert.Contains(t, text, "*Event:* `replication:failed`")
+	assert.Contains(t, text, "*Message:* change stream error")
+	assert.Contains(t, text, "*Time:*")
 	assert.NotContains(t, payload, "event", "slack payload should not have 'event' field")
-	assert.NotContains(t, payload, "timestamp", "slack payload should not have 'timestamp' field")
 }
 
 func TestSend_SlackNoAuthHeader(t *testing.T) {
