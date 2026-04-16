@@ -32,6 +32,8 @@ const (
 	EventReplicationFailed Event = "replication:failed"
 	// EventReplicationPaused is emitted when replication is paused.
 	EventReplicationPaused Event = "replication:paused"
+	// EventReplicationResumed is emitted when replication is resumed.
+	EventReplicationResumed Event = "replication:resumed"
 )
 
 // AllEvents returns all available webhook events.

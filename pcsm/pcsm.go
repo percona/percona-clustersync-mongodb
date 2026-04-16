@@ -620,6 +620,8 @@ func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 
 	log.New("pcsm").Info("Cluster Replication resumed")
 
+	p.webhook.Send(webhook.EventReplicationResumed, "Replication resumed")
+
 	return nil
 }
 
