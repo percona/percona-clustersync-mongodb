@@ -1,0 +1,80 @@
+name: Jira Comment Sync
+
+"on":
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: jira-sync-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  sync-comment:
+    if: github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      REPO_FULL: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+      COMMENT_URL: ${{ github.event.comment.html_url }}
+      COMMENT_TIMESTAMP: ${{ github.event.comment.created_at }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Filter command comments
+        id: filter-commands
+        shell: bash
+        run: |
+          if [[ "$COMMENT_BODY" == /jira* || "$COMMENT_BODY" == /oc* || "$COMMENT_BODY" == /opencode* ]]; then
+            echo "SKIP=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find Jira link marker
+        id: find-ticket
+        if: steps.filter-commands.outputs.SKIP != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
+          TICKET_KEY=$(printf '%s\n' "$COMMENTS" | grep -oP '(?<=<!-- jira:)PCSM-\d+' | head -1 || true)
+
+          if [[ -z "$TICKET_KEY" ]]; then
+            echo "NO_TICKET=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "TICKET_KEY=$TICKET_KEY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post comment to Jira
+        if: steps.filter-commands.outputs.SKIP != 'true' && steps.find-ticket.outputs.NO_TICKET != 'true'
+        env:
+          TICKET_KEY: ${{ steps.find-ticket.outputs.TICKET_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AUTH_HEADER=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
+          PAYLOAD=$(jq -n \
+            --arg issue_num "$ISSUE_NUMBER" \
+            --arg author "$COMMENT_AUTHOR" \
+            --arg comment_url "$COMMENT_URL" \
+            --arg timestamp "$COMMENT_TIMESTAMP" \
+            --arg body "$COMMENT_BODY" \
+            '{body:{type:"doc",version:1,content:[{"type":"paragraph","content":[{"type":"text","text":("Via GitHub issue #" + $issue_num + " (" + $author + " at " + $timestamp + "): " + $comment_url),"marks":[{"type":"em"}]}]},{"type":"paragraph","content":[{"type":"text","text":$body}]}]}}')
+
+          curl -fsS -X POST "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_KEY/comment" \
+            -H "Authorization: Basic $AUTH_HEADER" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
