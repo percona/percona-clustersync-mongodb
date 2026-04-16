@@ -21,7 +21,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_MODEL: claude-sonnet-4-20250514
-      REPOSITORY: ${{ github.repository }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
       PR_NUM: ${{ github.event.pull_request.number }}
       TMP_DIR: ./tmp/opencode-pr-summary
     steps:
@@ -33,16 +34,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$TMP_DIR"
-          OWNER="${REPOSITORY%/*}"
-          REPO="${REPOSITORY#*/}"
-          gh api "repos/$OWNER/$REPO/pulls/$PR_NUM/commits" > "$TMP_DIR/commits.json"
+          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM/commits" > "$TMP_DIR/commits.json"
 
       - name: Get current PR description
         run: |
           set -euo pipefail
-          OWNER="${REPOSITORY%/*}"
-          REPO="${REPOSITORY#*/}"
-          gh api "repos/$OWNER/$REPO/pulls/$PR_NUM" > "$TMP_DIR/pull-request.json"
+          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" > "$TMP_DIR/pull-request.json"
 
       - name: Generate PR summary
         run: |
@@ -109,8 +106,6 @@ jobs:
       - name: Update PR description
         run: |
           set -euo pipefail
-          OWNER="${REPOSITORY%/*}"
-          REPO="${REPOSITORY#*/}"
           python3 <<'PY'
           import json
           import os
@@ -138,4 +133,8 @@ jobs:
 
           (tmp_dir / "pull-request-update.json").write_text(json.dumps({"body": updated}))
           PY
-          gh api --method PATCH "repos/$OWNER/$REPO/pulls/$PR_NUM" --input "$TMP_DIR/pull-request-update.json"
+          gh api --method PATCH "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" --input "$TMP_DIR/pull-request-update.json"
+
+      - name: Cleanup tmp directory
+        if: always()
+        run: rm -rf "$TMP_DIR"

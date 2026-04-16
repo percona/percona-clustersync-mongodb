@@ -46,10 +46,10 @@ jobs:
         if: steps.filter-commands.outputs.SKIP != 'true'
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
 
           COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
-          TICKET_KEY=$(printf '%s\n' "$COMMENTS" | grep -oP '(?<=<!-- jira:)PCSM-\d+' | head -1)
+          TICKET_KEY=$(printf '%s\n' "$COMMENTS" | grep -oP '(?<=<!-- jira:)PCSM-\d+' | head -1 || true)
 
           if [[ -z "$TICKET_KEY" ]]; then
             echo "NO_TICKET=true" >> "$GITHUB_OUTPUT"

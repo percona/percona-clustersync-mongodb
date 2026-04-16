@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   create-jira:
-    if: startsWith(github.event.comment.body, '/jira')
+    if: github.event.comment.body == '/jira' || startsWith(github.event.comment.body, '/jira ')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,6 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           AUTH=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$AUTH"
           echo "JIRA_AUTH=$AUTH" >> "$GITHUB_ENV"
 
       - name: Get issue content
@@ -113,7 +114,7 @@ jobs:
                 }
               ]
             }')
-          RESPONSE=$(curl --fail --silent --show-error https://api.anthropic.com/v1/messages \
+          RESPONSE=$(curl --silent --show-error https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
@@ -183,10 +184,16 @@ jobs:
                 labels: ["github-issue"]
               }
             }')
-          JIRA_RESPONSE=$(curl --fail --silent --show-error -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
+          HTTP_CODE=$(curl --silent --show-error -o jira-response.json -w '%{http_code}' -X POST "$JIRA_BASE_URL/rest/api/3/issue" \
             -H "Authorization: Basic $JIRA_AUTH" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
+          if [[ "$HTTP_CODE" -ge 400 ]]; then
+            echo "Jira API error ($HTTP_CODE):"
+            cat jira-response.json
+            exit 1
+          fi
+          JIRA_RESPONSE=$(cat jira-response.json)
           TICKET_KEY=$(echo "$JIRA_RESPONSE" | jq -r '.key')
           if [[ -z "$TICKET_KEY" || "$TICKET_KEY" == "null" ]]; then
             echo "$JIRA_RESPONSE"
@@ -222,7 +229,12 @@ jobs:
                 icon: {url16x16: "https://github.com/favicon.ico"}
               }
             }')
-          curl --fail --silent --show-error -X POST "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_KEY/remotelink" \
+          HTTP_CODE=$(curl --silent --show-error -o remotelink-response.json -w '%{http_code}' -X POST "$JIRA_BASE_URL/rest/api/3/issue/$TICKET_KEY/remotelink" \
             -H "Authorization: Basic $JIRA_AUTH" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+          if [[ "$HTTP_CODE" -ge 400 ]]; then
+            echo "Jira API error ($HTTP_CODE):"
+            cat remotelink-response.json
+            exit 1
+          fi
