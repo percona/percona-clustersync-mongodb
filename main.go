@@ -643,6 +643,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 
 	if len(cfg.Webhook.Events) == 1 && cfg.Webhook.Events[0] == "failure" {
 		webhookEvents = webhook.FailureEvents()
+	} else {
+		webhookEvents = webhook.AllEvents()
 	}
 
 	pcs.SetWebhook(webhook.New(webhook.Config{
