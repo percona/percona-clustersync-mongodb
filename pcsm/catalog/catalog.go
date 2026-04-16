@@ -1083,15 +1083,27 @@ func (c *Catalog) doModifyIndexOption(
 	return err
 }
 
+// dropAndRecreateIndex drops an index and recreates it from the catalog spec.
+// Used as a fallback for IndexOptionsConflict from collMod.
+//
+// The spec is read via getIndexFromCatalog under RLock and released before the
+// drop and recreate commands run. Callers must ensure no concurrent catalog
+// mutation for this index occurs during the call; otherwise the spec used for
+// recreate may be stale. This holds for the only current caller
+// (doModifyIndexOption), which is invoked from the serialized change stream
+// applier and from prepareUnique/unique conversions that run sequentially
+// against the same namespace.
 func (c *Catalog) dropAndRecreateIndex(
 	ctx context.Context,
 	db string,
 	coll string,
 	indexName string,
 ) error {
+	lg := log.Ctx(ctx)
+
 	spec := c.getIndexFromCatalog(db, coll, indexName)
 	if spec == nil {
-		return errors.New("cannot recreate index: spec is nil for " + db + "." + coll + "." + indexName)
+		return errors.Errorf("cannot recreate index: spec is nil for %s.%s.%s", db, coll, indexName)
 	}
 
 	err := runWithRetry(ctx, func(ctx context.Context) error {
@@ -1107,7 +1119,7 @@ func (c *Catalog) dropAndRecreateIndex(
 		return err
 	}
 
-	return runWithRetry(ctx, func(ctx context.Context) error {
+	err = runWithRetry(ctx, func(ctx context.Context) error {
 		return errors.Wrapf(
 			c.target.Database(db).RunCommand(ctx, bson.D{
 				{"createIndexes", coll},
@@ -1116,6 +1128,13 @@ func (c *Catalog) dropAndRecreateIndex(
 			"recreate index %s.%s.%s after conflict", db, coll, indexName,
 		)
 	})
+	if err != nil {
+		return err
+	}
+
+	lg.Infof("Recreated index %s on %s.%s after IndexOptionsConflict", indexName, db, coll)
+
+	return nil
 }
 
 // getIndexFromCatalog gets an index spec from the catalog.

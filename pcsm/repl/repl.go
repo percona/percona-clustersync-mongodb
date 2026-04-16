@@ -919,7 +919,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		err := r.catalog.ModifyChangeStreamPreAndPostImages(ctx,
 			ns.Database, ns.Collection, opts.ChangeStreamPreAndPostImages.Enabled)
 		if err != nil {
-			return errors.Wrapf(err, "Modify changeStreamPreAndPostImages")
+			return errors.Wrap(err, "Modify changeStreamPreAndPostImages")
 		}
 	}
 
@@ -927,7 +927,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		err := r.catalog.ModifyValidation(ctx,
 			ns.Database, ns.Collection, opts.Validator, opts.ValidationLevel, opts.ValidationAction)
 		if err != nil {
-			return errors.Wrapf(err, "Modify validation")
+			return errors.Wrap(err, "Modify validation")
 		}
 	}
 
@@ -942,7 +942,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		err := r.catalog.ModifyCappedCollection(ctx,
 			ns.Database, ns.Collection, opts.CappedSize, opts.CappedMax)
 		if err != nil {
-			return errors.Wrapf(err, "Resize capped collection")
+			return errors.Wrap(err, "Resize capped collection")
 		}
 
 	case opts.ViewOn != "":
@@ -954,7 +954,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 
 		err := r.catalog.ModifyView(ctx, ns.Database, ns.Collection, opts.ViewOn, opts.Pipeline)
 		if err != nil {
-			return errors.Wrapf(err, "Modify view")
+			return errors.Wrap(err, "Modify view")
 		}
 
 	case opts.ExpireAfterSeconds != nil:
