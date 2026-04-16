@@ -30,6 +30,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/webhook"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -151,6 +152,14 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
+
+	// Webhook flags
+	rootCmd.Flags().String("webhook-url", "", "Webhook callback URL for lifecycle event notifications")
+	rootCmd.Flags().String("webhook-auth-token", "", "Bearer token sent with webhook requests")
+	rootCmd.Flags().StringSlice("webhook-events", nil,
+		"Webhook events to send (comma-separated: clone:completed,clone:failed,"+
+			"initial-sync:completed,finalization:started,finalization:finished,"+
+			"replication:started,replication:failed,replication:paused; default: all)")
 
 	rootCmd.AddCommand(
 		newVersionCmd(),
@@ -631,6 +640,17 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	metrics.Init(promRegistry)
 
 	pcs := pcsm.New(ctx, source, target)
+
+	webhookEvents := make([]webhook.Event, 0, len(cfg.Webhook.Events))
+	for _, e := range cfg.Webhook.Events {
+		webhookEvents = append(webhookEvents, webhook.Event(e))
+	}
+
+	pcs.SetWebhook(webhook.New(webhook.Config{
+		URL:       cfg.Webhook.URL,
+		AuthToken: cfg.Webhook.AuthToken,
+		Events:    webhookEvents,
+	}))
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {
