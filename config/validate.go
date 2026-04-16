@@ -31,6 +31,35 @@ func Validate(cfg *Config) error {
 		return errors.New("source URI and target URI are identical")
 	}
 
+	err := validateWebhook(&cfg.Webhook)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validWebhookEvents is the set of accepted --webhook-events values.
+var validWebhookEvents = map[string]bool{ //nolint:gochecknoglobals
+	"all":     true,
+	"failure": true,
+}
+
+func validateWebhook(cfg *WebhookConfig) error {
+	if cfg.URL == "" && cfg.AuthToken == "" && len(cfg.Events) == 0 {
+		return nil
+	}
+
+	if cfg.URL == "" {
+		return errors.New("--webhook-url is required when --webhook-auth-token or --webhook-events is set")
+	}
+
+	for _, e := range cfg.Events {
+		if !validWebhookEvents[e] {
+			return errors.Errorf("invalid --webhook-events value %q: must be \"all\" or \"failure\"", e)
+		}
+	}
+
 	return nil
 }
 
