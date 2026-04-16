@@ -199,11 +199,12 @@ func TestAdvanceOpTime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := &Repl{lastReplicatedOpTime: tt.current}
+			r := &Repl{lastReplicatedOpTime: tt.current, safeCheckpointOpTime: tt.current}
 			r.lock.Lock()
-			r.advanceOpTime(tt.input)
+			r.advanceSafeCheckpoint(tt.input)
 			r.lock.Unlock()
 			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
+			assert.Equal(t, tt.expected, r.safeCheckpointOpTime)
 		})
 	}
 }
