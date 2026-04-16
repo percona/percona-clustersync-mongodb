@@ -157,9 +157,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("webhook-url", "", "Webhook callback URL for lifecycle event notifications")
 	rootCmd.Flags().String("webhook-auth-token", "", "Bearer token sent with webhook requests")
 	rootCmd.Flags().StringSlice("webhook-events", nil,
-		"Webhook events to send (comma-separated: clone:completed,clone:failed,"+
-			"initial-sync:completed,finalization:started,finalization:finished,"+
-			"replication:started,replication:failed,replication:paused; default: all)")
+		"Webhook event filter: \"all\" for all events, \"failure\" for failure events only (default: all)")
 
 	rootCmd.AddCommand(
 		newVersionCmd(),
@@ -641,9 +639,10 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 
 	pcs := pcsm.New(ctx, source, target)
 
-	webhookEvents := make([]webhook.Event, 0, len(cfg.Webhook.Events))
-	for _, e := range cfg.Webhook.Events {
-		webhookEvents = append(webhookEvents, webhook.Event(e))
+	var webhookEvents []webhook.Event
+
+	if len(cfg.Webhook.Events) == 1 && cfg.Webhook.Events[0] == "failure" {
+		webhookEvents = webhook.FailureEvents()
 	}
 
 	pcs.SetWebhook(webhook.New(webhook.Config{

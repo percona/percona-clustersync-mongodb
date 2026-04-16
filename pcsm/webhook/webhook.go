@@ -48,6 +48,14 @@ func AllEvents() []Event {
 	}
 }
 
+// FailureEvents returns only failure-related webhook events.
+func FailureEvents() []Event {
+	return []Event{
+		EventCloneFailed,
+		EventReplicationFailed,
+	}
+}
+
 // Payload is the JSON body sent to the webhook URL.
 type Payload struct {
 	Event     Event  `json:"event"`
