@@ -49,6 +49,8 @@ type WebhookConfig struct {
 	AuthToken string `mapstructure:"webhook-auth-token"`
 	// Events is a comma-separated list of events to send notifications for.
 	Events []string `mapstructure:"webhook-events"`
+	// Target is the webhook target format (e.g. "slack").
+	Target string `mapstructure:"webhook-target"`
 }
 
 // LogConfig holds logging configuration.
@@ -204,6 +206,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("webhook-url", "PCSM_WEBHOOK_URL")
 	_ = viper.BindEnv("webhook-auth-token", "PCSM_WEBHOOK_AUTH_TOKEN")
 	_ = viper.BindEnv("webhook-events", "PCSM_WEBHOOK_EVENTS")
+	_ = viper.BindEnv("webhook-target", "PCSM_WEBHOOK_TARGET")
 }
 
 //nolint:gochecknoglobals

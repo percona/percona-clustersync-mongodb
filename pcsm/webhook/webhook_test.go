@@ -152,6 +152,46 @@ func TestSend_EmptyURL(t *testing.T) {
 	assert.False(t, called.Load(), "no request should be made when URL is empty")
 }
 
+func TestSend_SlackPayload(t *testing.T) {
+	t.Parallel()
+
+	var gotBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := New(Config{URL: srv.URL, Target: "slack"})
+	n.send(EventReplicationFailed, "change stream error")
+
+	var payload map[string]any
+	err := json.Unmarshal(gotBody, &payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, "[replication:failed] change stream error", payload["text"])
+	assert.NotContains(t, payload, "event", "slack payload should not have 'event' field")
+	assert.NotContains(t, payload, "timestamp", "slack payload should not have 'timestamp' field")
+}
+
+func TestSend_SlackNoAuthHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := New(Config{URL: srv.URL, Target: "slack", AuthToken: "should-be-ignored"})
+	n.send(EventPCSMStarted, "test")
+
+	assert.Empty(t, gotAuth, "Slack webhooks should not send Authorization header")
+}
+
 func TestFailureEvents(t *testing.T) {
 	t.Parallel()
 

@@ -158,6 +158,8 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("webhook-auth-token", "", "Bearer token sent with webhook requests")
 	rootCmd.Flags().StringSlice("webhook-events", nil,
 		"Webhook event filter: \"all\" for all events, \"failure\" for failure events only (default: all)")
+	rootCmd.Flags().String("webhook-target", "",
+		"Webhook payload format: \"slack\" for Slack incoming webhooks (default: generic JSON)")
 
 	rootCmd.AddCommand(
 		newVersionCmd(),
@@ -651,6 +653,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		URL:       cfg.Webhook.URL,
 		AuthToken: cfg.Webhook.AuthToken,
 		Events:    webhookEvents,
+		Target:    webhook.Target(cfg.Webhook.Target),
 	}))
 
 	err = Restore(ctx, target, pcs)

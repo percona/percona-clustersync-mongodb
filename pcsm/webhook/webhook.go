@@ -36,6 +36,14 @@ const (
 	EventReplicationResumed Event = "replication:resumed"
 )
 
+// Target represents a webhook target format (e.g. "slack").
+type Target string
+
+const (
+	// TargetSlack indicates the payload should be formatted for Slack incoming webhooks.
+	TargetSlack Target = "slack"
+)
+
 // AllEvents returns all available webhook events.
 func AllEvents() []Event {
 	return []Event{
@@ -70,6 +78,12 @@ type Config struct {
 	URL       string
 	AuthToken string
 	Events    []Event
+	Target    Target // "slack" for Slack incoming webhooks, empty for generic JSON
+}
+
+// slackPayload is the JSON body sent to Slack incoming webhooks.
+type slackPayload struct {
+	Text string `json:"text"`
 }
 
 // Notifier sends HTTP POST requests to a configured webhook URL.
@@ -106,13 +120,7 @@ func (n *Notifier) Send(event Event, message string) {
 func (n *Notifier) send(event Event, message string) {
 	lg := log.New("webhook")
 
-	payload := Payload{
-		Event:     event,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Message:   message,
-	}
-
-	body, err := json.Marshal(payload)
+	body, err := n.marshalPayload(event, message)
 	if err != nil {
 		lg.Error(err, "Marshal webhook payload")
 
@@ -128,7 +136,7 @@ func (n *Notifier) send(event Event, message string) {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	if n.cfg.AuthToken != "" {
+	if n.cfg.AuthToken != "" && n.cfg.Target == "" {
 		req.Header.Set("Authorization", "Bearer "+n.cfg.AuthToken)
 	}
 
@@ -147,4 +155,18 @@ func (n *Notifier) send(event Event, message string) {
 	}
 
 	lg.Debugf("Webhook sent for event %q (status %d)", event, resp.StatusCode)
+}
+
+func (n *Notifier) marshalPayload(event Event, message string) ([]byte, error) {
+	if n.cfg.Target == TargetSlack {
+		text := "[" + string(event) + "] " + message
+
+		return json.Marshal(slackPayload{Text: text}) //nolint:wrapcheck
+	}
+
+	return json.Marshal(Payload{ //nolint:wrapcheck
+		Event:     event,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Message:   message,
+	})
 }

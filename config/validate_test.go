@@ -249,6 +249,29 @@ func TestValidate_Webhook(t *testing.T) {
 			}),
 			wantErr: "invalid --webhook-events value \"garbage\"",
 		},
+		{
+			name: "webhook target slack - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://hooks.slack.com/services/xxx",
+				Target: "slack",
+			}),
+			wantErr: "",
+		},
+		{
+			name: "webhook target invalid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://example.com/hook",
+				Target: "unknown",
+			}),
+			wantErr: "invalid --webhook-target value \"unknown\"",
+		},
+		{
+			name: "webhook target without url",
+			cfg: validCfg(config.WebhookConfig{
+				Target: "slack",
+			}),
+			wantErr: "--webhook-url is required",
+		},
 	}
 
 	for _, tt := range tests {

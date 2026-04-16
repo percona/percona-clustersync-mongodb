@@ -45,19 +45,28 @@ var validWebhookEvents = map[string]bool{ //nolint:gochecknoglobals
 	"failure": true,
 }
 
+// validWebhookTargets is the set of accepted --webhook-target values.
+var validWebhookTargets = map[string]bool{ //nolint:gochecknoglobals
+	"slack": true,
+}
+
 func validateWebhook(cfg *WebhookConfig) error {
-	if cfg.URL == "" && cfg.AuthToken == "" && len(cfg.Events) == 0 {
+	if cfg.URL == "" && cfg.AuthToken == "" && len(cfg.Events) == 0 && cfg.Target == "" {
 		return nil
 	}
 
 	if cfg.URL == "" {
-		return errors.New("--webhook-url is required when --webhook-auth-token or --webhook-events is set")
+		return errors.New("--webhook-url is required when other webhook options are set")
 	}
 
 	for _, e := range cfg.Events {
 		if !validWebhookEvents[e] {
 			return errors.Errorf("invalid --webhook-events value %q: must be \"all\" or \"failure\"", e)
 		}
+	}
+
+	if cfg.Target != "" && !validWebhookTargets[cfg.Target] {
+		return errors.Errorf("invalid --webhook-target value %q: must be \"slack\"", cfg.Target)
 	}
 
 	return nil
