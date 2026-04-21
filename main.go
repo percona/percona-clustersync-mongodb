@@ -622,6 +622,15 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
+	crossVersion, err := mdb.CheckVersionCompat(sourceVersion, targetVersion)
+	if err != nil {
+		return nil, errors.Wrap(err, "version check")
+	}
+
+	if crossVersion {
+		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
+	}
+
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "heartbeat")
