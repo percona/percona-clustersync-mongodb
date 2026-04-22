@@ -118,7 +118,7 @@ type Repl struct {
 	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
-	checkpointOpTime bson.Timestamp // applied-only optime, never tick-driven
+	checkpointOpTime     bson.Timestamp // applied-only optime, never tick-driven
 
 	lock sync.Mutex
 	err  error
@@ -145,7 +145,7 @@ type Status struct {
 	PauseTime time.Time
 
 	LastReplicatedOpTime bson.Timestamp // Last applied operation time
-	CheckpointOpTime bson.Timestamp // Applied-only optime, safe for resume
+	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
 	EventsRead           int64          // Number of events read from the source
 	EventsApplied        int64          // Number of events applied
 
@@ -204,7 +204,7 @@ type Checkpoint struct {
 	EventsRead           int64          `bson:"eventsRead,omitempty"`
 	EventsApplied        int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
-	CheckpointOpTime bson.Timestamp `bson:"checkpointOpTS,omitempty"`
+	CheckpointOpTime     bson.Timestamp `bson:"checkpointOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
@@ -228,7 +228,7 @@ func (r *Repl) Checkpoint() *Checkpoint {
 		EventsRead:           applied,
 		EventsApplied:        applied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
-		CheckpointOpTime: r.checkpointOpTime,
+		CheckpointOpTime:     r.checkpointOpTime,
 		UseClientBulkWrite:   !r.useCollectionBulk,
 	}
 
@@ -262,6 +262,12 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 	r.checkpointOpTime = cp.CheckpointOpTime
+	// Fall back to the legacy single-optime field for checkpoints persisted
+	// before checkpointOpTS existed. Pre-split, lastReplicatedOpTime was the
+	// resume frontier, so using it here preserves prior behavior on upgrade.
+	if r.checkpointOpTime.IsZero() {
+		r.checkpointOpTime = r.lastReplicatedOpTime
+	}
 
 	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
@@ -290,7 +296,7 @@ func (r *Repl) Status() Status {
 
 	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
-		CheckpointOpTime: r.checkpointOpTime,
+		CheckpointOpTime:     r.checkpointOpTime,
 		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        applied,
 
