@@ -28,12 +28,13 @@ jobs:
       pull-requests: read
       issues: read
     steps:
-      # Check out the PR head so prompt edits made inside the PR take effect
-      # on that same PR when `/review` is run.
-      - name: Checkout PR head
+      # Checkout trusted default-branch contents to load the review prompt.
+      # Using the PR head here would put author-controlled content into a
+      # privileged (write-capable) issue_comment workflow, which CodeQL flags
+      # under actions/untrusted-checkout. Prompt edits land on main first.
+      - name: Checkout default branch
         uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
           persist-credentials: false
 
       - name: Load review prompt

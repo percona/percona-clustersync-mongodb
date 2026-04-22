@@ -34,12 +34,13 @@ jobs:
       PR_NUM: ${{ github.event.issue.number }}
       TMP_DIR: ./tmp/opencode-pr-summary
     steps:
-      # issue_comment defaults to base (main); checking out the PR head lets
-      # prompt edits inside a PR take effect on that same PR.
-      - name: Checkout PR head
+      # Checkout trusted default-branch contents to load the summary prompt.
+      # Using the PR head here would put author-controlled content into a
+      # privileged (pull-requests: write) issue_comment workflow, which CodeQL
+      # flags under actions/untrusted-checkout. Prompt edits land on main first.
+      - name: Checkout default branch
         uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
           persist-credentials: false
 
       - name: Fetch PR data
