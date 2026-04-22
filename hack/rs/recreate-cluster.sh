@@ -46,12 +46,12 @@ fi
 if $SOURCE; then
     echo "Recreating rs source cluster..."
     # Detect MongoDB version from running container before stopping
-    if [[ -z "${MONGO_VERSION:-}" ]]; then
-        MONGO_VERSION=$(get_mongo_version rs00)
+    if [[ -z "${SRC_MONGO_VERSION:-}" ]]; then
+        SRC_MONGO_VERSION="${MONGO_VERSION:-$(get_mongo_version rs00)}"
     fi
-    if [[ -n "${MONGO_VERSION:-}" ]]; then
-        export MONGO_VERSION
-        echo "  Using MongoDB version: $MONGO_VERSION"
+    if [[ -n "${SRC_MONGO_VERSION:-}" ]]; then
+        export SRC_MONGO_VERSION
+        echo "  Using MongoDB version: $SRC_MONGO_VERSION"
     fi
     echo "  Stopping and removing containers..."
     docker compose -f "$SCRIPT_DIR/compose.yml" stop rs00 rs01 rs02 2>/dev/null || true
@@ -70,12 +70,12 @@ fi
 if $TARGET; then
     echo "Recreating rs target cluster..."
     # Detect MongoDB version from running container before stopping
-    if [[ -z "${MONGO_VERSION:-}" ]]; then
-        MONGO_VERSION=$(get_mongo_version rs10)
+    if [[ -z "${TGT_MONGO_VERSION:-}" ]]; then
+        TGT_MONGO_VERSION="${MONGO_VERSION:-$(get_mongo_version rs10)}"
     fi
-    if [[ -n "${MONGO_VERSION:-}" ]]; then
-        export MONGO_VERSION
-        echo "  Using MongoDB version: $MONGO_VERSION"
+    if [[ -n "${TGT_MONGO_VERSION:-}" ]]; then
+        export TGT_MONGO_VERSION
+        echo "  Using MongoDB version: $TGT_MONGO_VERSION"
     fi
     echo "  Stopping and removing containers..."
     docker compose -f "$SCRIPT_DIR/compose.yml" stop rs10 rs11 rs12 2>/dev/null || true

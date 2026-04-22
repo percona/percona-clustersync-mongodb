@@ -877,7 +877,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 	case Modify:
 		event := change.Event.(ModifyEvent) //nolint:forcetypeassert
-		r.doModify(ctx, change.Namespace, &event)
+		err = r.doModify(ctx, change.Namespace, &event)
 
 	case Rename:
 		event := change.Event.(RenameEvent) //nolint:forcetypeassert
@@ -920,13 +920,25 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	}
 
 	if err != nil {
+		// During change stream catchup after clone, DDL events may target
+		// collections whose state has since changed on the target (dropped,
+		// recreated as non-capped, etc.). These are benign — the clone applied
+		// the definitive state and stale DDL events are safely skippable.
+		// IsInvalidOptions covers collMod on collections that no longer match
+		// the expected type (e.g. collMod capped on a non-capped collection).
+		if mdb.IsNamespaceNotFound(err) || mdb.IsIndexNotFound(err) || mdb.IsInvalidOptions(err) {
+			lg.Warn(err.Error())
+
+			return nil
+		}
+
 		return errors.Wrap(err, string(change.OperationType))
 	}
 
 	return nil
 }
 
-func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *ModifyEvent) {
+func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *ModifyEvent) error {
 	opts := event.OperationDescription
 
 	if len(opts.Unknown) != 0 {
@@ -937,7 +949,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		err := r.catalog.ModifyChangeStreamPreAndPostImages(ctx,
 			ns.Database, ns.Collection, opts.ChangeStreamPreAndPostImages.Enabled)
 		if err != nil {
-			log.Ctx(ctx).Error(err, "Modify changeStreamPreAndPostImages")
+			return errors.Wrap(err, "Modify changeStreamPreAndPostImages")
 		}
 	}
 
@@ -945,7 +957,7 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		err := r.catalog.ModifyValidation(ctx,
 			ns.Database, ns.Collection, opts.Validator, opts.ValidationLevel, opts.ValidationAction)
 		if err != nil {
-			log.Ctx(ctx).Error(err, "Modify validation")
+			return errors.Wrap(err, "Modify validation")
 		}
 	}
 
@@ -953,32 +965,26 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 	case opts.Index != nil:
 		err := r.catalog.ModifyIndex(ctx, ns.Database, ns.Collection, opts.Index)
 		if err != nil {
-			log.Ctx(ctx).Error(err, "Modify index: "+opts.Index.Name)
-
-			return
+			return errors.Wrapf(err, "Modify index: %s", opts.Index.Name)
 		}
 
 	case opts.CappedSize != nil || opts.CappedMax != nil:
 		err := r.catalog.ModifyCappedCollection(ctx,
 			ns.Database, ns.Collection, opts.CappedSize, opts.CappedMax)
 		if err != nil {
-			log.Ctx(ctx).Error(err, "Resize capped collection")
-
-			return
+			return errors.Wrap(err, "Resize capped collection")
 		}
 
 	case opts.ViewOn != "":
 		if strings.HasPrefix(opts.ViewOn, catalog.TimeseriesPrefix) {
 			log.Ctx(ctx).Warn("Timeseries is not supported. skipping")
 
-			return
+			return nil
 		}
 
 		err := r.catalog.ModifyView(ctx, ns.Database, ns.Collection, opts.ViewOn, opts.Pipeline)
 		if err != nil {
-			log.Ctx(ctx).Error(err, "Modify view")
-
-			return
+			return errors.Wrap(err, "Modify view")
 		}
 
 	case opts.ExpireAfterSeconds != nil:
@@ -987,6 +993,8 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 	case opts.ChangeStreamPreAndPostImages != nil:
 		log.Ctx(ctx).Warn("changeStreamPreAndPostImages is not supported")
 	}
+
+	return nil
 }
 
 func loggerForEvent(change *ChangeEvent) log.Logger {
