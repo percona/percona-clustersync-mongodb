@@ -2,7 +2,7 @@ services:
 
   # ----------------- Source -----------------
   src-mongos:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: src-mongos
     hostname: src-mongos
     mem_limit: 512m
@@ -24,7 +24,7 @@ services:
       ]
 
   src-cfg0:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: src-cfg0
     hostname: src-cfg0
     mem_limit: 2g
@@ -46,7 +46,7 @@ services:
       ]
 
   src-rs00:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: src-rs00
     hostname: src-rs00
     mem_limit: 2g
@@ -68,7 +68,7 @@ services:
       ]
 
   src-rs10:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: src-rs10
     hostname: src-rs10
     mem_limit: 2g
@@ -90,7 +90,7 @@ services:
       ]
 
   src-rs20:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: src-rs20
     hostname: src-rs20
     mem_limit: 2g
@@ -113,7 +113,7 @@ services:
 
   # ----------------- Target -----------------
   tgt-mongos:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: tgt-mongos
     hostname: tgt-mongos
     mem_limit: 2g
@@ -133,7 +133,7 @@ services:
       ]
 
   tgt-cfg0:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: tgt-cfg0
     hostname: tgt-cfg0
     mem_limit: 2g
@@ -155,7 +155,7 @@ services:
       ]
 
   tgt-rs00:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: tgt-rs00
     hostname: tgt-rs00
     mem_limit: 2g
@@ -177,7 +177,7 @@ services:
       ]
 
   tgt-rs10:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: tgt-rs10
     hostname: tgt-rs10
     mem_limit: 2g
@@ -199,7 +199,7 @@ services:
       ]
 
   tgt-rs20:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: tgt-rs20
     hostname: tgt-rs20
     mem_limit: 2g

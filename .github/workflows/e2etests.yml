@@ -8,16 +8,25 @@ permissions:
 
 jobs:
   replset:
-    name: ReplicaSet (MongoDB ${{ matrix.mongo_version }})
+    name: ReplicaSet (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }})
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        mongo_version: ["6.0", "7.0", "8.0"]
+        include:
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "6.0"
+          - src_mongo_version: "7.0"
+            tgt_mongo_version: "7.0"
+          - src_mongo_version: "8.0"
+            tgt_mongo_version: "8.0"
+          - src_mongo_version: "7.0"
+            tgt_mongo_version: "8.0"
 
     env:
-      MONGO_VERSION: ${{ matrix.mongo_version }}
+      SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
+      TGT_MONGO_VERSION: ${{ matrix.tgt_mongo_version }}
       PYTEST_TIMEOUT: 60
 
     steps:

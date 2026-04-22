@@ -400,6 +400,27 @@ Monitor write operations per second on a cluster:
 poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ```
 
+## CI (Jenkins)
+
+Functional tests run on Jenkins at `https://psmdb.cd.percona.com/view/PCSM/`.
+
+| Job                             | Default Cloud | Fallback |
+| ------------------------------- | ------------- | -------- |
+| `hetzner-pcsm-functional-tests` | Hetzner       | AWS      |
+
+Hetzner workers are used by default for cost reasons but sometimes fail to start due to cloud capacity limits. If workers don't start: cancel the stuck build and re-trigger with **AWS** (first cloud option in job parameters).
+
+## QA Test Branch Override
+
+The CI workflow (`.github/workflows/ci.yml`) extracts the first `PCSM-XXX` ticket key from the PR title and checks if a branch with that name exists in `Percona-QA/psmdb-testing`. If found, the CI checks out that branch instead of `main` for the QA tests.
+
+This is useful when QA tests need changes to pass on a PCSM PR. Push the test fixes to a branch named after the ticket (e.g. `PCSM-286`) in the QA repo, and the PCSM CI picks them up automatically.
+
+- No PR needed on the QA repo, just the branch.
+- Only the first `PCSM-XXX` match from the PR title is used (`grep -oE 'PCSM-[0-9]+' | head -1`).
+- Falls back to `main` if no matching branch exists or no ticket key is found in the title.
+- Can also be overridden manually via the `tests_ver` workflow dispatch input.
+
 ## External References
 
 | Project            | Repository                                    | Documentation                                               |
