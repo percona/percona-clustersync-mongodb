@@ -10,7 +10,12 @@ concurrency:
 
 jobs:
   create-jira:
-    if: github.event.comment.body == '/jira' || startsWith(github.event.comment.body, '/jira ')
+    # Runs only on /jira or "/jira ..." comments on issues (not PRs).
+    # PR-side flow uses .github/workflows/opencode-pr-summary.yml + opencode-review.yml;
+    # a separate Jira ticket from a PR comment would create a duplicate tracker.
+    if: |
+      (github.event.comment.body == '/jira' || startsWith(github.event.comment.body, '/jira ')) &&
+      github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,7 +51,7 @@ jobs:
         if: env.SKIP != 'true'
         run: |
           set -euo pipefail
-          COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
+          COMMENTS=$(gh api --paginate "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
           if echo "$COMMENTS" | grep -q "<!-- jira:PCSM-"; then
             TICKET=$(printf '%s\n' "$COMMENTS" | grep -oE '<!-- jira:PCSM-[0-9]+ -->' | head -1 | sed -E 's/<!-- jira:([^ ]+) -->/\1/')
             gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" \
@@ -61,6 +66,45 @@ jobs:
           AUTH=$(printf '%s' "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" | base64 | tr -d '\n')
           echo "::add-mask::$AUTH"
           echo "JIRA_AUTH=$AUTH" >> "$GITHUB_ENV"
+
+      - name: Verify Jira access
+        if: env.SKIP != 'true'
+        run: |
+          set -euo pipefail
+          # Preflight diagnostic. Without this, the Create Jira ticket step below
+          # reports a terse HTTP 400 `{"errors":{"project":"valid project is required"}}`
+          # when the service account can't see PCSM, which wastes reviewer time.
+          MYSELF_CODE=$(curl --silent --show-error -o myself.json -w '%{http_code}' \
+            "$JIRA_BASE_URL/rest/api/3/myself" \
+            -H "Authorization: Basic $JIRA_AUTH" \
+            -H "Accept: application/json")
+          if [[ "$MYSELF_CODE" -ge 400 ]]; then
+            echo "::error::Jira authentication failed (HTTP $MYSELF_CODE). Check JIRA_USER_EMAIL and JIRA_API_TOKEN secrets."
+            cat myself.json
+            exit 1
+          fi
+          JIRA_USER=$(jq -r '.emailAddress // .displayName // "unknown"' myself.json)
+          echo "Authenticated to Jira as: $JIRA_USER"
+
+          PROJECT_CODE=$(curl --silent --show-error -o project.json -w '%{http_code}' \
+            "$JIRA_BASE_URL/rest/api/3/project/PCSM" \
+            -H "Authorization: Basic $JIRA_AUTH" \
+            -H "Accept: application/json")
+          if [[ "$PROJECT_CODE" -eq 404 ]]; then
+            echo "::error::Jira account '$JIRA_USER' cannot see project PCSM. Grant Browse Projects and Create Issues permission to this account on the PCSM project in Jira."
+            exit 1
+          fi
+          if [[ "$PROJECT_CODE" -ge 400 ]]; then
+            echo "::error::Jira /project/PCSM returned HTTP $PROJECT_CODE."
+            cat project.json
+            exit 1
+          fi
+          if ! jq -e '.issueTypes[] | select(.name == "Task")' project.json >/dev/null; then
+            echo "::error::PCSM project visible but 'Task' issue type is not in its scheme. Available types:"
+            jq -r '.issueTypes[].name' project.json
+            exit 1
+          fi
+          echo "PCSM project accessible, 'Task' issue type available."
 
       - name: Get issue content
         id: get-issue

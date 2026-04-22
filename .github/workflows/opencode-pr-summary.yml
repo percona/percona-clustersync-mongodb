@@ -11,8 +11,6 @@ concurrency:
 jobs:
   sync-summary:
     # Runs only on exact '/summary' PR comments from repo members or higher.
-    # Contrast with .github/workflows/opencode.yml which uses startsWith() for /oc
-    # and /opencode prefix commands; this one is intentionally strict.
     if: |
       github.event.issue.pull_request != null &&
       github.event.comment.body == '/summary' &&
@@ -23,86 +21,51 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
+      id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
       pull-requests: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_MODEL: claude-sonnet-4-20250514
-      REPO_OWNER: ${{ github.repository_owner }}
-      REPO_NAME: ${{ github.event.repository.name }}
-      PR_NUM: ${{ github.event.issue.number }}
-      TMP_DIR: ./tmp/opencode-pr-summary
+      issues: read
     steps:
       # Checkout trusted default-branch contents to load the summary prompt.
-      # Using the PR head here would put author-controlled content into a
-      # privileged (pull-requests: write) issue_comment workflow, which CodeQL
-      # flags under actions/untrusted-checkout. Prompt edits land on main first.
       - name: Checkout default branch
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
-      - name: Fetch PR data
-        run: |
-          set -euo pipefail
-          mkdir -p "$TMP_DIR"
-          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" > "$TMP_DIR/pull-request.json"
-          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM/commits" > "$TMP_DIR/commits.json"
-          gh api --paginate "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM/files" > "$TMP_DIR/files.json"
-
-      - name: Build Anthropic request
+      - name: Load summary prompt
+        id: prompt
         run: |
           set -euo pipefail
           {
+            echo 'content<<PROMPT_EOF'
             cat .github/opencode/summary-prompt.md
-            printf '\n\n## Current PR body\n\n'
-            jq -r '.body // ""' "$TMP_DIR/pull-request.json"
-            printf '\n\n## Commits\n\n'
-            jq -r '.[] | "- " + (.commit.message | split("\n")[0])' "$TMP_DIR/commits.json"
-            printf '\n\n## File patches\n\n'
-            jq -r '.[] | "### " + .filename + " (" + .status + ", +" + (.additions|tostring) + "/-" + (.deletions|tostring) + ")\n\n```diff\n" + (.patch // "[binary or omitted]") + "\n```\n"' "$TMP_DIR/files.json"
-          } > "$TMP_DIR/prompt.txt"
+            echo ''
+            echo '---'
+            echo ''
+            echo '## Operating instructions'
+            echo ''
+            echo 'You are handling the `/summary` command on PR #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
+            echo ''
+            echo 'Workflow:'
+            echo '1. Read the current PR body with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}` and parse `.body`.'
+            echo '2. Read the commits with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/commits`.'
+            echo '3. Read the file patches with `gh api --paginate repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/files`.'
+            echo '4. Produce the new PR body per the rules at the top of this prompt.'
+            echo '5. Update the PR body with `gh api --method PATCH repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} -f body=@path/to/new-body.md`.'
+            echo ''
+            echo 'Hard constraints:'
+            echo '- The only write operation allowed is the PATCH that updates the PR body.'
+            echo '- Do not post any comment on the PR or its commits.'
+            echo '- Do not push commits or modify any branch (including the PR branch).'
+            echo '- Do not open new PRs, issues, or discussions.'
+            echo '- Do not edit any file in the checked-out workspace. Work in `$RUNNER_TEMP` if you need scratch space.'
+            echo PROMPT_EOF
+          } >> "$GITHUB_OUTPUT"
 
-          jq -n \
-            --arg model "$ANTHROPIC_MODEL" \
-            --rawfile prompt "$TMP_DIR/prompt.txt" \
-            '{model: $model, max_tokens: 4000, messages: [{role: "user", content: $prompt}]}' \
-            > "$TMP_DIR/anthropic-request.json"
-
-      - name: Call Anthropic Messages API
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error https://api.anthropic.com/v1/messages \
-            -H "content-type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            --data @"$TMP_DIR/anthropic-request.json" \
-            > "$TMP_DIR/anthropic-response.json"
-          if jq -e '.error' "$TMP_DIR/anthropic-response.json" >/dev/null 2>&1; then
-            echo "Anthropic API error: $(jq -r '.error.message' "$TMP_DIR/anthropic-response.json")"
-            exit 1
-          fi
-          jq -r '.content[] | select(.type == "text") | .text' "$TMP_DIR/anthropic-response.json" > "$TMP_DIR/summary.md"
-          test -s "$TMP_DIR/summary.md"
-
-      - name: Update PR description
-        run: |
-          set -euo pipefail
-          # Strip an outer code-fence wrapper if the model added one despite the
-          # instruction not to. Inner fences used for diff or code blocks inside
-          # the body survive because we only touch the first and last lines.
-          python3 - <<'PY'
-          import json, os, pathlib, re
-          tmp = pathlib.Path(os.environ["TMP_DIR"])
-          body = (tmp / "summary.md").read_text().strip()
-          m = re.match(r"^```(?:\w+)?\s*\n(.*?)\n```\s*$", body, re.DOTALL)
-          if m:
-              body = m.group(1)
-          (tmp / "pull-request-update.json").write_text(json.dumps({"body": body}))
-          PY
-          gh api --method PATCH "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" --input "$TMP_DIR/pull-request-update.json"
-
-      - name: Cleanup tmp directory
-        if: always()
-        run: rm -rf "$TMP_DIR"
+      - name: OpenCode PR summary
+        uses: anomalyco/opencode/github@latest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          model: anthropic/claude-opus-4-7
+          prompt: ${{ steps.prompt.outputs.content }}

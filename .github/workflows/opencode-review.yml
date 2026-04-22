@@ -11,8 +11,6 @@ concurrency:
 jobs:
   review:
     # Trigger only on exact `/review` comments from privileged PR actors.
-    # Exact-match is intentional: avoids accidental fires from comments that
-    # happen to start with `/review`.
     if: |
       github.event.issue.pull_request != null &&
       github.event.comment.body == '/review' &&
@@ -29,9 +27,6 @@ jobs:
       issues: read
     steps:
       # Checkout trusted default-branch contents to load the review prompt.
-      # Using the PR head here would put author-controlled content into a
-      # privileged (write-capable) issue_comment workflow, which CodeQL flags
-      # under actions/untrusted-checkout. Prompt edits land on main first.
       - name: Checkout default branch
         uses: actions/checkout@v6
         with:
@@ -52,5 +47,5 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          model: anthropic/claude-opus-4-6
+          model: anthropic/claude-opus-4-7
           prompt: ${{ steps.prompt.outputs.content }}
