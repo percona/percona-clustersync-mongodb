@@ -73,25 +73,19 @@ jobs:
           set -euo pipefail
           # Preflight diagnostic. Without this, the Create Jira ticket step below
           # reports a terse HTTP 400 `{"errors":{"project":"valid project is required"}}`
-          # when the service account can't see PCSM, which wastes reviewer time.
-          MYSELF_CODE=$(curl --silent --show-error -o myself.json -w '%{http_code}' \
-            "$JIRA_BASE_URL/rest/api/3/myself" \
-            -H "Authorization: Basic $JIRA_AUTH" \
-            -H "Accept: application/json")
-          if [[ "$MYSELF_CODE" -ge 400 ]]; then
-            echo "::error::Jira authentication failed (HTTP $MYSELF_CODE). Check JIRA_USER_EMAIL and JIRA_API_TOKEN secrets."
-            cat myself.json
-            exit 1
-          fi
-          JIRA_USER=$(jq -r '.emailAddress // .displayName // "unknown"' myself.json)
-          echo "Authenticated to Jira as: $JIRA_USER"
-
+          # for two different underlying causes: token can't see PCSM, or the
+          # configured issue type isn't in PCSM's scheme. This step distinguishes them.
           PROJECT_CODE=$(curl --silent --show-error -o project.json -w '%{http_code}' \
             "$JIRA_BASE_URL/rest/api/3/project/PCSM" \
             -H "Authorization: Basic $JIRA_AUTH" \
             -H "Accept: application/json")
+          if [[ "$PROJECT_CODE" -eq 401 || "$PROJECT_CODE" -eq 403 ]]; then
+            echo "::error::Jira authentication failed (HTTP $PROJECT_CODE). Check JIRA_USER_EMAIL and JIRA_API_TOKEN secrets and their scopes."
+            cat project.json
+            exit 1
+          fi
           if [[ "$PROJECT_CODE" -eq 404 ]]; then
-            echo "::error::Jira account '$JIRA_USER' cannot see project PCSM. Grant Browse Projects and Create Issues permission to this account on the PCSM project in Jira."
+            echo "::error::Jira token cannot see project PCSM. Grant Browse Projects and Create Issues permission to this account on the PCSM project in Jira."
             exit 1
           fi
           if [[ "$PROJECT_CODE" -ge 400 ]]; then
@@ -99,12 +93,12 @@ jobs:
             cat project.json
             exit 1
           fi
-          if ! jq -e '.issueTypes[] | select(.name == "Task")' project.json >/dev/null; then
-            echo "::error::PCSM project visible but 'Task' issue type is not in its scheme. Available types:"
+          if ! jq -e '.issueTypes[] | select(.name == "Admin & Maintenance Task")' project.json >/dev/null; then
+            echo "::error::PCSM project visible but 'Admin & Maintenance Task' issue type is not in its scheme. Available types:"
             jq -r '.issueTypes[].name' project.json
             exit 1
           fi
-          echo "PCSM project accessible, 'Task' issue type available."
+          echo "PCSM project accessible, 'Admin & Maintenance Task' issue type available."
 
       - name: Get issue content
         id: get-issue
@@ -224,7 +218,7 @@ jobs:
                 project: {key: "PCSM"},
                 summary: $summary,
                 description: $description,
-                issuetype: {name: "Task"},
+                issuetype: {name: "Admin & Maintenance Task"},
                 labels: ["github-issue"]
               }
             }')
