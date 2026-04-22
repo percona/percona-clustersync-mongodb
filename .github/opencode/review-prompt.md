@@ -102,6 +102,19 @@ When proposing, show a concrete code snippet and explain the trade-off: what you
 - **Idiomatic**: community convention violations. Low severity but matters for codebase consistency.
 - **Comment quality**: documentation gaps for exported APIs > internal style.
 
+## Confidence Gate
+
+Omit sections you cannot back with a concrete, diff-grounded finding.
+
+For each category in the output (Critical Issues, Performance & Allocations, Concurrency Assessment, Idiomatic Go, Comment Quality, Alternative Approaches):
+
+- Include the section **only if** you have a specific finding tied to actual lines in the diff with clear reasoning.
+- If your assessment would be generic, speculative, or hedged ("probably fine", "might want to consider", "no obvious issues"), omit the section entirely.
+- Silence is a valid signal. A missing section means "no high-confidence findings", not "I forgot".
+- Verdict, Effort, and Context are always required. Every category section is conditional.
+
+A three-section review with one concrete finding beats a seven-section review padded with filler.
+
 ## Output Format
 
 Produce a single markdown comment with this structure:
@@ -118,8 +131,7 @@ Produce a single markdown comment with this structure:
 
 ## Critical Issues
 
-[Bugs, races, panics, data-corruption risks. Blockers.]
-[If none: "No critical issues identified."]
+[Bugs, races, panics, data-corruption risks. Blockers. Omit section if no finding.]
 
 ### N. [Category] — [Short title]
 
@@ -135,28 +147,26 @@ Produce a single markdown comment with this structure:
 
 ## Performance & Allocations
 
-[Allocation issues, unnecessary copies, missing capacity hints. Non-blocking but worth fixing.]
-[If none: "No performance concerns."]
+[Allocation issues, unnecessary copies, missing capacity hints. Omit section if no finding.]
 
 ## Concurrency Assessment
 
-[Races, goroutine leaks, synchronization. If no concurrent code in this change, state so explicitly.]
+[Races, goroutine leaks, synchronization. Omit section if the diff touches no concurrent code.]
 
 ## Idiomatic Go
 
-[Style-guide violations, naming, non-idiomatic patterns.]
+[Style-guide violations, naming, non-idiomatic patterns. Omit section if no finding.]
 
 ## Comment Quality
 
 **Density**: Appropriate / Over-documented / Under-documented
 
-[Specific callouts.]
+[Specific callouts. Omit the whole section (density line included) if no finding.]
 
 ## Alternative Approaches
 
-[Structural improvements with concrete snippets and trade-offs.]
-[If current approach is already clean: "Current approach is well-suited for this use case."]
-```
+[Structural improvements with concrete snippets and trade-offs. Omit section unless the alternative has a measurable benefit over the current approach.]
+\`\`\`
 
 ## Tone
 
