@@ -1,0 +1,43 @@
+name: Repl Regression Gates
+
+on:
+  pull_request:
+    paths:
+      - 'pcsm/repl/**'
+      - 'config/**'
+      - 'metrics/**'
+      - 'main.go'
+      - 'Makefile'
+      - '.github/workflows/repl-regression.yml'
+  schedule:
+    - cron: '20 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repl-fast-gate:
+    name: Repl Fast Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Targeted high-risk regression tests
+        run: make test-repl-regression-fast
+
+  repl-chaos-gate:
+    name: Repl Chaos/Nightly Gate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: High-repeat chaos regression tests
+        run: make test-repl-regression-chaos
+      - name: Chunking benchmark snapshot
+        run: make bench-repl-chunking

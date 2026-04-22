@@ -67,7 +67,7 @@ type CopyManagerOptions struct {
 	// min: 1; default: [runtime.NumCPU] / 4.
 	NumReadWorkers int
 	// NumInsertWorkers is the total number of concurrent insert workers.
-	// min: 1; default: [runtime.NumCPU] * 4.
+	// min: 1; default: min(max(runtime.NumCPU(), 2), 16).
 	NumInsertWorkers int
 	// SegmentSizeBytes is the logical segment size in bytes for splitting collections.
 	// min: [config.MinCloneSegmentSizeBytes].
@@ -87,7 +87,7 @@ func (o *CopyManagerOptions) applyDefaults() {
 	}
 
 	if o.NumInsertWorkers < 1 {
-		o.NumInsertWorkers = runtime.NumCPU() * 2 //nolint:mnd
+		o.NumInsertWorkers = min(max(runtime.NumCPU(), 2), 16) //nolint:mnd
 	}
 
 	if o.SegmentSizeBytes < 0 {

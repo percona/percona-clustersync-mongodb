@@ -38,6 +38,34 @@ var (
 		Help:      "Total size of the inserted data in bytes.",
 		Namespace: metricNamespace,
 	})
+
+	//nolint:gochecknoglobals
+	replUpdateChunkingTriggeredTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "repl_update_chunking_triggered_total",
+		Help:      "Total number of update events where chunking/follow-up splitting was triggered.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	replUpdateFollowUpOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:      "repl_update_follow_up_ops_total",
+		Help:      "Total number of follow-up update operations emitted by type.",
+		Namespace: metricNamespace,
+	}, []string{"type"})
+
+	//nolint:gochecknoglobals
+	replUpdateChunkLimitHitsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:      "repl_update_chunk_limit_hits_total",
+		Help:      "Total number of chunk limit hits by target and reason.",
+		Namespace: metricNamespace,
+	}, []string{"target", "reason"})
+
+	//nolint:gochecknoglobals
+	replUpdateFollowUpOverflowTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:      "repl_update_follow_up_overflow_total",
+		Help:      "Total number of update events exceeding configured follow-up operation limit by action.",
+		Namespace: metricNamespace,
+	}, []string{"action"})
 )
 
 // Replication pipeline metrics.
@@ -85,6 +113,30 @@ var (
 		Help:      "Number of sealed bulks pending write in a worker's async queue.",
 		Namespace: metricNamespace,
 	}, []string{"worker"})
+
+	//nolint:gochecknoglobals
+	replUpdateFollowUpPerEvent = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:      "repl_update_follow_up_per_event",
+		Help:      "Number of follow-up update operations emitted for a single update event.",
+		Namespace: metricNamespace,
+		Buckets:   []float64{1, 2, 3, 5, 8, 13, 21, 34, 55},
+	})
+
+	//nolint:gochecknoglobals
+	replUpdateArrayChunksPerEvent = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:      "repl_update_array_chunks_per_event",
+		Help:      "Number of array-pipeline chunks emitted for a single update event.",
+		Namespace: metricNamespace,
+		Buckets:   []float64{0, 1, 2, 3, 5, 8, 13, 21},
+	})
+
+	//nolint:gochecknoglobals
+	replUpdateArrayMaxStagesPerChunk = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:      "repl_update_array_max_stages_per_chunk",
+		Help:      "Maximum number of array stages emitted within one chunk for a single update event.",
+		Namespace: metricNamespace,
+		Buckets:   []float64{1, 5, 10, 25, 50, 75, 100, 150, 200},
+	})
 )
 
 // Gauges.
@@ -159,6 +211,10 @@ func Init(reg prometheus.Registerer) {
 		eventsAppliedTotal,
 		lagTimeSeconds,
 		intialSyncLagTimeSeconds,
+		replUpdateChunkingTriggeredTotal,
+		replUpdateFollowUpOpsTotal,
+		replUpdateChunkLimitHitsTotal,
+		replUpdateFollowUpOverflowTotal,
 
 		replEventQueueSize,
 		replWorkerEventQueueSize,
@@ -166,6 +222,9 @@ func Init(reg prometheus.Registerer) {
 		replWorkerFlushBatchSize,
 		replWorkerFlushDurationSeconds,
 		replWorkerBulkQueueSize,
+		replUpdateFollowUpPerEvent,
+		replUpdateArrayChunksPerEvent,
+		replUpdateArrayMaxStagesPerChunk,
 	)
 }
 
@@ -254,4 +313,39 @@ func ObserveReplWorkerFlushDuration(worker string, d time.Duration) {
 // SetReplWorkerBulkQueueSize sets the current depth of a worker's pending bulk queue.
 func SetReplWorkerBulkQueueSize(worker string, v int) {
 	replWorkerBulkQueueSize.WithLabelValues(worker).Set(float64(v))
+}
+
+// IncReplUpdateChunkingTriggered increments the number of events that required update chunking.
+func IncReplUpdateChunkingTriggered() {
+	replUpdateChunkingTriggeredTotal.Inc()
+}
+
+// AddReplUpdateFollowUpOps increments follow-up operation totals by type.
+func AddReplUpdateFollowUpOps(typ string, v int) {
+	replUpdateFollowUpOpsTotal.WithLabelValues(typ).Add(float64(v))
+}
+
+// AddReplUpdateChunkLimitHits increments chunk-limit hit counters by target and reason.
+func AddReplUpdateChunkLimitHits(target, reason string, v int) {
+	replUpdateChunkLimitHitsTotal.WithLabelValues(target, reason).Add(float64(v))
+}
+
+// IncReplUpdateFollowUpOverflow increments follow-up overflow counter by action.
+func IncReplUpdateFollowUpOverflow(action string) {
+	replUpdateFollowUpOverflowTotal.WithLabelValues(action).Inc()
+}
+
+// ObserveReplUpdateFollowUpPerEvent records follow-up operation count for one event.
+func ObserveReplUpdateFollowUpPerEvent(v int) {
+	replUpdateFollowUpPerEvent.Observe(float64(v))
+}
+
+// ObserveReplUpdateArrayChunksPerEvent records array chunk count for one event.
+func ObserveReplUpdateArrayChunksPerEvent(v int) {
+	replUpdateArrayChunksPerEvent.Observe(float64(v))
+}
+
+// ObserveReplUpdateArrayMaxStagesPerChunk records max stages in one array chunk.
+func ObserveReplUpdateArrayMaxStagesPerChunk(v int) {
+	replUpdateArrayMaxStagesPerChunk.Observe(float64(v))
 }

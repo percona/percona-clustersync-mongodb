@@ -104,14 +104,18 @@ func newWorker(
 	}
 
 	bulkOpsSize := opts.BulkOpsSize
+	guard := followUpGuard{
+		maxOps: opts.MaxFollowUpOpsPerEvent,
+		action: opts.FollowUpOverflowAction,
+	}
 
 	if useCollectionBulk {
 		w.newBulkWriter = func() bulkWriter {
-			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation)
+			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, guard)
 		}
 	} else {
 		w.newBulkWriter = func() bulkWriter {
-			return newClientBulkWriter(bulkOpsSize, useSimpleCollation)
+			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, guard)
 		}
 	}
 

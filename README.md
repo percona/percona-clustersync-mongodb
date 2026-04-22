@@ -30,6 +30,46 @@ PCSM is a CLI tool, but also exposes HTTP API as well.
 
 For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/plm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
+For final pre-production confidence workflows (CI gates, old-vs-new reproducibility, staging checklist, and alerting), see [Replication Validation Guide](REPLICATION_VALIDATION.md).
+
+## Clone And Replication Safety Notes
+
+- Clone worker auto-defaults are intentionally bounded for safer live migrations:
+  - `NumReadWorkers` auto-default: `max(runtime.NumCPU()/4, 1)`
+  - `NumInsertWorkers` auto-default: `min(max(runtime.NumCPU(), 2), 16)`
+- These are defaults only. You can still tune worker counts explicitly using CLI flags/config for your environment.
+- Replication update batching includes safeguards to split large update payloads (including array-path pipeline updates) into ordered follow-up operations, reducing risk of MongoDB BufBuilder/AST overflow failures on large oplog events.
+- Prometheus observability is available for chunking behavior:
+  - `percona_clustersync_mongodb_repl_update_chunking_triggered_total`
+  - `percona_clustersync_mongodb_repl_update_follow_up_ops_total{type=standard|pipeline}`
+  - `percona_clustersync_mongodb_repl_update_chunk_limit_hits_total{target=array_pipeline|non_array_set,reason=bytes|stages}`
+  - `percona_clustersync_mongodb_repl_update_follow_up_overflow_total{action=fail|warn}`
+  - `percona_clustersync_mongodb_repl_update_follow_up_per_event`
+  - `percona_clustersync_mongodb_repl_update_array_chunks_per_event`
+  - `percona_clustersync_mongodb_repl_update_array_max_stages_per_chunk`
+
+### Optional hard safety valve for pathological events
+
+You can optionally enforce a maximum number of generated follow-up update operations per event:
+
+- `--repl-max-follow-up-ops-per-event` / `PCSM_REPL_MAX_FOLLOW_UP_OPS_PER_EVENT`
+  - `0` (default): disabled
+  - `>0`: enable limit
+- `--repl-follow-up-overflow-action` / `PCSM_REPL_FOLLOW_UP_OVERFLOW_ACTION`
+  - `fail` (default when set/invalid): fail fast if limit is exceeded
+  - `warn`: log and continue
+
+Recommended production mode for strict safety is `fail`.
+
+### Suggested alerting
+
+For large live migrations, monitor and alert on:
+
+- sustained growth in `repl_update_chunk_limit_hits_total` (bytes/stages)
+- high percentiles of `repl_update_follow_up_per_event`
+- sudden spikes in `repl_update_array_chunks_per_event`
+- any non-zero rate of `repl_update_follow_up_overflow_total{action=\"fail\"}`
+
 ## Submit Bug Report / Feature Request
 
 If you find a bug in Percona ClusterSync for MongoDB, submit a report to the project's [JIRA issue tracker](https://jira.percona.com/projects/PCSM).
