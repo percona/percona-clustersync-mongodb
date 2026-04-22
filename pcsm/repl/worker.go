@@ -516,9 +516,9 @@ func (p *workerPool) ReleaseBarrier() {
 	}
 }
 
-// SafeCheckpoint returns the minimum committed timestamp across all workers.
+// Checkpoint returns the minimum committed timestamp across all workers.
 // This is the safe point to resume from after a restart.
-func (p *workerPool) SafeCheckpoint() bson.Timestamp {
+func (p *workerPool) Checkpoint() bson.Timestamp {
 	var minTS bson.Timestamp
 	first := true
 
@@ -541,7 +541,7 @@ func (p *workerPool) SafeCheckpoint() bson.Timestamp {
 // committed (flushed) up to its last routed timestamp. Workers that were
 // never routed an event are skipped.
 //
-// This differs from SafeCheckpoint which returns the MIN committed timestamp
+// This differs from Checkpoint which returns the MIN committed timestamp
 // across all workers (useful for crash recovery). Idle checks each worker
 // against its own last routed timestamp, correctly handling the case where
 // workers receive events with different timestamp ranges.

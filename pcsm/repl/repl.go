@@ -118,7 +118,7 @@ type Repl struct {
 	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
-	safeCheckpointOpTime bson.Timestamp // applied-only optime, never tick-driven
+	checkpointOpTime bson.Timestamp // applied-only optime, never tick-driven
 
 	lock sync.Mutex
 	err  error
@@ -145,7 +145,7 @@ type Status struct {
 	PauseTime time.Time
 
 	LastReplicatedOpTime bson.Timestamp // Last applied operation time
-	SafeCheckpointOpTime bson.Timestamp // Applied-only optime, safe for resume
+	CheckpointOpTime bson.Timestamp // Applied-only optime, safe for resume
 	EventsRead           int64          // Number of events read from the source
 	EventsApplied        int64          // Number of events applied
 
@@ -204,7 +204,7 @@ type Checkpoint struct {
 	EventsRead           int64          `bson:"eventsRead,omitempty"`
 	EventsApplied        int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
-	SafeCheckpointOpTime bson.Timestamp `bson:"safeOpTS,omitempty"`
+	CheckpointOpTime bson.Timestamp `bson:"checkpointOpTS,omitempty"`
 	Error                string         `bson:"error,omitempty"`
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
@@ -228,7 +228,7 @@ func (r *Repl) Checkpoint() *Checkpoint {
 		EventsRead:           applied,
 		EventsApplied:        applied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
-		SafeCheckpointOpTime: r.safeCheckpointOpTime,
+		CheckpointOpTime: r.checkpointOpTime,
 		UseClientBulkWrite:   !r.useCollectionBulk,
 	}
 
@@ -261,7 +261,7 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.eventsApplied = cp.EventsApplied
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
-	r.safeCheckpointOpTime = cp.SafeCheckpointOpTime
+	r.checkpointOpTime = cp.CheckpointOpTime
 
 	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
@@ -290,7 +290,7 @@ func (r *Repl) Status() Status {
 
 	return Status{
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
-		SafeCheckpointOpTime: r.safeCheckpointOpTime,
+		CheckpointOpTime: r.checkpointOpTime,
 		EventsRead:           r.eventsRead.Load(),
 		EventsApplied:        applied,
 
@@ -343,7 +343,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 
 	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
-	r.safeCheckpointOpTime = startAt
+	r.checkpointOpTime = startAt
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -428,7 +428,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 		return errors.New("not paused")
 	}
 
-	if r.safeCheckpointOpTime.IsZero() {
+	if r.checkpointOpTime.IsZero() {
 		return errors.New("missing optime")
 	}
 
@@ -436,9 +436,9 @@ func (r *Repl) Resume(ctx context.Context) error {
 	r.doneCh = make(chan struct{})
 	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
 
-	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.safeCheckpointOpTime))
+	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
 
-	log.New("repl").With(log.OpTime(r.safeCheckpointOpTime.T, r.safeCheckpointOpTime.I)).
+	log.New("repl").With(log.OpTime(r.checkpointOpTime.T, r.checkpointOpTime.I)).
 		Info("Change Replication resumed")
 
 	return nil
@@ -458,7 +458,7 @@ func (r *Repl) watchWithRetry(
 		}
 
 		r.lock.Lock()
-		lastOpTime := r.safeCheckpointOpTime
+		lastOpTime := r.checkpointOpTime
 		r.lock.Unlock()
 
 		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
@@ -530,7 +530,7 @@ func (r *Repl) watchChangeEvents(
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
-		// Under sustained load, tryAdvanceOpTime + SafeCheckpoint keep
+		// Under sustained load, tryAdvanceOpTime + Checkpoint keep
 		// lastReplicatedOpTime current without the appendOplogNote overhead.
 		if !hasEvents {
 			sourceTS, err := mdb.AdvanceClusterTime(ctx, r.source)
@@ -560,7 +560,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
 		r.pool.Stop()
-		r.advanceSafeCheckpoint(r.pool.SafeCheckpoint())
+		r.advanceCheckpoint(r.pool.Checkpoint())
 
 		r.pool = nil
 		r.lock.Unlock()
@@ -596,11 +596,11 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
-	// Used with SafeCheckpoint() to determine if the pool is idle.
+	// Used with Checkpoint() to determine if the pool is idle.
 	var lastRoutedTS bson.Timestamp
 
 	// cpTicker triggers periodic advancement of lastReplicatedOpTime based on
-	// the worker pool's SafeCheckpoint. Under sustained DML load, @tick
+	// the worker pool's Checkpoint. Under sustained DML load, @tick
 	// pseudo-events may be delayed (queued behind DML in changeEventCh), and
 	// poolIdle() returns false because workers haven't caught up yet. Without
 	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
@@ -639,7 +639,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
-				r.advanceSafeCheckpoint(change.ClusterTime)
+				r.advanceCheckpoint(change.ClusterTime)
 				r.eventsApplied++
 				r.lock.Unlock()
 
@@ -654,7 +654,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if !r.nsFilter(change.Namespace.Database, change.Namespace.Collection) {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
-				r.advanceSafeCheckpoint(change.ClusterTime)
+				r.advanceCheckpoint(change.ClusterTime)
 				r.eventsApplied++
 				r.lock.Unlock()
 
@@ -705,7 +705,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			}
 
 			r.lock.Lock()
-			r.advanceSafeCheckpoint(change.ClusterTime)
+			r.advanceCheckpoint(change.ClusterTime)
 			r.eventsApplied++
 			r.lock.Unlock()
 
@@ -723,19 +723,19 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
-// advances safeCheckpointOpTime (and lastReplicatedOpTime) to the worker
-// pool's SafeCheckpoint. This ensures lag tracking stays current during
+// advances checkpointOpTime (and lastReplicatedOpTime) to the worker
+// pool's Checkpoint. This ensures lag tracking stays current during
 // sustained DML when @tick pseudo-events and poolIdle updates are insufficient.
 func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 	select {
 	case <-cpTicker.C:
-		cp := r.pool.SafeCheckpoint()
+		cp := r.pool.Checkpoint()
 		if cp.IsZero() {
 			return
 		}
 
 		r.lock.Lock()
-		r.advanceSafeCheckpoint(cp)
+		r.advanceCheckpoint(cp)
 		r.lock.Unlock()
 	default:
 	}
@@ -750,18 +750,16 @@ func (r *Repl) advanceReportedOpTime(ts bson.Timestamp) {
 	}
 }
 
-// advanceSafeCheckpoint updates safeCheckpointOpTime (the restart-safe
-// frontier) and also advances lastReplicatedOpTime so lag reporting stays
-// current. Used after real event application or worker checkpoint.
+// advanceCheckpoint advances checkpointOpTime (the resume frontier driven
+// by real applied events) and forwards lastReplicatedOpTime via
+// advanceReportedOpTime so lag reporting stays current.
 // Caller must hold r.lock.
-func (r *Repl) advanceSafeCheckpoint(ts bson.Timestamp) {
-	if ts.After(r.safeCheckpointOpTime) {
-		r.safeCheckpointOpTime = ts
+func (r *Repl) advanceCheckpoint(ts bson.Timestamp) {
+	if ts.After(r.checkpointOpTime) {
+		r.checkpointOpTime = ts
 	}
 
-	if ts.After(r.lastReplicatedOpTime) {
-		r.lastReplicatedOpTime = ts
-	}
+	r.advanceReportedOpTime(ts)
 }
 
 // poolIdle returns true when no events are pending in the worker pool.
