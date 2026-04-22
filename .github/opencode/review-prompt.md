@@ -111,9 +111,9 @@ For each category in the output (Critical Issues, Performance & Allocations, Con
 - Include the section **only if** you have a specific finding tied to actual lines in the diff with clear reasoning.
 - If your assessment would be generic, speculative, or hedged ("probably fine", "might want to consider", "no obvious issues"), omit the section entirely.
 - Silence is a valid signal. A missing section means "no high-confidence findings", not "I forgot".
-- Verdict, Effort, and Context are always required. Every category section is conditional.
+- Verdict and Effort are always required. Every other paragraph can be dropped conditionally.
 
-A three-section review with one concrete finding beats a seven-section review padded with filler.
+A simple "Verdict: Approve" beats a seven-section review of speculation and padded with filler.
 
 ## Output Format
 
