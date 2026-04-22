@@ -149,54 +149,55 @@ func TestIsChangeStreamUnrecoverable(t *testing.T) {
 	}
 }
 
-func TestAdvanceOpTime(t *testing.T) {
+// Shared monotonic-advance cases: both helpers apply the same rule.
+var advanceCases = []struct {
+	name     string
+	current  bson.Timestamp
+	input    bson.Timestamp
+	expected bson.Timestamp
+}{
+	{
+		name:     "lower timestamp",
+		current:  bson.Timestamp{T: 100, I: 10},
+		input:    bson.Timestamp{T: 99, I: 5},
+		expected: bson.Timestamp{T: 100, I: 10},
+	},
+	{
+		name:     "equal timestamp",
+		current:  bson.Timestamp{T: 100, I: 10},
+		input:    bson.Timestamp{T: 100, I: 10},
+		expected: bson.Timestamp{T: 100, I: 10},
+	},
+	{
+		name:     "higher timestamp",
+		current:  bson.Timestamp{T: 100, I: 10},
+		input:    bson.Timestamp{T: 101, I: 1},
+		expected: bson.Timestamp{T: 101, I: 1},
+	},
+	{
+		name:     "same T lower I",
+		current:  bson.Timestamp{T: 100, I: 10},
+		input:    bson.Timestamp{T: 100, I: 8},
+		expected: bson.Timestamp{T: 100, I: 10},
+	},
+	{
+		name:     "same T higher I",
+		current:  bson.Timestamp{T: 100, I: 10},
+		input:    bson.Timestamp{T: 100, I: 15},
+		expected: bson.Timestamp{T: 100, I: 15},
+	},
+	{
+		name:     "zero current",
+		current:  bson.Timestamp{T: 0, I: 0},
+		input:    bson.Timestamp{T: 50, I: 1},
+		expected: bson.Timestamp{T: 50, I: 1},
+	},
+}
+
+func TestAdvanceCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		current  bson.Timestamp
-		input    bson.Timestamp
-		expected bson.Timestamp
-	}{
-		{
-			name:     "lower timestamp",
-			current:  bson.Timestamp{T: 100, I: 10},
-			input:    bson.Timestamp{T: 99, I: 5},
-			expected: bson.Timestamp{T: 100, I: 10},
-		},
-		{
-			name:     "equal timestamp",
-			current:  bson.Timestamp{T: 100, I: 10},
-			input:    bson.Timestamp{T: 100, I: 10},
-			expected: bson.Timestamp{T: 100, I: 10},
-		},
-		{
-			name:     "higher timestamp",
-			current:  bson.Timestamp{T: 100, I: 10},
-			input:    bson.Timestamp{T: 101, I: 1},
-			expected: bson.Timestamp{T: 101, I: 1},
-		},
-		{
-			name:     "same T lower I",
-			current:  bson.Timestamp{T: 100, I: 10},
-			input:    bson.Timestamp{T: 100, I: 8},
-			expected: bson.Timestamp{T: 100, I: 10},
-		},
-		{
-			name:     "same T higher I",
-			current:  bson.Timestamp{T: 100, I: 10},
-			input:    bson.Timestamp{T: 100, I: 15},
-			expected: bson.Timestamp{T: 100, I: 15},
-		},
-		{
-			name:     "zero current",
-			current:  bson.Timestamp{T: 0, I: 0},
-			input:    bson.Timestamp{T: 50, I: 1},
-			expected: bson.Timestamp{T: 50, I: 1},
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range advanceCases {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := &Repl{lastReplicatedOpTime: tt.current, checkpointOpTime: tt.current}
@@ -205,6 +206,25 @@ func TestAdvanceOpTime(t *testing.T) {
 			r.lock.Unlock()
 			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
 			assert.Equal(t, tt.expected, r.checkpointOpTime)
+		})
+	}
+}
+
+func TestAdvanceReportedOpTime(t *testing.T) {
+	t.Parallel()
+
+	fixedCheckpoint := bson.Timestamp{T: 42, I: 42}
+
+	for _, tt := range advanceCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := &Repl{lastReplicatedOpTime: tt.current, checkpointOpTime: fixedCheckpoint}
+			r.lock.Lock()
+			r.advanceReportedOpTime(tt.input)
+			r.lock.Unlock()
+			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
+			assert.Equal(t, fixedCheckpoint, r.checkpointOpTime,
+				"advanceReportedOpTime must not advance checkpointOpTime")
 		})
 	}
 }
