@@ -1,140 +1,71 @@
 name: OpenCode PR Summary
 
 "on":
-  pull_request:
-    types:
-      - opened
-      - synchronize
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: pr-summary-${{ github.event.pull_request.number }}
+  group: pr-summary-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   sync-summary:
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    # Runs only on exact '/summary' PR comments from repo members or higher.
+    if: |
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/summary' &&
+      (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'
+      )
     runs-on: ubuntu-latest
     permissions:
+      id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
       pull-requests: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_MODEL: claude-sonnet-4-20250514
-      REPO_OWNER: ${{ github.repository_owner }}
-      REPO_NAME: ${{ github.event.repository.name }}
-      PR_NUM: ${{ github.event.pull_request.number }}
-      TMP_DIR: ./tmp/opencode-pr-summary
+      issues: read
     steps:
-      - uses: actions/checkout@v6
+      # Checkout trusted default-branch contents to load the summary prompt.
+      - name: Checkout default branch
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
-      - name: Get PR commits
+      - name: Load summary prompt
+        id: prompt
         run: |
           set -euo pipefail
-          mkdir -p "$TMP_DIR"
-          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM/commits" > "$TMP_DIR/commits.json"
+          {
+            echo 'content<<PROMPT_EOF'
+            cat .github/opencode/summary-prompt.md
+            echo ''
+            echo '---'
+            echo ''
+            echo '## Operating instructions'
+            echo ''
+            echo 'You are handling the `/summary` command on PR #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
+            echo ''
+            echo 'Workflow:'
+            echo '1. Read the current PR body with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}` and parse `.body`.'
+            echo '2. Read the commits with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/commits`.'
+            echo '3. Read the file patches with `gh api --paginate repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/files`.'
+            echo '4. Produce the new PR body per the rules at the top of this prompt.'
+            echo '5. Update the PR body with `gh api --method PATCH repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} -f body=@path/to/new-body.md`.'
+            echo ''
+            echo 'Hard constraints:'
+            echo '- The only write operation allowed is the PATCH that updates the PR body.'
+            echo '- Do not post any comment on the PR or its commits.'
+            echo '- Do not push commits or modify any branch (including the PR branch).'
+            echo '- Do not open new PRs, issues, or discussions.'
+            echo '- Do not edit any file in the checked-out workspace. Work in `$RUNNER_TEMP` if you need scratch space.'
+            echo PROMPT_EOF
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Get current PR description
-        run: |
-          set -euo pipefail
-          gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" > "$TMP_DIR/pull-request.json"
-
-      - name: Generate PR summary
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import json
-          import os
-          import pathlib
-          import re
-
-          tmp_dir = pathlib.Path(os.environ["TMP_DIR"])
-          commits = json.loads((tmp_dir / "commits.json").read_text())
-          pr = json.loads((tmp_dir / "pull-request.json").read_text())
-
-          start_marker = "<!-- opencode-summary-start -->"
-          end_marker = "<!-- opencode-summary-end -->"
-          body = pr.get("body") or ""
-          outside = re.sub(
-              re.escape(start_marker) + r".*?" + re.escape(end_marker),
-              "",
-              body,
-              flags=re.S,
-          ).strip()
-
-          commit_messages = []
-          for commit in commits:
-              message = (commit.get("commit") or {}).get("message", "").strip()
-              if message:
-                  commit_messages.append(f"- {message}")
-
-          prompt = "\n".join(
-              [
-                  "Generate a concise PR summary from these commit messages. Use Problem/Solution format if commits suggest a bug fix. Otherwise use a descriptive format. Keep it professional and terse. If the PR already has content outside the markers, match its tone.",
-                  "Return markdown only. No code fences. No commentary outside summary.",
-                  "",
-                  "Existing PR description outside summary markers:",
-                  outside or "(empty)",
-                  "",
-                  "Commit messages:",
-                  "\n".join(commit_messages) or "- No commit messages available",
-              ]
-          )
-
-          payload = {
-              "model": os.environ["ANTHROPIC_MODEL"],
-              "max_tokens": 400,
-              "messages": [{"role": "user", "content": prompt}],
-          }
-          (tmp_dir / "anthropic-request.json").write_text(json.dumps(payload))
-          PY
-          curl --fail --silent --show-error https://api.anthropic.com/v1/messages \
-            -H "content-type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            --data @"$TMP_DIR/anthropic-request.json" \
-            > "$TMP_DIR/anthropic-response.json"
-          if jq -e '.error' "$TMP_DIR/anthropic-response.json" >/dev/null 2>&1; then
-            echo "Anthropic API error: $(jq -r '.error.message' "$TMP_DIR/anthropic-response.json")"
-            exit 1
-          fi
-          jq -r '.content[] | select(.type == "text") | .text' "$TMP_DIR/anthropic-response.json" > "$TMP_DIR/summary.md"
-          test -s "$TMP_DIR/summary.md"
-
-      - name: Update PR description
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import json
-          import os
-          import pathlib
-
-          tmp_dir = pathlib.Path(os.environ["TMP_DIR"])
-          pr = json.loads((tmp_dir / "pull-request.json").read_text())
-          summary = (tmp_dir / "summary.md").read_text().strip()
-          body = pr.get("body") or ""
-
-          start_marker = "<!-- opencode-summary-start -->"
-          end_marker = "<!-- opencode-summary-end -->"
-          block = f"{start_marker}\n{summary}\n{end_marker}"
-
-          if not body.strip():
-              updated = block
-          else:
-              start = body.find(start_marker)
-              end = body.find(end_marker)
-              if start != -1 and end != -1 and start < end:
-                  end += len(end_marker)
-                  updated = body[:start] + block + body[end:]
-              else:
-                  updated = f"{block}\n\n{body}"
-
-          (tmp_dir / "pull-request-update.json").write_text(json.dumps({"body": updated}))
-          PY
-          gh api --method PATCH "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUM" --input "$TMP_DIR/pull-request-update.json"
-
-      - name: Cleanup tmp directory
-        if: always()
-        run: rm -rf "$TMP_DIR"
+      - name: OpenCode PR summary
+        uses: anomalyco/opencode/github@latest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          model: anthropic/claude-opus-4-7
+          prompt: ${{ steps.prompt.outputs.content }}
