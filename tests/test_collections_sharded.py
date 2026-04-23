@@ -68,6 +68,10 @@ def test_create_collection_with_collation(t: Testing, phase: Runner.Phase):
         )
         t.source["db_1"]["coll_2"].insert_many([{"_id": 11}, {"_id": 22}, {"_id": 33}])
 
+        if phase == Runner.Phase.APPLY:
+            t.wait_target_count("db_1", "coll_1", 3)
+            t.wait_target_count("db_1", "coll_2", 3)
+
     t.compare_all_sharded()
 
 
