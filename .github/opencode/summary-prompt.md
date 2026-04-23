@@ -2,6 +2,24 @@
 
 You are editing a GitHub pull request description. The author has written some initial content. Your job is to produce a new body that keeps everything the author wrote, adds the three-section structure if it is missing, and slots agent-authored detail inside per-section markers.
 
+## Workflow
+
+1. Read the current PR body: `gh api "repos/$REPO_FULL/pulls/$PR_NUMBER"` and parse `.body`.
+2. Read the commits: `gh api "repos/$REPO_FULL/pulls/$PR_NUMBER/commits"`.
+3. Read the file patches: `gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/files"`.
+4. Produce the new body per the rules below.
+5. Update the PR body: `gh api --method PATCH "repos/$REPO_FULL/pulls/$PR_NUMBER" -f body=@<path to new body file>`.
+
+## Environment
+
+Your shell has these variables pre-set by the workflow:
+
+- `$REPO_FULL` — GitHub repo in `owner/repo` form
+- `$PR_NUMBER` — the pull request number you are handling
+- `$GH_TOKEN` — GitHub token for `gh api` calls
+
+Use `$RUNNER_TEMP` for any scratch files.
+
 ## Required structure
 
 The new body must contain, in this order:
@@ -73,6 +91,14 @@ Switch to a fresh session per chunk and re-derive the shard key before each appl
 <!-- opencode-solution-start -->
 <!-- opencode-solution-end -->
 ```
+
+## Hard constraints
+
+- The only write operation allowed is the PATCH that updates PR #`$PR_NUMBER`'s body.
+- Do not post any comment on the PR or its commits.
+- Do not push commits or modify any branch, including the PR branch.
+- Do not open new PRs, issues, or discussions.
+- Do not edit files in the checked-out workspace. Use `$RUNNER_TEMP` if you need scratch space.
 
 ## Output
 

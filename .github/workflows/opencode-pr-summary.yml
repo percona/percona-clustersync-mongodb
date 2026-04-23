@@ -25,6 +25,10 @@ jobs:
       contents: read
       pull-requests: write
       issues: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO_FULL: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
     steps:
       # Checkout trusted default-branch contents to load the summary prompt.
       - name: Checkout default branch
@@ -36,36 +40,25 @@ jobs:
         id: prompt
         run: |
           set -euo pipefail
+          # This step only injects the runtime metadata that GHA expressions resolve
           {
             echo 'content<<PROMPT_EOF'
             cat .github/opencode/summary-prompt.md
             echo ''
             echo '---'
             echo ''
-            echo '## Operating instructions'
-            echo ''
             echo 'You are handling the `/summary` command on PR #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
-            echo ''
-            echo 'Workflow:'
-            echo '1. Read the current PR body with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}` and parse `.body`.'
-            echo '2. Read the commits with `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/commits`.'
-            echo '3. Read the file patches with `gh api --paginate repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/files`.'
-            echo '4. Produce the new PR body per the rules at the top of this prompt.'
-            echo '5. Update the PR body with `gh api --method PATCH repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} -f body=@path/to/new-body.md`.'
-            echo ''
-            echo 'Hard constraints:'
-            echo '- The only write operation allowed is the PATCH that updates the PR body.'
-            echo '- Do not post any comment on the PR or its commits.'
-            echo '- Do not push commits or modify any branch (including the PR branch).'
-            echo '- Do not open new PRs, issues, or discussions.'
-            echo '- Do not edit any file in the checked-out workspace. Work in `$RUNNER_TEMP` if you need scratch space.'
             echo PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
       - name: OpenCode PR summary
+        timeout-minutes: 10
         uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ env.GH_TOKEN }}
+          REPO_FULL: ${{ env.REPO_FULL }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
         with:
           model: anthropic/claude-opus-4-7
           prompt: ${{ steps.prompt.outputs.content }}

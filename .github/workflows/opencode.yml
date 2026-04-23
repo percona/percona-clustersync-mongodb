@@ -34,6 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Run opencode
+        timeout-minutes: 20
         uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
