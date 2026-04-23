@@ -112,6 +112,8 @@ type Repl struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
+	sourceVer mdb.ServerVersion
+
 	nsFilter sel.NSFilter // Namespace filter
 	catalog  Catalog      // Catalog for managing collections and indexes
 
@@ -173,6 +175,7 @@ func NewRepl(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
+	sourceVer mdb.ServerVersion,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -187,13 +190,14 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:   source,
-		target:   target,
-		nsFilter: nsFilter,
-		catalog:  cat,
-		options:  opts,
-		pauseCh:  make(chan struct{}),
-		doneCh:   make(chan struct{}),
+		source:    source,
+		target:    target,
+		sourceVer: sourceVer,
+		nsFilter:  nsFilter,
+		catalog:   cat,
+		options:   opts,
+		pauseCh:   make(chan struct{}),
+		doneCh:    make(chan struct{}),
 	}
 }
 

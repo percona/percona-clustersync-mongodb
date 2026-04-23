@@ -143,6 +143,7 @@ var _ BaseCatalog = (*Catalog)(nil)
 type Catalog struct {
 	lock      sync.RWMutex
 	target    *mongo.Client
+	sourceVer mdb.ServerVersion
 	Databases map[string]databaseCatalog
 }
 
@@ -172,9 +173,10 @@ func (i indexCatalogEntry) Unsuccessful() bool {
 }
 
 // NewCatalog creates a new Catalog.
-func NewCatalog(target *mongo.Client) *Catalog {
+func NewCatalog(target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
 	return &Catalog{
 		target:    target,
+		sourceVer: sourceVer,
 		Databases: make(map[string]databaseCatalog),
 	}
 }
