@@ -942,6 +942,17 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	return nil
 }
 
+// alignCappedSize rounds size up to the nearest 256-byte boundary.
+// MongoDB 6.x internally applies this rounding to capped collections;
+// later versions do not. Use when replicating collMod cappedSize events
+// from a 6.x source so the target stores an identical value.
+func alignCappedSize(size int64) int64 {
+	const alignment int64 = 256
+	const alignmentOffset = alignment - 1
+
+	return (size + alignmentOffset) / alignment * alignment
+}
+
 func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *ModifyEvent) error {
 	opts := event.OperationDescription
 
@@ -973,8 +984,16 @@ func (r *Repl) doModify(ctx context.Context, ns catalog.Namespace, event *Modify
 		}
 
 	case opts.CappedSize != nil || opts.CappedMax != nil:
+		cappedSize := opts.CappedSize
+		if cappedSize != nil && r.sourceVer.Major() == 6 {
+			// MongoDB 6.x rounds capped sizes to the nearest 256-byte boundary
+			// internally. Replicate this alignment when applying collMod events
+			// from a 6.x source so source and target store identical values.
+			aligned := alignCappedSize(*cappedSize)
+			cappedSize = &aligned
+		}
 		err := r.catalog.ModifyCappedCollection(ctx,
-			ns.Database, ns.Collection, opts.CappedSize, opts.CappedMax)
+			ns.Database, ns.Collection, cappedSize, opts.CappedMax)
 		if err != nil {
 			return errors.Wrap(err, "Resize capped collection")
 		}
