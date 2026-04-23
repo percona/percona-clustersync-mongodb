@@ -930,7 +930,12 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		// the definitive state and stale DDL events are safely skippable.
 		// IsInvalidOptions covers collMod on collections that no longer match
 		// the expected type (e.g. collMod capped on a non-capped collection).
-		if mdb.IsNamespaceNotFound(err) || mdb.IsIndexNotFound(err) || mdb.IsInvalidOptions(err) {
+		// IsDatabaseDropPending covers concurrent database drops during
+		// change-stream catchup.
+		if mdb.IsNamespaceNotFound(err) ||
+			mdb.IsIndexNotFound(err) ||
+			mdb.IsInvalidOptions(err) ||
+			mdb.IsDatabaseDropPending(err) {
 			lg.Warn(err.Error())
 
 			return nil

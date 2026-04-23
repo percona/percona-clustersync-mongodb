@@ -165,6 +165,11 @@ func TestDoModifyIndexOption(t *testing.T) {
 		}
 	})
 
+	t.Run("returns nil when namespace not found", func(t *testing.T) {
+		err := cat.doModifyIndexOption(ctx, db, "nonexistent_collection", indexName, "expireAfterSeconds", int64(999))
+		assert.NoError(t, err)
+	})
+
 	t.Run("converts non-unique to unique via prepareUnique", func(t *testing.T) {
 		unique := true
 		uniqueSpec := &mdb.IndexSpecification{

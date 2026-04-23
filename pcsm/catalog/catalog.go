@@ -1078,6 +1078,12 @@ func (c *Catalog) doModifyIndexOption(
 
 		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, indexName, propName)
 	})
+	if mdb.IsNamespaceNotFound(err) {
+		log.Ctx(ctx).Warn(err.Error())
+
+		return nil
+	}
+
 	if mdb.IsIndexOptionsConflict(err) {
 		return c.dropAndRecreateIndex(ctx, db, coll, indexName)
 	}
