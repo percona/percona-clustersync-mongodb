@@ -31,6 +31,12 @@ var (
 	errEOS = errors.New("end of segment")
 )
 
+const (
+	minNumWorkers                 = 1
+	defaultNumReadWorkersDivisor  = 4
+	defaultNumInsertWorkersFactor = 2
+)
+
 // CopyManager orchestrates the cloning process by managing read and insert workers,
 // handling parallel collection cloning, batching, and segmentation.
 // It encapsulates the logic needed to coordinate concurrent operations and maintain progress.
@@ -64,30 +70,30 @@ type CopyProgressUpdate struct {
 // It controls concurrency settings and memory limits for collection cloning operations.
 type CopyManagerOptions struct {
 	// NumReadWorkers is the total number of concurrent read workers.
-	// min: 1; default: [runtime.NumCPU] / 4.
+	// min: 1; default: max([runtime.NumCPU] / 4, 1).
 	NumReadWorkers int
 	// NumInsertWorkers is the total number of concurrent insert workers.
-	// min: 1; default: [runtime.NumCPU] * 4.
+	// min: 1; default: [runtime.NumCPU] * 2.
 	NumInsertWorkers int
 	// SegmentSizeBytes is the logical segment size in bytes for splitting collections.
 	// min: [config.MinCloneSegmentSizeBytes].
-	// min: [config.MaxCloneSegmentSizeBytes].
+	// max: [config.MaxCloneSegmentSizeBytes].
 	// default: auto (per collection) [config.AutoCloneSegmentSize].
 	SegmentSizeBytes int64
 	// ReadBatchSizeBytes is the maximum read batch size in bytes.
 	// min: [config.MinCloneReadBatchSizeBytes].
 	// max: [config.MaxCloneReadBatchSizeBytes].
-	// default: config.DefaultCloneReadBatchSizeBytes].
+	// default: [config.DefaultCloneReadBatchSizeBytes].
 	ReadBatchSizeBytes int32
 }
 
 func (o *CopyManagerOptions) applyDefaults() {
-	if o.NumReadWorkers < 1 {
-		o.NumReadWorkers = max(runtime.NumCPU()/4, 1) //nolint:mnd
+	if o.NumReadWorkers < minNumWorkers {
+		o.NumReadWorkers = max(runtime.NumCPU()/defaultNumReadWorkersDivisor, minNumWorkers)
 	}
 
-	if o.NumInsertWorkers < 1 {
-		o.NumInsertWorkers = runtime.NumCPU() * 2 //nolint:mnd
+	if o.NumInsertWorkers < minNumWorkers {
+		o.NumInsertWorkers = runtime.NumCPU() * defaultNumInsertWorkersFactor
 	}
 
 	if o.SegmentSizeBytes < 0 {
@@ -447,6 +453,7 @@ type collectionCopySession struct {
 }
 
 func newCollectionCopySession(ctx context.Context, ns catalog.Namespace, isCapped bool) *collectionCopySession {
+	//nolint:gosec // G118 false positive: cancel is stored on session and called later via session.cancel().
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	return &collectionCopySession{
