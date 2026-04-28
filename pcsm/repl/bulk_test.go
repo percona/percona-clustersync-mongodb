@@ -126,7 +126,7 @@ func TestCollectUpdateOps(t *testing.T) {
 			},
 		},
 		{
-			name: "nested-in-array truncation conflict spills indexed writes (PCSM-305 shape)",
+			name: "truncation of nested array spills inside-truncated-array writes to follow-up",
 			event: &UpdateEvent{
 				UpdateDescription: UpdateDescription{
 					TruncatedArrays: []struct {
@@ -301,13 +301,12 @@ func TestCollectUpdateOpsWithConflicts_ChunksLargeFields(t *testing.T) {
 	assert.Len(t, gotKeys, numFields, "all fields must be preserved across follow-ups")
 }
 
-// TestCollectUpdateOpsWithConflicts_PCSM305CustomerShape is the regression test for the
-// customer's BufBuilder 125 MB target-side crash. The truncated array is nested inside
-// another array (groups.<idx>.items where groups is itself an array). The fix avoids
-// pipeline form entirely - the truncation goes to a primary classic $push and indexed
-// writes spill to follow-up classic $set ops, which correctly navigate dotted numeric
-// paths through arrays without exhausting BufBuilder.
-func TestCollectUpdateOpsWithConflicts_PCSM305CustomerShape(t *testing.T) {
+// TestCollectUpdateOpsWithConflicts_NestedArrayTruncation covers a truncated array
+// nested inside another array (groups.<idx>.items where groups is itself an array).
+// The truncation goes to a primary $push and indexed writes spill to follow-up $set
+// ops, which correctly navigate dotted numeric paths through arrays without exhausting
+// MongoDB's 125 MB BufBuilder.
+func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 	t.Parallel()
 
 	const numIndexed = 15
