@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import pymongo
@@ -293,6 +294,135 @@ def test_update_one_with_trucated_arrays(t: Testing, phase: Runner.Phase):
                 }
             ],
         )
+
+    t.compare_all()
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY])
+def test_pcsm_305_bufbuilder_overflow(t: Testing, phase: Runner.Phase):
+    """Regression test for PCSM-305 (BufBuilder 125MB target-side crash).
+
+    Each updated document emits a change-stream event combining:
+      - truncation of an array nested under an indexed parent
+      - indexed writes within that truncated array
+      - sibling count and signature updates
+
+    With the bug, PCSM bundles many such events into a single target bulkWrite
+    that exceeds MongoDB's 125MB BufBuilder limit and change replication fails
+    ('BufBuilder attempted to grow() to 131072001 bytes, past the 125MB limit').
+    The harness surfaces this as either an AssertionError on the state==RUNNING
+    check in wait_for_current_optime, a WaitTimeoutError, or a compare_all()
+    content mismatch. With the fix, source and target converge.
+    """
+    parent_index = 4
+    base_array_size = 1500
+    new_size = 1000
+    indexed_updates = 15
+    iterations = 10
+    parallel_workers = 25
+    total_docs = iterations * parallel_workers  # 250
+
+    def build_seed_doc(doc_id):
+        groups = []
+        for i in range(parent_index + 1):
+            if i == parent_index:
+                groups.append(
+                    {
+                        "name": f"group_{i}",
+                        "count": base_array_size,
+                        "items": [f"item_{j}" for j in range(base_array_size)],
+                    }
+                )
+            else:
+                groups.append({"name": f"group_{i}", "count": 0, "items": []})
+        return {
+            "_id": doc_id,
+            "groups": groups,
+            "signature": "initial",
+            "updated_at": "initial",
+        }
+
+    def build_pipeline_computed_diff_update():
+        # Truncates groups.<idx>.items to new_size, rewrites the trailing
+        # `indexed_updates` elements via $concatArrays/$slice, and updates the
+        # sibling count/signature fields. Avoids classic-modifier path
+        # conflicts so the resulting change-stream event combines truncation +
+        # indexed writes + count update on the same array path.
+        start_idx = max(0, new_size - indexed_updates)
+        touched_indexes = list(range(start_idx, new_size))
+
+        target_group_expr = {"$arrayElemAt": ["$groups", parent_index]}
+        source_items_expr = {
+            "$ifNull": [
+                {"$getField": {"field": "items", "input": target_group_expr}},
+                [],
+            ]
+        }
+        mutated_items_expr = {"$slice": [source_items_expr, new_size]}
+        for idx in touched_indexes:
+            mutated_items_expr = {
+                "$concatArrays": [
+                    {"$slice": [mutated_items_expr, idx]},
+                    [f"updated_{idx}"],
+                    {"$slice": [mutated_items_expr, idx + 1, new_size]},
+                ]
+            }
+
+        updated_group_expr = {
+            "$mergeObjects": [
+                target_group_expr,
+                {"count": new_size, "items": mutated_items_expr},
+            ]
+        }
+
+        trailing_count_expr = {
+            "$max": [0, {"$subtract": [{"$size": "$groups"}, parent_index + 1]}]
+        }
+        trailing_slice_expr = {
+            "$let": {
+                "vars": {"tailCount": trailing_count_expr},
+                "in": {
+                    "$cond": [
+                        {"$gt": ["$$tailCount", 0]},
+                        {"$slice": ["$groups", parent_index + 1, "$$tailCount"]},
+                        [],
+                    ]
+                },
+            }
+        }
+        updated_groups_expr = {
+            "$concatArrays": [
+                {"$slice": ["$groups", parent_index]},
+                [updated_group_expr],
+                trailing_slice_expr,
+            ]
+        }
+
+        return [
+            {
+                "$set": {
+                    "groups": updated_groups_expr,
+                    "signature": "updated",
+                    "updated_at": "updated",
+                }
+            }
+        ]
+
+    seed_docs = [build_seed_doc(i) for i in range(total_docs)]
+    t.source["db_1"]["coll_1"].insert_many(seed_docs)
+    t.target["db_1"]["coll_1"].insert_many(seed_docs)
+
+    update_pipeline = build_pipeline_computed_diff_update()
+
+    def apply_one(doc_id):
+        t.source["db_1"]["coll_1"].update_one({"_id": doc_id}, update_pipeline)
+
+    with t.run(phase, wait_timeout=10):
+        with ThreadPoolExecutor(max_workers=parallel_workers) as ex:
+            futures = [ex.submit(apply_one, doc_id) for doc_id in range(total_docs)]
+            for fut in as_completed(futures):
+                fut.result()  # surface any source-side write error
 
     t.compare_all()
 
