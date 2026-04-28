@@ -376,9 +376,7 @@ def test_pcsm_305_bufbuilder_overflow(t: Testing, phase: Runner.Phase):
             ]
         }
 
-        trailing_count_expr = {
-            "$max": [0, {"$subtract": [{"$size": "$groups"}, parent_index + 1]}]
-        }
+        trailing_count_expr = {"$max": [0, {"$subtract": [{"$size": "$groups"}, parent_index + 1]}]}
         trailing_slice_expr = {
             "$let": {
                 "vars": {"tailCount": trailing_count_expr},
