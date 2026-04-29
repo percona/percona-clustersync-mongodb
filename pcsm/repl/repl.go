@@ -140,7 +140,7 @@ type Repl struct {
 	pauseCh chan struct{}
 	doneCh  chan struct{}
 
-	pool *workerPool
+	pool workerBarrierPool
 
 	movePrimaryMarker movePrimaryMarker
 	sourceIsMongos    bool
@@ -703,36 +703,12 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.tryAdvanceOpTime(cpTicker)
 
 		case Invalidate:
-			// PCSM-249: handle Invalidate at dispatch layer (not in applyDDLChange).
-			// On <8 mongos sources, movePrimary invalidates the change stream after a phantom
-			// create. The movePrimaryMarker sentinel is armed by the phantom create handler.
-			// All other invalidates (unexpected stream closure) must fail closed.
-			// SERVER-120349: phantom create is not marked fromMigrate, so marker is required.
-			err := r.pool.Barrier()
-			if err != nil {
-				r.pool.ReleaseBarrier()
-				r.setFailed(err, "Worker error during barrier")
-
+			r.handleInvalidate(change)
+			if r.err != nil {
 				return
 			}
-
-			canSkip := r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS)
-			if !canSkip {
-				r.pool.ReleaseBarrier()
-				r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
-
-				return
-			}
-
-			r.lock.Lock()
-			r.advanceCheckpoint(change.ClusterTime)
-			r.eventsApplied++
-			r.lock.Unlock()
-
-			metrics.AddEventsApplied(1)
 
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
-			r.pool.ReleaseBarrier()
 
 		default:
 			err := r.pool.Barrier()
@@ -780,6 +756,32 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+func (r *Repl) handleInvalidate(change *ChangeEvent) {
+	err := r.pool.Barrier()
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return
+	}
+
+	canSkip := r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS)
+	if !canSkip {
+		r.pool.ReleaseBarrier()
+		r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
+
+		return
+	}
+
+	r.lock.Lock()
+	r.advanceCheckpoint(change.ClusterTime)
+	r.eventsApplied++
+	r.lock.Unlock()
+
+	metrics.AddEventsApplied(1)
+	r.pool.ReleaseBarrier()
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,

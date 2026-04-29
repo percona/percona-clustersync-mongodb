@@ -25,6 +25,19 @@ type routedEvent struct {
 	ns     catalog.Namespace
 }
 
+type workerBarrierPool interface {
+	Route(change *ChangeEvent, ns catalog.Namespace)
+	Barrier() error
+	ReleaseBarrier()
+	Checkpoint() bson.Timestamp
+	Idle() bool
+	TotalEventsApplied() int64
+	Stop()
+	Err() <-chan error
+}
+
+var _ workerBarrierPool = (*workerPool)(nil)
+
 // pendingBulk is a sealed bulk ready for writing by the writer goroutine.
 // It bundles the filled bulkWriter with the checkpoint timestamp that should
 // be committed after a successful write.
