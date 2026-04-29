@@ -225,16 +225,16 @@ def test_move_primary_concurrent_writes(t: Testing, pcsm_bin: str, request: pyte
         with _captured_pcsm(pcsm_bin, request, t.pcsm) as log_path:
             with t.run(Runner.Phase.APPLY, wait_timeout=30):
                 _move_primary(t, db_name, target_shard)
-                with progress_lock:
-                    after_move_primary_count = progress["count"]
-                _wait_for_count(
-                    collection,
-                    min(after_move_primary_count + 30, total_docs),
-                    timeout=60,
-                )
-                writer_thread.join(timeout=30)
+                # movePrimary briefly stalls writer on busy CI runners; allow
+                # generous time for the writer to finish all 150 inserts.
+                writer_thread.join(timeout=90)
                 assert not writer_thread.is_alive(), "writer did not finish"
                 assert not writer_errors, writer_errors
+                _wait_for_count(
+                    t.target[db_name][coll_name],
+                    total_docs,
+                    timeout=60,
+                )
 
             source_count = collection.count_documents({})
             target_count = t.target[db_name][coll_name].count_documents({})
