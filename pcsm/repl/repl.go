@@ -478,11 +478,29 @@ func (r *Repl) watchWithRetry(
 	changeCh chan<- *ChangeEvent,
 ) error {
 	currentOpts := opts
+	var startAfter bson.Raw
 
 	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil
+		}
+
+		var invalidateErr changeStreamInvalidateError
+		if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
+			startAfter = append(startAfter[:0], invalidateErr.token...)
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+			log.New("repl:watch").With(
+				log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
+			).Warn("change stream invalidated; reconnecting with startAfter")
+
+			return err
+		}
+
+		if len(startAfter) > 0 {
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+
+			return err
 		}
 
 		r.lock.Lock()
@@ -495,6 +513,15 @@ func (r *Repl) watchWithRetry(
 	}, isChangeStreamUnrecoverable,
 		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
+}
+
+type changeStreamInvalidateError struct {
+	token       bson.Raw
+	clusterTime bson.Timestamp
+}
+
+func (e changeStreamInvalidateError) Error() string {
+	return "change stream invalidated"
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
@@ -530,6 +557,8 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
+	var invalidateErr *changeStreamInvalidateError
+
 	for {
 		lastEventTS := bson.Timestamp{}
 		hasEvents := false
@@ -550,6 +579,13 @@ func (r *Repl) watchChangeEvents(
 			ts := change.ClusterTime
 			changeCh <- change
 			lastEventTS = ts
+
+			if change.OperationType == Invalidate {
+				invalidateErr = &changeStreamInvalidateError{
+					token:       append(bson.Raw(nil), change.ID...),
+					clusterTime: change.ClusterTime,
+				}
+			}
 		}
 
 		err = cur.Err()
@@ -558,6 +594,10 @@ func (r *Repl) watchChangeEvents(
 		}
 
 		if cur.ID() == 0 {
+			if invalidateErr != nil {
+				return *invalidateErr
+			}
+
 			// Return a real error so watchWithRetry reconnects instead of stopping silently.
 			return errors.New("change stream cursor closed by server")
 		}

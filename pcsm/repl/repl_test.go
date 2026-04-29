@@ -523,6 +523,21 @@ func TestIsChangeStreamUnrecoverable(t *testing.T) {
 	}
 }
 
+func TestChangeStreamInvalidateError(t *testing.T) {
+	t.Parallel()
+
+	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
+	err := changeStreamInvalidateError{
+		token:       token,
+		clusterTime: bson.Timestamp{T: 123, I: 1},
+	}
+
+	var target changeStreamInvalidateError
+	require.ErrorAs(t, err, &target)
+	assert.Equal(t, token, target.token)
+	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
+}
+
 func advanceCases() []struct {
 	name     string
 	current  bson.Timestamp
