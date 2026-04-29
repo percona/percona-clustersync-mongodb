@@ -66,6 +66,10 @@ func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
 	return catalog.UUIDMap{}
 }
 
+func (m *mockCatalog) CollectionUUID(_, _ string) (*bson.Binary, bool) {
+	return nil, false
+}
+
 func (m *mockCatalog) DropDatabase(_ context.Context, _ string) error {
 	return nil
 }
