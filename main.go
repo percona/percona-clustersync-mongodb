@@ -639,7 +639,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	pcs := pcsm.New(ctx, source, target)
+	pcs := pcsm.New(ctx, source, target, sourceVersion)
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {

@@ -234,3 +234,27 @@ func TestAdvanceReportedOpTime(t *testing.T) {
 		})
 	}
 }
+
+func TestAlignCappedSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    int64
+		expected int64
+	}{
+		{"non-aligned rounds up", 3333, 3584},
+		{"already aligned is unchanged", 3584, 3584},
+		{"zero stays zero", 0, 0},
+		{"256 stays 256", 256, 256},
+		{"257 rounds to 512", 257, 512},
+		{"1 rounds to 256", 1, 256},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, alignCappedSize(tt.input))
+		})
+	}
+}

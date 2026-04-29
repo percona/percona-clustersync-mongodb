@@ -38,6 +38,20 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 | `SRC_SHARDS`    | `2`     | Number of source shards (sharded topology only, max 3) |
 | `TGT_SHARDS`    | `2`     | Number of target shards (sharded topology only, max 3) |
 
+## Supported MongoDB Versions
+
+| Source | Target | Topology    |
+| ------ | ------ | ----------- |
+| 6.0    | 6.0    | RS, Sharded |
+| 7.0    | 7.0    | RS, Sharded |
+| 8.0    | 8.0    | RS, Sharded |
+| 6.0    | 7.0    | RS, Sharded |
+| 6.0    | 8.0    | RS, Sharded |
+| 7.0    | 8.0    | RS, Sharded |
+
+Sharded entries (except 8.0 → 8.0) run a reduced E2E scope in CI; the full sharded suite is blocked by PCSM-255.
+Downgrade (higher → lower) is not supported.
+
 ## Cluster Topology
 
 ### Connection URIs
