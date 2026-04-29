@@ -6,14 +6,13 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import conftest
 import pytest
 from pymongo.errors import OperationFailure
 from requests import RequestException
 from testing import Testing
 
-import conftest
 from pcsm import PCSM, Runner
-
 
 SHARD_KEY_LOG_MESSAGE = "could not extract exact shard key"
 
