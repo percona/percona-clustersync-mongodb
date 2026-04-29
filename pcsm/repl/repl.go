@@ -553,8 +553,13 @@ func (r *Repl) watchChangeEvents(
 		}
 
 		err = cur.Err()
-		if err != nil || cur.ID() == 0 {
+		if err != nil {
 			return errors.Wrap(err, "cursor")
+		}
+
+		if cur.ID() == 0 {
+			// Return a real error so watchWithRetry reconnects instead of stopping silently.
+			return errors.New("change stream cursor closed by server")
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -767,21 +772,32 @@ func (r *Repl) handleInvalidate(change *ChangeEvent) {
 		return
 	}
 
-	canSkip := r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS)
-	if !canSkip {
+	if r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS) {
+		r.lock.Lock()
+		r.advanceCheckpoint(change.ClusterTime)
+		r.eventsApplied++
+		r.lock.Unlock()
+
+		metrics.AddEventsApplied(1)
 		r.pool.ReleaseBarrier()
-		r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
 
 		return
 	}
 
-	r.lock.Lock()
-	r.advanceCheckpoint(change.ClusterTime)
-	r.eventsApplied++
-	r.lock.Unlock()
+	if r.sourceIsMongos {
+		log.New("repl:invalidate").With(
+			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			log.NS(change.Namespace.Database, change.Namespace.Collection),
+		).Warn("change stream invalidated; will reconnect from checkpoint")
 
-	metrics.AddEventsApplied(1)
+		// Do not advance checkpoint; reconnect re-reads from the last applied event and idempotency handles duplicates.
+		r.pool.ReleaseBarrier()
+
+		return
+	}
+
 	r.pool.ReleaseBarrier()
+	r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
