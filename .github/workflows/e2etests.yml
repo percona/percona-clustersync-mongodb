@@ -89,25 +89,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 6.0/7.0 source: sharded-specific tests only (full suite blocked by PCSM-255)
           - src_mongo_version: "6.0"
             tgt_mongo_version: "6.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - src_mongo_version: "7.0"
             tgt_mongo_version: "7.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - src_mongo_version: "8.0"
             tgt_mongo_version: "8.0"
-            test_scope: ""
           - src_mongo_version: "6.0"
             tgt_mongo_version: "7.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - src_mongo_version: "6.0"
             tgt_mongo_version: "8.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
           - src_mongo_version: "7.0"
             tgt_mongo_version: "8.0"
-            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
 
     env:
       SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
@@ -156,7 +149,7 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest ${{ matrix.test_scope }}
+          poetry run pytest
 
       - name: Teardown Docker Compose
         if: always()
