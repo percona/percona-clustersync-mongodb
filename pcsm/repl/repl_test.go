@@ -169,33 +169,35 @@ func TestDispatch_Invalidate(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		sourceIsMongos bool
-		sourceVer      mdb.ServerVersion
-		markerArmed    bool
-		expectFailed   bool
+		name              string
+		sourceIsMongos    bool
+		sourceVer         mdb.ServerVersion
+		markerArmed       bool
+		expectFailed      bool
+		expectCheckpoint  bool
+		expectEventsApply int64
 	}{
 		{
-			name:           "skip_on_armed_marker_pre8_mongos",
-			sourceIsMongos: true,
-			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
-			markerArmed:    true,
+			name:              "skip_on_armed_marker_pre8_mongos",
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			markerArmed:       true,
+			expectCheckpoint:  true,
+			expectEventsApply: 1,
 		},
 		{
-			name:           "fail_closed_no_marker_pre8_mongos",
+			name:           "recoverable_no_marker_pre8_mongos",
 			sourceIsMongos: true,
 			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
-			expectFailed:   true,
 		},
 		{
-			name:           "fail_closed_8x_with_marker",
+			name:           "recoverable_8x_with_marker_mongos",
 			sourceIsMongos: true,
 			sourceVer:      mdb.ServerVersion{8, 0, 0, 0},
 			markerArmed:    true,
-			expectFailed:   true,
 		},
 		{
-			name:         "fail_closed_rs_source_with_marker",
+			name:         "fail_closed_rs_source",
 			sourceVer:    mdb.ServerVersion{7, 0, 0, 0},
 			markerArmed:  true,
 			expectFailed: true,
@@ -223,7 +225,13 @@ func TestDispatch_Invalidate(t *testing.T) {
 			}
 
 			require.NoError(t, r.err)
-			assert.Equal(t, change.ClusterTime, r.checkpointOpTime)
+			if tt.expectCheckpoint {
+				assert.Equal(t, change.ClusterTime, r.checkpointOpTime)
+			} else {
+				assert.Equal(t, bson.Timestamp{}, r.checkpointOpTime)
+			}
+
+			assert.Equal(t, tt.expectEventsApply, r.eventsApplied)
 		})
 	}
 }
