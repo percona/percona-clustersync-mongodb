@@ -645,7 +645,9 @@ func parseChangeEvent(data bson.Raw, change *ChangeEvent) error {
 		return errors.New("refineCollectionShardKey operation is not supported")
 
 	case Invalidate:
-		return ErrInvalidateEvent
+		var e InvalidateEvent
+		err = bson.Unmarshal(data, &e)
+		change.Event = e
 	}
 
 	if err != nil {
