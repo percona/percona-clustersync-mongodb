@@ -196,6 +196,7 @@ def test_move_primary_forced_replay_post_uuid_update(
         _assert_log_clean(first_log, second_log)
 
 
+@pytest.mark.timeout(120)  # 6.0 invalidates change stream on movePrimary; reconnect overhead ~14s
 def test_move_primary_concurrent_writes(t: Testing, pcsm_bin: str, request: pytest.FixtureRequest):
     db_name = "move_primary_concurrent_writes"
     coll_name = "test_coll"
