@@ -17,6 +17,9 @@ import (
 type mockCatalog struct {
 	collectionExists bool
 
+	collectionUUIDResult *bson.Binary
+	collectionUUIDExists bool
+
 	dropCollectionCalled bool
 	dropCollectionDB     string
 	dropCollectionColl   string
@@ -29,6 +32,41 @@ type mockCatalog struct {
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
 }
+
+type mockPool struct {
+	barrierErr    error
+	barrierCalled bool
+	releaseCalled bool
+	callOrder     []string
+	onRelease     func()
+}
+
+func (m *mockPool) Route(_ *ChangeEvent, _ catalog.Namespace) {}
+
+func (m *mockPool) Barrier() error {
+	m.barrierCalled = true
+	m.callOrder = append(m.callOrder, "Barrier")
+
+	return m.barrierErr
+}
+
+func (m *mockPool) ReleaseBarrier() {
+	m.releaseCalled = true
+	m.callOrder = append(m.callOrder, "ReleaseBarrier")
+	if m.onRelease != nil {
+		m.onRelease()
+	}
+}
+
+func (m *mockPool) Checkpoint() bson.Timestamp { return bson.Timestamp{} }
+
+func (m *mockPool) Idle() bool { return true }
+
+func (m *mockPool) TotalEventsApplied() int64 { return 0 }
+
+func (m *mockPool) Stop() {}
+
+func (m *mockPool) Err() <-chan error { return make(chan error) }
 
 func (m *mockCatalog) CollectionExists(_, _ string) bool {
 	return m.collectionExists
@@ -67,7 +105,7 @@ func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
 }
 
 func (m *mockCatalog) CollectionUUID(_, _ string) (*bson.Binary, bool) {
-	return nil, false
+	return m.collectionUUIDResult, m.collectionUUIDExists
 }
 
 func (m *mockCatalog) DropDatabase(_ context.Context, _ string) error {
@@ -105,30 +143,352 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
-func TestApplyDDLChange_Create(t *testing.T) {
-	t.Parallel()
+func newInvalidateTestRepl(pool *mockPool, sourceIsMongos bool, sourceVer mdb.ServerVersion) *Repl {
+	doneCh := make(chan struct{})
+	close(doneCh)
 
-	cat := &mockCatalog{}
-	r := &Repl{catalog: cat}
+	return &Repl{
+		pool:              pool,
+		catalog:           &mockCatalog{},
+		sourceIsMongos:    sourceIsMongos,
+		sourceVer:         sourceVer,
+		movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
+		pauseCh:           make(chan struct{}, 1),
+		doneCh:            doneCh,
+	}
+}
+
+func TestDispatch_Invalidate(t *testing.T) {
+	t.Parallel()
 
 	change := &ChangeEvent{
 		EventHeader: EventHeader{
-			OperationType: Create,
-			Namespace: catalog.Namespace{
-				Database:   "testdb",
-				Collection: "testcoll",
-			},
-			CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")},
+			OperationType: Invalidate,
+			ClusterTime:   bson.Timestamp{T: 123, I: 1},
 		},
-		Event: CreateEvent{},
 	}
 
-	err := r.applyDDLChange(context.Background(), change)
-	require.NoError(t, err)
+	tests := []struct {
+		name           string
+		sourceIsMongos bool
+		sourceVer      mdb.ServerVersion
+		markerArmed    bool
+		expectFailed   bool
+	}{
+		{
+			name:           "skip_on_armed_marker_pre8_mongos",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
+			markerArmed:    true,
+		},
+		{
+			name:           "fail_closed_no_marker_pre8_mongos",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
+			expectFailed:   true,
+		},
+		{
+			name:           "fail_closed_8x_with_marker",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{8, 0, 0, 0},
+			markerArmed:    true,
+			expectFailed:   true,
+		},
+		{
+			name:         "fail_closed_rs_source_with_marker",
+			sourceVer:    mdb.ServerVersion{7, 0, 0, 0},
+			markerArmed:  true,
+			expectFailed: true,
+		},
+	}
 
-	assert.True(t, cat.dropCollectionCalled)
-	assert.True(t, cat.createCollectionCalled)
-	assert.True(t, cat.setCollectionUUIDCalled)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pool := &mockPool{}
+			r := newInvalidateTestRepl(pool, tt.sourceIsMongos, tt.sourceVer)
+			if tt.markerArmed {
+				r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+			}
+
+			r.handleInvalidate(change)
+
+			assert.True(t, pool.barrierCalled)
+			assert.True(t, pool.releaseCalled)
+			if tt.expectFailed {
+				require.Error(t, r.err)
+
+				return
+			}
+
+			require.NoError(t, r.err)
+			assert.Equal(t, change.ClusterTime, r.checkpointOpTime)
+		})
+	}
+}
+
+func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
+	t.Parallel()
+
+	pool := &mockPool{}
+	r := newInvalidateTestRepl(pool, true, mdb.ServerVersion{7, 0, 0, 0})
+	r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+	pool.onRelease = func() {
+		_, markerExists := r.movePrimaryMarker.ns["::movePrimary::.sentinel"]
+		assert.False(t, markerExists)
+	}
+
+	change := &ChangeEvent{
+		EventHeader: EventHeader{
+			OperationType: Invalidate,
+			ClusterTime:   bson.Timestamp{T: 123, I: 1},
+		},
+	}
+
+	r.handleInvalidate(change)
+
+	assert.Equal(t, []string{"Barrier", "ReleaseBarrier"}, pool.callOrder)
+	require.NoError(t, r.err)
+}
+
+func TestApplyCreateDDLChange(t *testing.T) {
+	t.Parallel()
+
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+
+	tests := []struct {
+		name                 string
+		catalogUUID          *bson.Binary
+		catalogUUIDExists    bool
+		eventUUID            *bson.Binary
+		sourceIsMongos       bool
+		sourceVer            mdb.ServerVersion
+		createEvent          CreateEvent
+		expectDrop           bool
+		expectCreate         bool
+		expectSetUUID        bool
+		expectMarker         bool
+		expectSentinelMarker bool
+	}{
+		{
+			name:                 "same UUID replay on pre8 mongos arms markers and noops",
+			catalogUUID:          eventUUID,
+			catalogUUIDExists:    true,
+			eventUUID:            eventUUID,
+			sourceIsMongos:       true,
+			sourceVer:            mdb.ServerVersion{7, 0, 0, 0},
+			expectMarker:         true,
+			expectSentinelMarker: true,
+		},
+		{
+			name:              "same UUID replay on replica set does not arm markers",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    false,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+		},
+		{
+			name:                 "different UUID phantom create updates catalog and arms markers",
+			catalogUUID:          differentUUID,
+			catalogUUIDExists:    true,
+			eventUUID:            eventUUID,
+			sourceIsMongos:       true,
+			sourceVer:            mdb.ServerVersion{7, 0, 0, 0},
+			expectSetUUID:        true,
+			expectMarker:         true,
+			expectSentinelMarker: true,
+		},
+		{
+			name:                 "nil event UUID with catalog UUID follows phantom create branch",
+			catalogUUID:          differentUUID,
+			catalogUUIDExists:    true,
+			eventUUID:            nil,
+			sourceIsMongos:       true,
+			sourceVer:            mdb.ServerVersion{7, 0, 0, 0},
+			expectSetUUID:        true,
+			expectMarker:         true,
+			expectSentinelMarker: true,
+		},
+		{
+			name:              "missing catalog entry applies real create",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			expectDrop:        true,
+			expectCreate:      true,
+			expectSetUUID:     true,
+		},
+		{
+			name:              "timeseries create returns without catalog changes",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			createEvent: CreateEvent{
+				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + "testcoll"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := &mockCatalog{
+				collectionUUIDResult: tt.catalogUUID,
+				collectionUUIDExists: tt.catalogUUIDExists,
+			}
+			r := &Repl{
+				catalog:           cat,
+				movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
+				sourceIsMongos:    tt.sourceIsMongos,
+				sourceVer:         tt.sourceVer,
+			}
+
+			change := &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType:  Create,
+					Namespace:      ns,
+					CollectionUUID: tt.eventUUID,
+				},
+				Event: tt.createEvent,
+			}
+
+			err := r.applyDDLChange(context.Background(), change)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
+			assert.Equal(t, tt.expectCreate, cat.createCollectionCalled)
+			assert.Equal(t, tt.expectSetUUID, cat.setCollectionUUIDCalled)
+
+			if tt.expectDrop {
+				assert.Equal(t, ns.Database, cat.dropCollectionDB)
+				assert.Equal(t, ns.Collection, cat.dropCollectionColl)
+			}
+			if tt.expectSetUUID {
+				assert.Equal(t, ns.Database, cat.setCollectionUUIDDB)
+				assert.Equal(t, ns.Collection, cat.setCollectionUUIDColl)
+			}
+
+			_, markerArmed := r.movePrimaryMarker.ns["testdb.testcoll"]
+			assert.Equal(t, tt.expectMarker, markerArmed)
+
+			_, sentinelArmed := r.movePrimaryMarker.ns["::movePrimary::.sentinel"]
+			assert.Equal(t, tt.expectSentinelMarker, sentinelArmed)
+		})
+	}
+}
+
+func TestApplyDropDDLChange(t *testing.T) {
+	t.Parallel()
+
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+
+	tests := []struct {
+		name              string
+		catalogUUID       *bson.Binary
+		catalogUUIDExists bool
+		eventUUID         *bson.Binary
+		sourceIsMongos    bool
+		armMarker         bool
+		expectDrop        bool
+		expectMarkerGone  bool
+	}{
+		{
+			name:              "missing catalog entry noops without consuming marker",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			armMarker:         true,
+		},
+		{
+			name:              "UUID mismatch on pre8 mongos suppresses phantom drop without consuming marker",
+			catalogUUID:       differentUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			armMarker:         true,
+		},
+		{
+			name:              "UUID mismatch on replica set suppresses phantom drop",
+			catalogUUID:       differentUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+		},
+		{
+			name:              "UUID match on pre8 mongos applies drop and consumes marker",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			armMarker:         true,
+			expectDrop:        true,
+			expectMarkerGone:  true,
+		},
+		{
+			name:              "UUID match on replica set applies drop without marker consumption",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			armMarker:         true,
+			expectDrop:        true,
+		},
+		{
+			name:              "nil UUIDs apply drop through default branch",
+			catalogUUIDExists: true,
+			expectDrop:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := &mockCatalog{
+				collectionUUIDResult: tt.catalogUUID,
+				collectionUUIDExists: tt.catalogUUIDExists,
+			}
+			r := &Repl{
+				catalog:           cat,
+				movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
+				sourceIsMongos:    tt.sourceIsMongos,
+				sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			}
+			if tt.armMarker {
+				r.movePrimaryMarker.Arm(ns)
+			}
+
+			change := &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType:  Drop,
+					Namespace:      ns,
+					CollectionUUID: tt.eventUUID,
+				},
+				Event: DropEvent{},
+			}
+
+			err := r.applyDDLChange(context.Background(), change)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
+			if tt.expectDrop {
+				assert.Equal(t, ns.Database, cat.dropCollectionDB)
+				assert.Equal(t, ns.Collection, cat.dropCollectionColl)
+			}
+
+			if tt.armMarker {
+				_, markerExists := r.movePrimaryMarker.ns["testdb.testcoll"]
+				assert.Equal(t, !tt.expectMarkerGone, markerExists)
+			}
+		})
+	}
 }
 
 func TestIsChangeStreamUnrecoverable(t *testing.T) {
