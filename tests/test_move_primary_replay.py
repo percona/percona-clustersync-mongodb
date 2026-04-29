@@ -227,7 +227,11 @@ def test_move_primary_concurrent_writes(t: Testing, pcsm_bin: str, request: pyte
                 _move_primary(t, db_name, target_shard)
                 with progress_lock:
                     after_move_primary_count = progress["count"]
-                _wait_for_count(collection, min(after_move_primary_count + 30, total_docs))
+                _wait_for_count(
+                    collection,
+                    min(after_move_primary_count + 30, total_docs),
+                    timeout=60,
+                )
                 writer_thread.join(timeout=30)
                 assert not writer_thread.is_alive(), "writer did not finish"
                 assert not writer_errors, writer_errors

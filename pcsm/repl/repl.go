@@ -878,39 +878,31 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		db := change.Namespace.Database
 		coll := change.Namespace.Collection
 		eventUUID := change.CollectionUUID
-		catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+		catalogUUID, _ := r.catalog.CollectionUUID(db, coll)
 
-		switch {
-		case !exists:
-			// PCSM-249: drop event for unknown namespace — replay-safe noop.
-			// This occurs when the drop event replays after the namespace was already removed.
-			lg.Warn("drop event for unknown namespace, treating as replay-safe noop")
-
-			return nil
-
-		case eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID):
-			// PCSM-249: stale phantom drop from movePrimary suppressed.
-			// The catalog has the new UUID (assigned by phantom create handler); this drop
-			// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+		// PCSM-249: stale phantom drop from movePrimary is suppressed.
+		// The catalog has the new UUID (assigned by phantom create handler); this drop
+		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+		// UUID comparison only suppresses when both sides are present and differ; views
+		// and other untracked namespaces fall through to the real drop, which is idempotent.
+		if eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID) {
 			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
 
 			return nil
-
-		default:
-			// UUIDs match, or UUID comparison is not possible — apply the real drop.
-			// On <8 mongos source, consume the movePrimary marker if present.
-			// (marker signals that a real drop is part of the movePrimary invalidate sequence)
-			if r.sourceIsPre8AndMongos() {
-				r.movePrimaryMarker.Take(change.Namespace)
-			}
-
-			err = r.catalog.DropCollection(ctx, db, coll)
-			if err != nil {
-				break
-			}
-
-			lg.Infof("Collection %q has been dropped", change.Namespace)
 		}
+
+		// On <8 mongos source, consume the movePrimary marker if present.
+		// (marker signals that a real drop is part of the movePrimary invalidate sequence)
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Take(change.Namespace)
+		}
+
+		err = r.catalog.DropCollection(ctx, db, coll)
+		if err != nil {
+			break
+		}
+
+		lg.Infof("Collection %q has been dropped", change.Namespace)
 
 	case DropDatabase:
 		err = r.catalog.DropDatabase(ctx, change.Namespace.Database)
