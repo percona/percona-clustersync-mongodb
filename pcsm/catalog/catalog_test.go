@@ -16,6 +16,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
 const testDB = "pcsm_test_catalog"
@@ -132,7 +134,7 @@ func TestCreateCollection_Idempotency(t *testing.T) {
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	cat := NewCatalog(client)
+	cat := NewCatalog(client, mdb.ServerVersion{})
 
 	db := testDB + "_coll"
 	coll := "test_create_collection"
@@ -164,7 +166,7 @@ func TestCreateView_Idempotency(t *testing.T) {
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	cat := NewCatalog(client)
+	cat := NewCatalog(client, mdb.ServerVersion{})
 
 	db := testDB + "_view"
 	sourceColl := "test_view_source"

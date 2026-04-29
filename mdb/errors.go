@@ -62,6 +62,13 @@ func IsCappedPositionLost(err error) bool {
 	return isMongoCommandError(err, "CappedPositionLost")
 }
 
+// IsDatabaseDropPending checks if an error is caused by a database drop pending state.
+// MongoDB returns this error (code 357) when an operation targets a database
+// that is in the process of being dropped.
+func IsDatabaseDropPending(err error) bool {
+	return isMongoCommandError(err, "DatabaseDropPending")
+}
+
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	var cmdErr mongo.CommandError

@@ -66,7 +66,7 @@ func TestDropAndRecreateIndex(t *testing.T) {
 	}).Err()
 	require.NoError(t, err)
 
-	cat := NewCatalog(client)
+	cat := NewCatalog(client, mdb.ServerVersion{})
 	seedIndex(t, cat, db, coll, spec)
 
 	t.Run("drops and recreates index from catalog spec", func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestDoModifyIndexOption(t *testing.T) {
 	}).Err()
 	require.NoError(t, err)
 
-	cat := NewCatalog(client)
+	cat := NewCatalog(client, mdb.ServerVersion{})
 	seedIndex(t, cat, db, coll, spec)
 
 	t.Run("modifies expireAfterSeconds via collMod", func(t *testing.T) {
@@ -163,6 +163,11 @@ func TestDoModifyIndexOption(t *testing.T) {
 				assert.Equal(t, true, idx["hidden"])
 			}
 		}
+	})
+
+	t.Run("returns nil when namespace not found", func(t *testing.T) {
+		err := cat.doModifyIndexOption(ctx, db, "nonexistent_collection", indexName, "expireAfterSeconds", int64(999))
+		assert.NoError(t, err)
 	})
 
 	t.Run("converts non-unique to unique via prepareUnique", func(t *testing.T) {

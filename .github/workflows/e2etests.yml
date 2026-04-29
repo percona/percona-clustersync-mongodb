@@ -21,6 +21,10 @@ jobs:
             tgt_mongo_version: "7.0"
           - src_mongo_version: "8.0"
             tgt_mongo_version: "8.0"
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "7.0"
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "8.0"
           - src_mongo_version: "7.0"
             tgt_mongo_version: "8.0"
 
@@ -78,23 +82,36 @@ jobs:
         run: docker compose -f hack/rs/compose.yml down
 
   sharded:
-    name: Sharded (MongoDB ${{ matrix.mongo_version }})
+    name: Sharded (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }})
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 6.0/7.0: sharded-specific tests only (full suite blocked by PCSM-255)
-          - mongo_version: "6.0"
+          # 6.0/7.0 source: sharded-specific tests only (full suite blocked by PCSM-255)
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "6.0"
             test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
-          - mongo_version: "7.0"
+          - src_mongo_version: "7.0"
+            tgt_mongo_version: "7.0"
             test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
-          - mongo_version: "8.0"
+          - src_mongo_version: "8.0"
+            tgt_mongo_version: "8.0"
             test_scope: ""
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "7.0"
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
+          - src_mongo_version: "6.0"
+            tgt_mongo_version: "8.0"
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
+          - src_mongo_version: "7.0"
+            tgt_mongo_version: "8.0"
+            test_scope: tests/test_collections_sharded.py tests/test_documents_sharded.py tests/test_pipeline_updates.py
 
     env:
-      MONGO_VERSION: ${{ matrix.mongo_version }}
+      SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
+      TGT_MONGO_VERSION: ${{ matrix.tgt_mongo_version }}
       PYTEST_TIMEOUT: 60
 
     steps:

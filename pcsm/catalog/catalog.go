@@ -143,6 +143,7 @@ var _ BaseCatalog = (*Catalog)(nil)
 type Catalog struct {
 	lock      sync.RWMutex
 	target    *mongo.Client
+	sourceVer mdb.ServerVersion
 	Databases map[string]databaseCatalog
 }
 
@@ -172,9 +173,10 @@ func (i indexCatalogEntry) Unsuccessful() bool {
 }
 
 // NewCatalog creates a new Catalog.
-func NewCatalog(target *mongo.Client) *Catalog {
+func NewCatalog(target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
 	return &Catalog{
 		target:    target,
+		sourceVer: sourceVer,
 		Databases: make(map[string]databaseCatalog),
 	}
 }
@@ -1076,6 +1078,12 @@ func (c *Catalog) doModifyIndexOption(
 
 		return errors.Wrapf(err, "modify index %s.%s.%s: %s", db, coll, indexName, propName)
 	})
+	if mdb.IsNamespaceNotFound(err) {
+		log.Ctx(ctx).Warn(err.Error())
+
+		return nil
+	}
+
 	if mdb.IsIndexOptionsConflict(err) {
 		return c.dropAndRecreateIndex(ctx, db, coll, indexName)
 	}
