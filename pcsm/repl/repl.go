@@ -1031,7 +1031,7 @@ func (r *Repl) applyCreateDDLChange(
 
 		return nil
 
-	case exists && !uuidEqual(catalogUUID, eventUUID):
+	case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
 		lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
 		if r.sourceIsPre8AndMongos() {
 			r.movePrimaryMarker.Arm(change.Namespace)
