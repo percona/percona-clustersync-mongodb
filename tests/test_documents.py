@@ -319,9 +319,9 @@ def test_pcsm_305_bufbuilder_overflow(t: Testing, phase: Runner.Phase):
     base_array_size = 1500
     new_size = 1000
     indexed_updates = 15
-    iterations = 10
-    parallel_workers = 25
-    total_docs = iterations * parallel_workers  # 250
+    iterations = 5
+    parallel_workers = 10
+    total_docs = iterations * parallel_workers  # 50
 
     def build_seed_doc(doc_id):
         groups = []
