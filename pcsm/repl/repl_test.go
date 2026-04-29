@@ -402,11 +402,13 @@ func TestApplyDropDDLChange(t *testing.T) {
 		expectMarkerGone  bool
 	}{
 		{
-			name:              "missing catalog entry noops without consuming marker",
+			name:              "missing catalog entry applies real drop and consumes marker",
 			catalogUUIDExists: false,
 			eventUUID:         eventUUID,
 			sourceIsMongos:    true,
 			armMarker:         true,
+			expectDrop:        true,
+			expectMarkerGone:  true,
 		},
 		{
 			name:              "UUID mismatch on pre8 mongos suppresses phantom drop without consuming marker",
