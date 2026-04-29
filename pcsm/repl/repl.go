@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"runtime"
@@ -41,12 +42,16 @@ type Catalog interface {
 	) error
 }
 
-var (
-	ErrInvalidateEvent  = errors.New("invalidate")
-	ErrOplogHistoryLost = errors.New("oplog history is lost")
-)
+var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
+
+// movePrimarySentinelNS is the sentinel namespace used to signal a movePrimary-induced
+// change stream invalidation on <8 mongos sources. See PCSM-249 / SERVER-120349.
+var movePrimarySentinelNS = catalog.Namespace{ //nolint:gochecknoglobals
+	Database:   "::movePrimary::",
+	Collection: "sentinel",
+}
 
 // Options configures the replication behavior.
 type Options struct {
@@ -213,9 +218,6 @@ func NewRepl(
 func (r *Repl) sourceIsPre8AndMongos() bool {
 	return r.sourceIsMongos && r.sourceVer.Major() < 8
 }
-
-//nolint:gochecknoglobals // Keeps helper lint-clean until follow-up PCSM-249 wiring uses it.
-var _ = (*Repl).sourceIsPre8AndMongos
 
 // Checkpoint represents the checkpoint state for replication recovery.
 type Checkpoint struct {
@@ -700,6 +702,38 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 			r.tryAdvanceOpTime(cpTicker)
 
+		case Invalidate:
+			// PCSM-249: handle Invalidate at dispatch layer (not in applyDDLChange).
+			// On <8 mongos sources, movePrimary invalidates the change stream after a phantom
+			// create. The movePrimaryMarker sentinel is armed by the phantom create handler.
+			// All other invalidates (unexpected stream closure) must fail closed.
+			// SERVER-120349: phantom create is not marked fromMigrate, so marker is required.
+			err := r.pool.Barrier()
+			if err != nil {
+				r.pool.ReleaseBarrier()
+				r.setFailed(err, "Worker error during barrier")
+
+				return
+			}
+
+			canSkip := r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS)
+			if !canSkip {
+				r.pool.ReleaseBarrier()
+				r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
+
+				return
+			}
+
+			r.lock.Lock()
+			r.advanceCheckpoint(change.ClusterTime)
+			r.eventsApplied++
+			r.lock.Unlock()
+
+			metrics.AddEventsApplied(1)
+
+			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
+			r.pool.ReleaseBarrier()
+
 		default:
 			err := r.pool.Barrier()
 			if err != nil {
@@ -816,6 +850,16 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	return ns
 }
 
+// uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
+// Returns false if either pointer is nil.
+func uuidEqual(a, b *bson.Binary) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	return bytes.Equal(a.Data, b.Data)
+}
+
 // applyDDLChange applies a schema change to the target MongoDB.
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
@@ -826,47 +870,45 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	switch change.OperationType { //nolint:exhaustive
 	case Create:
 		event := change.Event.(CreateEvent) //nolint:forcetypeassert
-		if event.IsTimeseries() {
-			lg.Warn("Timeseries is not supported. skipping")
-
-			return nil
-		}
-
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
-		if err != nil {
-			err = errors.Wrap(err, "drop before create")
-
-			break
-		}
-
-		err = r.catalog.CreateCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			&event.OperationDescription)
-		if err != nil {
-			err = errors.Wrap(err, "create")
-
-			break
-		}
-
-		r.catalog.SetCollectionUUID(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			change.CollectionUUID)
-
-		lg.Infof("Collection %q has been created", change.Namespace)
+		err = r.applyCreateDDLChange(ctx, change, &event, lg)
 
 	case Drop:
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
-		if err != nil {
-			break
-		}
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		eventUUID := change.CollectionUUID
+		catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
 
-		lg.Infof("Collection %q has been dropped", change.Namespace)
+		switch {
+		case !exists:
+			// PCSM-249: drop event for unknown namespace — replay-safe noop.
+			// This occurs when the drop event replays after the namespace was already removed.
+			lg.Warn("drop event for unknown namespace, treating as replay-safe noop")
+
+			return nil
+
+		case eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID):
+			// PCSM-249: stale phantom drop from movePrimary suppressed.
+			// The catalog has the new UUID (assigned by phantom create handler); this drop
+			// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
+
+			return nil
+
+		default:
+			// UUIDs match, or UUID comparison is not possible — apply the real drop.
+			// On <8 mongos source, consume the movePrimary marker if present.
+			// (marker signals that a real drop is part of the movePrimary invalidate sequence)
+			if r.sourceIsPre8AndMongos() {
+				r.movePrimaryMarker.Take(change.Namespace)
+			}
+
+			err = r.catalog.DropCollection(ctx, db, coll)
+			if err != nil {
+				break
+			}
+
+			lg.Infof("Collection %q has been dropped", change.Namespace)
+		}
 
 	case DropDatabase:
 		err = r.catalog.DropDatabase(ctx, change.Namespace.Database)
@@ -913,11 +955,8 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been renamed to %q",
 			change.Namespace, event.OperationDescription.To)
 
-	case Invalidate:
-		lg.Error(ErrInvalidateEvent, "")
-
-		return ErrInvalidateEvent
-
+	// Invalidate handled at dispatch layer — see run() switch.
+	// This case is intentionally absent; reaching it would be a programming error.
 	case ShardCollection:
 		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
 		err = r.catalog.ShardCollection(ctx,
@@ -959,6 +998,61 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		return errors.Wrap(err, string(change.OperationType))
 	}
+
+	return nil
+}
+
+func (r *Repl) applyCreateDDLChange(
+	ctx context.Context,
+	change *ChangeEvent,
+	event *CreateEvent,
+	lg log.Logger,
+) error {
+	if event.IsTimeseries() {
+		lg.Warn("Timeseries is not supported. skipping")
+
+		return nil
+	}
+
+	db := change.Namespace.Database
+	coll := change.Namespace.Collection
+	eventUUID := change.CollectionUUID
+
+	catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+	switch {
+	case exists && uuidEqual(catalogUUID, eventUUID):
+		lg.Debug("create event replay detected, namespace already at this UUID; noop")
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Arm(change.Namespace)
+			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+		}
+
+		return nil
+
+	case exists && !uuidEqual(catalogUUID, eventUUID):
+		lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Arm(change.Namespace)
+			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+		}
+
+		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+
+		return nil
+	}
+
+	err := r.catalog.DropCollection(ctx, db, coll)
+	if err != nil {
+		return errors.Wrap(err, "drop before create")
+	}
+
+	err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
+	if err != nil {
+		return errors.Wrap(err, "create")
+	}
+
+	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+	lg.Infof("Collection %q has been created", change.Namespace)
 
 	return nil
 }
