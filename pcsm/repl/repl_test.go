@@ -47,7 +47,7 @@ type mockPool struct {
 	onRelease     func()
 }
 
-func (m *mockPool) Route(_ *ChangeEvent, _ catalog.Namespace) {}
+func (m *mockPool) Route(_ *ChangeEvent) {}
 
 func (m *mockPool) Barrier() error {
 	m.barrierCalled = true
