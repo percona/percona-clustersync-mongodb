@@ -5,34 +5,43 @@ name: OpenCode Review
     types: [created]
 
 concurrency:
-  group: opencode-review-${{ github.event.issue.number }}
+  group: opencode-review-${{ github.event.issue.number }}-${{ github.event.comment.body == '/review' && 'cmd' || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   review:
-    # Trigger only on exact `/review` comments from privileged PR actors.
     if: |
       github.event.issue.pull_request != null &&
-      github.event.comment.body == '/review' &&
-      (
-        github.event.comment.author_association == 'OWNER' ||
-        github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'COLLABORATOR'
-      )
+      github.event.comment.body == '/review'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      ACTOR: ${{ github.event.comment.user.login }}
     steps:
+      - name: Check maintainer permission
+        run: |
+          set -euo pipefail
+          PERM=$(gh api "repos/$REPO_OWNER/$REPO_NAME/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
+          if [[ "$PERM" != "write" && "$PERM" != "admin" ]]; then
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
       # Checkout trusted default-branch contents to load the review prompt.
       - name: Checkout default branch
+        if: env.SKIP != 'true'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Load review prompt
+        if: env.SKIP != 'true'
         id: prompt
         run: |
           set -euo pipefail
@@ -43,9 +52,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: OpenCode Go review
-        uses: anomalyco/opencode/github@latest
+        if: env.SKIP != 'true'
+        timeout-minutes: 10
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           model: anthropic/claude-opus-4-7
+          # Use GITHUB_TOKEN directly so the agent shell can post review
+          # comments. Default OIDC exchange holds the App token internally
+          # and strips it from the agent shell, leaving gh CLI unauthenticated.
+          use_github_token: true
           prompt: ${{ steps.prompt.outputs.content }}
