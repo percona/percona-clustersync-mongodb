@@ -579,6 +579,11 @@ func (p *PCSM) doPause(ctx context.Context) error {
 		return errors.New("cannot pause: Change Replication is not running")
 	}
 
+	cloneStatus := p.clone.Status()
+	if !cloneStatus.IsFinished() || !replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
+		return errors.New("cannot pause: initial sync is not complete")
+	}
+
 	err := p.repl.Pause(ctx)
 	if err != nil {
 		return errors.Wrap(err, "pause replication")
