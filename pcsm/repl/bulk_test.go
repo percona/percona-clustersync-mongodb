@@ -7,230 +7,193 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-const setOp = "$set"
-
-func TestIsArrayPath(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		field string
-		dp    map[string][]any
-		tf    map[string]struct{}
-		want  bool
-	}{
-		{
-			name:  "dp nil: depth 2 numeric path returns false",
-			field: "a.1",
-			dp:    nil,
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp nil: another depth 2 numeric path returns false",
-			field: "f2.1",
-			dp:    nil,
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp present, field not in dp, Atoi true",
-			field: "a.b.1",
-			dp:    map[string][]any{"a.b": {"c", "d"}},
-			tf:    nil,
-			want:  true,
-		},
-		{
-			name:  "dp present, field exists, last is integer",
-			field: "a.22.1",
-			dp:    map[string][]any{"a.22.1": {"a", "22", 1}},
-			tf:    nil,
-			want:  true,
-		},
-		{
-			name:  "dp present, field exists, last is string",
-			field: "a.b.22",
-			dp:    map[string][]any{"a.b.22": {"a", "b", "22"}},
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp present, field exists, last component is integer",
-			field: "arr.2",
-			dp:    map[string][]any{"arr.2": {"arr", 2}},
-			tf:    nil,
-			want:  true,
-		},
-		{
-			name:  "dp present, field exists, interior int but last string",
-			field: "f2.0.2.0",
-			dp:    map[string][]any{"f2.0.2.0": {"f2", "0", 2, "0"}},
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "single segment",
-			field: "field",
-			dp:    nil,
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp present, field exists, empty path",
-			field: "x.0",
-			dp:    map[string][]any{"x.0": {}},
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp present, field not in dp, Atoi false",
-			field: "a.b.x",
-			dp:    map[string][]any{"other": {"x"}},
-			tf:    nil,
-			want:  false,
-		},
-		{
-			name:  "dp nil, truncated parent: real array index",
-			field: "a.2",
-			dp:    nil,
-			tf:    map[string]struct{}{"a": {}},
-			want:  true,
-		},
-		{
-			name:  "dp nil, depth 2 non-truncated parent: returns false",
-			field: "f2.0",
-			dp:    nil,
-			tf:    map[string]struct{}{"a": {}},
-			want:  false,
-		},
-		{
-			// "a.2.b.3": last="3" numeric, direct parent="a.2.b" not in truncatedFields
-			// → standard $set (no $concatArrays needed; only direct parent matters)
-			name:  "dp nil, deeply nested: direct parent not truncated returns false",
-			field: "a.2.b.3",
-			dp:    nil,
-			tf:    map[string]struct{}{"a": {}},
-			want:  false,
-		},
-		{
-			name:  "dp nil, nested truncated parent: real array index",
-			field: "f2.0.3",
-			dp:    nil,
-			tf:    map[string]struct{}{"f2.0": {}},
-			want:  true,
-		},
-		{
-			name:  "dp nil, empty truncatedFields: depth 2 returns false",
-			field: "a.1",
-			dp:    nil,
-			tf:    map[string]struct{}{},
-			want:  false,
-		},
-		{
-			// "arr.0.10": last="10" numeric, direct parent="arr.0" not in truncatedFields
-			// ("arr" is truncated but "arr.0" is not) → standard $set to avoid data corruption
-			// from misidentifying "10" (a document field name) as an array index.
-			// This is the slice_zero scenario on MongoDB <6.1 without disambiguatedPaths.
-			name:  "dp nil, slice_zero scenario: numeric string field name not direct parent",
-			field: "arr.0.10",
-			dp:    nil,
-			tf:    map[string]struct{}{"arr": {}},
-			want:  false,
-		},
-		{
-			// "arr.0": last="0" numeric, direct parent="arr" IS in truncatedFields
-			// → $concatArrays needed (genuine array element replacement under truncated array)
-			name:  "dp nil, direct array element under truncated array returns true",
-			field: "arr.0",
-			dp:    nil,
-			tf:    map[string]struct{}{"arr": {}},
-			want:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := isArrayPath(tt.field, tt.dp, tt.tf)
-			if got != tt.want {
-				t.Errorf("isArrayPath(%q, %v, %v) = %v, want %v", tt.field, tt.dp, tt.tf, got, tt.want)
-			}
-		})
-	}
-}
+const (
+	setOp   = "$set"
+	pushOp  = "$push"
+	unsetOp = "$unset"
+)
 
 func TestCollectUpdateOps(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name                  string
-		event                 *UpdateEvent
-		expectPipeline        bool
-		expectConcatArraysFor []string // Fields that should use $concatArrays
-		expectSimpleSetFor    []string // Fields that should use simple $set
+		name   string
+		event  *UpdateEvent
+		assert func(t *testing.T, ops updateOps)
 	}{
 		{
-			name: "dp nil: truncated parent uses $concatArrays, depth 2 uses $set",
+			name: "simple $set with no truncation produces a single classic update",
+			event: &UpdateEvent{
+				UpdateDescription: UpdateDescription{
+					UpdatedFields: bson.D{{Key: "a", Value: 1}, {Key: "b.c", Value: 2}},
+				},
+			},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+				assert.Empty(t, ops.followUp)
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				keys := topLevelKeys(doc)
+				assert.Equal(t, []string{setOp}, keys)
+			},
+		},
+		{
+			name: "removed fields produce $unset",
+			event: &UpdateEvent{
+				UpdateDescription: UpdateDescription{
+					RemovedFields: []string{"x", "y.z"},
+				},
+			},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+				assert.Empty(t, ops.followUp)
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				assert.Equal(t, []string{unsetOp}, topLevelKeys(doc))
+			},
+		},
+		{
+			name: "truncation alone produces classic $push with $each:[]/$slice",
 			event: &UpdateEvent{
 				UpdateDescription: UpdateDescription{
 					TruncatedArrays: []struct {
 						Field   string `bson:"field"`
 						NewSize int32  `bson:"newSize"`
 					}{
-						{Field: "a1", NewSize: 3},
+						{Field: "arr", NewSize: 3},
 					},
-					UpdatedFields: bson.D{
-						{Key: "a1.2", Value: "X"},
-						{Key: "f2.1", Value: "Y"},
-					},
-					DisambiguatedPaths: nil, // MongoDB 6.0
 				},
 			},
-			expectPipeline:        true,
-			expectConcatArraysFor: []string{"a1"},
-			expectSimpleSetFor:    []string{"f2.1"},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+				assert.Empty(t, ops.followUp)
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				assertHasTruncationPush(t, doc, "arr", 3)
+			},
 		},
 		{
-			name: "dp present: confirmed array uses $concatArrays",
+			name: "truncation conflict splits indexed write into follow-up $set",
 			event: &UpdateEvent{
 				UpdateDescription: UpdateDescription{
 					TruncatedArrays: []struct {
 						Field   string `bson:"field"`
 						NewSize int32  `bson:"newSize"`
 					}{
-						{Field: "a1", NewSize: 3},
+						{Field: "arr", NewSize: 3},
 					},
 					UpdatedFields: bson.D{
-						{Key: "a1.2", Value: "X"},
-						{Key: "f2.1", Value: "Y"},
-					},
-					DisambiguatedPaths: bson.D{
-						{Key: "a1.2", Value: bson.A{"a1", 2}},
+						{Key: "arr.2", Value: "X"},
+						{Key: "meta", Value: "Y"},
 					},
 				},
 			},
-			expectPipeline:        true,
-			expectConcatArraysFor: []string{"a1", "f2"},
-			expectSimpleSetFor:    []string{},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				// Primary must hold $push (truncation) and $set (non-conflicting).
+				assertHasTruncationPush(t, doc, "arr", 3)
+
+				primarySet := findSetDoc(t, doc)
+				assert.Equal(t, bson.D{{Key: "meta", Value: "Y"}}, primarySet,
+					"non-conflicting field 'meta' must remain in primary $set")
+
+				// arr.2 conflicts with truncation 'arr', must spill to follow-up.
+				followUpKeys := collectFollowUpKeys(t, ops.followUp)
+				assert.Equal(t, []string{"arr.2"}, followUpKeys,
+					"conflicting field 'arr.2' must be in follow-up $set")
+			},
 		},
 		{
-			name: "dp present: string key uses $set",
+			name: "truncation of nested array spills inside-truncated-array writes to follow-up",
 			event: &UpdateEvent{
 				UpdateDescription: UpdateDescription{
-					UpdatedFields: bson.D{
-						{Key: "f2.1", Value: "Y"},
+					TruncatedArrays: []struct {
+						Field   string `bson:"field"`
+						NewSize int32  `bson:"newSize"`
+					}{
+						{Field: "groups.4.items", NewSize: 1000},
 					},
-					DisambiguatedPaths: bson.D{
-						{Key: "f2.1", Value: bson.A{"f2", "1"}},
+					UpdatedFields: bson.D{
+						{Key: "signature", Value: "sig"},
+						{Key: "groups.4.count", Value: 1000},
+						{Key: "groups.4.items.985", Value: "v0"},
+						{Key: "groups.4.items.986", Value: "v1"},
 					},
 				},
 			},
-			expectPipeline:        false,
-			expectConcatArraysFor: []string{},
-			expectSimpleSetFor:    []string{"f2.1"},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				assertHasTruncationPush(t, doc, "groups.4.items", 1000)
+
+				primarySet := findSetDoc(t, doc)
+				gotKeys := setKeys(primarySet)
+				// signature and groups.4.count do not conflict with truncation.
+				assert.ElementsMatch(t, []string{"signature", "groups.4.count"}, gotKeys)
+
+				// Both indexed writes inside the truncated path go to follow-up.
+				followUpKeys := collectFollowUpKeys(t, ops.followUp)
+				assert.ElementsMatch(t, []string{
+					"groups.4.items.985",
+					"groups.4.items.986",
+				}, followUpKeys)
+			},
+		},
+		{
+			name: "non-conflicting prefix-match field stays in primary",
+			event: &UpdateEvent{
+				UpdateDescription: UpdateDescription{
+					TruncatedArrays: []struct {
+						Field   string `bson:"field"`
+						NewSize int32  `bson:"newSize"`
+					}{
+						{Field: "items", NewSize: 5},
+					},
+					UpdatedFields: bson.D{
+						{Key: "items_count", Value: 5}, // prefix 'items' but separate field
+					},
+				},
+			},
+			assert: func(t *testing.T, ops updateOps) {
+				t.Helper()
+				assert.Empty(t, ops.followUp,
+					"items_count must not be treated as conflict with truncated 'items'")
+
+				doc, ok := ops.primary.(bson.D)
+				if !ok {
+					t.Fatalf("expected primary bson.D, got %T", ops.primary)
+				}
+
+				primarySet := findSetDoc(t, doc)
+				assert.Equal(t, []string{"items_count"}, setKeys(primarySet))
+			},
 		},
 	}
 
@@ -239,137 +202,27 @@ func TestCollectUpdateOps(t *testing.T) {
 			t.Parallel()
 
 			ops := collectUpdateOps(tt.event)
-
-			switch v := ops.primary.(type) {
-			case bson.A:
-				if !tt.expectPipeline {
-					t.Errorf("Expected simple update doc (bson.D), got pipeline (bson.A)")
-
-					return
-				}
-
-				foundConcatArrays, foundSimpleSet := extractPipelineFields(t, v)
-
-				// Non-array fields may be in follow-up standard $set ops, collect those too.
-				for _, fu := range ops.followUp {
-					for _, elem := range fu {
-						if elem.Key == "$set" {
-							if setDoc, ok := elem.Value.(bson.D); ok {
-								for _, f := range setDoc {
-									foundSimpleSet[f.Key] = true
-								}
-							}
-						}
-					}
-				}
-
-				assertFieldsPresent(t, foundConcatArrays, tt.expectConcatArraysFor, "$concatArrays")
-				assertFieldsPresent(t, foundSimpleSet, tt.expectSimpleSetFor, "simple $set")
-
-			case bson.D:
-				if tt.expectPipeline {
-					t.Errorf("Expected pipeline (bson.A), got simple update doc (bson.D)")
-
-					return
-				}
-
-				verifySimpleUpdateDoc(t, v, tt.expectSimpleSetFor)
-
-			default:
-				t.Errorf("Unexpected result type: %T", ops.primary)
-			}
+			tt.assert(t, ops)
 		})
 	}
 }
 
-func TestCollectUpdateOps_NoFalsePositiveConflict(t *testing.T) {
+// TestCollectUpdateOpsWithConflicts_ChunksConflictingFields verifies that many array-index
+// updates conflicting with a truncation are chunked into multiple follow-up $set ops by
+// maxBytesPerSetOp / maxFieldsPerSetOp, keeping each individual update bounded.
+func TestCollectUpdateOpsWithConflicts_ChunksConflictingFields(t *testing.T) {
 	t.Parallel()
 
-	// "items_count" should NOT conflict with truncated array "items"
-	// because "items_count" is a separate field, not a sub-path of "items".
-	tests := []struct {
-		name           string
-		truncField     string
-		updateKey      string
-		expectPipeline bool
-	}{
-		{
-			name:           "prefix match is not a conflict: items_count vs items",
-			truncField:     "items",
-			updateKey:      "items_count",
-			expectPipeline: false,
-		},
-		{
-			name:           "prefix match is not a conflict: data vs database",
-			truncField:     "data",
-			updateKey:      "database",
-			expectPipeline: false,
-		},
-		{
-			name:           "exact match is a conflict",
-			truncField:     "items",
-			updateKey:      "items",
-			expectPipeline: true,
-		},
-		{
-			name:           "dot-separated sub-path is a conflict",
-			truncField:     "items",
-			updateKey:      "items.2",
-			expectPipeline: true,
-		},
-		{
-			name:           "deeply nested sub-path is a conflict",
-			truncField:     "items",
-			updateKey:      "items.2.name",
-			expectPipeline: true,
-		},
+	const numIndexed = 250 // > maxFieldsPerSetOp (100) → chunked into multiple follow-ups
+
+	updatedFields := make(bson.D, 0, numIndexed)
+	expectedKeys := make([]string, 0, numIndexed)
+
+	for i := range numIndexed {
+		key := "arr." + strconv.Itoa(i)
+		updatedFields = append(updatedFields, bson.E{Key: key, Value: "v" + strconv.Itoa(i)})
+		expectedKeys = append(expectedKeys, key)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			event := &UpdateEvent{
-				UpdateDescription: UpdateDescription{
-					TruncatedArrays: []struct {
-						Field   string `bson:"field"`
-						NewSize int32  `bson:"newSize"`
-					}{
-						{Field: tt.truncField, NewSize: 3},
-					},
-					UpdatedFields: bson.D{
-						{Key: tt.updateKey, Value: "val"},
-					},
-				},
-			}
-
-			ops := collectUpdateOps(event)
-
-			_, isPipeline := ops.primary.(bson.A)
-			if isPipeline != tt.expectPipeline {
-				t.Errorf("collectUpdateOps() returned pipeline=%v, want pipeline=%v", isPipeline, tt.expectPipeline)
-			}
-		})
-	}
-}
-
-func TestCollectUpdateOpsWithPipeline_ChunksSmallFields(t *testing.T) {
-	t.Parallel()
-
-	// Many small fields should be chunked by field count (maxFieldsPerSetOp),
-	// since their total byte size is well under maxBytesPerSetOp.
-	// All 250 non-array fields go to follow-up standard $set operations: 3 chunks of (100, 100, 50).
-	const numFields = 250
-
-	updatedFields := make(bson.D, 0, numFields+1)
-	for i := range numFields {
-		updatedFields = append(updatedFields, bson.E{
-			Key:   "field_" + strconv.Itoa(i),
-			Value: "value",
-		})
-	}
-
-	updatedFields = append(updatedFields, bson.E{Key: "arr.2", Value: "arrval"})
 
 	event := &UpdateEvent{
 		UpdateDescription: UpdateDescription{
@@ -377,206 +230,97 @@ func TestCollectUpdateOpsWithPipeline_ChunksSmallFields(t *testing.T) {
 				Field   string `bson:"field"`
 				NewSize int32  `bson:"newSize"`
 			}{
-				{Field: "arr", NewSize: 5},
+				{Field: "arr", NewSize: int32(numIndexed)},
 			},
 			UpdatedFields: updatedFields,
 		},
 	}
 
-	ops := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithConflicts(event)
 
-	pipeline, ok := ops.primary.(bson.A)
+	// Primary should have just $push (truncation), no $set (no non-conflicting fields).
+	doc, ok := ops.primary.(bson.D)
 	if !ok {
-		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
+		t.Fatalf("expected primary bson.D, got %T", ops.primary)
 	}
 
-	concatArraysStages, truncationStages := classifySetStages(t, pipeline)
+	assertHasTruncationPush(t, doc, "arr", int32(numIndexed))
+	assert.Empty(t, findSetDoc(t, doc), "no non-conflicting $set fields expected")
 
-	assert.Equal(t, 1, concatArraysStages, "$concatArrays stages")
-	assert.Equal(t, 1, truncationStages, "truncation stages")
+	// All conflicting fields must spill to follow-ups, chunked by count.
+	expectedFollowUps := (numIndexed + maxFieldsPerSetOp - 1) / maxFieldsPerSetOp
+	assert.Len(t, ops.followUp, expectedFollowUps)
 
-	// Count all $set fields across primary pipeline and follow-ups
-	totalFields := countAllSetFields(t, ops)
-
-	assert.Equal(t, numFields, totalFields, "total fields across primary + follow-ups")
-
-	// All batched fields go to follow-ups: 250 / 100 = 3 follow-ups (100, 100, 50)
-	expectedFollowUps := (numFields + maxFieldsPerSetOp - 1) / maxFieldsPerSetOp
-
-	assert.Len(t, ops.followUp, expectedFollowUps, "follow-up operations")
+	gotKeys := collectFollowUpKeys(t, ops.followUp)
+	assert.Equal(t, expectedKeys, gotKeys, "conflicting fields must be preserved in source order")
 }
 
-func TestCollectUpdateOpsWithPipeline_ChunksLargeFields(t *testing.T) {
+// TestCollectUpdateOpsWithConflicts_ChunksLargeFields verifies byte-based chunking when
+// individual fields are large (~20 KB each) - chunks split by maxBytesPerSetOp before
+// reaching maxFieldsPerSetOp.
+func TestCollectUpdateOpsWithConflicts_ChunksLargeFields(t *testing.T) {
 	t.Parallel()
 
-	// Large fields (~20KB each) should be chunked by byte size (maxBytesPerSetOp),
-	// producing follow-up standard $set operations. This is the BufBuilder overflow scenario.
 	const numFields = 100
+
 	largeValue := strings.Repeat("X", 20_000)
 
-	updatedFields := make(bson.D, 0, numFields+1)
+	updatedFields := make(bson.D, 0, numFields)
+
 	for i := range numFields {
 		updatedFields = append(updatedFields, bson.E{
-			Key:   "arr." + strconv.Itoa(i) + ".d",
+			Key:   "arr." + strconv.Itoa(i),
 			Value: largeValue,
 		})
 	}
 
-	updatedFields = append(updatedFields, bson.E{Key: "meta.updated", Value: true})
-
 	event := &UpdateEvent{
 		UpdateDescription: UpdateDescription{
 			TruncatedArrays: []struct {
 				Field   string `bson:"field"`
 				NewSize int32  `bson:"newSize"`
 			}{
-				{Field: "arr", NewSize: 250},
+				{Field: "arr", NewSize: int32(numFields)},
 			},
 			UpdatedFields: updatedFields,
 		},
 	}
 
-	ops := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithConflicts(event)
 
-	pipeline, ok := ops.primary.(bson.A)
-	if !ok {
-		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
-	}
+	// 100 × 20 KB = 2 MB total; maxBytesPerSetOp is 512 KiB → ~4 follow-up chunks.
+	assert.NotEmpty(t, ops.followUp)
+	assert.GreaterOrEqual(t, len(ops.followUp), 2)
 
-	concatArraysStages, _ := classifySetStages(t, pipeline)
-
-	assert.Equal(t, 0, concatArraysStages, "$concatArrays stages (all fields should be batched)")
-
-	// Must have follow-ups since 100 × 20KB = 2MB >> 512KB limit
-	assert.NotEmpty(t, ops.followUp, "should have follow-up operations due to byte size")
-
-	// Each follow-up must be a standard update (bson.D) with a single $set operator
 	for i, fu := range ops.followUp {
 		assert.Len(t, fu, 1, "follow-up %d should have exactly 1 operator ($set)", i)
-		assert.Equal(t, "$set", fu[0].Key, "follow-up %d operator key", i)
+		assert.Equal(t, setOp, fu[0].Key, "follow-up %d operator key", i)
 	}
 
-	// Count total fields across everything
-	totalFields := countAllSetFields(t, ops)
-	assert.Equal(t, numFields+1, totalFields, "total fields across primary + follow-ups (100 arr + 1 meta)")
+	gotKeys := collectFollowUpKeys(t, ops.followUp)
+	assert.Len(t, gotKeys, numFields, "all fields must be preserved across follow-ups")
 }
 
-// classifySetStages counts $concatArrays and truncation $set stages in a pipeline.
-func classifySetStages(t *testing.T, pipeline bson.A) (int, int) {
-	t.Helper()
-
-	var concatArrays, truncation int
-
-	for _, stage := range pipeline {
-		stageDoc, ok := stage.(bson.D)
-		if !ok {
-			continue
-		}
-
-		for _, elem := range stageDoc {
-			if elem.Key != setOp {
-				continue
-			}
-
-			setDoc, ok := elem.Value.(bson.D)
-			if !ok {
-				continue
-			}
-
-			switch {
-			case len(setDoc) == 1 && hasConcatArrays(setDoc[0].Value):
-				concatArrays++
-			case len(setDoc) == 1 && hasSlice(setDoc[0].Value):
-				truncation++
-			}
-		}
-	}
-
-	return concatArrays, truncation
-}
-
-// extractSetFieldsFromPipeline collects non-array $set field keys from a pipeline in order.
-func extractSetFieldsFromPipeline(t *testing.T, pipeline bson.A) []string {
-	t.Helper()
-
-	var keys []string
-
-	for _, stage := range pipeline {
-		stageDoc, ok := stage.(bson.D)
-		if !ok {
-			continue
-		}
-
-		for _, elem := range stageDoc {
-			if elem.Key != setOp {
-				continue
-			}
-
-			setDoc, ok := elem.Value.(bson.D)
-			if !ok {
-				continue
-			}
-
-			for _, f := range setDoc {
-				if !hasConcatArrays(f.Value) && !hasSlice(f.Value) {
-					keys = append(keys, f.Key)
-				}
-			}
-		}
-	}
-
-	return keys
-}
-
-// collectSetFieldKeys collects all non-array $set field keys from primary + follow-ups in order.
-func collectSetFieldKeys(t *testing.T, ops updateOps) []string {
-	t.Helper()
-
-	pipeline, ok := ops.primary.(bson.A)
-	if !ok {
-		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
-	}
-
-	keys := extractSetFieldsFromPipeline(t, pipeline)
-
-	// Follow-ups are standard $set (bson.D), not pipelines
-	for _, fu := range ops.followUp {
-		for _, elem := range fu {
-			if elem.Key == "$set" {
-				if setDoc, ok := elem.Value.(bson.D); ok {
-					for _, f := range setDoc {
-						keys = append(keys, f.Key)
-					}
-				}
-			}
-		}
-	}
-
-	return keys
-}
-
-// countAllSetFields counts all non-array $set fields across primary pipeline + follow-ups.
-func countAllSetFields(t *testing.T, ops updateOps) int {
-	t.Helper()
-
-	return len(collectSetFieldKeys(t, ops))
-}
-
-func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
+// TestCollectUpdateOpsWithConflicts_NestedArrayTruncation covers a truncated array
+// nested inside another array (groups.<idx>.items where groups is itself an array).
+// The truncation goes to a primary $push and indexed writes spill to follow-up $set
+// ops, which correctly navigate dotted numeric paths through arrays without exhausting
+// MongoDB's 125 MB BufBuilder.
+func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 	t.Parallel()
 
-	// Field ordering must be preserved across chunks to avoid breaking
-	// exact-match queries on embedded documents (MongoDB compares embedded
-	// documents by BSON byte order, so field reordering changes query semantics).
-	const numFields = 250 // spans multiple chunks of maxFieldsPerSetStage
+	const numIndexed = 15
 
-	updatedFields := make(bson.D, 0, numFields)
-	expectedOrder := make([]string, 0, numFields)
+	updatedFields := make(bson.D, 0, 3+numIndexed)
+	updatedFields = append(updatedFields,
+		bson.E{Key: "signature", Value: "sig"},
+		bson.E{Key: "updated_at", Value: "now"},
+		bson.E{Key: "groups.4.count", Value: 1000},
+	)
 
-	for i := range numFields {
-		key := "field_" + strconv.Itoa(i)
-		updatedFields = append(updatedFields, bson.E{Key: key, Value: i})
-		expectedOrder = append(expectedOrder, key)
+	for i := range numIndexed {
+		key := "groups.4.items." + strconv.Itoa(985+i)
+		updatedFields = append(updatedFields, bson.E{Key: key, Value: "v" + strconv.Itoa(i)})
 	}
 
 	event := &UpdateEvent{
@@ -585,172 +329,155 @@ func TestCollectUpdateOpsWithPipeline_ChunkedSetPreservesOrder(t *testing.T) {
 				Field   string `bson:"field"`
 				NewSize int32  `bson:"newSize"`
 			}{
-				{Field: "arr", NewSize: 5},
+				{Field: "groups.4.items", NewSize: 1000},
 			},
 			UpdatedFields: updatedFields,
 		},
 	}
 
-	ops := collectUpdateOpsWithPipeline(event)
+	ops := collectUpdateOpsWithConflicts(event)
 
-	// Collect all non-array $set fields in order: primary pipeline first, then follow-ups
-	gotOrder := collectSetFieldKeys(t, ops)
-
-	if len(gotOrder) != len(expectedOrder) {
-		t.Fatalf("Expected %d fields, got %d", len(expectedOrder), len(gotOrder))
+	doc, ok := ops.primary.(bson.D)
+	if !ok {
+		t.Fatalf("expected primary bson.D (classic update), got %T", ops.primary)
 	}
 
-	for i := range expectedOrder {
-		if gotOrder[i] != expectedOrder[i] {
-			t.Errorf("Field at position %d: got %q, want %q", i, gotOrder[i], expectedOrder[i])
-		}
+	assertHasTruncationPush(t, doc, "groups.4.items", 1000)
+
+	primarySet := findSetDoc(t, doc)
+	primaryKeys := setKeys(primarySet)
+	assert.ElementsMatch(t, []string{"signature", "updated_at", "groups.4.count"}, primaryKeys)
+
+	// Every array-index update key must appear in some follow-up $set.
+	followUpKeys := collectFollowUpKeys(t, ops.followUp)
+	for i := range numIndexed {
+		key := "groups.4.items." + strconv.Itoa(985+i)
+		assert.Contains(t, followUpKeys, key, "expected follow-up $set to include %s", key)
 	}
 }
 
-func TestCollectUpdateOpsWithPipeline_SliceUsesMaxForPositive(t *testing.T) {
+// TestClientBulkWrite_FullByBytes verifies that the per-bulk byte budget triggers Full()
+// before the count cap when individual writes are large.
+func TestClientBulkWrite_FullByBytes(t *testing.T) {
 	t.Parallel()
 
-	// The $slice third argument must always be positive.
-	// Verify the pipeline uses $max to guarantee this.
-	event := &UpdateEvent{
-		UpdateDescription: UpdateDescription{
-			TruncatedArrays: []struct {
-				Field   string `bson:"field"`
-				NewSize int32  `bson:"newSize"`
-			}{
-				{Field: "arr", NewSize: 0}, // Array truncated to size 0
-			},
-			UpdatedFields: bson.D{
-				{Key: "arr.0", Value: "new_val"},
-			},
-		},
-	}
+	cbw := newClientBulkWriter(10_000, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
-	ops := collectUpdateOpsWithPipeline(event)
+	largeValue := strings.Repeat("X", 1024*1024)
 
-	pipeline, ok := ops.primary.(bson.A)
-	if !ok {
-		t.Fatalf("Expected pipeline (bson.A), got %T", ops.primary)
-	}
-
-	// Find the $concatArrays stage for "arr"
-	found := false
-
-	for _, stage := range pipeline {
-		stageDoc, ok := stage.(bson.D)
-		if !ok {
-			continue
+	for i := range 100 {
+		raw, err := bson.Marshal(bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}})
+		if err != nil {
+			t.Fatalf("marshal full document: %v", err)
 		}
 
-		for _, elem := range stageDoc {
-			if elem.Key != setOp {
-				continue
-			}
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: raw,
+		})
 
-			setDoc, ok := elem.Value.(bson.D)
-			if !ok {
-				continue
-			}
-
-			for _, setField := range setDoc {
-				if setField.Key != "arr" {
-					continue
-				}
-
-				arrDoc, ok := setField.Value.(bson.D)
-				if !ok {
-					continue
-				}
-
-				for _, arrElem := range arrDoc {
-					if arrElem.Key != "$concatArrays" {
-						continue
-					}
-
-					concatArr, ok := arrElem.Value.(bson.A)
-					if !ok || len(concatArr) != 3 {
-						t.Fatalf("Expected $concatArrays with 3 elements, got %v", arrElem.Value)
-					}
-
-					// Third element is the trailing $slice
-					sliceDoc, ok := concatArr[2].(bson.D)
-					if !ok {
-						t.Fatalf("Expected third $concatArrays element to be bson.D, got %T", concatArr[2])
-					}
-
-					for _, sliceElem := range sliceDoc {
-						if sliceElem.Key != "$slice" {
-							continue
-						}
-
-						sliceArgs, ok := sliceElem.Value.(bson.A)
-						if !ok || len(sliceArgs) != 3 {
-							t.Fatalf("Expected $slice with 3 args, got %v", sliceElem.Value)
-						}
-
-						// Third arg should be bson.D{{"$max", bson.A{1, ...}}}
-						maxDoc, ok := sliceArgs[2].(bson.D)
-						if !ok {
-							t.Fatalf("Expected $slice third arg to be bson.D, got %T", sliceArgs[2])
-						}
-
-						hasMax := false
-						for _, maxElem := range maxDoc {
-							if maxElem.Key == "$max" {
-								hasMax = true
-
-								maxArr, ok := maxElem.Value.(bson.A)
-								if !ok || len(maxArr) != 2 {
-									t.Fatalf("Expected $max with 2 elements, got %v", maxElem.Value)
-								}
-
-								minVal, ok := maxArr[0].(int)
-								if !ok || minVal != 1 {
-									t.Errorf("Expected $max minimum to be 1, got %v", maxArr[0])
-								}
-							}
-						}
-
-						if !hasMax {
-							t.Error("$slice third argument does not use $max to guarantee positive value")
-						}
-
-						found = true
-					}
-				}
-			}
+		if cbw.Full() {
+			break
 		}
 	}
 
-	if !found {
-		t.Error("Could not find $concatArrays with $slice in pipeline")
-	}
+	assert.True(t, cbw.Full(), "Full() must be true after exceeding maxBulkBytes")
+	assert.Less(t, len(cbw.writes), 10_000, "Full() must trigger before reaching count cap")
+	assert.GreaterOrEqual(t, cbw.bytes, maxBulkBytes, "byte counter must have reached maxBulkBytes")
 }
 
-func extractPipelineFields(t *testing.T, pipeline bson.A) (map[string]bool, map[string]bool) {
-	t.Helper()
+// TestCollectionBulkWrite_FullByBytes mirrors the client-bulk byte budget test for the
+// pre-MongoDB-8.0 collection-level bulk write path.
+func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
+	t.Parallel()
 
-	concatArrays := make(map[string]bool)
-	simpleSet := make(map[string]bool)
+	cbw := newCollectionBulkWriter(10_000, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
-	for _, stage := range pipeline {
-		stageDoc, ok := stage.(bson.D)
-		if !ok {
-			t.Errorf("Pipeline stage is not bson.D: %T", stage)
+	largeValue := strings.Repeat("X", 1024*1024)
 
-			continue
+	for i := range 100 {
+		raw, err := bson.Marshal(bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}})
+		if err != nil {
+			t.Fatalf("marshal full document: %v", err)
 		}
 
-		extractSetFields(t, stageDoc, concatArrays, simpleSet)
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: raw,
+		})
+
+		if cbw.Full() {
+			break
+		}
 	}
 
-	return concatArrays, simpleSet
+	assert.True(t, cbw.Full(), "Full() must be true after exceeding maxBulkBytes")
+	assert.Less(t, cbw.count, 10_000, "Full() must trigger before reaching count cap")
+	assert.GreaterOrEqual(t, cbw.bytes, maxBulkBytes, "byte counter must have reached maxBulkBytes")
 }
 
-func extractSetDocs(t *testing.T, doc bson.D) []bson.D {
-	t.Helper()
+// TestClientBulkWrite_FullByCount preserves the existing count-based Full() behavior for
+// small writes that don't reach the byte budget.
+func TestClientBulkWrite_FullByCount(t *testing.T) {
+	t.Parallel()
 
-	docs := make([]bson.D, 0, len(doc))
+	cbw := newClientBulkWriter(3, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
+
+	for i := range 3 {
+		raw, err := bson.Marshal(bson.D{{Key: "_id", Value: i}})
+		if err != nil {
+			t.Fatalf("marshal full document: %v", err)
+		}
+
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: raw,
+		})
+	}
+
+	assert.True(t, cbw.Full(), "Full() must be true at count cap")
+	assert.Less(t, cbw.bytes, maxBulkBytes, "byte counter must be well below maxBulkBytes")
+}
+
+// TestCollectionBulkWrite_FullByCount preserves the count-based Full() behavior.
+func TestCollectionBulkWrite_FullByCount(t *testing.T) {
+	t.Parallel()
+
+	cbw := newCollectionBulkWriter(3, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
+
+	for i := range 3 {
+		raw, err := bson.Marshal(bson.D{{Key: "_id", Value: i}})
+		if err != nil {
+			t.Fatalf("marshal full document: %v", err)
+		}
+
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: raw,
+		})
+	}
+
+	assert.True(t, cbw.Full(), "Full() must be true at count cap")
+	assert.Less(t, cbw.bytes, maxBulkBytes, "byte counter must be well below maxBulkBytes")
+}
+
+// topLevelKeys returns the top-level keys of a classic update document in source order.
+func topLevelKeys(doc bson.D) []string {
+	keys := make([]string, len(doc))
+	for i, e := range doc {
+		keys[i] = e.Key
+	}
+
+	return keys
+}
+
+// findSetDoc returns the $set sub-document from a classic update doc, or nil if absent.
+func findSetDoc(t *testing.T, doc bson.D) bson.D {
+	t.Helper()
 
 	for _, elem := range doc {
 		if elem.Key != setOp {
@@ -759,80 +486,100 @@ func extractSetDocs(t *testing.T, doc bson.D) []bson.D {
 
 		setDoc, ok := elem.Value.(bson.D)
 		if !ok {
-			t.Errorf("$set value is not bson.D: %T", elem.Value)
+			t.Fatalf("$set value is not bson.D: %T", elem.Value)
+		}
 
+		return setDoc
+	}
+
+	return nil
+}
+
+// setKeys returns the keys of a $set sub-document in source order.
+func setKeys(setDoc bson.D) []string {
+	keys := make([]string, len(setDoc))
+	for i, e := range setDoc {
+		keys[i] = e.Key
+	}
+
+	return keys
+}
+
+// assertHasTruncationPush verifies the classic update doc carries
+// $push: {field: {$each: [], $slice: newSize}}.
+func assertHasTruncationPush(t *testing.T, doc bson.D, field string, newSize int32) {
+	t.Helper()
+
+	for _, elem := range doc {
+		if elem.Key != pushOp {
 			continue
 		}
 
-		docs = append(docs, setDoc)
+		pushDoc, ok := elem.Value.(bson.D)
+		if !ok {
+			t.Fatalf("$push value is not bson.D: %T", elem.Value)
+		}
+
+		for _, p := range pushDoc {
+			if p.Key != field {
+				continue
+			}
+
+			spec, ok := p.Value.(bson.D)
+			if !ok {
+				t.Fatalf("$push.%s value is not bson.D: %T", field, p.Value)
+			}
+
+			var hasEach, hasSlice bool
+
+			for _, s := range spec {
+				switch s.Key {
+				case "$each":
+					arr, ok := s.Value.(bson.A)
+					assert.True(t, ok && len(arr) == 0, "$each must be empty array")
+
+					hasEach = true
+				case "$slice":
+					assert.Equal(t, newSize, s.Value, "$slice must equal newSize")
+
+					hasSlice = true
+				}
+			}
+
+			assert.True(t, hasEach, "$push.%s must include $each:[]", field)
+			assert.True(t, hasSlice, "$push.%s must include $slice", field)
+
+			return
+		}
+
+		t.Fatalf("$push does not contain field %q", field)
 	}
 
-	return docs
+	t.Fatalf("classic update doc does not contain $push for %q", field)
 }
 
-func extractSetFields(t *testing.T, stageDoc bson.D, concatArrays, simpleSet map[string]bool) {
+// collectFollowUpKeys returns every $set key across follow-up updates in source order.
+func collectFollowUpKeys(t *testing.T, followUp []bson.D) []string {
 	t.Helper()
 
-	for _, setDoc := range extractSetDocs(t, stageDoc) {
-		for _, setField := range setDoc {
-			if hasConcatArrays(setField.Value) {
-				concatArrays[setField.Key] = true
-			} else {
-				simpleSet[setField.Key] = true
+	keys := make([]string, 0)
+
+	for _, fu := range followUp {
+		for _, elem := range fu {
+			if elem.Key != setOp {
+				continue
+			}
+
+			setDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				t.Fatalf("$set value is not bson.D: %T", elem.Value)
+			}
+
+			for _, f := range setDoc {
+				keys = append(keys, f.Key)
 			}
 		}
 	}
-}
 
-func hasConcatArrays(v any) bool {
-	valueDoc, ok := v.(bson.D)
-	if !ok {
-		return false
-	}
-
-	for _, elem := range valueDoc {
-		if elem.Key == "$concatArrays" {
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasSlice(v any) bool {
-	valueDoc, ok := v.(bson.D)
-	if !ok {
-		return false
-	}
-
-	for _, elem := range valueDoc {
-		if elem.Key == "$slice" {
-			return true
-		}
-	}
-
-	return false
-}
-
-func assertFieldsPresent(t *testing.T, found map[string]bool, expected []string, fieldType string) {
-	t.Helper()
-
-	for _, field := range expected {
-		if !found[field] {
-			t.Errorf("Expected field %q to use %s, but it doesn't", field, fieldType)
-		}
-	}
-}
-
-func verifySimpleUpdateDoc(t *testing.T, doc bson.D, expectedFields []string) {
-	t.Helper()
-
-	for _, setDoc := range extractSetDocs(t, doc) {
-		foundFields := make(map[string]bool)
-		for _, setField := range setDoc {
-			foundFields[setField.Key] = true
-		}
-
-		assertFieldsPresent(t, foundFields, expectedFields, "$set")
-	}
+	return keys
 }
