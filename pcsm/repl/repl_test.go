@@ -538,6 +538,25 @@ func TestChangeStreamInvalidateError(t *testing.T) {
 	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
 }
 
+func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
+	t.Parallel()
+
+	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
+	invalidateErr := &changeStreamInvalidateError{
+		token:       token,
+		clusterTime: bson.Timestamp{T: 123, I: 1},
+	}
+	cursorErr := errors.New("cursor closed by mongos") //nolint:err113 // test-only cursor error for precedence check.
+
+	err := changeStreamCursorError(invalidateErr, cursorErr, 0)
+
+	var target changeStreamInvalidateError
+	require.ErrorAs(t, err, &target)
+	assert.Equal(t, token, target.token)
+	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
+	assert.NotContains(t, err.Error(), "cursor")
+}
+
 func advanceCases() []struct {
 	name     string
 	current  bson.Timestamp

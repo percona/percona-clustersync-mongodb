@@ -588,18 +588,9 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 
-		err = cur.Err()
+		err = changeStreamCursorError(invalidateErr, cur.Err(), cur.ID())
 		if err != nil {
-			return errors.Wrap(err, "cursor")
-		}
-
-		if cur.ID() == 0 {
-			if invalidateErr != nil {
-				return *invalidateErr
-			}
-
-			// Return a real error so watchWithRetry reconnects instead of stopping silently.
-			return errors.New("change stream cursor closed by server")
+			return err
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -625,6 +616,22 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 	}
+}
+
+func changeStreamCursorError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
+	if invalidateErr != nil {
+		return *invalidateErr
+	}
+
+	if cursorErr != nil {
+		return errors.Wrap(cursorErr, "cursor")
+	}
+
+	if cursorID == 0 {
+		return errors.New("change stream cursor closed by server")
+	}
+
+	return nil
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
