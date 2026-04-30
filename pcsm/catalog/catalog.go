@@ -135,6 +135,7 @@ type BaseCatalog interface {
 	CreateCollection(ctx context.Context, db, coll string, opts *CreateCollectionOptions) error
 	CreateIndexes(ctx context.Context, db, coll string, indexes []*mdb.IndexSpecification) error
 	ShardCollection(ctx context.Context, db, coll string, shardKey bson.D, unique bool) error
+	SetCollectionShardingMetadata(ctx context.Context, db, coll string, shardKey bson.D) error
 	SetCollectionUUID(ctx context.Context, db, coll string, uuid *bson.Binary)
 }
 
@@ -896,6 +897,33 @@ func (c *Catalog) SetCollectionUUID(ctx context.Context, db, coll string, uuid *
 	collectionEntry.UUID = uuid
 	databaseEntry.Collections[coll] = collectionEntry
 	c.Databases[db] = databaseEntry
+}
+
+// SetCollectionShardingMetadata sets sharding metadata for an existing catalog entry.
+func (c *Catalog) SetCollectionShardingMetadata(ctx context.Context, db, coll string, shardKey bson.D) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	databaseEntry, ok := c.Databases[db]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection sharding metadata: database %q is not found", db)
+
+		return mdb.ErrNotFound
+	}
+
+	collectionEntry, ok := databaseEntry.Collections[coll]
+	if !ok {
+		log.Ctx(ctx).Warnf("set collection sharding metadata: namespace %q is not found", db+"."+coll)
+
+		return mdb.ErrNotFound
+	}
+
+	collectionEntry.Sharded = true
+	collectionEntry.ShardKey = shardKey
+	databaseEntry.Collections[coll] = collectionEntry
+	c.Databases[db] = databaseEntry
+
+	return nil
 }
 
 // UUIDMap returns a map of collection UUIDs to their namespaces.

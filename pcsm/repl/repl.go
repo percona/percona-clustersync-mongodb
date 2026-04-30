@@ -117,6 +117,8 @@ type Repl struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
+	getCollectionShardingInfo func(context.Context, *mongo.Client, string, string) (*mdb.ShardingInfo, error)
+
 	sourceVer mdb.ServerVersion
 
 	nsFilter sel.NSFilter // Namespace filter
@@ -199,16 +201,17 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:            source,
-		target:            target,
-		sourceVer:         sourceVer,
-		nsFilter:          nsFilter,
-		catalog:           cat,
-		options:           opts,
-		pauseCh:           make(chan struct{}),
-		doneCh:            make(chan struct{}),
-		movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
-		sourceIsMongos:    sourceIsMongos,
+		source:                    source,
+		target:                    target,
+		getCollectionShardingInfo: mdb.GetCollectionShardingInfo,
+		sourceVer:                 sourceVer,
+		nsFilter:                  nsFilter,
+		catalog:                   cat,
+		options:                   opts,
+		pauseCh:                   make(chan struct{}),
+		doneCh:                    make(chan struct{}),
+		movePrimaryMarker:         movePrimaryMarker{ns: make(map[string]struct{})},
+		sourceIsMongos:            sourceIsMongos,
 	}
 }
 
@@ -1086,6 +1089,12 @@ func (r *Repl) applyCreateDDLChange(
 			r.movePrimaryMarker.Arm(change.Namespace)
 			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
 		}
+		if r.sourceIsMongos {
+			err := r.repairCollectionShardingMetadata(ctx, db, coll)
+			if err != nil {
+				return errors.Wrap(err, "repair catalog sharding metadata")
+			}
+		}
 
 		return nil
 
@@ -1113,6 +1122,33 @@ func (r *Repl) applyCreateDDLChange(
 
 	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
 	lg.Infof("Collection %q has been created", change.Namespace)
+
+	return nil
+}
+
+func (r *Repl) repairCollectionShardingMetadata(ctx context.Context, db, coll string) error {
+	getShardingInfo := r.getCollectionShardingInfo
+	if getShardingInfo == nil {
+		getShardingInfo = mdb.GetCollectionShardingInfo
+	}
+
+	shInfo, err := getShardingInfo(ctx, r.source, db, coll)
+	if err != nil {
+		if errors.Is(err, mdb.ErrNotFound) {
+			return nil
+		}
+
+		return errors.Wrap(err, "query source sharding info")
+	}
+
+	if shInfo == nil || !shInfo.IsSharded() {
+		return nil
+	}
+
+	err = r.catalog.SetCollectionShardingMetadata(ctx, db, coll, shInfo.ShardKey)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+		return errors.Wrap(err, "set catalog sharding metadata")
+	}
 
 	return nil
 }
