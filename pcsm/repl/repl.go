@@ -3,7 +3,6 @@ package repl
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"runtime"
 	"strings"
 	"sync"
@@ -372,7 +371,8 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target,
+		r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap)
 
 	r.checkpointOpTime = startAt
 
@@ -465,7 +465,8 @@ func (r *Repl) Resume(ctx context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target,
+		r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
 
@@ -674,8 +675,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 	}()
 
-	uuidMap := r.catalog.UUIDMap()
-
 	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
@@ -751,8 +750,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.pool.Route(change, ns)
+			r.pool.Route(change)
 			lastRoutedTS = change.ClusterTime
 
 			r.tryAdvanceOpTime(cpTicker)
@@ -801,11 +799,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.lock.Unlock()
 
 			metrics.AddEventsApplied(1)
-
-			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase, ShardCollection:
-				uuidMap = r.catalog.UUIDMap()
-			}
 
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			r.pool.ReleaseBarrier()
@@ -902,23 +895,6 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	}
 
 	return r.pool.Idle()
-}
-
-//go:inline
-func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID != nil {
-		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
-			return ns
-		}
-	}
-
-	for _, ns := range uuidMap {
-		if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
-			return ns
-		}
-	}
-
-	return change.Namespace
 }
 
 // uuidEqual reports whether two BSON UUID binaries refer to the same UUID.

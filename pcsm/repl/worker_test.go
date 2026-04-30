@@ -37,14 +37,20 @@ func makeTestPool(numWorkers int) *workerPool {
 
 // makeChangeEvent builds a minimal ChangeEvent whose RawData contains a
 // documentKey field, matching what Route() reads via bson.Raw.Lookup.
-func makeChangeEvent(docKey bson.D) *ChangeEvent {
+func makeChangeEvent(docKey bson.D, namespaces ...catalog.Namespace) *ChangeEvent {
 	raw, err := bson.Marshal(bson.D{{"documentKey", docKey}})
 	if err != nil {
 		panic(fmt.Sprintf("marshal documentKey: %v", err))
 	}
 
+	var ns catalog.Namespace
+	if len(namespaces) > 0 {
+		ns = namespaces[0]
+	}
+
 	return &ChangeEvent{
-		RawData: bson.Raw(raw),
+		EventHeader: EventHeader{Namespace: ns},
+		RawData:     bson.Raw(raw),
 	}
 }
 
@@ -151,7 +157,7 @@ func TestRoute_SameDocumentGoesToSameWorker(t *testing.T) {
 	docKey := bson.D{{"_id", "same-doc"}}
 
 	for range numEvents {
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
 	counts := workerEventCounts(pool)
@@ -179,7 +185,7 @@ func TestRoute_DifferentDocumentsDistribute(t *testing.T) {
 
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
 	counts := workerEventCounts(pool)
@@ -210,7 +216,7 @@ func TestRoute_CappedNamespaceRoutesToSameWorker(t *testing.T) {
 	// Route events with different document keys — they must all go to one worker.
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
 	counts := workerEventCounts(pool)
@@ -245,8 +251,8 @@ func TestRoute_CappedDifferentNamespacesCanDiffer(t *testing.T) {
 	ns2Worker := -1
 
 	for i := range numEvents {
-		pool1.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("a-%d", i)}}), ns1)
-		pool2.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("b-%d", i)}}), ns2)
+		pool1.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("a-%d", i)}}, ns1))
+		pool2.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("b-%d", i)}}, ns2))
 	}
 
 	counts1 := workerEventCounts(pool1)
@@ -283,7 +289,7 @@ func TestRoute_NonCappedIgnoresCappedRouting(t *testing.T) {
 
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
 	counts := workerEventCounts(pool)
@@ -328,10 +334,10 @@ func (m *mockBulkWriter) Do(_ context.Context, _ *mongo.Client) (int, error) {
 	return n, nil
 }
 
-func (m *mockBulkWriter) Insert(_ catalog.Namespace, _ *InsertEvent)   { m.count++ }
-func (m *mockBulkWriter) Update(_ catalog.Namespace, _ *UpdateEvent)   { m.count++ }
-func (m *mockBulkWriter) Replace(_ catalog.Namespace, _ *ReplaceEvent) { m.count++ }
-func (m *mockBulkWriter) Delete(_ catalog.Namespace, _ *DeleteEvent)   { m.count++ }
+func (m *mockBulkWriter) Insert(_ *ChangeEvent, _ *InsertEvent)   { m.count++ }
+func (m *mockBulkWriter) Update(_ *ChangeEvent, _ *UpdateEvent)   { m.count++ }
+func (m *mockBulkWriter) Replace(_ *ChangeEvent, _ *ReplaceEvent) { m.count++ }
+func (m *mockBulkWriter) Delete(_ *ChangeEvent, _ *DeleteEvent)   { m.count++ }
 
 // makeInsertEvent creates a valid routedEvent with an insert ChangeEvent.
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
@@ -346,10 +352,12 @@ func makeInsertEvent(id string) *routedEvent {
 
 	return &routedEvent{
 		change: &ChangeEvent{
-			EventHeader: EventHeader{OperationType: Insert},
-			RawData:     bson.Raw(raw),
+			EventHeader: EventHeader{
+				OperationType: Insert,
+				Namespace:     catalog.Namespace{Database: "testdb", Collection: "testcoll"},
+			},
+			RawData: bson.Raw(raw),
 		},
-		ns: catalog.Namespace{Database: "testdb", Collection: "testcoll"},
 	}
 }
 
@@ -379,7 +387,7 @@ func makeTestPoolLive(t *testing.T, bws []bulkWriter) *workerPool {
 			pendingBulkCh:    make(chan *pendingBulk, config.WorkerBulkQueueSize),
 			writerDone:       make(chan struct{}),
 			bulkQueueSize:    config.WorkerBulkQueueSize,
-			newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
+			newBulkWriter:    func(catalog.UUIDMap) bulkWriter { return &mockBulkWriter{} },
 			barrierReq:       make(chan struct{}),
 			barrierDone:      make(chan error),
 			resumeCh:         make(chan struct{}),
