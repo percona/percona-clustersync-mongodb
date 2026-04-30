@@ -260,6 +260,85 @@ func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
 	require.NoError(t, r.err)
 }
 
+func TestFindNamespaceByUUID(t *testing.T) {
+	t.Parallel()
+
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	unknownUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
+	bareNS := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+	enrichedNS := catalog.Namespace{
+		Database:   "testdb",
+		Collection: "testcoll",
+		Sharded:    true,
+		ShardKey:   bson.D{{Key: "category", Value: 1}, {Key: "item_id", Value: 1}},
+	}
+	otherNS := catalog.Namespace{
+		Database:   "otherdb",
+		Collection: "othercoll",
+		Sharded:    true,
+		ShardKey:   bson.D{{Key: "other", Value: 1}},
+	}
+
+	tests := []struct {
+		name      string
+		uuidMap   catalog.UUIDMap
+		change    *ChangeEvent
+		expected  catalog.Namespace
+		bareMatch bool
+	}{
+		{
+			name: "uuid match returns enriched namespace",
+			uuidMap: catalog.UUIDMap{
+				"30313233343536373839616263646566": enrichedNS,
+			},
+			change:   &ChangeEvent{EventHeader: EventHeader{Namespace: bareNS, CollectionUUID: eventUUID}},
+			expected: enrichedNS,
+		},
+		{
+			name: "nil uuid falls back to namespace match",
+			uuidMap: catalog.UUIDMap{
+				"30313233343536373839616263646566": enrichedNS,
+			},
+			change:   &ChangeEvent{EventHeader: EventHeader{Namespace: bareNS}},
+			expected: enrichedNS,
+		},
+		{
+			name: "unknown uuid falls back to namespace match",
+			uuidMap: catalog.UUIDMap{
+				"30313233343536373839616263646566": enrichedNS,
+			},
+			change:   &ChangeEvent{EventHeader: EventHeader{Namespace: bareNS, CollectionUUID: unknownUUID}},
+			expected: enrichedNS,
+		},
+		{
+			name: "no match returns bare namespace",
+			uuidMap: catalog.UUIDMap{
+				"30313233343536373839616263646566": otherNS,
+			},
+			change:    &ChangeEvent{EventHeader: EventHeader{Namespace: bareNS, CollectionUUID: unknownUUID}},
+			expected:  bareNS,
+			bareMatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			actual := findNamespaceByUUID(tt.uuidMap, tt.change)
+
+			assert.Equal(t, tt.expected, actual)
+			if tt.bareMatch {
+				assert.False(t, actual.Sharded)
+				assert.Nil(t, actual.ShardKey)
+			} else {
+				assert.True(t, actual.Sharded)
+				assert.NotNil(t, actual.ShardKey)
+			}
+		})
+	}
+}
+
 func TestApplyCreateDDLChange(t *testing.T) {
 	t.Parallel()
 
