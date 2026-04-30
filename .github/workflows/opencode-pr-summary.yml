@@ -5,7 +5,7 @@ name: OpenCode PR Summary
     types: [created]
 
 concurrency:
-  group: pr-summary-${{ github.event.issue.number }}
+  group: pr-summary-${{ github.event.issue.number }}-${{ github.event.comment.body == '/summary' && 'cmd' || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
       id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
       pull-requests: write
-      issues: read
+      issues: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO_FULL: ${{ github.repository }}
