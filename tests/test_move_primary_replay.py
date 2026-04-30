@@ -8,7 +8,7 @@ from pathlib import Path
 
 import conftest
 import pytest
-from pymongo.errors import OperationFailure
+from pymongo.errors import OperationFailure, WriteError
 from requests import RequestException
 from testing import Testing
 
@@ -208,7 +208,19 @@ def test_move_primary_concurrent_writes(t: Testing, pcsm_bin: str, request: pyte
     def writer():
         try:
             for i in range(total_docs):
-                collection.insert_one({"_id": i, "value": f"doc-{i}"})
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        collection.insert_one({"_id": i, "value": f"doc-{i}"})
+                        break
+                    except WriteError as exc:
+                        if exc.code != 319:
+                            writer_errors.append(exc)
+                            return
+                        if time.monotonic() >= deadline:
+                            writer_errors.append(exc)
+                            return
+                        time.sleep(0.05)
                 with progress_lock:
                     progress["count"] = i + 1
                 time.sleep(0.03)
