@@ -527,7 +527,7 @@ func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 
 	// Build an UpdateEvent that produces primary + 2 follow-ups (3 ops total) so the
 	// total count after this Update is 2 + 3 = 5, past the count cap of 3.
-	conflicting := bson.D{}
+	conflicting := make(bson.D, 0, 2*maxFieldsPerSetOp)
 	for i := range 2 * maxFieldsPerSetOp { // 200 fields → 2 chunks of follow-ups
 		conflicting = append(conflicting, bson.E{Key: "arr." + strconv.Itoa(i), Value: i})
 	}
@@ -569,7 +569,7 @@ func TestCollectionBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 
 	assert.False(t, cbw.Full(), "bulk should not be full at count=2 with cap=3")
 
-	conflicting := bson.D{}
+	conflicting := make(bson.D, 0, 2*maxFieldsPerSetOp)
 	for i := range 2 * maxFieldsPerSetOp {
 		conflicting = append(conflicting, bson.E{Key: "arr." + strconv.Itoa(i), Value: i})
 	}

@@ -713,7 +713,8 @@ func collectUpdateOpsWithConflicts(event *UpdateEvent, prefixes []string) update
 	}
 
 	// Partition removed fields: non-conflicting → primary $unset; conflicting → follow-up.
-	var nonConflictingUnset, conflictingUnset bson.D
+	nonConflictingUnset := make(bson.D, 0, len(event.UpdateDescription.RemovedFields))
+	conflictingUnset := make(bson.D, 0, len(event.UpdateDescription.RemovedFields))
 
 	for _, field := range event.UpdateDescription.RemovedFields {
 		if conflictsWithTruncation(field, prefixes) {
@@ -730,7 +731,8 @@ func collectUpdateOpsWithConflicts(event *UpdateEvent, prefixes []string) update
 	}
 
 	// Partition updated fields: non-conflicting → primary $set; conflicting → follow-up.
-	var nonConflictingSet, conflictingSet bson.D
+	nonConflictingSet := make(bson.D, 0, len(event.UpdateDescription.UpdatedFields))
+	conflictingSet := make(bson.D, 0, len(event.UpdateDescription.UpdatedFields))
 
 	for _, field := range event.UpdateDescription.UpdatedFields {
 		if conflictsWithTruncation(field.Key, prefixes) {
