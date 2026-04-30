@@ -30,6 +30,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/webhook"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -151,6 +152,14 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
+
+	// Webhook flags
+	rootCmd.Flags().String("webhook-url", "", "Webhook callback URL for lifecycle event notifications")
+	rootCmd.Flags().String("webhook-auth-token", "", "Bearer token sent with webhook requests")
+	rootCmd.Flags().StringSlice("webhook-events", nil,
+		"Webhook event filter: \"all\" for all events, \"failure\" for failure events only (default: all)")
+	rootCmd.Flags().String("webhook-target", "",
+		"Webhook payload format: \"slack\" for Slack incoming webhooks (default: generic JSON)")
 
 	rootCmd.AddCommand(
 		newVersionCmd(),
@@ -640,6 +649,21 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	metrics.Init(promRegistry)
 
 	pcs := pcsm.New(ctx, source, target, sourceVersion)
+
+	var webhookEvents []webhook.Event
+
+	if len(cfg.Webhook.Events) == 1 && cfg.Webhook.Events[0] == "failure" {
+		webhookEvents = webhook.FailureEvents()
+	} else {
+		webhookEvents = webhook.AllEvents()
+	}
+
+	pcs.SetWebhook(webhook.New(webhook.Config{
+		URL:       cfg.Webhook.URL,
+		AuthToken: cfg.Webhook.AuthToken,
+		Events:    webhookEvents,
+		Target:    webhook.Target(cfg.Webhook.Target),
+	}))
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {

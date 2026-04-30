@@ -30,6 +30,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/webhook"
 	"github.com/percona/percona-clustersync-mongodb/sel"
 )
 
@@ -109,6 +110,7 @@ type PCSM struct {
 	nsFilter  sel.NSFilter // Namespace filter
 
 	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
+	webhook        *webhook.Notifier  // webhook notifier for lifecycle events
 
 	pauseOnInitialSync bool
 
@@ -253,6 +255,11 @@ func (p *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 	p.lock.Unlock()
 }
 
+// SetWebhook sets the webhook notifier for lifecycle event notifications.
+func (p *PCSM) SetWebhook(n *webhook.Notifier) {
+	p.webhook = n
+}
+
 // Status returns the current status of the PCSM.
 func (p *PCSM) Status(ctx context.Context) *Status {
 	p.lock.Lock()
@@ -360,6 +367,8 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer)
 	p.state = StateRunning
 
+	p.webhook.Send(webhook.EventPCSMStarted, "PCSM started")
+
 	go p.run(p.lifecycleCtx)
 
 	return nil
@@ -398,10 +407,13 @@ func (p *PCSM) run(ctx context.Context) {
 
 		cloneStatus = p.clone.Status()
 		if cloneStatus.Err != nil {
+			p.webhook.Send(webhook.EventCloneFailed, cloneStatus.Err.Error())
 			p.setFailed(errors.Wrap(cloneStatus.Err, "clone"))
 
 			return
 		}
+
+		p.webhook.Send(webhook.EventCloneCompleted, "Data clone completed")
 	}
 
 	replStatus := p.repl.Status()
@@ -430,6 +442,7 @@ func (p *PCSM) run(ctx context.Context) {
 
 	replStatus = p.repl.Status()
 	if replStatus.Err != nil {
+		p.webhook.Send(webhook.EventReplicationFailed, replStatus.Err.Error())
 		p.setFailed(errors.Wrap(replStatus.Err, "change replication"))
 	}
 }
@@ -472,6 +485,8 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			elapsed = time.Since(cloneStatus.StartTime)
 			lg.With(log.Elapsed(elapsed)).
 				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
+
+			p.webhook.Send(webhook.EventInitialSyncCompleted, "Initial sync completed")
 
 			p.lock.Lock()
 			pauseOnInitialSync := p.pauseOnInitialSync
@@ -578,6 +593,9 @@ func (p *PCSM) doPause(ctx context.Context) error {
 	}
 
 	p.state = StatePaused
+
+	p.webhook.Send(webhook.EventReplicationPaused, "Replication paused")
+
 	go p.onStateChanged(StatePaused)
 
 	return nil
@@ -604,6 +622,8 @@ func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 	}
 
 	log.New("pcsm").Info("Cluster Replication resumed")
+
+	p.webhook.Send(webhook.EventReplicationResumed, "Replication resumed")
 
 	return nil
 }
@@ -691,10 +711,14 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		lg.With(log.Elapsed(time.Since(startedTime))).
 			Info("Finalization is completed")
 
+		p.webhook.Send(webhook.EventFinalizationFinished, "Finalization completed")
+
 		go p.onStateChanged(StateFinalized)
 	}()
 
 	lg.Info("Finalizing")
+
+	p.webhook.Send(webhook.EventFinalizationStarted, "Finalization started")
 
 	go p.onStateChanged(StateFinalizing)
 
