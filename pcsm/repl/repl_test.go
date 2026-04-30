@@ -31,6 +31,12 @@ type mockCatalog struct {
 	setCollectionUUIDCalled bool
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
+
+	setCollectionShardingMetadataCalled bool
+	setCollectionShardingMetadataDB     string
+	setCollectionShardingMetadataColl   string
+	setCollectionShardingMetadataKey    bson.D
+	setCollectionShardingMetadataErr    error
 }
 
 type mockPool struct {
@@ -98,6 +104,15 @@ func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.Ind
 
 func (m *mockCatalog) ShardCollection(_ context.Context, _, _ string, _ bson.D, _ bool) error {
 	return nil
+}
+
+func (m *mockCatalog) SetCollectionShardingMetadata(_ context.Context, db, coll string, shardKey bson.D) error {
+	m.setCollectionShardingMetadataCalled = true
+	m.setCollectionShardingMetadataDB = db
+	m.setCollectionShardingMetadataColl = coll
+	m.setCollectionShardingMetadataKey = shardKey
+
+	return m.setCollectionShardingMetadataErr
 }
 
 func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
@@ -357,6 +372,9 @@ func TestApplyCreateDDLChange(t *testing.T) {
 		expectDrop           bool
 		expectCreate         bool
 		expectSetUUID        bool
+		sourceShardingInfo   *mdb.ShardingInfo
+		sourceShardingErr    error
+		expectSetSharding    bool
 		expectMarker         bool
 		expectSentinelMarker bool
 	}{
@@ -367,8 +385,21 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			eventUUID:            eventUUID,
 			sourceIsMongos:       true,
 			sourceVer:            mdb.ServerVersion{7, 0, 0, 0},
+			sourceShardingErr:    mdb.ErrNotFound,
 			expectMarker:         true,
 			expectSentinelMarker: true,
+		},
+		{
+			name:              "same UUID replay on mongos repairs sharding metadata",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{8, 0, 0, 0},
+			sourceShardingInfo: &mdb.ShardingInfo{
+				ShardKey: bson.D{{Key: "sku", Value: 1}},
+			},
+			expectSetSharding: true,
 		},
 		{
 			name:              "same UUID replay on replica set does not arm markers",
@@ -436,6 +467,17 @@ func TestApplyCreateDDLChange(t *testing.T) {
 				sourceIsMongos:    tt.sourceIsMongos,
 				sourceVer:         tt.sourceVer,
 			}
+			r.getCollectionShardingInfo = func(
+				_ context.Context,
+				_ *mongo.Client,
+				db string,
+				coll string,
+			) (*mdb.ShardingInfo, error) {
+				require.Equal(t, ns.Database, db)
+				require.Equal(t, ns.Collection, coll)
+
+				return tt.sourceShardingInfo, tt.sourceShardingErr
+			}
 
 			change := &ChangeEvent{
 				EventHeader: EventHeader{
@@ -452,6 +494,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
 			assert.Equal(t, tt.expectCreate, cat.createCollectionCalled)
 			assert.Equal(t, tt.expectSetUUID, cat.setCollectionUUIDCalled)
+			assert.Equal(t, tt.expectSetSharding, cat.setCollectionShardingMetadataCalled)
 
 			if tt.expectDrop {
 				assert.Equal(t, ns.Database, cat.dropCollectionDB)
@@ -460,6 +503,11 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			if tt.expectSetUUID {
 				assert.Equal(t, ns.Database, cat.setCollectionUUIDDB)
 				assert.Equal(t, ns.Collection, cat.setCollectionUUIDColl)
+			}
+			if tt.expectSetSharding {
+				assert.Equal(t, ns.Database, cat.setCollectionShardingMetadataDB)
+				assert.Equal(t, ns.Collection, cat.setCollectionShardingMetadataColl)
+				assert.Equal(t, tt.sourceShardingInfo.ShardKey, cat.setCollectionShardingMetadataKey)
 			}
 
 			_, markerArmed := r.movePrimaryMarker.ns["testdb.testcoll"]
