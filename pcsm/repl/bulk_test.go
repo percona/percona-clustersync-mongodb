@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
@@ -36,12 +37,7 @@ func TestCollectUpdateOps(t *testing.T) {
 				t.Helper()
 				assert.Empty(t, ops.followUp)
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
-
-				keys := topLevelKeys(doc)
+				keys := topLevelKeys(ops.primary)
 				assert.Equal(t, []string{setOp}, keys)
 			},
 		},
@@ -56,12 +52,7 @@ func TestCollectUpdateOps(t *testing.T) {
 				t.Helper()
 				assert.Empty(t, ops.followUp)
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
-
-				assert.Equal(t, []string{unsetOp}, topLevelKeys(doc))
+				assert.Equal(t, []string{unsetOp}, topLevelKeys(ops.primary))
 			},
 		},
 		{
@@ -80,12 +71,7 @@ func TestCollectUpdateOps(t *testing.T) {
 				t.Helper()
 				assert.Empty(t, ops.followUp)
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
-
-				assertHasTruncationPush(t, doc, "arr", 3)
+				assertHasTruncationPush(t, ops.primary, "arr", 3)
 			},
 		},
 		{
@@ -107,15 +93,10 @@ func TestCollectUpdateOps(t *testing.T) {
 			assert: func(t *testing.T, ops updateOps) {
 				t.Helper()
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
-
 				// Primary must hold $push (truncation) and $set (non-conflicting).
-				assertHasTruncationPush(t, doc, "arr", 3)
+				assertHasTruncationPush(t, ops.primary, "arr", 3)
 
-				primarySet := findSetDoc(t, doc)
+				primarySet := findSetDoc(t, ops.primary)
 				assert.Equal(t, bson.D{{Key: "meta", Value: "Y"}}, primarySet,
 					"non-conflicting field 'meta' must remain in primary $set")
 
@@ -146,14 +127,9 @@ func TestCollectUpdateOps(t *testing.T) {
 			assert: func(t *testing.T, ops updateOps) {
 				t.Helper()
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
+				assertHasTruncationPush(t, ops.primary, "groups.4.items", 1000)
 
-				assertHasTruncationPush(t, doc, "groups.4.items", 1000)
-
-				primarySet := findSetDoc(t, doc)
+				primarySet := findSetDoc(t, ops.primary)
 				gotKeys := setKeys(primarySet)
 				// signature and groups.4.count do not conflict with truncation.
 				assert.ElementsMatch(t, []string{"signature", "groups.4.count"}, gotKeys)
@@ -186,12 +162,7 @@ func TestCollectUpdateOps(t *testing.T) {
 				assert.Empty(t, ops.followUp,
 					"items_count must not be treated as conflict with truncated 'items'")
 
-				doc, ok := ops.primary.(bson.D)
-				if !ok {
-					t.Fatalf("expected primary bson.D, got %T", ops.primary)
-				}
-
-				primarySet := findSetDoc(t, doc)
+				primarySet := findSetDoc(t, ops.primary)
 				assert.Equal(t, []string{"items_count"}, setKeys(primarySet))
 			},
 		},
@@ -236,16 +207,11 @@ func TestCollectUpdateOpsWithConflicts_ChunksConflictingFields(t *testing.T) {
 		},
 	}
 
-	ops := collectUpdateOpsWithConflicts(event)
+	ops := collectUpdateOpsWithConflicts(event, truncatedPrefixes(event))
 
 	// Primary should have just $push (truncation), no $set (no non-conflicting fields).
-	doc, ok := ops.primary.(bson.D)
-	if !ok {
-		t.Fatalf("expected primary bson.D, got %T", ops.primary)
-	}
-
-	assertHasTruncationPush(t, doc, "arr", int32(numIndexed))
-	assert.Empty(t, findSetDoc(t, doc), "no non-conflicting $set fields expected")
+	assertHasTruncationPush(t, ops.primary, "arr", int32(numIndexed))
+	assert.Empty(t, findSetDoc(t, ops.primary), "no non-conflicting $set fields expected")
 
 	// All conflicting fields must spill to follow-ups, chunked by count.
 	expectedFollowUps := (numIndexed + maxFieldsPerSetOp - 1) / maxFieldsPerSetOp
@@ -286,7 +252,7 @@ func TestCollectUpdateOpsWithConflicts_ChunksLargeFields(t *testing.T) {
 		},
 	}
 
-	ops := collectUpdateOpsWithConflicts(event)
+	ops := collectUpdateOpsWithConflicts(event, truncatedPrefixes(event))
 
 	// 100 × 20 KB = 2 MB total; maxBytesPerSetOp is 512 KiB → ~4 follow-up chunks.
 	assert.NotEmpty(t, ops.followUp)
@@ -335,16 +301,11 @@ func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 		},
 	}
 
-	ops := collectUpdateOpsWithConflicts(event)
+	ops := collectUpdateOpsWithConflicts(event, truncatedPrefixes(event))
 
-	doc, ok := ops.primary.(bson.D)
-	if !ok {
-		t.Fatalf("expected primary bson.D (classic update), got %T", ops.primary)
-	}
+	assertHasTruncationPush(t, ops.primary, "groups.4.items", 1000)
 
-	assertHasTruncationPush(t, doc, "groups.4.items", 1000)
-
-	primarySet := findSetDoc(t, doc)
+	primarySet := findSetDoc(t, ops.primary)
 	primaryKeys := setKeys(primarySet)
 	assert.ElementsMatch(t, []string{"signature", "updated_at", "groups.4.count"}, primaryKeys)
 
@@ -382,9 +343,10 @@ func TestClientBulkWrite_FullByBytes(t *testing.T) {
 		}
 	}
 
-	assert.True(t, cbw.Full(), "Full() must be true after exceeding maxBulkBytes")
+	assert.True(t, cbw.Full(), "Full() must be true after exceeding byte budget")
 	assert.Less(t, len(cbw.writes), 10_000, "Full() must trigger before reaching count cap")
-	assert.GreaterOrEqual(t, cbw.bytes, maxBulkBytes, "byte counter must have reached maxBulkBytes")
+	assert.GreaterOrEqual(t, cbw.bytes, config.MaxWriteBatchSizeBytes,
+		"byte counter must have reached the byte budget")
 }
 
 // TestCollectionBulkWrite_FullByBytes mirrors the client-bulk byte budget test for the
@@ -413,9 +375,10 @@ func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 		}
 	}
 
-	assert.True(t, cbw.Full(), "Full() must be true after exceeding maxBulkBytes")
+	assert.True(t, cbw.Full(), "Full() must be true after exceeding byte budget")
 	assert.Less(t, cbw.count, 10_000, "Full() must trigger before reaching count cap")
-	assert.GreaterOrEqual(t, cbw.bytes, maxBulkBytes, "byte counter must have reached maxBulkBytes")
+	assert.GreaterOrEqual(t, cbw.bytes, config.MaxWriteBatchSizeBytes,
+		"byte counter must have reached the byte budget")
 }
 
 // TestClientBulkWrite_FullByCount preserves the existing count-based Full() behavior for
@@ -439,7 +402,8 @@ func TestClientBulkWrite_FullByCount(t *testing.T) {
 	}
 
 	assert.True(t, cbw.Full(), "Full() must be true at count cap")
-	assert.Less(t, cbw.bytes, maxBulkBytes, "byte counter must be well below maxBulkBytes")
+	assert.Less(t, cbw.bytes, config.MaxWriteBatchSizeBytes,
+		"byte counter must be well below the byte budget")
 }
 
 // TestCollectionBulkWrite_FullByCount preserves the count-based Full() behavior.
@@ -462,7 +426,299 @@ func TestCollectionBulkWrite_FullByCount(t *testing.T) {
 	}
 
 	assert.True(t, cbw.Full(), "Full() must be true at count cap")
-	assert.Less(t, cbw.bytes, maxBulkBytes, "byte counter must be well below maxBulkBytes")
+	assert.Less(t, cbw.bytes, config.MaxWriteBatchSizeBytes,
+		"byte counter must be well below the byte budget")
+}
+
+// TestCollectUpdateOps_TruncationWithRemovedFieldOnSamePathSpills (issue #1) verifies that
+// a removed field whose path equals or is nested under a truncated array spills to a
+// follow-up $unset operation rather than colliding with $push in the primary update
+// document. MongoDB rejects update docs that combine $push and $unset on overlapping paths
+// with "Updating the path '...' would create a conflict at '...'".
+func TestCollectUpdateOps_TruncationWithRemovedFieldOnSamePathSpills(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		removedFields    []string
+		wantPrimaryUnset []string // fields expected in primary $unset (non-conflicting)
+		wantFollowUpKeys []string // fields expected in follow-up $unset (conflicting)
+	}{
+		{
+			name:             "sub-path of truncated array",
+			removedFields:    []string{"arr.0.x", "other"},
+			wantPrimaryUnset: []string{"other"},
+			wantFollowUpKeys: []string{"arr.0.x"},
+		},
+		{
+			name:             "exact truncated path",
+			removedFields:    []string{"arr"},
+			wantPrimaryUnset: nil,
+			wantFollowUpKeys: []string{"arr"},
+		},
+		{
+			name:             "multiple conflicting and one non-conflicting",
+			removedFields:    []string{"arr.5.field", "arr.7", "meta"},
+			wantPrimaryUnset: []string{"meta"},
+			wantFollowUpKeys: []string{"arr.5.field", "arr.7"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			event := &UpdateEvent{
+				UpdateDescription: UpdateDescription{
+					TruncatedArrays: []struct {
+						Field   string `bson:"field"`
+						NewSize int32  `bson:"newSize"`
+					}{
+						{Field: "arr", NewSize: 5},
+					},
+					RemovedFields: tt.removedFields,
+				},
+			}
+
+			ops := collectUpdateOps(event)
+
+			// Primary must always carry $push for the truncation.
+			assertHasTruncationPush(t, ops.primary, "arr", 5)
+
+			// Primary $unset (if any) must contain only non-conflicting paths.
+			primaryUnset := findUnsetDoc(t, ops.primary)
+			gotPrimary := setKeys(primaryUnset)
+			assert.ElementsMatch(t, tt.wantPrimaryUnset, gotPrimary,
+				"primary $unset must contain only non-conflicting fields")
+
+			// Follow-up must carry the conflicting $unset paths.
+			gotFollowUp := collectFollowUpUnsetKeys(t, ops.followUp)
+			assert.ElementsMatch(t, tt.wantFollowUpKeys, gotFollowUp,
+				"conflicting removed fields must spill to follow-up $unset")
+
+			// Sanity: the primary update doc must not simultaneously contain $push for "arr"
+			// and $unset for any path under "arr" — that's the conflict the fix prevents.
+			for _, primaryKey := range gotPrimary {
+				assert.False(t, primaryKey == "arr" || strings.HasPrefix(primaryKey, "arr."),
+					"primary $unset must not include path %q overlapping truncation 'arr'", primaryKey)
+			}
+		})
+	}
+}
+
+// TestClientBulkWrite_FullAfterUpdateWithFollowUps (issue #2) verifies that Full() honors
+// the count cap even after Update appends primary + multiple follow-ups, which can grow
+// the underlying slice past its initial cap.
+func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
+	t.Parallel()
+
+	cbw := newClientBulkWriter(3, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
+
+	// Two single-op inserts: count = 2.
+	for i := range 2 {
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: i}})),
+		})
+	}
+
+	assert.False(t, cbw.Full(), "bulk should not be full at count=2 with cap=3")
+
+	// Build an UpdateEvent that produces primary + 2 follow-ups (3 ops total) so the
+	// total count after this Update is 2 + 3 = 5, past the count cap of 3.
+	conflicting := bson.D{}
+	for i := range 2 * maxFieldsPerSetOp { // 200 fields → 2 chunks of follow-ups
+		conflicting = append(conflicting, bson.E{Key: "arr." + strconv.Itoa(i), Value: i})
+	}
+
+	event := &UpdateEvent{
+		DocumentKey: bson.D{{Key: "_id", Value: 99}},
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: conflicting,
+		},
+	}
+
+	cbw.Update(ns, event)
+
+	assert.True(t, cbw.Full(), "Full() must be true after Update appended past count cap")
+	assert.Greater(t, len(cbw.writes), cbw.maxOpsSize,
+		"Update must have grown the slice past its initial cap")
+}
+
+// TestCollectionBulkWrite_FullAfterUpdateWithFollowUps mirrors the client-bulk variant
+// for the collection-level path.
+func TestCollectionBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
+	t.Parallel()
+
+	cbw := newCollectionBulkWriter(3, false)
+	ns := catalog.Namespace{Database: "db", Collection: "c"}
+
+	for i := range 2 {
+		cbw.Insert(ns, &InsertEvent{
+			DocumentKey:  bson.D{{Key: "_id", Value: i}},
+			FullDocument: bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: i}})),
+		})
+	}
+
+	assert.False(t, cbw.Full(), "bulk should not be full at count=2 with cap=3")
+
+	conflicting := bson.D{}
+	for i := range 2 * maxFieldsPerSetOp {
+		conflicting = append(conflicting, bson.E{Key: "arr." + strconv.Itoa(i), Value: i})
+	}
+
+	event := &UpdateEvent{
+		DocumentKey: bson.D{{Key: "_id", Value: 99}},
+		UpdateDescription: UpdateDescription{
+			TruncatedArrays: []struct {
+				Field   string `bson:"field"`
+				NewSize int32  `bson:"newSize"`
+			}{
+				{Field: "arr", NewSize: 1000},
+			},
+			UpdatedFields: conflicting,
+		},
+	}
+
+	cbw.Update(ns, event)
+
+	assert.True(t, cbw.Full(), "Full() must be true after Update appended past count cap")
+	assert.Greater(t, cbw.count, cbw.maxOpsSize,
+		"Update must have pushed count past max")
+}
+
+// TestBulkWriter_WouldOverflowPreflight (issue #3) verifies the byte-budget preflight:
+// WouldOverflow returns true when adding the estimate would push past config.MaxWriteBatchSizeBytes,
+// returns false when the bulk is empty (so a single oversized event still proceeds), and
+// returns false when the estimate fits.
+func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("client bulk", func(t *testing.T) {
+		t.Parallel()
+
+		cbw := newClientBulkWriter(10_000, false)
+
+		// Empty bulk: WouldOverflow must always be false even for huge estimates so a
+		// single oversized event can still be sent on its own bulk.
+		assert.False(t, cbw.WouldOverflow(2*config.MaxWriteBatchSizeBytes),
+			"empty bulk must accept any estimate")
+
+		// Fill close to the byte cap.
+		ns := catalog.Namespace{Database: "db", Collection: "c"}
+		largeValue := strings.Repeat("X", 1024*1024)
+
+		for i := range 30 {
+			raw := bson.Raw(mustMarshal(t,
+				bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}}))
+			cbw.Insert(ns, &InsertEvent{
+				DocumentKey:  bson.D{{Key: "_id", Value: i}},
+				FullDocument: raw,
+			})
+		}
+
+		// A small estimate must fit.
+		assert.False(t, cbw.WouldOverflow(1024),
+			"small estimate must not trigger overflow")
+
+		// A large estimate that pushes past the cap must trigger overflow.
+		remaining := config.MaxWriteBatchSizeBytes - cbw.bytes
+		assert.True(t, cbw.WouldOverflow(remaining+1),
+			"estimate exceeding remaining budget must trigger overflow")
+	})
+
+	t.Run("collection bulk", func(t *testing.T) {
+		t.Parallel()
+
+		cbw := newCollectionBulkWriter(10_000, false)
+
+		assert.False(t, cbw.WouldOverflow(2*config.MaxWriteBatchSizeBytes),
+			"empty bulk must accept any estimate")
+
+		ns := catalog.Namespace{Database: "db", Collection: "c"}
+		largeValue := strings.Repeat("X", 1024*1024)
+
+		for i := range 30 {
+			raw := bson.Raw(mustMarshal(t,
+				bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}}))
+			cbw.Insert(ns, &InsertEvent{
+				DocumentKey:  bson.D{{Key: "_id", Value: i}},
+				FullDocument: raw,
+			})
+		}
+
+		assert.False(t, cbw.WouldOverflow(1024),
+			"small estimate must not trigger overflow")
+
+		remaining := config.MaxWriteBatchSizeBytes - cbw.bytes
+		assert.True(t, cbw.WouldOverflow(remaining+1),
+			"estimate exceeding remaining budget must trigger overflow")
+	})
+}
+
+// mustMarshal marshals v with bson.Marshal or fails the test on error.
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+
+	b, err := bson.Marshal(v)
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+
+	return b
+}
+
+// findUnsetDoc returns the $unset sub-document from a classic update doc, or nil if absent.
+func findUnsetDoc(t *testing.T, doc bson.D) bson.D {
+	t.Helper()
+
+	for _, elem := range doc {
+		if elem.Key != unsetOp {
+			continue
+		}
+
+		unsetDoc, ok := elem.Value.(bson.D)
+		if !ok {
+			t.Fatalf("$unset value is not bson.D: %T", elem.Value)
+		}
+
+		return unsetDoc
+	}
+
+	return nil
+}
+
+// collectFollowUpUnsetKeys returns every $unset key across follow-up updates in source order.
+func collectFollowUpUnsetKeys(t *testing.T, followUp []bson.D) []string {
+	t.Helper()
+
+	keys := make([]string, 0)
+
+	for _, fu := range followUp {
+		for _, elem := range fu {
+			if elem.Key != unsetOp {
+				continue
+			}
+
+			unsetDoc, ok := elem.Value.(bson.D)
+			if !ok {
+				t.Fatalf("$unset value is not bson.D: %T", elem.Value)
+			}
+
+			for _, f := range unsetDoc {
+				keys = append(keys, f.Key)
+			}
+		}
+	}
+
+	return keys
 }
 
 // topLevelKeys returns the top-level keys of a classic update document in source order.

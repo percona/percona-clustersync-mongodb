@@ -304,6 +304,10 @@ func (w *worker) run(ctx context.Context) {
 // addToCurrentBulk parses the deferred DML event body from raw BSON and adds
 // it to the current bulk write.
 // Returns a non-nil error if parsing fails, which is reported to the main loop.
+//
+// If adding the parsed event would push the current bulk past config.MaxWriteBatchSizeBytes,
+// the current bulk is enqueued first so the byte budget is honored without ever appending
+// past it.
 func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
 	if err != nil {
@@ -311,6 +315,15 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	}
 
 	event.change.RawData = nil // release raw bytes for GC
+
+	// Preflight: if the current bulk would overflow the byte budget, enqueue it first
+	// and start fresh. The WouldOverflow guard returns false when the bulk is empty so
+	// a single oversized event can still be sent on its own bulk.
+	if w.currentBulkWrite.WouldOverflow(estimateEventBytes(parsed)) {
+		if !w.enqueueBulk() {
+			return errors.Wrap(w.writerErr, "writer stopped")
+		}
+	}
 
 	switch e := parsed.(type) { //nolint:exhaustive
 	case InsertEvent:

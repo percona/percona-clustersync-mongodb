@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
@@ -35,38 +36,45 @@ var collectionBulkOptions = options.BulkWrite().
 
 // Update operation chunking limits to prevent MongoDB's 125 MB BufBuilder overflow (error
 // 13548) and to keep individual update payloads bounded. When a change event combines
-// truncations with conflicting array-index updates, the array-index updates are split off
-// into separate $set follow-up operations, each its own update with its own MongoDB-side
-// BufBuilder. maxBytesPerSetOp is the primary guard; maxFieldsPerSetOp is a secondary guard
-// against degenerate cases with many tiny fields.
+// truncations with conflicting array-index updates or removed sub-paths, the conflicting
+// operations are split off into separate $set/$unset follow-up operations, each its own
+// update with its own MongoDB-side BufBuilder. maxBytesPerSetOp is the primary guard;
+// maxFieldsPerSetOp is a secondary guard against degenerate cases with many tiny fields.
 //
-// maxBulkBytes caps the aggregate wire size of a single bulk command, well under MongoDB's
-// 48 MB MaxMessageSizeBytes default. Combined with the per-update bounds above, this keeps
-// both individual operations and the bulk command within MongoDB's wire-protocol limits.
+// The aggregate wire size of a single bulk command is capped at config.MaxWriteBatchSizeBytes
+// (MongoDB's MaxMessageSizeBytes minus the standard message-header reserve). Per-op envelope
+// overhead (model wrappers, nsInfo, command metadata) is not explicitly accounted for in
+// cbw.bytes; the header reserve plus the empty-bulk exception in WouldOverflow provide the
+// safety margin in practice.
 const (
-	maxFieldsPerSetOp = 100              //nolint:mnd
-	maxBytesPerSetOp  = 512 * 1024       //nolint:mnd // 512 KiB
-	maxBulkBytes      = 32 * 1024 * 1024 //nolint:mnd // 32 MiB - well under 48 MB MaxMessageSizeBytes
+	maxFieldsPerSetOp = 100        //nolint:mnd
+	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512 KiB
 )
 
 // updateOps holds the result of building update operations from a change stream event.
-// When a change event combines an array truncation with conflicting indexed-write updates,
-// the conflicting updates are split into follow-up $set operations so that no single update
-// document carries both a $push (truncation) and a $set on the same array path - which
-// MongoDB rejects as a path conflict - and so that no individual update accumulates enough
-// work to exhaust MongoDB's 125 MB BufBuilder ceiling (error 13548).
+// When a change event combines an array truncation with conflicting indexed-write updates
+// or removed sub-paths, the conflicting updates are split into follow-up $set/$unset
+// operations so that no single update document carries both a $push (truncation) and a
+// $set/$unset on the same array path - which MongoDB rejects as a path conflict - and so
+// that no individual update accumulates enough work to exhaust MongoDB's 125 MB BufBuilder
+// ceiling (error 13548).
 type updateOps struct {
-	// primary is the main update document (bson.D).
-	primary any
-	// followUp contains additional $set operations for array-index updates that conflict
-	// with a truncation in the primary update. Each element is an update document (bson.D)
-	// with a single $set operator. nil when not needed.
+	// primary is the main update document.
+	primary bson.D
+	// followUp contains additional update documents (each with a single $set or $unset
+	// operator) for fields that conflict with a truncation in the primary update. nil
+	// when not needed.
 	followUp []bson.D
 }
 
 type bulkWriter interface {
 	Full() bool
 	Empty() bool
+	// WouldOverflow reports whether appending an operation of the given estimated
+	// BSON byte size would push the bulk past config.MaxWriteBatchSizeBytes. It
+	// returns false when the bulk is empty so a single oversized event can still be
+	// sent on its own.
+	WouldOverflow(estimate int) bool
 	Do(ctx context.Context, m *mongo.Client) (int, error)
 
 	Insert(ns catalog.Namespace, event *InsertEvent)
@@ -77,6 +85,7 @@ type bulkWriter interface {
 
 type clientBulkWrite struct {
 	useSimpleCollation bool
+	maxOpsSize         int
 	bytes              int
 	writes             []mongo.ClientBulkWrite
 }
@@ -84,16 +93,21 @@ type clientBulkWrite struct {
 func newClientBulkWriter(size int, useSimpleCollation bool) *clientBulkWrite {
 	return &clientBulkWrite{
 		useSimpleCollation: useSimpleCollation,
+		maxOpsSize:         size,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
 	}
 }
 
 func (cbw *clientBulkWrite) Full() bool {
-	return len(cbw.writes) == cap(cbw.writes) || cbw.bytes >= maxBulkBytes
+	return len(cbw.writes) >= cbw.maxOpsSize || cbw.bytes >= config.MaxWriteBatchSizeBytes
 }
 
 func (cbw *clientBulkWrite) Empty() bool {
 	return len(cbw.writes) == 0
+}
+
+func (cbw *clientBulkWrite) WouldOverflow(estimate int) bool {
+	return len(cbw.writes) > 0 && cbw.bytes+estimate > config.MaxWriteBatchSizeBytes
 }
 
 func (cbw *clientBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
@@ -212,6 +226,9 @@ func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	ops := collectUpdateOps(event)
 
+	// Marshal the document filter once and reuse for primary + every follow-up.
+	filterLen := marshalLen(event.DocumentKey)
+
 	m := &mongo.ClientUpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: ops.primary,
@@ -224,11 +241,11 @@ func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	cbw.writes = append(cbw.writes, mongo.ClientBulkWrite{
 		Database: ns.Database, Collection: ns.Collection, Model: m,
 	})
-	cbw.bytes += estimateBytes(event.DocumentKey, ops.primary)
+	cbw.bytes += filterLen + marshalLen(ops.primary)
 
-	// Follow-up $set operations for fields split out due to BufBuilder limits.
-	// Each is a separate updateOne so MongoDB resets its BufBuilder per operation.
-	// Ordered bulk writes guarantee sequential execution.
+	// Follow-up $set/$unset operations for fields split out due to truncation path
+	// conflicts and BufBuilder limits. Each is a separate updateOne so MongoDB resets
+	// its BufBuilder per operation. Ordered bulk writes guarantee sequential execution.
 	for _, followUp := range ops.followUp {
 		fm := &mongo.ClientUpdateOneModel{
 			Filter: event.DocumentKey,
@@ -242,7 +259,7 @@ func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 		cbw.writes = append(cbw.writes, mongo.ClientBulkWrite{
 			Database: ns.Database, Collection: ns.Collection, Model: fm,
 		})
-		cbw.bytes += estimateBytes(event.DocumentKey, followUp)
+		cbw.bytes += filterLen + marshalLen(followUp)
 	}
 }
 
@@ -287,7 +304,7 @@ func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 
 type collectionBulkWrite struct {
 	useSimpleCollation bool
-	max                int
+	maxOpsSize         int
 	count              int
 	bytes              int
 	writes             map[string][]mongo.WriteModel
@@ -296,17 +313,21 @@ type collectionBulkWrite struct {
 func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,
-		max:                size,
+		maxOpsSize:         size,
 		writes:             make(map[string][]mongo.WriteModel),
 	}
 }
 
 func (cbw *collectionBulkWrite) Full() bool {
-	return cbw.count == cbw.max || cbw.bytes >= maxBulkBytes
+	return cbw.count >= cbw.maxOpsSize || cbw.bytes >= config.MaxWriteBatchSizeBytes
 }
 
 func (cbw *collectionBulkWrite) Empty() bool {
 	return cbw.count == 0
+}
+
+func (cbw *collectionBulkWrite) WouldOverflow(estimate int) bool {
+	return cbw.count > 0 && cbw.bytes+estimate > config.MaxWriteBatchSizeBytes
 }
 
 func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, error) {
@@ -449,6 +470,8 @@ func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent)
 func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	ops := collectUpdateOps(event)
 
+	filterLen := marshalLen(event.DocumentKey)
+
 	m := &mongo.UpdateOneModel{
 		Filter: event.DocumentKey,
 		Update: ops.primary,
@@ -460,9 +483,10 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 
 	cbw.writes[ns.String()] = append(cbw.writes[ns.String()], m)
 	cbw.count++
-	cbw.bytes += estimateBytes(event.DocumentKey, ops.primary)
+	cbw.bytes += filterLen + marshalLen(ops.primary)
 
-	// Follow-up $set operations for fields split out due to BufBuilder limits.
+	// Follow-up $set/$unset operations for fields split out due to truncation path
+	// conflicts and BufBuilder limits.
 	for _, followUp := range ops.followUp {
 		fm := &mongo.UpdateOneModel{
 			Filter: event.DocumentKey,
@@ -475,7 +499,7 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 
 		cbw.writes[ns.String()] = append(cbw.writes[ns.String()], fm)
 		cbw.count++
-		cbw.bytes += estimateBytes(event.DocumentKey, followUp)
+		cbw.bytes += filterLen + marshalLen(followUp)
 	}
 }
 
@@ -542,7 +566,7 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	log.Ctx(ctx).With(log.NS(coll.Database().Name(), coll.Name())).
 		Infof("Retrying with delete+insert fallback for _id: %v", docID)
 
-	_, err = coll.DeleteOne(ctx, bson.D{{"_id", docID}})
+	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}})
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.Wrap(err, "delete before insert")
 	}
@@ -565,9 +589,14 @@ func estimateBytes(filter, payload any) int {
 }
 
 // marshalLen returns the marshaled BSON length of v, or 0 if v is nil or marshaling fails.
+// Special-cases bson.Raw (already a complete BSON document) to avoid a redundant marshal.
 func marshalLen(v any) int {
 	if v == nil {
 		return 0
+	}
+
+	if r, ok := v.(bson.Raw); ok {
+		return len(r)
 	}
 
 	b, err := bson.Marshal(v)
@@ -578,19 +607,58 @@ func marshalLen(v any) int {
 	return len(b)
 }
 
+// estimateEventBytes returns the approximate BSON byte size that an event will contribute
+// to a bulk write. Used by the worker to preflight WouldOverflow before adding to the
+// current bulk so the byte cap is honored without ever appending past it.
+func estimateEventBytes(parsed any) int {
+	switch e := parsed.(type) {
+	case InsertEvent:
+		return estimateBytes(e.DocumentKey, e.FullDocument)
+	case ReplaceEvent:
+		return estimateBytes(e.DocumentKey, e.FullDocument)
+	case DeleteEvent:
+		return estimateBytes(e.DocumentKey, nil)
+	case UpdateEvent:
+		ops := collectUpdateOps(&e)
+
+		filterLen := marshalLen(e.DocumentKey)
+		total := filterLen + marshalLen(ops.primary)
+
+		for _, fu := range ops.followUp {
+			total += filterLen + marshalLen(fu)
+		}
+
+		return total
+	default:
+		return 0
+	}
+}
+
+// collectUpdateOps builds the update operations for a change stream UpdateEvent. When no
+// truncated array path conflicts with any updated or removed field, a single classic
+// update document is emitted in updateOps.primary. Otherwise it dispatches to
+// collectUpdateOpsWithConflicts to split conflicting writes into ordered follow-up updates.
 func collectUpdateOps(event *UpdateEvent) updateOps {
-	for _, trunc := range event.UpdateDescription.TruncatedArrays {
-		for _, update := range event.UpdateDescription.UpdatedFields {
-			if update.Key == trunc.Field || strings.HasPrefix(update.Key, trunc.Field+".") {
-				return collectUpdateOpsWithConflicts(event) // there is conflict field update
+	if len(event.UpdateDescription.TruncatedArrays) != 0 {
+		prefixes := truncatedPrefixes(event)
+
+		for _, u := range event.UpdateDescription.UpdatedFields {
+			if conflictsWithTruncation(u.Key, prefixes) {
+				return collectUpdateOpsWithConflicts(event, prefixes)
+			}
+		}
+
+		for _, rf := range event.UpdateDescription.RemovedFields {
+			if conflictsWithTruncation(rf, prefixes) {
+				return collectUpdateOpsWithConflicts(event, prefixes)
 			}
 		}
 	}
 
-	ops := make(bson.D, 0, 1)
+	ops := make(bson.D, 0, 3) //nolint:mnd
 
 	if len(event.UpdateDescription.UpdatedFields) != 0 {
-		ops = append(ops, bson.E{"$set", event.UpdateDescription.UpdatedFields})
+		ops = append(ops, bson.E{Key: "$set", Value: event.UpdateDescription.UpdatedFields})
 	}
 
 	if len(event.UpdateDescription.RemovedFields) != 0 {
@@ -600,35 +668,37 @@ func collectUpdateOps(event *UpdateEvent) updateOps {
 			fields[i].Value = 1
 		}
 
-		ops = append(ops, bson.E{"$unset", fields})
+		ops = append(ops, bson.E{Key: "$unset", Value: fields})
 	}
 
 	if len(event.UpdateDescription.TruncatedArrays) != 0 {
 		fields := make(bson.D, len(event.UpdateDescription.TruncatedArrays))
 		for i, field := range event.UpdateDescription.TruncatedArrays {
 			fields[i].Key = field.Field
-			fields[i].Value = bson.D{{"$each", bson.A{}}, {"$slice", field.NewSize}}
+			fields[i].Value = bson.D{{Key: "$each", Value: bson.A{}}, {Key: "$slice", Value: field.NewSize}}
 		}
 
-		ops = append(ops, bson.E{"$push", fields})
+		ops = append(ops, bson.E{Key: "$push", Value: fields})
 	}
 
 	return updateOps{primary: ops}
 }
 
 // collectUpdateOpsWithConflicts builds update operations for change events where one or
-// more updated fields target a path inside a truncated array (e.g. truncation of "arr"
-// together with a write to "arr.5"). MongoDB rejects an update document that combines a
-// $push (truncation) with a $set on the same array path, so the work is split across
-// multiple ordered update operations:
+// more updated fields or removed fields target a path inside a truncated array (e.g.
+// truncation of "arr" together with a write to "arr.5" or a removal of "arr.0.x"). MongoDB
+// rejects an update document that combines a $push (truncation) with a $set or $unset on
+// the same array path, so the work is split across multiple ordered update operations:
 //
-//	primary update:   $push (truncations) + $unset (removed) + $set (non-conflicting fields)
-//	follow-up update: $set (conflicting fields), chunked by maxBytesPerSetOp /
-//	                  maxFieldsPerSetOp to keep each individual update bounded
+//	primary update:   $push (truncations) + $unset (non-conflicting removed) +
+//	                  $set (non-conflicting updated)
+//	follow-up update: $set (conflicting updated) and $unset (conflicting removed),
+//	                  chunked by maxBytesPerSetOp / maxFieldsPerSetOp to keep each
+//	                  individual update bounded
 //
 // Splitting also bounds per-update work on the target side, keeping each update under
 // MongoDB's 125 MB BufBuilder ceiling (error 13548, PCSM-305).
-func collectUpdateOpsWithConflicts(event *UpdateEvent) updateOps {
+func collectUpdateOpsWithConflicts(event *UpdateEvent, prefixes []string) updateOps {
 	primary := make(bson.D, 0, 3) //nolint:mnd
 
 	// Truncations → $push: {field: {$each: [], $slice: NewSize}}.
@@ -642,71 +712,94 @@ func collectUpdateOpsWithConflicts(event *UpdateEvent) updateOps {
 		primary = append(primary, bson.E{Key: "$push", Value: fields})
 	}
 
-	// Removed fields → $unset.
-	if len(event.UpdateDescription.RemovedFields) != 0 {
-		fields := make(bson.D, len(event.UpdateDescription.RemovedFields))
-		for i, field := range event.UpdateDescription.RemovedFields {
-			fields[i].Key = field
-			fields[i].Value = 1
-		}
+	// Partition removed fields: non-conflicting → primary $unset; conflicting → follow-up.
+	var nonConflictingUnset, conflictingUnset bson.D
 
-		primary = append(primary, bson.E{Key: "$unset", Value: fields})
-	}
-
-	truncatedPrefixes := make([]string, 0, len(event.UpdateDescription.TruncatedArrays))
-	for _, ta := range event.UpdateDescription.TruncatedArrays {
-		truncatedPrefixes = append(truncatedPrefixes, ta.Field)
-	}
-
-	// Updated fields are partitioned into:
-	//  - nonConflicting: emitted in primary $set (no overlap with any truncated path).
-	//  - conflicting:    deferred to follow-up $set to avoid same-path $push+$set conflict.
-	var nonConflicting, conflicting bson.D
-
-	for _, field := range event.UpdateDescription.UpdatedFields {
-		if conflictsWithTruncation(field.Key, truncatedPrefixes) {
-			conflicting = append(conflicting, bson.E{Key: field.Key, Value: field.Value})
+	for _, field := range event.UpdateDescription.RemovedFields {
+		if conflictsWithTruncation(field, prefixes) {
+			conflictingUnset = append(conflictingUnset, bson.E{Key: field, Value: 1})
 
 			continue
 		}
 
-		nonConflicting = append(nonConflicting, bson.E{Key: field.Key, Value: field.Value})
+		nonConflictingUnset = append(nonConflictingUnset, bson.E{Key: field, Value: 1})
 	}
 
-	if len(nonConflicting) != 0 {
-		primary = append(primary, bson.E{Key: "$set", Value: nonConflicting})
+	if len(nonConflictingUnset) != 0 {
+		primary = append(primary, bson.E{Key: "$unset", Value: nonConflictingUnset})
 	}
 
-	// Follow-up $set ops carry only conflicting (array-index) fields. They are chunked
-	// by maxBytesPerSetOp / maxFieldsPerSetOp so each individual update is bounded - this
+	// Partition updated fields: non-conflicting → primary $set; conflicting → follow-up.
+	var nonConflictingSet, conflictingSet bson.D
+
+	for _, field := range event.UpdateDescription.UpdatedFields {
+		if conflictsWithTruncation(field.Key, prefixes) {
+			conflictingSet = append(conflictingSet, bson.E{Key: field.Key, Value: field.Value})
+
+			continue
+		}
+
+		nonConflictingSet = append(nonConflictingSet, bson.E{Key: field.Key, Value: field.Value})
+	}
+
+	if len(nonConflictingSet) != 0 {
+		primary = append(primary, bson.E{Key: "$set", Value: nonConflictingSet})
+	}
+
+	// Follow-up ops carry only conflicting (truncation-path) fields. They are chunked by
+	// maxBytesPerSetOp / maxFieldsPerSetOp so each individual update is bounded - this
 	// caps the per-update wire size and keeps target plan execution cheap. Each follow-up
 	// is a separate ordered update operation; MongoDB resets BufBuilder between operations.
 	var followUp []bson.D
 
+	followUp = appendFieldChunks(followUp, "$set", conflictingSet)
+	followUp = appendFieldChunks(followUp, "$unset", conflictingUnset)
+
+	return updateOps{primary: primary, followUp: followUp}
+}
+
+// truncatedPrefixes extracts the list of truncated array paths from an UpdateEvent so they
+// can be reused by both the dispatch check and the partitioning logic.
+func truncatedPrefixes(event *UpdateEvent) []string {
+	prefixes := make([]string, 0, len(event.UpdateDescription.TruncatedArrays))
+	for _, ta := range event.UpdateDescription.TruncatedArrays {
+		prefixes = append(prefixes, ta.Field)
+	}
+
+	return prefixes
+}
+
+// appendFieldChunks splits fields into bounded follow-up update documents, each carrying a
+// single op operator (e.g. "$set" or "$unset"). Chunks are bounded by maxBytesPerSetOp and
+// maxFieldsPerSetOp. Returns followUp with the new chunks appended.
+func appendFieldChunks(followUp []bson.D, op string, fields bson.D) []bson.D {
+	if len(fields) == 0 {
+		return followUp
+	}
+
 	chunkStart := 0
 	chunkBytes := 0
 
-	for i := range conflicting {
-		b, _ := bson.Marshal(bson.D{conflicting[i]})
-		chunkBytes += len(b)
+	for i := range fields {
+		chunkBytes += marshalLen(bson.D{fields[i]})
 
 		if chunkBytes >= maxBytesPerSetOp || (i-chunkStart+1) >= maxFieldsPerSetOp {
-			followUp = append(followUp, bson.D{{Key: "$set", Value: conflicting[chunkStart : i+1]}})
+			followUp = append(followUp, bson.D{{Key: op, Value: fields[chunkStart : i+1]}})
 			chunkStart = i + 1
 			chunkBytes = 0
 		}
 	}
 
-	if chunkStart < len(conflicting) {
-		followUp = append(followUp, bson.D{{Key: "$set", Value: conflicting[chunkStart:]}})
+	if chunkStart < len(fields) {
+		followUp = append(followUp, bson.D{{Key: op, Value: fields[chunkStart:]}})
 	}
 
-	return updateOps{primary: primary, followUp: followUp}
+	return followUp
 }
 
 // conflictsWithTruncation reports whether key is the same as, or a sub-path of, any
 // truncated-array path in prefixes. A conflict means the field cannot share an update
-// document with the truncation $push and must be deferred to a separate follow-up $set.
+// document with the truncation $push and must be deferred to a separate follow-up.
 func conflictsWithTruncation(key string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if key == p || strings.HasPrefix(key, p+".") {
