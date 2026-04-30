@@ -17,10 +17,10 @@ jobs:
     permissions:
       id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
-      pull-requests: write
+      pull-requests: write  # bash post-step PATCHes the PR body
       issues: write
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO_FULL: ${{ github.repository }}
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
@@ -42,6 +42,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read PR payload
+        if: env.SKIP != 'true'
+        run: |
+          set -euo pipefail
+          # Pre-fetch PR data outside the LLM step so the agent does not need
+          # GitHub API access. The opencode step reads from these files instead
+          # of calling `gh api` itself, which previously hung the action.
+          PR_FILE="$RUNNER_TEMP/pr.json"
+          COMMITS_FILE="$RUNNER_TEMP/pr_commits.json"
+          FILES_FILE="$RUNNER_TEMP/pr_files.json"
+          gh api "repos/$REPO_FULL/pulls/$PR_NUMBER" > "$PR_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/commits" > "$COMMITS_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/files" > "$FILES_FILE"
+          {
+            echo "PR_PAYLOAD_FILE=$PR_FILE"
+            echo "PR_COMMITS_FILE=$COMMITS_FILE"
+            echo "PR_FILES_FILE=$FILES_FILE"
+          } >> "$GITHUB_ENV"
+
       - name: Load summary prompt
         if: env.SKIP != 'true'
         id: prompt
@@ -62,12 +81,30 @@ jobs:
         if: env.SKIP != 'true'
         timeout-minutes: 10
         uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        # GH_TOKEN is intentionally not passed. The agent reads PR data from
+        # files and writes the new body to NEW_BODY_FILE; a follow-up bash
+        # step PATCHes the PR. This mirrors the /jira flow.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO_FULL: ${{ env.REPO_FULL }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          PR_PAYLOAD_FILE: ${{ env.PR_PAYLOAD_FILE }}
+          PR_COMMITS_FILE: ${{ env.PR_COMMITS_FILE }}
+          PR_FILES_FILE: ${{ env.PR_FILES_FILE }}
+          NEW_BODY_FILE: ${{ runner.temp }}/new_body.md
         with:
           model: anthropic/claude-opus-4-7
-          # Use GITHUB_TOKEN directly so the agent shell can call `gh api` for the
-          # PR body PATCH. Default OIDC exchange holds the App token internally and
-          # strips it from the agent shell, which causes the PATCH call to hang.
-          use_github_token: true
           prompt: ${{ steps.prompt.outputs.content }}
+
+      - name: Update PR body
+        if: env.SKIP != 'true'
+        run: |
+          set -euo pipefail
+          BODY_FILE="$RUNNER_TEMP/new_body.md"
+          if [[ ! -f "$BODY_FILE" ]]; then
+            echo "::error::New PR body file not produced by opencode step at $BODY_FILE."
+            exit 1
+          fi
+          # --field with @file feeds the body verbatim; no shell quoting hazards.
+          gh api --method PATCH "repos/$REPO_FULL/pulls/$PR_NUMBER" \
+            --field "body=@$BODY_FILE"
