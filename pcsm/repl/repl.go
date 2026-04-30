@@ -1,8 +1,8 @@
 package repl
 
 import (
+	"bytes"
 	"context"
-	"encoding/hex"
 	"runtime"
 	"strings"
 	"sync"
@@ -41,12 +41,16 @@ type Catalog interface {
 	) error
 }
 
-var (
-	ErrInvalidateEvent  = errors.New("invalidate")
-	ErrOplogHistoryLost = errors.New("oplog history is lost")
-)
+var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
+
+// movePrimarySentinelNS is the sentinel namespace used to signal a movePrimary-induced
+// change stream invalidation on <8 mongos sources. See PCSM-249 / SERVER-120349.
+var movePrimarySentinelNS = catalog.Namespace{ //nolint:gochecknoglobals
+	Database:   "::movePrimary::",
+	Collection: "sentinel",
+}
 
 // Options configures the replication behavior.
 type Options struct {
@@ -112,6 +116,8 @@ type Repl struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
+	getCollectionShardingInfo func(context.Context, *mongo.Client, string, string) (*mdb.ShardingInfo, error)
+
 	sourceVer mdb.ServerVersion
 
 	nsFilter sel.NSFilter // Namespace filter
@@ -135,7 +141,10 @@ type Repl struct {
 	pauseCh chan struct{}
 	doneCh  chan struct{}
 
-	pool *workerPool
+	pool workerBarrierPool
+
+	movePrimaryMarker movePrimaryMarker
+	sourceIsMongos    bool
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
@@ -176,6 +185,7 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 	sourceVer mdb.ServerVersion,
+	sourceIsMongos bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -190,15 +200,25 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:    source,
-		target:    target,
-		sourceVer: sourceVer,
-		nsFilter:  nsFilter,
-		catalog:   cat,
-		options:   opts,
-		pauseCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		source:                    source,
+		target:                    target,
+		getCollectionShardingInfo: mdb.GetCollectionShardingInfo,
+		sourceVer:                 sourceVer,
+		nsFilter:                  nsFilter,
+		catalog:                   cat,
+		options:                   opts,
+		pauseCh:                   make(chan struct{}),
+		doneCh:                    make(chan struct{}),
+		movePrimaryMarker:         movePrimaryMarker{ns: make(map[string]struct{})},
+		sourceIsMongos:            sourceIsMongos,
 	}
+}
+
+// sourceIsPre8AndMongos returns true when the source is a mongos (sharded) and
+// runs MongoDB 6.x or 7.x (pre-8). Used to gate invalidate-stream handling for
+// movePrimary on older sharded topologies.
+func (r *Repl) sourceIsPre8AndMongos() bool {
+	return r.sourceIsMongos && r.sourceVer.Major() < 8
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -351,7 +371,8 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target,
+		r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap)
 
 	r.checkpointOpTime = startAt
 
@@ -444,7 +465,8 @@ func (r *Repl) Resume(ctx context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(context.Background(), r.options, r.target,
+		r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
 
@@ -460,11 +482,29 @@ func (r *Repl) watchWithRetry(
 	changeCh chan<- *ChangeEvent,
 ) error {
 	currentOpts := opts
+	var startAfter bson.Raw
 
 	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil
+		}
+
+		var invalidateErr changeStreamInvalidateError
+		if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
+			startAfter = append(startAfter[:0], invalidateErr.token...)
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+			log.New("repl:watch").With(
+				log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
+			).Warn("change stream invalidated; reconnecting with startAfter")
+
+			return err
+		}
+
+		if len(startAfter) > 0 {
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+
+			return err
 		}
 
 		r.lock.Lock()
@@ -477,6 +517,15 @@ func (r *Repl) watchWithRetry(
 	}, isChangeStreamUnrecoverable,
 		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
+}
+
+type changeStreamInvalidateError struct {
+	token       bson.Raw
+	clusterTime bson.Timestamp
+}
+
+func (e changeStreamInvalidateError) Error() string {
+	return "change stream invalidated"
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
@@ -512,6 +561,8 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
+	var invalidateErr *changeStreamInvalidateError
+
 	for {
 		lastEventTS := bson.Timestamp{}
 		hasEvents := false
@@ -532,11 +583,18 @@ func (r *Repl) watchChangeEvents(
 			ts := change.ClusterTime
 			changeCh <- change
 			lastEventTS = ts
+
+			if change.OperationType == Invalidate {
+				invalidateErr = &changeStreamInvalidateError{
+					token:       append(bson.Raw(nil), change.ID...),
+					clusterTime: change.ClusterTime,
+				}
+			}
 		}
 
-		err = cur.Err()
-		if err != nil || cur.ID() == 0 {
-			return errors.Wrap(err, "cursor")
+		err = changeStreamCursorError(invalidateErr, cur.Err(), cur.ID())
+		if err != nil {
+			return err
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -562,6 +620,22 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 	}
+}
+
+func changeStreamCursorError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
+	if invalidateErr != nil {
+		return *invalidateErr
+	}
+
+	if cursorErr != nil {
+		return errors.Wrap(cursorErr, "cursor")
+	}
+
+	if cursorID == 0 {
+		return errors.New("change stream cursor closed by server")
+	}
+
+	return nil
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
@@ -600,8 +674,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.setFailed(err, "Watch change stream")
 		}
 	}()
-
-	uuidMap := r.catalog.UUIDMap()
 
 	lg := log.New("repl")
 
@@ -678,11 +750,18 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.pool.Route(change, ns)
+			r.pool.Route(change)
 			lastRoutedTS = change.ClusterTime
 
 			r.tryAdvanceOpTime(cpTicker)
+
+		case Invalidate:
+			r.handleInvalidate(change)
+			if r.err != nil {
+				return
+			}
+
+			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 
 		default:
 			err := r.pool.Barrier()
@@ -721,15 +800,47 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 			metrics.AddEventsApplied(1)
 
-			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase, ShardCollection:
-				uuidMap = r.catalog.UUIDMap()
-			}
-
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+func (r *Repl) handleInvalidate(change *ChangeEvent) {
+	err := r.pool.Barrier()
+	if err != nil {
+		r.pool.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return
+	}
+
+	if r.sourceIsPre8AndMongos() && r.movePrimaryMarker.Take(movePrimarySentinelNS) {
+		r.lock.Lock()
+		r.advanceCheckpoint(change.ClusterTime)
+		r.eventsApplied++
+		r.lock.Unlock()
+
+		metrics.AddEventsApplied(1)
+		r.pool.ReleaseBarrier()
+
+		return
+	}
+
+	if r.sourceIsMongos {
+		log.New("repl:invalidate").With(
+			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			log.NS(change.Namespace.Database, change.Namespace.Collection),
+		).Warn("change stream invalidated; will reconnect from checkpoint")
+
+		// Do not advance checkpoint; reconnect re-reads from the last applied event and idempotency handles duplicates.
+		r.pool.ReleaseBarrier()
+
+		return
+	}
+
+	r.pool.ReleaseBarrier()
+	r.setFailed(errors.New("change stream invalidated unexpectedly"), "Invalidate event")
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
@@ -786,18 +897,14 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	return r.pool.Idle()
 }
 
-//go:inline
-func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID == nil {
-		return change.Namespace
+// uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
+// Returns false if either pointer is nil.
+func uuidEqual(a, b *bson.Binary) bool {
+	if a == nil || b == nil {
+		return false
 	}
 
-	ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]
-	if !ok {
-		return change.Namespace
-	}
-
-	return ns
+	return bytes.Equal(a.Data, b.Data)
 }
 
 // applyDDLChange applies a schema change to the target MongoDB.
@@ -810,42 +917,32 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	switch change.OperationType { //nolint:exhaustive
 	case Create:
 		event := change.Event.(CreateEvent) //nolint:forcetypeassert
-		if event.IsTimeseries() {
-			lg.Warn("Timeseries is not supported. skipping")
+		err = r.applyCreateDDLChange(ctx, change, &event, lg)
+
+	case Drop:
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		eventUUID := change.CollectionUUID
+		catalogUUID, _ := r.catalog.CollectionUUID(db, coll)
+
+		// PCSM-249: stale phantom drop from movePrimary is suppressed.
+		// The catalog has the new UUID (assigned by phantom create handler); this drop
+		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+		// UUID comparison only suppresses when both sides are present and differ; views
+		// and other untracked namespaces fall through to the real drop, which is idempotent.
+		if eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID) {
+			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
 
 			return nil
 		}
 
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
-		if err != nil {
-			err = errors.Wrap(err, "drop before create")
-
-			break
+		// On <8 mongos source, consume the movePrimary marker if present.
+		// (marker signals that a real drop is part of the movePrimary invalidate sequence)
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Take(change.Namespace)
 		}
 
-		err = r.catalog.CreateCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			&event.OperationDescription)
-		if err != nil {
-			err = errors.Wrap(err, "create")
-
-			break
-		}
-
-		r.catalog.SetCollectionUUID(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			change.CollectionUUID)
-
-		lg.Infof("Collection %q has been created", change.Namespace)
-
-	case Drop:
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
+		err = r.catalog.DropCollection(ctx, db, coll)
 		if err != nil {
 			break
 		}
@@ -897,11 +994,8 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		lg.Infof("Collection %q has been renamed to %q",
 			change.Namespace, event.OperationDescription.To)
 
-	case Invalidate:
-		lg.Error(ErrInvalidateEvent, "")
-
-		return ErrInvalidateEvent
-
+	// Invalidate handled at dispatch layer — see run() switch.
+	// This case is intentionally absent; reaching it would be a programming error.
 	case ShardCollection:
 		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
 		err = r.catalog.ShardCollection(ctx,
@@ -942,6 +1036,94 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		}
 
 		return errors.Wrap(err, string(change.OperationType))
+	}
+
+	return nil
+}
+
+func (r *Repl) applyCreateDDLChange(
+	ctx context.Context,
+	change *ChangeEvent,
+	event *CreateEvent,
+	lg log.Logger,
+) error {
+	if event.IsTimeseries() {
+		lg.Warn("Timeseries is not supported. skipping")
+
+		return nil
+	}
+
+	db := change.Namespace.Database
+	coll := change.Namespace.Collection
+	eventUUID := change.CollectionUUID
+
+	catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+	switch {
+	case exists && uuidEqual(catalogUUID, eventUUID):
+		lg.Debug("create event replay detected, namespace already at this UUID; noop")
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Arm(change.Namespace)
+			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+		}
+		if r.sourceIsMongos {
+			err := r.repairCollectionShardingMetadata(ctx, db, coll)
+			if err != nil {
+				return errors.Wrap(err, "repair catalog sharding metadata")
+			}
+		}
+
+		return nil
+
+	case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
+		lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+		if r.sourceIsPre8AndMongos() {
+			r.movePrimaryMarker.Arm(change.Namespace)
+			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+		}
+
+		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+
+		return nil
+	}
+
+	err := r.catalog.DropCollection(ctx, db, coll)
+	if err != nil {
+		return errors.Wrap(err, "drop before create")
+	}
+
+	err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
+	if err != nil {
+		return errors.Wrap(err, "create")
+	}
+
+	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+	lg.Infof("Collection %q has been created", change.Namespace)
+
+	return nil
+}
+
+func (r *Repl) repairCollectionShardingMetadata(ctx context.Context, db, coll string) error {
+	getShardingInfo := r.getCollectionShardingInfo
+	if getShardingInfo == nil {
+		getShardingInfo = mdb.GetCollectionShardingInfo
+	}
+
+	shInfo, err := getShardingInfo(ctx, r.source, db, coll)
+	if err != nil {
+		if errors.Is(err, mdb.ErrNotFound) {
+			return nil
+		}
+
+		return errors.Wrap(err, "query source sharding info")
+	}
+
+	if shInfo == nil || !shInfo.IsSharded() {
+		return nil
+	}
+
+	err = r.catalog.SetCollectionShardingMetadata(ctx, db, coll, shInfo.ShardKey)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+		return errors.Wrap(err, "set catalog sharding metadata")
 	}
 
 	return nil

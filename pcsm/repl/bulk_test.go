@@ -6,10 +6,40 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
 const setOp = "$set"
+
+func TestClientBulkWriteResolvesNamespaceFromBulkSnapshot(t *testing.T) {
+	t.Parallel()
+
+	uuid := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	currentNS := catalog.Namespace{Database: "current_db", Collection: "current_coll"}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace:      catalog.Namespace{Database: "stale_db", Collection: "stale_coll"},
+		CollectionUUID: uuid,
+	}}
+	fullDocument, err := bson.Marshal(bson.D{{Key: "_id", Value: 1}})
+	require.NoError(t, err)
+
+	event := &InsertEvent{
+		DocumentKey:  bson.D{{Key: "_id", Value: 1}},
+		FullDocument: bson.Raw(fullDocument),
+	}
+	writer := newClientBulkWriter(1, false, catalog.UUIDMap{
+		"30313233343536373839616263646566": currentNS,
+	})
+
+	writer.Insert(change, event)
+
+	assert.Len(t, writer.writes, 1)
+	assert.Equal(t, currentNS.Database, writer.writes[0].Database)
+	assert.Equal(t, currentNS.Collection, writer.writes[0].Collection)
+}
 
 func TestIsArrayPath(t *testing.T) {
 	t.Parallel()
