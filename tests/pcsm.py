@@ -226,19 +226,9 @@ class Runner:
                 # Even though PCSM has processed the oplog entry, MongoDB metadata updates
                 # (like collection/database creation) may not be immediately visible to other
                 # connections. Poll the target with exponential backoff to ensure visibility.
-                for retry in range(6):
-                    # When PCSM creates a collection or database on the target cluster:
-                    #   - PCSM writes the change and confirms it's applied
-                    #   - But test's MongoDB connection still has stale metadata cached
-                    #   - Immediately querying for that collection might return "not found"
-
-                    # The ping command causes the driver to refresh its metadata cache,
-                    # ensuring subsequent queries  see the latest state.
+                for retry in range(12):
                     self.target.admin.command("ping")
-
-                    # Exponential backoff with cap: 0.05s, 0.10s, 0.20s, 0.20s, 0.20s, 0.20s
-                    # Total wait: ~0.95 seconds
-                    time.sleep(min(0.05 * (2**retry), 0.2))
+                    time.sleep(min(0.05 * (2**retry), 0.5))
 
                 return
 

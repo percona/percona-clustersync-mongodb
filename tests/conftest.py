@@ -88,13 +88,39 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
 PCSM_PROC: subprocess.Popen = None
 
 
+def _pcsm_url(request: pytest.FixtureRequest):
+    return request.config.getoption("--pcsm_url") or os.environ["TEST_PCSM_URL"]
+
+
+def _wait_for_pcsm_ready(pcsm_url: str, timeout: float = 10.0):
+    """Poll PCSM /status until it returns state=idle or timeout."""
+    deadline = time.monotonic() + timeout
+    pcsm_client = PCSM(pcsm_url)
+    last_err = "no response"
+    while time.monotonic() < deadline:
+        try:
+            payload = pcsm_client.status()
+            if payload.get("state") == PCSM.State.IDLE:
+                return
+            last_err = f"unexpected state={payload.get('state')}"
+        except Exception as e:  # noqa: BLE001 - any failure during startup is retryable
+            last_err = str(e)
+        time.sleep(0.1)
+    raise TimeoutError(f"PCSM not ready within {timeout}s: {last_err}")
+
+
 def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest):
     source = source_uri(request)
     target = target_uri(request)
     rv = subprocess.Popen(
         [pcsm_bin, "--source", source, "--target", target, "--reset-state", "--log-level=trace"]
     )
-    time.sleep(1)
+    try:
+        _wait_for_pcsm_ready(_pcsm_url(request))
+    except Exception:  # noqa: BLE001 - cleanup orphaned process before re-raising
+        rv.terminate()
+        rv.wait()
+        raise
     return rv
 
 
