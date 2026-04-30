@@ -38,7 +38,7 @@ func makeTestPool(numWorkers int) *workerPool {
 // makeChangeEvent builds a minimal ChangeEvent whose RawData contains a
 // documentKey field, matching what Route() reads via bson.Raw.Lookup.
 func makeChangeEvent(docKey bson.D, namespaces ...catalog.Namespace) *ChangeEvent {
-	raw, err := bson.Marshal(bson.D{{"documentKey", docKey}})
+	raw, err := bson.Marshal(bson.D{{Key: "documentKey", Value: docKey}})
 	if err != nil {
 		panic(fmt.Sprintf("marshal documentKey: %v", err))
 	}
@@ -72,17 +72,17 @@ func TestHashDocumentKey_Deterministic(t *testing.T) {
 		key        bson.D
 		numWorkers int
 	}{
-		{"objectid_8w", bson.D{{"_id", bson.NewObjectID()}}, 8},
-		{"string_8w", bson.D{{"_id", "some-key"}}, 8},
-		{"int_16w", bson.D{{"_id", 42}}, 16},
-		{"compound_4w", bson.D{{"_id", "x"}, {"sk", 1}}, 4},
+		{"objectid_8w", bson.D{{Key: "_id", Value: bson.NewObjectID()}}, 8},
+		{"string_8w", bson.D{{Key: "_id", Value: "some-key"}}, 8},
+		{"int_16w", bson.D{{Key: "_id", Value: 42}}, 16},
+		{"compound_4w", bson.D{{Key: "_id", Value: "x"}, {Key: "sk", Value: 1}}, 4},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			raw, err := bson.Marshal(bson.D{{"documentKey", tt.key}})
+			raw, err := bson.Marshal(bson.D{{Key: "documentKey", Value: tt.key}})
 			require.NoError(t, err)
 
 			docKey := bson.Raw(raw).Lookup("documentKey")
@@ -154,7 +154,7 @@ func TestRoute_SameDocumentGoesToSameWorker(t *testing.T) {
 
 	pool := makeTestPool(numWorkers)
 	ns := catalog.Namespace{Database: "db", Collection: "coll"}
-	docKey := bson.D{{"_id", "same-doc"}}
+	docKey := bson.D{{Key: "_id", Value: "same-doc"}}
 
 	for range numEvents {
 		pool.Route(makeChangeEvent(docKey, ns))
@@ -184,7 +184,7 @@ func TestRoute_DifferentDocumentsDistribute(t *testing.T) {
 	ns := catalog.Namespace{Database: "db", Collection: "coll"}
 
 	for i := range numEvents {
-		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
+		docKey := bson.D{{Key: "_id", Value: fmt.Sprintf("doc-%d", i)}}
 		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
@@ -215,7 +215,7 @@ func TestRoute_CappedNamespaceRoutesToSameWorker(t *testing.T) {
 
 	// Route events with different document keys — they must all go to one worker.
 	for i := range numEvents {
-		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
+		docKey := bson.D{{Key: "_id", Value: fmt.Sprintf("doc-%d", i)}}
 		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
@@ -251,8 +251,8 @@ func TestRoute_CappedDifferentNamespacesCanDiffer(t *testing.T) {
 	ns2Worker := -1
 
 	for i := range numEvents {
-		pool1.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("a-%d", i)}}, ns1))
-		pool2.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("b-%d", i)}}, ns2))
+		pool1.Route(makeChangeEvent(bson.D{{Key: "_id", Value: fmt.Sprintf("a-%d", i)}}, ns1))
+		pool2.Route(makeChangeEvent(bson.D{{Key: "_id", Value: fmt.Sprintf("b-%d", i)}}, ns2))
 	}
 
 	counts1 := workerEventCounts(pool1)
@@ -288,7 +288,7 @@ func TestRoute_NonCappedIgnoresCappedRouting(t *testing.T) {
 	ns := catalog.Namespace{Database: "db", Collection: "regular", Capped: false}
 
 	for i := range numEvents {
-		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
+		docKey := bson.D{{Key: "_id", Value: fmt.Sprintf("doc-%d", i)}}
 		pool.Route(makeChangeEvent(docKey, ns))
 	}
 
@@ -304,6 +304,77 @@ func TestRoute_NonCappedIgnoresCappedRouting(t *testing.T) {
 
 	assert.Greater(t, workersUsed, 1,
 		"non-capped collections must still distribute by document key across multiple workers")
+}
+
+func TestWorkerPoolCheckpoint_SafeFrontier(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func(*workerPool)
+		expected bson.Timestamp
+	}{
+		{
+			name:     "empty pool",
+			setup:    func(*workerPool) {},
+			expected: bson.Timestamp{},
+		},
+		{
+			name: "one worker routed none committed",
+			setup: func(pool *workerPool) {
+				storeLastRoutedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
+			},
+			expected: bson.Timestamp{},
+		},
+		{
+			name: "fast worker committed past slow in flight worker",
+			setup: func(pool *workerPool) {
+				storeLastRoutedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
+				storeLastRoutedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+				storeLastCommittedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+			},
+			expected: bson.Timestamp{},
+		},
+		{
+			name: "all workers fully applied returns max committed",
+			setup: func(pool *workerPool) {
+				storeLastRoutedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
+				storeLastCommittedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
+				storeLastRoutedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+				storeLastCommittedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+			},
+			expected: bson.Timestamp{T: 15, I: 1},
+		},
+		{
+			name: "one worker behind returns min committed",
+			setup: func(pool *workerPool) {
+				storeLastRoutedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
+				storeLastCommittedTS(pool.workers[0], bson.Timestamp{T: 13, I: 1})
+				storeLastRoutedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+				storeLastCommittedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
+			},
+			expected: bson.Timestamp{T: 13, I: 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pool := makeTestPool(2)
+			tt.setup(pool)
+
+			assert.Equal(t, tt.expected, pool.Checkpoint())
+		})
+	}
+}
+
+func storeLastRoutedTS(w *worker, ts bson.Timestamp) {
+	w.lastRoutedTS.Store(&ts)
+}
+
+func storeLastCommittedTS(w *worker, ts bson.Timestamp) {
+	w.lastTS.Store(&ts)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +414,8 @@ func (m *mockBulkWriter) Delete(_ *ChangeEvent, _ *DeleteEvent)   { m.count++ }
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
 func makeInsertEvent(id string) *routedEvent {
 	raw, err := bson.Marshal(bson.D{
-		{"documentKey", bson.D{{"_id", id}}},
-		{"fullDocument", bson.D{{"_id", id}, {"x", 1}}},
+		{Key: "documentKey", Value: bson.D{{Key: "_id", Value: id}}},
+		{Key: "fullDocument", Value: bson.D{{Key: "_id", Value: id}, {Key: "x", Value: 1}}},
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal insert event: %v", err))

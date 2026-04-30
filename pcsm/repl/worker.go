@@ -576,25 +576,53 @@ func (p *workerPool) ReleaseBarrier() {
 	}
 }
 
-// Checkpoint returns the minimum committed timestamp across all workers.
-// This is the safe point to resume from after a restart.
+// Checkpoint returns a safe stream-prefix frontier across workers.
+// If any routed event is not committed yet, the slowest routed worker limits
+// the checkpoint; when every routed worker is caught up, the frontier can move
+// to the highest committed timestamp.
 func (p *workerPool) Checkpoint() bson.Timestamp {
-	var minTS bson.Timestamp
+	var minCommitted bson.Timestamp
+	var maxCommitted bson.Timestamp
+	hasUnapplied := false
 	first := true
 
 	for _, w := range p.workers {
-		ts := w.lastTS.Load()
-		if ts == nil {
+		routed := w.lastRoutedTS.Load()
+		if routed == nil {
 			continue
 		}
 
-		if first || ts.Before(minTS) {
-			minTS = *ts
+		var committed bson.Timestamp
+		if ts := w.lastTS.Load(); ts != nil {
+			committed = *ts
+		}
+
+		if first || committed.Before(minCommitted) {
+			minCommitted = committed
+		}
+
+		if first || committed.After(maxCommitted) {
+			maxCommitted = committed
+		}
+
+		if committed.Before(*routed) {
+			hasUnapplied = true
+		}
+
+		if first {
 			first = false
 		}
 	}
 
-	return minTS
+	if first {
+		return bson.Timestamp{}
+	}
+
+	if hasUnapplied {
+		return minCommitted
+	}
+
+	return maxCommitted
 }
 
 // Idle returns true when every worker that has been routed events has
