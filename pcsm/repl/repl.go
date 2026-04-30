@@ -903,16 +903,19 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 
 //go:inline
 func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID == nil {
-		return change.Namespace
+	if change.CollectionUUID != nil {
+		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
+			return ns
+		}
 	}
 
-	ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]
-	if !ok {
-		return change.Namespace
+	for _, ns := range uuidMap {
+		if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
+			return ns
+		}
 	}
 
-	return ns
+	return change.Namespace
 }
 
 // uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
