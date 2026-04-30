@@ -718,6 +718,15 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			continue
 		}
 
+		if r.isReplay(change) {
+			lg.With(
+				log.NS(change.Namespace.Database, change.Namespace.Collection),
+				log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			).Trace("replayed event skipped")
+
+			continue
+		}
+
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
@@ -860,6 +869,17 @@ func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 		r.lock.Unlock()
 	default:
 	}
+}
+
+// isReplay reports whether change is older than the applied checkpoint frontier.
+// Keep strict `<` semantics: timestamp-only `<=` is unsafe because MongoDB can
+// emit multiple distinct change stream events with the same clusterTime.
+func (r *Repl) isReplay(change *ChangeEvent) bool {
+	r.lock.Lock()
+	checkpoint := r.checkpointOpTime
+	r.lock.Unlock()
+
+	return !checkpoint.IsZero() && change.ClusterTime.Before(checkpoint)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick
