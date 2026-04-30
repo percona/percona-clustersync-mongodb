@@ -311,11 +311,12 @@ func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 
 	const numIndexed = 15
 
-	updatedFields := bson.D{
-		{Key: "signature", Value: "sig"},
-		{Key: "updated_at", Value: "now"},
-		{Key: "groups.4.count", Value: 1000},
-	}
+	updatedFields := make(bson.D, 0, 3+numIndexed)
+	updatedFields = append(updatedFields,
+		bson.E{Key: "signature", Value: "sig"},
+		bson.E{Key: "updated_at", Value: "now"},
+		bson.E{Key: "groups.4.count", Value: 1000},
+	)
 
 	for i := range numIndexed {
 		key := "groups.4.items." + strconv.Itoa(985+i)
