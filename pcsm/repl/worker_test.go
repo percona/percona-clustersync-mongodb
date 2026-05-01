@@ -313,8 +313,9 @@ type mockBulkWriter struct {
 	fullAt int   // Full() returns true when count >= fullAt (0 = never full)
 }
 
-func (m *mockBulkWriter) Full() bool  { return m.fullAt > 0 && m.count >= m.fullAt }
-func (m *mockBulkWriter) Empty() bool { return m.count == 0 }
+func (m *mockBulkWriter) Full() bool               { return m.fullAt > 0 && m.count >= m.fullAt }
+func (m *mockBulkWriter) Empty() bool              { return m.count == 0 }
+func (m *mockBulkWriter) WouldOverflow(_ int) bool { return false }
 
 func (m *mockBulkWriter) Do(_ context.Context, _ *mongo.Client) (int, error) {
 	n := m.count
