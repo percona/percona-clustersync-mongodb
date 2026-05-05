@@ -306,7 +306,7 @@ func TestRoute_NonCappedIgnoresCappedRouting(t *testing.T) {
 		"non-capped collections must still distribute by document key across multiple workers")
 }
 
-func TestWorkerPoolCheckpoint_SafeFrontier(t *testing.T) {
+func TestWorkerPoolCheckpoint_ConservativeCommittedFrontier(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -333,17 +333,17 @@ func TestWorkerPoolCheckpoint_SafeFrontier(t *testing.T) {
 				storeLastRoutedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
 				storeLastCommittedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
 			},
-			expected: bson.Timestamp{},
+			expected: bson.Timestamp{T: 15, I: 1},
 		},
 		{
-			name: "all workers fully applied returns max committed",
+			name: "all workers fully applied returns min committed",
 			setup: func(pool *workerPool) {
 				storeLastRoutedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
 				storeLastCommittedTS(pool.workers[0], bson.Timestamp{T: 14, I: 1})
 				storeLastRoutedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
 				storeLastCommittedTS(pool.workers[1], bson.Timestamp{T: 15, I: 1})
 			},
-			expected: bson.Timestamp{T: 15, I: 1},
+			expected: bson.Timestamp{T: 14, I: 1},
 		},
 		{
 			name: "one worker behind returns min committed",
