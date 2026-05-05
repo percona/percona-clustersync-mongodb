@@ -718,7 +718,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			continue
 		}
 
-		if r.isReplay(change) {
+		if r.shouldSkipReplay(change) {
 			lg.With(
 				log.NS(change.Namespace.Database, change.Namespace.Collection),
 				log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
@@ -880,6 +880,10 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 	r.lock.Unlock()
 
 	return !checkpoint.IsZero() && change.ClusterTime.Before(checkpoint)
+}
+
+func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
+	return r.sourceIsPre8AndMongos() && r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick

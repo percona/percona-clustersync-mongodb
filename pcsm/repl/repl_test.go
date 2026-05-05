@@ -796,6 +796,50 @@ func TestIsReplay(t *testing.T) {
 	}
 }
 
+func TestShouldSkipReplay(t *testing.T) {
+	t.Parallel()
+
+	checkpoint := bson.Timestamp{T: 100, I: 10}
+	replayedChange := &ChangeEvent{EventHeader: EventHeader{ClusterTime: bson.Timestamp{T: 100, I: 9}}}
+
+	tests := []struct {
+		name           string
+		sourceIsMongos bool
+		sourceVersion  mdb.ServerVersion
+		expected       bool
+	}{
+		{
+			name:           "pre-8 mongos skips replay",
+			sourceIsMongos: true,
+			sourceVersion:  mdb.ServerVersion{7, 0, 0, 0},
+			expected:       true,
+		},
+		{
+			name:          "replica set does not skip replay",
+			sourceVersion: mdb.ServerVersion{7, 0, 0, 0},
+		},
+		{
+			name:           "8.x mongos does not skip replay",
+			sourceIsMongos: true,
+			sourceVersion:  mdb.ServerVersion{8, 0, 0, 0},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			repl := &Repl{
+				checkpointOpTime: checkpoint,
+				sourceIsMongos:   testCase.sourceIsMongos,
+				sourceVer:        testCase.sourceVersion,
+			}
+
+			assert.Equal(t, testCase.expected, repl.shouldSkipReplay(replayedChange))
+		})
+	}
+}
+
 func TestAdvanceReportedOpTime(t *testing.T) {
 	t.Parallel()
 
