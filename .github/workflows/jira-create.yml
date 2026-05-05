@@ -8,6 +8,9 @@ concurrency:
   group: jira-create-${{ github.event.issue.number }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   create-jira:
     # Runs only on /jira or "/jira ..." comments on issues (not PRs).
@@ -143,14 +146,14 @@ jobs:
             echo ''
             echo '---'
             echo ''
-            echo 'You are handling the `/jira` command on GitHub issue #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
+            echo "You are handling the \`/jira\` command on GitHub issue #$ISSUE_NUMBER in the \`$REPO_FULL\` repository."
             echo PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
       - name: OpenCode Jira create
         if: env.SKIP != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         # GH_TOKEN is intentionally not passed
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

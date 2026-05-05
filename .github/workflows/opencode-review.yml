@@ -8,6 +8,9 @@ concurrency:
   group: opencode-review-${{ github.event.issue.number }}-${{ github.event.comment.body == '/review' && 'cmd' || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   generate-review:
     if: |
@@ -87,7 +90,7 @@ jobs:
       - name: OpenCode Go review
         if: steps.permission.outputs.skip != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO_FULL: ${{ env.REPO_FULL }}
