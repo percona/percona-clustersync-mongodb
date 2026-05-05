@@ -80,7 +80,7 @@ jobs:
             echo ''
             echo '---'
             echo ''
-            echo 'You are handling the `/review` command on PR #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
+            echo "You are handling the \`/review\` command on PR #$PR_NUMBER in the \`$REPO_FULL\` repository."
             echo PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
