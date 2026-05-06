@@ -90,7 +90,7 @@ jobs:
 
       - name: OpenCode PR summary
         if: steps.permission.outputs.skip != 'true'
-        timeout-minutes: 10
+        timeout-minutes: 30
         uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         # GH_TOKEN is intentionally not passed. The agent reads PR data from
         # files and writes the new body to NEW_BODY_FILE; a follow-up bash
