@@ -8,8 +8,11 @@ concurrency:
   group: pr-summary-${{ github.event.issue.number }}-${{ github.event.comment.body == '/summary' && 'cmd' || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  sync-summary:
+  generate-summary:
     if: |
       github.event.issue.pull_request != null &&
       github.event.comment.body == '/summary'
@@ -17,33 +20,41 @@ jobs:
     permissions:
       id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
-      pull-requests: write  # bash post-step PATCHes the PR body
-      issues: write
+      pull-requests: read
+      issues: read
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO_FULL: ${{ github.repository }}
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
       ACTOR: ${{ github.event.comment.user.login }}
       PR_NUMBER: ${{ github.event.issue.number }}
+    outputs:
+      skip: ${{ steps.permission.outputs.skip }}
     steps:
       - name: Check maintainer permission
+        id: permission
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           PERM=$(gh api "repos/$REPO_OWNER/$REPO_NAME/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
           if [[ "$PERM" != "write" && "$PERM" != "admin" ]]; then
-            echo "SKIP=true" >> "$GITHUB_ENV"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Checkout trusted default-branch contents to load the summary prompt.
       - name: Checkout default branch
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Read PR payload
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # Pre-fetch PR data outside the LLM step so the agent does not need
@@ -62,7 +73,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Load summary prompt
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         id: prompt
         run: |
           set -euo pipefail
@@ -73,14 +84,14 @@ jobs:
             echo ''
             echo '---'
             echo ''
-            echo 'You are handling the `/summary` command on PR #${{ github.event.issue.number }} in the `${{ github.repository }}` repository.'
+            echo "You are handling the \`/summary\` command on PR #$PR_NUMBER in the \`$REPO_FULL\` repository."
             echo PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
       - name: OpenCode PR summary
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         # GH_TOKEN is intentionally not passed. The agent reads PR data from
         # files and writes the new body to NEW_BODY_FILE; a follow-up bash
         # step PATCHes the PR. This mirrors the /jira flow.
@@ -96,8 +107,13 @@ jobs:
           model: anthropic/claude-opus-4-7
           prompt: ${{ steps.prompt.outputs.content }}
 
-      - name: Update PR body
-        if: env.SKIP != 'true'
+      - name: Validate PR body
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -euo pipefail
           BODY_FILE="$RUNNER_TEMP/new_body.md"
@@ -105,6 +121,87 @@ jobs:
             echo "::error::New PR body file not produced by opencode step at $BODY_FILE."
             exit 1
           fi
+          if [[ ! -s "$BODY_FILE" ]]; then
+            echo "::error::New PR body file is empty."
+            exit 1
+          fi
+          BYTES=$(wc -c < "$BODY_FILE")
+          if (( BYTES > 60000 )); then
+            echo "::error::New PR body is too large ($BYTES bytes)."
+            exit 1
+          fi
+          if [[ -n "${ANTHROPIC_API_KEY:-}" ]] && grep -Fq -- "$ANTHROPIC_API_KEY" "$BODY_FILE"; then
+            echo "::error::New PR body contains the Anthropic API key."
+            exit 1
+          fi
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$BODY_FILE"; then
+            echo "::error::New PR body contains text that looks like a secret or env dump."
+            exit 1
+          fi
+
+      - name: Upload PR body
+        if: steps.permission.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        env:
+          NODE_OPTIONS: ""
+        with:
+          name: opencode-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/new_body.md
+          if-no-files-found: error
+          retention-days: 1
+
+  post-summary:
+    needs: generate-summary
+    if: needs.generate-summary.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      REPO_FULL: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Download PR body
+        uses: actions/download-artifact@v6
+        with:
+          name: opencode-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/summary-output
+
+      - name: Validate downloaded PR body
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          BODY_FILE="$RUNNER_TEMP/summary-output/new_body.md"
+          if [[ ! -f "$BODY_FILE" ]]; then
+            echo "::error::Downloaded PR body file missing at $BODY_FILE."
+            exit 1
+          fi
+          if [[ ! -s "$BODY_FILE" ]]; then
+            echo "::error::Downloaded PR body file is empty."
+            exit 1
+          fi
+          BYTES=$(wc -c < "$BODY_FILE")
+          if (( BYTES > 60000 )); then
+            echo "::error::Downloaded PR body is too large ($BYTES bytes)."
+            exit 1
+          fi
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$BODY_FILE"; then
+            echo "::error::Downloaded PR body contains text that looks like a secret or env dump."
+            exit 1
+          fi
+
+      - name: Update PR body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          BODY_FILE="$RUNNER_TEMP/summary-output/new_body.md"
           # --field with @file feeds the body verbatim; no shell quoting hazards.
           gh api --method PATCH "repos/$REPO_FULL/pulls/$PR_NUMBER" \
             --field "body=@$BODY_FILE"

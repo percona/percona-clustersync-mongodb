@@ -1,6 +1,6 @@
 name: OpenCode
 
-on:
+"on":
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -9,6 +9,9 @@ on:
 concurrency:
   group: opencode-command-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   opencode:
@@ -44,7 +47,7 @@ jobs:
       - name: Run opencode
         if: env.SKIP != 'true'
         timeout-minutes: 20
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:

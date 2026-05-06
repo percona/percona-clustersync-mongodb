@@ -1,15 +1,18 @@
+---
+# yamllint disable rule:line-length
 name: CI
 permissions:
   contents: read
 
-on:
+"on":
+  # checkov:skip=CKV_GHA_7: Manual dispatch inputs select PCSM and QA test branches for explicit validation runs.
   workflow_dispatch:
     inputs:
       pcsm_branch:
-        description: "PCSM branch"
+        description: PCSM branch
         required: false
       tests_ver:
-        description: "QA tests version"
+        description: QA tests version
         required: false
 
   pull_request:
@@ -17,8 +20,8 @@ on:
     branches:
       - main
     paths-ignore:
-      - "tests/**"
-      - "packaging/**"
+      - tests/**
+      - packaging/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,28 +42,30 @@ jobs:
     steps:
       - name: Determine test branch
         id: test_branch
+        env:
+          TESTS_VER: ${{ github.event.inputs.tests_ver }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [ -n "${{ github.event.inputs.tests_ver }}" ]; then
-            echo "branch=${{ github.event.inputs.tests_ver }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ github.event.pull_request.title }}" ]; then
-            PR_TITLE="${{ github.event.pull_request.title }}"
+          if [ -n "$TESTS_VER" ]; then
+            echo "branch=$TESTS_VER" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PR_TITLE" ]; then
             echo "PR title: $PR_TITLE"
             BRANCH_TO_CHECK=$(echo "$PR_TITLE" | grep -oE 'PCSM-[0-9]+' | head -1)
             if [ -n "$BRANCH_TO_CHECK" ]; then
               echo "Extracted branch pattern: $BRANCH_TO_CHECK"
               if curl -sf "https://api.github.com/repos/Percona-QA/psmdb-testing/branches/$BRANCH_TO_CHECK" > /dev/null; then
                 echo "Branch $BRANCH_TO_CHECK found, using it"
-                echo "branch=$BRANCH_TO_CHECK" >> $GITHUB_OUTPUT
+                echo "branch=$BRANCH_TO_CHECK" >> "$GITHUB_OUTPUT"
               else
                 echo "Branch $BRANCH_TO_CHECK not found, falling back to main"
-                echo "branch=main" >> $GITHUB_OUTPUT
+                echo "branch=main" >> "$GITHUB_OUTPUT"
               fi
             else
               echo "No PCSM-XXXXX pattern found in PR title, using main"
-              echo "branch=main" >> $GITHUB_OUTPUT
+              echo "branch=main" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "branch=main" >> $GITHUB_OUTPUT
+            echo "branch=main" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout testing repo
@@ -87,6 +92,6 @@ jobs:
         if: success() || failure()
         with:
           report_paths: '**/junit.xml'
-          include_passed: True
-          detailed_summary: True
-          include_time_in_summary: True
+          include_passed: true
+          detailed_summary: true
+          include_time_in_summary: true

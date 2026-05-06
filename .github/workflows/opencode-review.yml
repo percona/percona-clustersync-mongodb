@@ -8,8 +8,11 @@ concurrency:
   group: opencode-review-${{ github.event.issue.number }}-${{ github.event.comment.body == '/review' && 'cmd' || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  review:
+  generate-review:
     if: |
       github.event.issue.pull_request != null &&
       github.event.comment.body == '/review'
@@ -17,50 +20,182 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
-      issues: write
+      pull-requests: read
+      issues: read
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO_FULL: ${{ github.repository }}
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
       ACTOR: ${{ github.event.comment.user.login }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+    outputs:
+      skip: ${{ steps.permission.outputs.skip }}
     steps:
       - name: Check maintainer permission
+        id: permission
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           PERM=$(gh api "repos/$REPO_OWNER/$REPO_NAME/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
           if [[ "$PERM" != "write" && "$PERM" != "admin" ]]; then
-            echo "SKIP=true" >> "$GITHUB_ENV"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Checkout trusted default-branch contents to load the review prompt.
       - name: Checkout default branch
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
+      - name: Read PR payload
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Pre-fetch PR data outside the LLM step so the agent does not need
+          # GitHub API access. The opencode step reads from these files and
+          # writes the review body to REVIEW_BODY_FILE.
+          PR_FILE="$RUNNER_TEMP/pr.json"
+          COMMITS_FILE="$RUNNER_TEMP/pr_commits.json"
+          FILES_FILE="$RUNNER_TEMP/pr_files.json"
+          gh api "repos/$REPO_FULL/pulls/$PR_NUMBER" > "$PR_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/commits" > "$COMMITS_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/files" > "$FILES_FILE"
+          {
+            echo "PR_PAYLOAD_FILE=$PR_FILE"
+            echo "PR_COMMITS_FILE=$COMMITS_FILE"
+            echo "PR_FILES_FILE=$FILES_FILE"
+          } >> "$GITHUB_ENV"
+
       - name: Load review prompt
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         id: prompt
         run: |
           set -euo pipefail
           {
             echo 'content<<PROMPT_EOF'
             cat .github/opencode/review-prompt.md
+            echo ''
+            echo '---'
+            echo ''
+            echo "You are handling the \`/review\` command on PR #$PR_NUMBER in the \`$REPO_FULL\` repository."
             echo PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
       - name: OpenCode Go review
-        if: env.SKIP != 'true'
+        if: steps.permission.outputs.skip != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO_FULL: ${{ env.REPO_FULL }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          PR_PAYLOAD_FILE: ${{ env.PR_PAYLOAD_FILE }}
+          PR_COMMITS_FILE: ${{ env.PR_COMMITS_FILE }}
+          PR_FILES_FILE: ${{ env.PR_FILES_FILE }}
+          REVIEW_BODY_FILE: ${{ runner.temp }}/review.md
         with:
           model: anthropic/claude-opus-4-7
-          # Use GITHUB_TOKEN directly so the agent shell can post review
-          # comments. Default OIDC exchange holds the App token internally
-          # and strips it from the agent shell, leaving gh CLI unauthenticated.
-          use_github_token: true
           prompt: ${{ steps.prompt.outputs.content }}
+
+      - name: Validate review body
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          REVIEW_BODY_FILE="$RUNNER_TEMP/review.md"
+          if [[ ! -f "$REVIEW_BODY_FILE" ]]; then
+            echo "::error::Review body file not produced by opencode step at $REVIEW_BODY_FILE."
+            exit 1
+          fi
+          if [[ ! -s "$REVIEW_BODY_FILE" ]]; then
+            echo "::error::Review body file is empty."
+            exit 1
+          fi
+          BYTES=$(wc -c < "$REVIEW_BODY_FILE")
+          if (( BYTES > 60000 )); then
+            echo "::error::Review body is too large ($BYTES bytes)."
+            exit 1
+          fi
+          if [[ -n "${ANTHROPIC_API_KEY:-}" ]] && grep -Fq -- "$ANTHROPIC_API_KEY" "$REVIEW_BODY_FILE"; then
+            echo "::error::Review body contains the Anthropic API key."
+            exit 1
+          fi
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$REVIEW_BODY_FILE"; then
+            echo "::error::Review body contains text that looks like a secret or env dump."
+            exit 1
+          fi
+
+      - name: Upload review body
+        if: steps.permission.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        env:
+          NODE_OPTIONS: ""
+        with:
+          name: opencode-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/review.md
+          if-no-files-found: error
+          retention-days: 1
+
+  post-review:
+    needs: generate-review
+    if: needs.generate-review.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      REPO_FULL: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Download review body
+        uses: actions/download-artifact@v6
+        with:
+          name: opencode-review-${{ github.run_id }}
+          path: ${{ runner.temp }}/review-output
+
+      - name: Validate downloaded review body
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          REVIEW_BODY_FILE="$RUNNER_TEMP/review-output/review.md"
+          if [[ ! -f "$REVIEW_BODY_FILE" ]]; then
+            echo "::error::Downloaded review body file missing at $REVIEW_BODY_FILE."
+            exit 1
+          fi
+          if [[ ! -s "$REVIEW_BODY_FILE" ]]; then
+            echo "::error::Downloaded review body file is empty."
+            exit 1
+          fi
+          BYTES=$(wc -c < "$REVIEW_BODY_FILE")
+          if (( BYTES > 60000 )); then
+            echo "::error::Downloaded review body is too large ($BYTES bytes)."
+            exit 1
+          fi
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$REVIEW_BODY_FILE"; then
+            echo "::error::Downloaded review body contains text that looks like a secret or env dump."
+            exit 1
+          fi
+
+      - name: Post review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          REVIEW_BODY_FILE="$RUNNER_TEMP/review-output/review.md"
+          gh pr review "$PR_NUMBER" --repo "$REPO_FULL" --comment --body-file "$REVIEW_BODY_FILE"
