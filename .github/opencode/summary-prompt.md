@@ -57,7 +57,8 @@ If `### Problem` or `### Solution` is missing, create the heading and place the 
 ## Core content rules
 
 - Ground every agent sentence in the provided diff. If you cannot cite a specific code change, do not write the sentence.
-- Prefer empty markers over padded content. An empty marker block beats filler.
+- Prefer empty markers unless there is a mismatch or missing diff-derived context. An empty marker block beats filler.
+- If the PR title or body contradicts the commits or diff, keep author text exactly as written. Add one concise **bolded** factual correction inside the relevant marker, grounded in the diff. Then write `$NEW_BODY_FILE`; do not pause, ask, or try to reconcile the mismatch.
 - No internal discussions, team decisions, or people's names. This is an open-source repo.
 - No file-by-file walkthroughs. The diff speaks for itself.
 - Do not repeat what the author already wrote. Add complementary detail only.
