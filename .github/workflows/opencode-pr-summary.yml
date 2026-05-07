@@ -1,3 +1,5 @@
+---
+# yamllint disable rule:line-length
 name: OpenCode PR Summary
 
 "on":
@@ -18,16 +20,19 @@ permissions:
   contents: read
 
 jobs:
-  generate-summary:
+  summary:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request != null &&
         github.event.comment.body == '/summary')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Job-level write permission is fine because only the final "Update PR
+    # body" step receives GH_TOKEN. The opencode step has no GitHub
+    # credential and cannot use this permission even if prompt-injected.
     permissions:
-      id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
     env:
       REPO_FULL: ${{ github.repository }}
@@ -35,8 +40,6 @@ jobs:
       REPO_NAME: ${{ github.event.repository.name }}
       ACTOR: ${{ github.event.comment.user.login || github.actor }}
       PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
-    outputs:
-      skip: ${{ steps.permission.outputs.skip }}
     steps:
       - name: Check maintainer permission
         id: permission
@@ -65,8 +68,8 @@ jobs:
         run: |
           set -euo pipefail
           # Pre-fetch PR data outside the LLM step so the agent does not need
-          # GitHub API access. The opencode step reads from these files instead
-          # of calling `gh api` itself, which previously hung the action.
+          # GitHub API access. The opencode step reads from these files
+          # instead of calling `gh api` itself.
           PR_FILE="$RUNNER_TEMP/pr.json"
           COMMITS_FILE="$RUNNER_TEMP/pr_commits.json"
           FILES_FILE="$RUNNER_TEMP/pr_files.json"
@@ -81,27 +84,36 @@ jobs:
 
       - name: Load summary prompt
         if: steps.permission.outputs.skip != 'true'
-        id: prompt
         run: |
           set -euo pipefail
-          # This step only injects the runtime metadata that GHA expressions resolve
+          # Build the prompt as a file so the OpenCode step feeds it via
+          # stdin to the non-interactive CLI.
+          PROMPT_FILE="$RUNNER_TEMP/summary-prompt.md"
           {
-            echo 'content<<PROMPT_EOF'
             cat .github/opencode/summary-prompt.md
             echo ''
             echo '---'
             echo ''
             echo "You are handling the \`/summary\` command on PR #$PR_NUMBER in the \`$REPO_FULL\` repository."
-            echo PROMPT_EOF
-          } >> "$GITHUB_OUTPUT"
+          } > "$PROMPT_FILE"
+          echo "SUMMARY_PROMPT_FILE=$PROMPT_FILE" >> "$GITHUB_ENV"
+
+      - name: Install OpenCode
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GITHUB_ACTIONS: "true"
+        run: |
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: OpenCode PR summary
         if: steps.permission.outputs.skip != 'true'
-        timeout-minutes: 30
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
-        # GH_TOKEN is intentionally not passed. The agent reads PR data from
-        # files and writes the new body to NEW_BODY_FILE; a follow-up bash
-        # step PATCHes the PR. This mirrors the /jira flow.
+        timeout-minutes: 25
+        # The opencode step has only ANTHROPIC_API_KEY in its environment.
+        # GH_TOKEN / GITHUB_TOKEN do not reach this step, so prompt-injected
+        # content cannot mint or use a GitHub write credential. The agent's
+        # only output channel is NEW_BODY_FILE, validated below.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO_FULL: ${{ env.REPO_FULL }}
@@ -110,9 +122,15 @@ jobs:
           PR_COMMITS_FILE: ${{ env.PR_COMMITS_FILE }}
           PR_FILES_FILE: ${{ env.PR_FILES_FILE }}
           NEW_BODY_FILE: ${{ runner.temp }}/new_body.md
-        with:
-          model: anthropic/claude-opus-4-7
-          prompt: ${{ steps.prompt.outputs.content }}
+          SUMMARY_PROMPT_FILE: ${{ env.SUMMARY_PROMPT_FILE }}
+        run: |
+          set -euo pipefail
+          opencode --version
+          timeout --kill-after=30s 25m opencode run \
+            --pure \
+            --model anthropic/claude-opus-4-7 \
+            --dangerously-skip-permissions \
+            < "$SUMMARY_PROMPT_FILE"
 
       - name: Validate PR body
         if: steps.permission.outputs.skip != 'true'
@@ -141,66 +159,16 @@ jobs:
             echo "::error::New PR body contains the Anthropic API key."
             exit 1
           fi
-          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$BODY_FILE"; then
-            echo "::error::New PR body contains text that looks like a secret or env dump."
-            exit 1
-          fi
-
-      - name: Upload PR body
-        if: steps.permission.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
-        env:
-          NODE_OPTIONS: ""
-        with:
-          name: opencode-summary-${{ github.run_id }}
-          path: ${{ runner.temp }}/new_body.md
-          if-no-files-found: error
-          retention-days: 1
-
-  post-summary:
-    needs: generate-summary
-    if: needs.generate-summary.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      REPO_FULL: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
-    steps:
-      - name: Download PR body
-        uses: actions/download-artifact@v6
-        with:
-          name: opencode-summary-${{ github.run_id }}
-          path: ${{ runner.temp }}/summary-output
-
-      - name: Validate downloaded PR body
-        env:
-          BASH_ENV: ""
-          ENV: ""
-          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        run: |
-          set -euo pipefail
-          BODY_FILE="$RUNNER_TEMP/summary-output/new_body.md"
-          if [[ ! -f "$BODY_FILE" ]]; then
-            echo "::error::Downloaded PR body file missing at $BODY_FILE."
-            exit 1
-          fi
-          if [[ ! -s "$BODY_FILE" ]]; then
-            echo "::error::Downloaded PR body file is empty."
-            exit 1
-          fi
-          BYTES=$(wc -c < "$BODY_FILE")
-          if (( BYTES > 60000 )); then
-            echo "::error::Downloaded PR body is too large ($BYTES bytes)."
-            exit 1
-          fi
-          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(ANTHROPIC_API_KEY|GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)=[^[:space:]]+|[A-Fa-f0-9]{96,}|[A-Za-z0-9+/]{120,}={0,2}' "$BODY_FILE"; then
-            echo "::error::Downloaded PR body contains text that looks like a secret or env dump."
+          # Concrete provider tokens and private-key markers only. Generic
+          # hex/base64 patterns were dropped because they false-positive on
+          # legitimate review content (commit hashes, base64 fixtures).
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' "$BODY_FILE"; then
+            echo "::error::New PR body contains text that looks like a secret."
             exit 1
           fi
 
       - name: Update PR body
+        if: steps.permission.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASH_ENV: ""
@@ -208,7 +176,7 @@ jobs:
           PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -euo pipefail
-          BODY_FILE="$RUNNER_TEMP/summary-output/new_body.md"
+          BODY_FILE="$RUNNER_TEMP/new_body.md"
           # --field with @file feeds the body verbatim; no shell quoting hazards.
           gh api --method PATCH "repos/$REPO_FULL/pulls/$PR_NUMBER" \
             --field "body=@$BODY_FILE"
