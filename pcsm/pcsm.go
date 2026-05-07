@@ -93,6 +93,28 @@ type Status struct {
 	Repl repl.Status
 	// Clone is the status of the cloning process.
 	Clone clone.Status
+	// FinalizeStatus is the status of the finalize stage.
+	// It is non-nil once /finalize has been triggered (states: finalizing, finalized,
+	// or failed after a finalize attempt).
+	FinalizeStatus *FinalizeStatus
+}
+
+// FinalizeStatus describes the progress of a finalize run.
+//
+// While finalize is in flight (state == finalizing) Completed is false and
+// CompletedAt is zero. When finalize completes successfully (state == finalized)
+// Completed is true, CompletedAt is set, and UnsuccessfulIndexes is populated
+// from the catalog.
+type FinalizeStatus struct {
+	// Completed indicates whether the finalize stage has finished successfully.
+	Completed bool
+	// StartedAt is when the finalize stage was triggered.
+	StartedAt time.Time
+	// CompletedAt is when the finalize stage finished. Zero unless Completed.
+	CompletedAt time.Time
+	// UnsuccessfulIndexes lists indexes that did not complete cleanly. Empty
+	// until the finalize stage completes.
+	UnsuccessfulIndexes []catalog.UnsuccessfulIndex
 }
 
 // PCSM manages the replication process.
@@ -117,6 +139,9 @@ type PCSM struct {
 	catalog *catalog.Catalog // Catalog for managing collections and indexes
 	clone   Cloner           // Clone process
 	repl    Replicator       // Replication process
+
+	// finalizeStatus tracks finalize-stage state. Nil until /finalize is triggered.
+	finalizeStatus *FinalizeStatus
 
 	err error
 
@@ -263,9 +288,10 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 	}
 
 	s := &Status{
-		State: p.state,
-		Clone: p.clone.Status(),
-		Repl:  p.repl.Status(),
+		State:          p.state,
+		Clone:          p.clone.Status(),
+		Repl:           p.repl.Status(),
+		FinalizeStatus: copyFinalizeStatus(p.finalizeStatus),
 	}
 
 	switch {
@@ -311,6 +337,23 @@ func (p *PCSM) resetError() {
 	p.err = nil
 	p.clone.ResetError()
 	p.repl.ResetError()
+}
+
+// copyFinalizeStatus returns a deep copy of fs so callers cannot mutate
+// PCSM's internal state via the returned Status.
+func copyFinalizeStatus(fs *FinalizeStatus) *FinalizeStatus {
+	if fs == nil {
+		return nil
+	}
+
+	out := *fs
+
+	if len(fs.UnsuccessfulIndexes) > 0 {
+		out.UnsuccessfulIndexes = make([]catalog.UnsuccessfulIndex, len(fs.UnsuccessfulIndexes))
+		copy(out.UnsuccessfulIndexes, fs.UnsuccessfulIndexes)
+	}
+
+	return &out
 }
 
 // StartOptions represents the options for starting the PCSM.
@@ -673,11 +716,11 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		}
 	}
 
-	startedTime := time.Now()
+	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
 	p.state = StateFinalizing
 
 	go func() {
-		err := p.catalog.Finalize(p.lifecycleCtx)
+		unsuccessful, err := p.catalog.Finalize(p.lifecycleCtx)
 		if err != nil {
 			p.setFailed(errors.Wrap(err, "finalization"))
 
@@ -685,10 +728,14 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		}
 
 		p.lock.Lock()
+		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful
+		p.finalizeStatus.CompletedAt = time.Now()
+		p.finalizeStatus.Completed = true
 		p.state = StateFinalized
+		startedAt := p.finalizeStatus.StartedAt
 		p.lock.Unlock()
 
-		lg.With(log.Elapsed(time.Since(startedTime))).
+		lg.With(log.Elapsed(time.Since(startedAt))).
 			Info("Finalization is completed")
 
 		go p.onStateChanged(StateFinalized)

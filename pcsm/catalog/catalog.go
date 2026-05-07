@@ -172,6 +172,27 @@ func (i indexCatalogEntry) Unsuccessful() bool {
 	return i.Failed || i.Incomplete || i.Inconsistent
 }
 
+// IndexUnsuccessfulType describes why an index ended up unsuccessful at finalize time.
+type IndexUnsuccessfulType string
+
+const (
+	// IndexFailed means the index failed to create on the target cluster.
+	IndexFailed IndexUnsuccessfulType = "failed"
+	// IndexIncomplete means the index was being built on the source when replication observed it.
+	IndexIncomplete IndexUnsuccessfulType = "incomplete"
+	// IndexInconsistent means the index was inconsistent across shards on the source cluster.
+	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
+)
+
+// UnsuccessfulIndex describes an index that did not complete cleanly during replication
+// and was not recovered during finalize.
+type UnsuccessfulIndex struct {
+	Namespace string
+	Name      string
+	Keys      bson.Raw
+	Type      IndexUnsuccessfulType
+}
+
 // NewCatalog creates a new Catalog.
 func NewCatalog(target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
 	return &Catalog{
@@ -904,16 +925,28 @@ func (c *Catalog) UUIDMap() UUIDMap {
 }
 
 // Finalize finalizes the indexes in the target MongoDB.
-func (c *Catalog) Finalize(ctx context.Context) error {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-
+//
+// It returns the list of indexes that ended up unsuccessful at the end of finalize:
+// indexes flagged as Failed, Incomplete, or Inconsistent in the catalog and not
+// recovered by [finalizeUnsuccessfulIndexes]. Per-index errors are not returned
+// via the error value; only true infrastructure failures would be (currently none).
+func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 	lg := log.Ctx(ctx)
 
-	var idxErrors []error
+	// Track indexes whose modify-options call failed so we can flag them as Failed
+	// after releasing the read lock.
+	type modifyFailure struct {
+		db, coll string
+		spec     *mdb.IndexSpecification
+	}
 
-	foundUnsuccessfulIdx := false
+	var (
+		idxErrors            []error
+		modifyFailures       []modifyFailure
+		foundUnsuccessfulIdx bool
+	)
 
+	c.lock.RLock()
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			nsLg := lg.With(log.NS(db, coll))
@@ -931,6 +964,14 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					continue
 				}
 
+				modifyFailed := func() {
+					modifyFailures = append(modifyFailures, modifyFailure{
+						db:   db,
+						coll: coll,
+						spec: index.IndexSpecification,
+					})
+				}
+
 				// restore properties
 				switch { // unique and prepareUnique are mutually exclusive.
 				case index.Unique != nil && *index.Unique:
@@ -940,6 +981,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
+						modifyFailed()
 
 						continue
 					}
@@ -951,6 +994,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to unique: "+index.Name))
 
+						modifyFailed()
+
 						continue
 					}
 
@@ -961,6 +1006,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					if err != nil {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
+						modifyFailed()
 
 						continue
 					}
@@ -975,6 +1022,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
 
+						modifyFailed()
+
 						continue
 					}
 				}
@@ -987,6 +1036,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 						idxErrors = append(idxErrors,
 							errors.Wrap(err, "modify hidden: "+index.Name))
 
+						modifyFailed()
+
 						continue
 					}
 				}
@@ -997,12 +1048,58 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	if foundUnsuccessfulIdx {
 		c.finalizeUnsuccessfulIndexes(ctx)
 	}
+	c.lock.RUnlock()
+
+	// Flag any indexes that failed during finalize as Failed in the catalog so
+	// they show up in the returned report.
+	for _, f := range modifyFailures {
+		c.AddFailedIndexes(ctx, f.db, f.coll, []*mdb.IndexSpecification{f.spec})
+	}
 
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
-	return nil
+	return c.collectUnsuccessfulIndexes(), nil
+}
+
+// collectUnsuccessfulIndexes walks the catalog and returns every index entry
+// that has the Failed, Incomplete, or Inconsistent flag set.
+func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	var out []UnsuccessfulIndex
+
+	for db, colls := range c.Databases {
+		for coll, collEntry := range colls.Collections {
+			ns := db + "." + coll
+
+			for _, index := range collEntry.Indexes {
+				var typ IndexUnsuccessfulType
+
+				switch {
+				case index.Failed:
+					typ = IndexFailed
+				case index.Incomplete:
+					typ = IndexIncomplete
+				case index.Inconsistent:
+					typ = IndexInconsistent
+				default:
+					continue
+				}
+
+				out = append(out, UnsuccessfulIndex{
+					Namespace: ns,
+					Name:      index.Name,
+					Keys:      index.KeysDocument,
+					Type:      typ,
+				})
+			}
+		}
+	}
+
+	return out
 }
 
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
