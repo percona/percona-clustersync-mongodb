@@ -14,8 +14,9 @@ Behaviour under test:
 
 import time
 
-from pcsm import PCSM, Runner
 from testing import Testing
+
+from pcsm import PCSM, Runner
 
 
 def test_finalization_section_absent_before_finalize(t: Testing):
@@ -77,9 +78,13 @@ def test_finalization_section_reports_failed_unique_index(t: Testing):
 
     unsuccessful = fin.get("unsuccessfulIndexes") or []
     matching = [
-        idx for idx in unsuccessful if idx["namespace"] == f"{db}.{coll}" and idx["indexName"] == "x_unique_idx"
+        idx
+        for idx in unsuccessful
+        if idx["namespace"] == f"{db}.{coll}" and idx["indexName"] == "x_unique_idx"
     ]
-    assert matching, f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
+    assert matching, (
+        f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
+    )
 
     entry = matching[0]
     assert entry["type"] == "failed", entry
