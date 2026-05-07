@@ -79,7 +79,7 @@ jobs:
 
       - name: OpenCode Go review
         if: steps.permission.outputs.skip != 'true'
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
+        uses: anomalyco/opencode/github@98e091796b6a293cf20b4187e8fc6a949e0295e4  # v1.14.41
         timeout-minutes: 15
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -88,13 +88,21 @@ jobs:
           # this the agent would pick up attacker-controlled config and skill
           # files.
           OPENCODE_DISABLE_PROJECT_CONFIG: "true"
-          # Deny every side-effect channel an agent could use to exfiltrate
-          # data or execute attacker-supplied content. The agent's only
-          # remaining capability is to compose review markdown; the wrapper
-          # posts that as a PR comment.
+          # Allow only read-only git/ls/find/grep so the agent can discover
+          # changed files and read context, then deny everything else.
+          # `edit`, `task`, `webfetch`, `websearch`, `question` are blanket-
+          # denied. With no GH_TOKEN and no fetch tools, the agent cannot
+          # exfiltrate secrets or call GitHub; its only output is the review
+          # markdown the wrapper posts as a PR comment.
           OPENCODE_PERMISSION: |
             {
-              "bash": "deny",
+              "bash": {
+                "git*": "allow",
+                "ls*": "allow",
+                "find*": "allow",
+                "grep*": "allow",
+                "*": "deny"
+              },
               "edit": "deny",
               "task": "deny",
               "webfetch": "deny",
