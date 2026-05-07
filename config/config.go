@@ -33,10 +33,24 @@ type Config struct {
 	Repl  ReplConfig  `mapstructure:",squash"`
 	Clone CloneConfig `mapstructure:",squash"`
 
+	Webhook WebhookConfig `mapstructure:",squash"`
+
 	// hidden startup flags
 	Start              bool `mapstructure:"start"`
 	ResetState         bool `mapstructure:"reset-state"`
 	PauseOnInitialSync bool `mapstructure:"pause-on-initial-sync"`
+}
+
+// WebhookConfig holds webhook notification configuration.
+type WebhookConfig struct {
+	// URL is the webhook callback URL.
+	URL string `mapstructure:"webhook-url"`
+	// AuthToken is the Bearer token sent with webhook requests.
+	AuthToken string `mapstructure:"webhook-auth-token"`
+	// Events is a comma-separated list of events to send notifications for.
+	Events []string `mapstructure:"webhook-events"`
+	// Target is the webhook target format (e.g. "slack").
+	Target string `mapstructure:"webhook-target"`
 }
 
 // LogConfig holds logging configuration.
@@ -188,6 +202,11 @@ func bindEnvVars() {
 	_ = viper.BindEnv("clone-num-insert-workers", "PCSM_CLONE_NUM_INSERT_WORKERS")
 	_ = viper.BindEnv("clone-segment-size", "PCSM_CLONE_SEGMENT_SIZE")
 	_ = viper.BindEnv("clone-read-batch-size", "PCSM_CLONE_READ_BATCH_SIZE")
+
+	_ = viper.BindEnv("webhook-url", "PCSM_WEBHOOK_URL")
+	_ = viper.BindEnv("webhook-auth-token", "PCSM_WEBHOOK_AUTH_TOKEN")
+	_ = viper.BindEnv("webhook-events", "PCSM_WEBHOOK_EVENTS")
+	_ = viper.BindEnv("webhook-target", "PCSM_WEBHOOK_TARGET")
 }
 
 //nolint:gochecknoglobals
