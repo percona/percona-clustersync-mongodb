@@ -109,14 +109,23 @@ func TestPause_Success(t *testing.T) {
 	t.Parallel()
 
 	stateChangeCh := make(chan State, 1)
+	cloneFinishTS := bson.Timestamp{T: 100, I: 1}
 	p := &PCSM{
 		state: StateRunning,
 		onStateChanged: func(s State) {
 			stateChangeCh <- s
 		},
+		clone: &mockCloner{
+			doneCh: make(chan struct{}),
+			status: clone.Status{
+				FinishTS:   cloneFinishTS,
+				FinishTime: time.Now(),
+			},
+		},
 		repl: &mockReplicator{
-			doneCh:    make(chan struct{}),
-			startTime: time.Now(), // IsStarted() = true
+			doneCh:     make(chan struct{}),
+			startTime:  time.Now(), // IsStarted() = true
+			lastOpTime: bson.Timestamp{T: 101, I: 1},
 			// pauseTime is zero, so IsRunning() = true
 		},
 	}
@@ -134,6 +143,71 @@ func TestPause_Success(t *testing.T) {
 		assert.Equal(t, State(StatePaused), newState, "onStateChanged should be called with StatePaused")
 	case <-time.After(100 * time.Millisecond):
 		t.Error("onStateChanged was not called within timeout")
+	}
+}
+
+func TestPause_FailsBeforeInitialSyncComplete(t *testing.T) {
+	t.Parallel()
+
+	cloneFinishTS := bson.Timestamp{T: 100, I: 1}
+	tests := []struct {
+		name          string
+		cloneStatus   clone.Status
+		lastOpTime    bson.Timestamp
+		errorContains string
+	}{
+		{
+			name: "clone not finished",
+			cloneStatus: clone.Status{
+				StartTime: time.Now(),
+			},
+			lastOpTime:    bson.Timestamp{T: 101, I: 1},
+			errorContains: "initial sync is not complete",
+		},
+		{
+			name: "clone finished but catchup equal to finish timestamp",
+			cloneStatus: clone.Status{
+				FinishTS:   cloneFinishTS,
+				FinishTime: time.Now(),
+			},
+			lastOpTime:    cloneFinishTS,
+			errorContains: "initial sync is not complete",
+		},
+		{
+			name: "clone finished but catchup before finish timestamp",
+			cloneStatus: clone.Status{
+				FinishTS:   cloneFinishTS,
+				FinishTime: time.Now(),
+			},
+			lastOpTime:    bson.Timestamp{T: 99, I: 1},
+			errorContains: "initial sync is not complete",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &PCSM{
+				state:          StateRunning,
+				onStateChanged: func(State) {},
+				clone: &mockCloner{
+					doneCh: make(chan struct{}),
+					status: tt.cloneStatus,
+				},
+				repl: &mockReplicator{
+					doneCh:     make(chan struct{}),
+					startTime:  time.Now(),
+					lastOpTime: tt.lastOpTime,
+				},
+			}
+
+			err := p.Pause(context.Background())
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errorContains)
+			assert.Equal(t, State(StateRunning), p.state)
+		})
 	}
 }
 
