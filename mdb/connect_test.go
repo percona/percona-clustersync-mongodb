@@ -12,7 +12,7 @@ import (
 func TestSanitizeConnString(t *testing.T) {
 	t.Parallel()
 
-	const baseURI = "mongodb://usr:pass@mongo:27018"
+	const baseURI = "mongodb://usr:pass@mongo:27018" //nolint:gosec // test-only URI fixture, not real credentials
 
 	// realOptions is list of real options that are not in the allowed list.
 	realOptions := []string{

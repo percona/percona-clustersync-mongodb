@@ -102,6 +102,8 @@ type PCSM struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
+	sourceVer mdb.ServerVersion
+
 	nsInclude []string
 	nsExclude []string
 	nsFilter  sel.NSFilter // Namespace filter
@@ -122,11 +124,12 @@ type PCSM struct {
 }
 
 // New creates a new PCSM.
-func New(lifecycleCtx context.Context, source, target *mongo.Client) *PCSM {
+func New(lifecycleCtx context.Context, source, target *mongo.Client, sourceVer mdb.ServerVersion) *PCSM {
 	return &PCSM{
 		lifecycleCtx:   lifecycleCtx,
 		source:         source,
 		target:         target,
+		sourceVer:      sourceVer,
 		state:          StateIdle,
 		onStateChanged: func(State) {},
 	}
@@ -194,10 +197,10 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
-	cat := catalog.NewCatalog(p.target)
+	cat := catalog.NewCatalog(p.target, p.sourceVer)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
 	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{})
-	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{})
+	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{}, p.sourceVer)
 
 	if cp.Catalog != nil {
 		err = cat.Recover(cp.Catalog)
@@ -352,9 +355,9 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.nsExclude = options.ExcludeNamespaces
 	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
 	p.pauseOnInitialSync = options.PauseOnInitialSync
-	p.catalog = catalog.NewCatalog(p.target)
+	p.catalog = catalog.NewCatalog(p.target, p.sourceVer)
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
-	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl)
+	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer)
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)

@@ -23,6 +23,12 @@ func IsNamespaceNotFound(err error) bool {
 	return isMongoCommandError(err, "NamespaceNotFound")
 }
 
+// IsInvalidOptions checks if an error is an invalid options error (e.g. collMod on
+// a non-existent or incompatible collection).
+func IsInvalidOptions(err error) bool {
+	return isMongoCommandError(err, "InvalidOptions")
+}
+
 func IsNamespaceExists(err error) bool {
 	return isMongoCommandError(err, "NamespaceExists")
 }
@@ -54,6 +60,13 @@ func IsChangeStreamHistoryLost(err error) bool {
 
 func IsCappedPositionLost(err error) bool {
 	return isMongoCommandError(err, "CappedPositionLost")
+}
+
+// IsDatabaseDropPending checks if an error is caused by a database drop pending state.
+// MongoDB returns this error (code 357) when an operation targets a database
+// that is in the process of being dropped.
+func IsDatabaseDropPending(err error) bool {
+	return isMongoCommandError(err, "DatabaseDropPending")
 }
 
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.

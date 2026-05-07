@@ -15,7 +15,10 @@ concurrency:
 
 jobs:
   sync-comment:
-    if: github.event.comment.user.type != 'Bot'
+    # Runs only on issue comments (not PR comments)
+    if: |
+      github.event.comment.user.type != 'Bot' &&
+      github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,7 +40,7 @@ jobs:
         id: filter-commands
         shell: bash
         run: |
-          if [[ "$COMMENT_BODY" == /jira* || "$COMMENT_BODY" == /oc* || "$COMMENT_BODY" == /opencode* ]]; then
+          if [[ "$COMMENT_BODY" == /jira* || "$COMMENT_BODY" == /oc* || "$COMMENT_BODY" == /opencode* || "$COMMENT_BODY" == /review* || "$COMMENT_BODY" == /summary* ]]; then
             echo "SKIP=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -48,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          COMMENTS=$(gh api "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
+          COMMENTS=$(gh api --paginate "repos/$REPO_FULL/issues/$ISSUE_NUMBER/comments" --jq '.[].body')
           TICKET_KEY=$(printf '%s\n' "$COMMENTS" | grep -oP '(?<=<!-- jira:)PCSM-\d+' | head -1 || true)
 
           if [[ -z "$TICKET_KEY" ]]; then

@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
@@ -18,7 +19,7 @@ import (
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	p := New(t.Context(), nil, nil)
+	p := New(t.Context(), nil, nil, mdb.ServerVersion{})
 
 	assert.Equal(t, State(StateIdle), p.state, "initial state should be StateIdle")
 	assert.Nil(t, p.source, "source should be nil when passed nil")
@@ -54,7 +55,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil),
+			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -79,7 +80,7 @@ func TestCheckpoint(t *testing.T) {
 			onStateChanged: func(State) {},
 			nsInclude:      []string{"db1.*", "db2.coll"},
 			nsExclude:      []string{"db1.excluded"},
-			catalog:        catalog.NewCatalog(nil),
+			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -102,7 +103,7 @@ func TestCheckpoint(t *testing.T) {
 			state:          StateFailed,
 			onStateChanged: func(State) {},
 			err:            errors.New("test error"),
-			catalog:        catalog.NewCatalog(nil),
+			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -128,7 +129,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil),
+			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{}), checkpoint: cloneCP},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -156,7 +157,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil),
+			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{}), checkpoint: replCP},
 		}

@@ -148,3 +148,113 @@ func TestIsChangeStreamUnrecoverable(t *testing.T) {
 		})
 	}
 }
+
+func advanceCases() []struct {
+	name     string
+	current  bson.Timestamp
+	input    bson.Timestamp
+	expected bson.Timestamp
+} {
+	return []struct {
+		name     string
+		current  bson.Timestamp
+		input    bson.Timestamp
+		expected bson.Timestamp
+	}{
+		{
+			name:     "lower timestamp",
+			current:  bson.Timestamp{T: 100, I: 10},
+			input:    bson.Timestamp{T: 99, I: 5},
+			expected: bson.Timestamp{T: 100, I: 10},
+		},
+		{
+			name:     "equal timestamp",
+			current:  bson.Timestamp{T: 100, I: 10},
+			input:    bson.Timestamp{T: 100, I: 10},
+			expected: bson.Timestamp{T: 100, I: 10},
+		},
+		{
+			name:     "higher timestamp",
+			current:  bson.Timestamp{T: 100, I: 10},
+			input:    bson.Timestamp{T: 101, I: 1},
+			expected: bson.Timestamp{T: 101, I: 1},
+		},
+		{
+			name:     "same T lower I",
+			current:  bson.Timestamp{T: 100, I: 10},
+			input:    bson.Timestamp{T: 100, I: 8},
+			expected: bson.Timestamp{T: 100, I: 10},
+		},
+		{
+			name:     "same T higher I",
+			current:  bson.Timestamp{T: 100, I: 10},
+			input:    bson.Timestamp{T: 100, I: 15},
+			expected: bson.Timestamp{T: 100, I: 15},
+		},
+		{
+			name:     "zero current",
+			current:  bson.Timestamp{T: 0, I: 0},
+			input:    bson.Timestamp{T: 50, I: 1},
+			expected: bson.Timestamp{T: 50, I: 1},
+		},
+	}
+}
+
+func TestAdvanceCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range advanceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := &Repl{lastReplicatedOpTime: tt.current, checkpointOpTime: tt.current}
+			r.lock.Lock()
+			r.advanceCheckpoint(tt.input)
+			r.lock.Unlock()
+			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
+			assert.Equal(t, tt.expected, r.checkpointOpTime)
+		})
+	}
+}
+
+func TestAdvanceReportedOpTime(t *testing.T) {
+	t.Parallel()
+
+	fixedCheckpoint := bson.Timestamp{T: 42, I: 42}
+
+	for _, tt := range advanceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := &Repl{lastReplicatedOpTime: tt.current, checkpointOpTime: fixedCheckpoint}
+			r.lock.Lock()
+			r.advanceReportedOpTime(tt.input)
+			r.lock.Unlock()
+			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
+			assert.Equal(t, fixedCheckpoint, r.checkpointOpTime,
+				"advanceReportedOpTime must not advance checkpointOpTime")
+		})
+	}
+}
+
+func TestAlignCappedSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    int64
+		expected int64
+	}{
+		{"non-aligned rounds up", 3333, 3584},
+		{"already aligned is unchanged", 3584, 3584},
+		{"zero stays zero", 0, 0},
+		{"256 stays 256", 256, 256},
+		{"257 rounds to 512", 257, 512},
+		{"1 rounds to 256", 1, 256},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, alignCappedSize(tt.input))
+		})
+	}
+}

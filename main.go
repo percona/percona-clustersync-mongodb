@@ -42,7 +42,7 @@ const (
 )
 
 var (
-	Version   = "v0.8.0" //nolint:gochecknoglobals
+	Version   = "v0.8.1" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
 	GitCommit = ""       //nolint:gochecknoglobals
 	GitBranch = ""       //nolint:gochecknoglobals
@@ -622,6 +622,15 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
 		targetVersion.FullString(), cs.Scheme, strings.Join(cs.Hosts, ","))
 
+	crossVersion, err := mdb.CheckVersionCompat(sourceVersion, targetVersion)
+	if err != nil {
+		return nil, errors.Wrap(err, "version check")
+	}
+
+	if crossVersion {
+		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
+	}
+
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "heartbeat")
@@ -630,7 +639,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	pcs := pcsm.New(ctx, source, target)
+	pcs := pcsm.New(ctx, source, target, sourceVersion)
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {

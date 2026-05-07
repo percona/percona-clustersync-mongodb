@@ -1,6 +1,6 @@
 services:
   rs00:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs00
     hostname: rs00
     mem_limit: 2g
@@ -22,7 +22,7 @@ services:
       ]
 
   rs01:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs01
     hostname: rs01
     mem_limit: 2g
@@ -41,7 +41,7 @@ services:
       ]
 
   rs02:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs02
     hostname: rs02
     mem_limit: 2g
@@ -60,7 +60,7 @@ services:
       ]
 
   rs10:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs10
     hostname: rs10
     mem_limit: 2g
@@ -79,7 +79,7 @@ services:
       ]
 
   rs11:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs11
     hostname: rs11
     mem_limit: 2g
@@ -98,7 +98,7 @@ services:
       ]
 
   rs12:
-    image: "percona/percona-server-mongodb:${MONGO_VERSION:-8.0}"
+    image: "percona/percona-server-mongodb:${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
     container_name: rs12
     hostname: rs12
     mem_limit: 2g

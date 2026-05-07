@@ -81,7 +81,7 @@ for i in $(seq 0 $((SRC_SHARDS - 1))); do
 done
 msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
-if [[ "${MONGO_VERSION:-8.0}" == 8.* ]]; then
+if [[ "${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* ]]; then
     msh "src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 fi
 
@@ -114,6 +114,6 @@ for i in $(seq 0 $((TGT_SHARDS - 1))); do
 done
 msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
-if [[ "${MONGO_VERSION:-8.0}" == 8.* ]]; then
+if [[ "${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* ]]; then
     msh "tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 fi

@@ -38,6 +38,20 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 | `SRC_SHARDS`    | `2`     | Number of source shards (sharded topology only, max 3) |
 | `TGT_SHARDS`    | `2`     | Number of target shards (sharded topology only, max 3) |
 
+## Supported MongoDB Versions
+
+| Source | Target | Topology    |
+| ------ | ------ | ----------- |
+| 6.0    | 6.0    | RS, Sharded |
+| 7.0    | 7.0    | RS, Sharded |
+| 8.0    | 8.0    | RS, Sharded |
+| 6.0    | 7.0    | RS, Sharded |
+| 6.0    | 8.0    | RS, Sharded |
+| 7.0    | 8.0    | RS, Sharded |
+
+Sharded entries (except 8.0 → 8.0) run a reduced E2E scope in CI; the full sharded suite is blocked by PCSM-255.
+Downgrade (higher → lower) is not supported.
+
 ## Cluster Topology
 
 ### Connection URIs
@@ -399,6 +413,27 @@ Monitor write operations per second on a cluster:
 ```bash
 poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ```
+
+## CI (Jenkins)
+
+Functional tests run on Jenkins at `https://psmdb.cd.percona.com/view/PCSM/`.
+
+| Job                             | Default Cloud | Fallback |
+| ------------------------------- | ------------- | -------- |
+| `hetzner-pcsm-functional-tests` | Hetzner       | AWS      |
+
+Hetzner workers are used by default for cost reasons but sometimes fail to start due to cloud capacity limits. If workers don't start: cancel the stuck build and re-trigger with **AWS** (first cloud option in job parameters).
+
+## QA Test Branch Override
+
+The CI workflow (`.github/workflows/ci.yml`) extracts the first `PCSM-XXX` ticket key from the PR title and checks if a branch with that name exists in `Percona-QA/psmdb-testing`. If found, the CI checks out that branch instead of `main` for the QA tests.
+
+This is useful when QA tests need changes to pass on a PCSM PR. Push the test fixes to a branch named after the ticket (e.g. `PCSM-286`) in the QA repo, and the PCSM CI picks them up automatically.
+
+- No PR needed on the QA repo, just the branch.
+- Only the first `PCSM-XXX` match from the PR title is used (`grep -oE 'PCSM-[0-9]+' | head -1`).
+- Falls back to `main` if no matching branch exists or no ticket key is found in the title.
+- Can also be overridden manually via the `tests_ver` workflow dispatch input.
 
 ## External References
 

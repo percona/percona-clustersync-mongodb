@@ -43,4 +43,8 @@ def test_insert_without_shardkey_in_doc(t: Testing, phase: Runner.Phase):
             ]
         )
 
+        t.wait_target_count("db_1", "coll_1", 2)
+        t.wait_target_count("db_1", "coll_2", 4)
+        t.wait_target_count("db_1", "coll_3", 4)
+
     t.compare_all_sharded()
