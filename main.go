@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
@@ -772,6 +773,8 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		ClonedSizeBytes:         status.Clone.CopiedSizeBytes,
 	}
 
+	res.Finalization = makeFinalizationResponse(status.FinalizeStatus)
+
 	switch {
 	case status.State == pcsm.StateRunning && !status.Clone.IsFinished():
 		res.Info = "Initial Sync: Cloning Data"
@@ -1202,6 +1205,9 @@ type statusResponse struct {
 
 	// InitialSync contains the initial sync status details.
 	InitialSync *statusInitialSyncResponse `json:"initialSync,omitempty"`
+
+	// Finalization contains the finalize stage status details.
+	Finalization *statusFinalizationResponse `json:"finalization,omitempty"`
 }
 
 func (r statusResponse) IsOk() bool       { return r.Ok }
@@ -1226,6 +1232,111 @@ type statusInitialSyncResponse struct {
 	Completed bool `json:"completed"`
 	// CloneCompleted indicates if the cloning process is completed.
 	CloneCompleted bool `json:"cloneCompleted"`
+}
+
+// statusFinalizationResponse represents the finalize-stage status in the /status response.
+type statusFinalizationResponse struct {
+	// Completed indicates whether the finalize stage has finished successfully.
+	Completed bool `json:"completed"`
+	// StartedAt is when the finalize stage was triggered.
+	StartedAt time.Time `json:"startedAt"`
+	// CompletedAt is when the finalize stage finished. Omitted while in progress.
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+
+	// UnsuccessfulIndexes lists indexes that did not complete cleanly during
+	// replication and were not recovered during finalize. Empty until the
+	// finalize stage completes.
+	UnsuccessfulIndexes []unsuccessfulIndexResponse `json:"unsuccessfulIndexes,omitempty"`
+}
+
+// unsuccessfulIndexResponse describes a single index that did not finalize cleanly.
+type unsuccessfulIndexResponse struct {
+	// Namespace is the database and collection (db.coll) of the index.
+	Namespace string `json:"namespace"`
+	// IndexName is the name of the index.
+	IndexName string `json:"indexName"`
+	// Type categorizes why the index is unsuccessful: "failed", "incomplete", or "inconsistent".
+	Type string `json:"type"`
+	// Keys is the index key spec, encoded as a JSON object preserving field order.
+	Keys json.RawMessage `json:"keys,omitempty"`
+}
+
+// makeFinalizationResponse translates a [pcsm.FinalizeStatus] into the wire format.
+// Returns nil when fs is nil (no finalize has been triggered yet).
+func makeFinalizationResponse(fs *pcsm.FinalizeStatus) *statusFinalizationResponse {
+	if fs == nil {
+		return nil
+	}
+
+	out := &statusFinalizationResponse{
+		Completed: fs.Completed,
+		StartedAt: fs.StartedAt,
+	}
+
+	if !fs.CompletedAt.IsZero() {
+		t := fs.CompletedAt
+		out.CompletedAt = &t
+	}
+
+	if len(fs.UnsuccessfulIndexes) > 0 {
+		out.UnsuccessfulIndexes = make([]unsuccessfulIndexResponse, 0, len(fs.UnsuccessfulIndexes))
+
+		for _, idx := range fs.UnsuccessfulIndexes {
+			out.UnsuccessfulIndexes = append(out.UnsuccessfulIndexes, unsuccessfulIndexResponse{
+				Namespace: idx.Namespace,
+				IndexName: idx.Name,
+				Type:      string(idx.Type),
+				Keys:      indexKeysToJSON(idx.Keys),
+			})
+		}
+	}
+
+	return out
+}
+
+// indexKeysToJSON converts a bson.Raw index keys document into a JSON object,
+// preserving field order. Returns nil on any decoding error so the field is
+// omitted from the response rather than failing the whole status response.
+func indexKeysToJSON(raw bson.Raw) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var doc bson.D
+
+	err := bson.Unmarshal(raw, &doc)
+	if err != nil {
+		return nil
+	}
+
+	var buf bytes.Buffer
+
+	buf.WriteByte('{')
+
+	for i, e := range doc {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+
+		k, err := json.Marshal(e.Key)
+		if err != nil {
+			return nil
+		}
+
+		buf.Write(k)
+		buf.WriteByte(':')
+
+		v, err := json.Marshal(e.Value)
+		if err != nil {
+			return nil
+		}
+
+		buf.Write(v)
+	}
+
+	buf.WriteByte('}')
+
+	return buf.Bytes()
 }
 
 // pauseResponse represents the response body for the /pause endpoint.
