@@ -26,15 +26,16 @@ jobs:
       (github.event.issue.pull_request != null &&
         github.event.comment.body == '/review')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # Job-level write permission is fine because only the final "Post review"
+    # step receives GH_TOKEN. The opencode step has no GitHub credential and
+    # cannot use this permission even if prompt-injected.
     permissions:
-      # OIDC exchange for the OpenCode App token; required for the wrapper
-      # to post as opencode-agent[bot] with a session link.
-      id-token: write
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
     env:
+      REPO_FULL: ${{ github.repository }}
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
       ACTOR: ${{ github.event.comment.user.login || github.actor }}
@@ -53,66 +54,130 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Checkout trusted default-branch contents so the prompt file below
-      # comes from main, not the PR. The action wrapper still checks out the
-      # PR head internally; tool denials confine the agent there.
+      # Checkout trusted default-branch contents to load the review prompt.
       - name: Checkout default branch
         if: steps.permission.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          # Full history so the agent can run `git diff origin/main...HEAD`
-          # against the PR head the wrapper checks out next.
-          fetch-depth: 0
+
+      - name: Read PR payload
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Pre-fetch PR data outside the LLM step so the agent does not need
+          # GitHub API access. The opencode step reads from these files
+          # instead of calling `gh api` itself.
+          PR_FILE="$RUNNER_TEMP/pr.json"
+          COMMITS_FILE="$RUNNER_TEMP/pr_commits.json"
+          FILES_FILE="$RUNNER_TEMP/pr_files.json"
+          gh api "repos/$REPO_FULL/pulls/$PR_NUMBER" > "$PR_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/commits" > "$COMMITS_FILE"
+          gh api --paginate "repos/$REPO_FULL/pulls/$PR_NUMBER/files" > "$FILES_FILE"
+          {
+            echo "PR_PAYLOAD_FILE=$PR_FILE"
+            echo "PR_COMMITS_FILE=$COMMITS_FILE"
+            echo "PR_FILES_FILE=$FILES_FILE"
+          } >> "$GITHUB_ENV"
 
       - name: Load review prompt
         if: steps.permission.outputs.skip != 'true'
-        id: prompt
         run: |
           set -euo pipefail
+          # Build the prompt as a file so the OpenCode step feeds it via
+          # stdin to the non-interactive CLI.
+          PROMPT_FILE="$RUNNER_TEMP/review-prompt.md"
           {
-            echo 'content<<OPENCODE_PROMPT_EOF'
             cat .github/opencode/review-prompt.md
             echo ''
             echo '---'
             echo ''
-            echo "You are handling the \`/review\` command on PR #$PR_NUMBER in the \`$GITHUB_REPOSITORY\` repository."
-            echo 'OPENCODE_PROMPT_EOF'
-          } >> "$GITHUB_OUTPUT"
+            echo "You are handling the \`/review\` command on PR #$PR_NUMBER in the \`$REPO_FULL\` repository."
+          } > "$PROMPT_FILE"
+          echo "REVIEW_PROMPT_FILE=$PROMPT_FILE" >> "$GITHUB_ENV"
+
+      - name: Install OpenCode
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GITHUB_ACTIONS: "true"
+        run: |
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: OpenCode Go review
         if: steps.permission.outputs.skip != 'true'
-        uses: anomalyco/opencode/github@98e091796b6a293cf20b4187e8fc6a949e0295e4  # v1.14.41
-        timeout-minutes: 15
+        timeout-minutes: 25
+        # The opencode step has only ANTHROPIC_API_KEY in its environment.
+        # GH_TOKEN / GITHUB_TOKEN do not reach this step, so prompt-injected
+        # content cannot mint or use a GitHub write credential. The agent's
+        # only output channel is REVIEW_BODY_FILE, validated below.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Disable opencode.json/opencode.jsonc/AGENTS.md loading from the PR
-          # branch. The wrapper checks out the PR head internally; without
-          # this the agent would pick up attacker-controlled config and skill
-          # files.
-          OPENCODE_DISABLE_PROJECT_CONFIG: "true"
-          # Allow only read-only git/ls/find/grep so the agent can discover
-          # changed files and read context, then deny everything else.
-          # `edit`, `task`, `webfetch`, `websearch`, `question` are blanket-
-          # denied. With no GH_TOKEN and no fetch tools, the agent cannot
-          # exfiltrate secrets or call GitHub; its only output is the review
-          # markdown the wrapper posts as a PR comment.
-          OPENCODE_PERMISSION: |
-            {
-              "bash": {
-                "git*": "allow",
-                "ls*": "allow",
-                "find*": "allow",
-                "grep*": "allow",
-                "*": "deny"
-              },
-              "edit": "deny",
-              "task": "deny",
-              "webfetch": "deny",
-              "websearch": "deny",
-              "question": "deny"
-            }
-        with:
-          model: anthropic/claude-opus-4-7
-          share: true
-          prompt: ${{ steps.prompt.outputs.content }}
+          REPO_FULL: ${{ env.REPO_FULL }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          PR_PAYLOAD_FILE: ${{ env.PR_PAYLOAD_FILE }}
+          PR_COMMITS_FILE: ${{ env.PR_COMMITS_FILE }}
+          PR_FILES_FILE: ${{ env.PR_FILES_FILE }}
+          REVIEW_BODY_FILE: ${{ runner.temp }}/review_body.md
+          REVIEW_PROMPT_FILE: ${{ env.REVIEW_PROMPT_FILE }}
+        run: |
+          set -euo pipefail
+          opencode --version
+          timeout --kill-after=30s 25m opencode run \
+            --pure \
+            --model anthropic/claude-opus-4-7 \
+            --dangerously-skip-permissions \
+            < "$REVIEW_PROMPT_FILE"
+
+      - name: Validate review body
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          BODY_FILE="$RUNNER_TEMP/review_body.md"
+          if [[ ! -f "$BODY_FILE" ]]; then
+            echo "::error::Review body file not produced by opencode step at $BODY_FILE."
+            exit 1
+          fi
+          if [[ ! -s "$BODY_FILE" ]]; then
+            echo "::error::Review body file is empty."
+            exit 1
+          fi
+          BYTES=$(wc -c < "$BODY_FILE")
+          if (( BYTES > 60000 )); then
+            echo "::error::Review body is too large ($BYTES bytes)."
+            exit 1
+          fi
+          if [[ -n "${ANTHROPIC_API_KEY:-}" ]] && grep -Fq -- "$ANTHROPIC_API_KEY" "$BODY_FILE"; then
+            echo "::error::Review body contains the Anthropic API key."
+            exit 1
+          fi
+          # Concrete provider tokens and private-key markers only. Generic
+          # hex/base64 patterns were dropped because they false-positive on
+          # legitimate review content (commit hashes, base64 fixtures).
+          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' "$BODY_FILE"; then
+            echo "::error::Review body contains text that looks like a secret."
+            exit 1
+          fi
+
+      - name: Post review
+        if: steps.permission.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASH_ENV: ""
+          ENV: ""
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -euo pipefail
+          BODY_FILE="$RUNNER_TEMP/review_body.md"
+          gh pr review "$PR_NUMBER" \
+            --repo "$REPO_FULL" \
+            --comment \
+            --body-file "$BODY_FILE"
