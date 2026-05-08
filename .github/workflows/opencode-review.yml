@@ -61,6 +61,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # Full history so the agent can run `git diff origin/main...HEAD`
+          # against the PR head the wrapper checks out next.
+          fetch-depth: 0
 
       - name: Load review prompt
         if: steps.permission.outputs.skip != 'true'
