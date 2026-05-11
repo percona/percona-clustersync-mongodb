@@ -1,17 +1,4 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-"""Tests for the `finalization` section of the /status response.
-
-The `finalization` section is added in PCSM-176 to make failed/incomplete/
-inconsistent indexes visible after `/finalize` finishes.
-
-Behaviour under test:
-- The section is absent before /finalize is triggered.
-- Once finalize completes successfully it appears with completed=true,
-  startedAt, completedAt and (when applicable) unsuccessfulIndexes.
-- A unique index whose data violates uniqueness on the target produces an
-  entry with type="failed" in unsuccessfulIndexes.
-"""
-
 import time
 
 from testing import Testing
@@ -20,11 +7,13 @@ from pcsm import PCSM, Runner
 
 
 def test_finalization_section_absent_before_finalize(t: Testing):
-    """Status returned in IDLE state must not contain the finalization section."""
-    status = t.pcsm.status()
+    """While PCSM is running (before /finalize is called) the /status response
+    must not include a `finalization` section."""
+    with t.run(Runner.Phase.APPLY):
+        status = t.pcsm.status()
 
-    assert status["state"] == PCSM.State.IDLE
-    assert "finalization" not in status, status
+        assert status["state"] == PCSM.State.RUNNING, status
+        assert "finalization" not in status, status
 
 
 def test_finalization_section_present_after_clean_finalize(t: Testing):
@@ -82,9 +71,9 @@ def test_finalization_section_reports_failed_unique_index(t: Testing):
         for idx in unsuccessful
         if idx["namespace"] == f"{db}.{coll}" and idx["indexName"] == "x_unique_idx"
     ]
-    assert matching, (
-        f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
-    )
+    assert (
+        matching
+    ), f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
 
     entry = matching[0]
     assert entry["type"] == "failed", entry

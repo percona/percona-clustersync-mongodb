@@ -254,6 +254,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	p.catalog = cat
 	p.clone = cln
 	p.repl = rpl
+	p.finalizeStatus = nil
 	p.state = cp.State
 
 	if cp.Error != "" {
@@ -401,6 +402,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.catalog = catalog.NewCatalog(p.target, p.sourceVer)
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer)
+	p.finalizeStatus = nil
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)
