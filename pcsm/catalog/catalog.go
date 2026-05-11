@@ -1065,6 +1065,12 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 
 // collectUnsuccessfulIndexes walks the catalog and returns every index entry
 // that has the Failed, Incomplete, or Inconsistent flag set.
+//
+// An index entry is expected to carry at most one of these flags. If multiple
+// flags are set due to a bug, the entry is reported once with the highest-priority
+// type: Failed > Incomplete > Inconsistent. This is a fail-loud default that
+// prefers surfacing the more severe condition rather than silently dropping the
+// entry.
 func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 	c.lock.RLock()
 	defer c.lock.RUnlock()

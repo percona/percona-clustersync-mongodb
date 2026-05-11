@@ -1295,8 +1295,12 @@ func makeFinalizationResponse(fs *pcsm.FinalizeStatus) *statusFinalizationRespon
 }
 
 // indexKeysToJSON converts a bson.Raw index keys document into a JSON object,
-// preserving field order. Returns nil on any decoding error so the field is
-// omitted from the response rather than failing the whole status response.
+// preserving field order for compound indexes.
+//
+// On any decoding or marshaling error the function returns nil so the field is
+// omitted from the response via omitempty. A malformed key spec is not worth
+// failing the entire /status response over: operators still get the namespace,
+// index name and type, which are enough to identify the offending index.
 func indexKeysToJSON(raw bson.Raw) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
