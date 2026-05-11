@@ -68,6 +68,9 @@ func TestCheckpoint_NilSkipAdvancesPastFailedWorker(t *testing.T) {
 
 	// Half 1 -- failed-on-first-bulk worker really does leave lastTS uninitialized
 	failedLastTS := pool.workers[0].lastTS.Load()
+	require.Nil(t, failedLastTS,
+		"expected the failing worker's lastTS to be nil after its bulk write failure, "+
+			"but got %v.", failedLastTS)
 	t.Logf("Half 1 -- failed worker lastTS after error: %v", failedLastTS)
 
 	// Half 2 -- Checkpoint silently skips that nil and min over remaining workers ends up > T_fail
