@@ -1,14 +1,13 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import time
 
+import pytest
 from testing import Testing
 
 from pcsm import PCSM, Runner
 
 
 def test_finalization_section_absent_before_finalize(t: Testing):
-    """While PCSM is running (before /finalize is called) the /status response
-    must not include a `finalization` section."""
     with t.run(Runner.Phase.APPLY):
         status = t.pcsm.status()
 
@@ -16,32 +15,25 @@ def test_finalization_section_absent_before_finalize(t: Testing):
         assert "finalization" not in status, status
 
 
-def test_finalization_section_present_after_clean_finalize(t: Testing):
-    """A normal finalize run must produce a finalization section with no unsuccessful indexes."""
-    with t.run(Runner.Phase.APPLY):
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_finalization_section_present_after_clean_finalize(t: Testing, phase: Runner.Phase):
+    with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1})
 
     status = t.pcsm.status()
     assert status["state"] == PCSM.State.FINALIZED, status
 
-    assert "finalization" in status, status
-    fin = status["finalization"]
-
+    fin = status.get("finalization")
+    assert fin is not None, status
     assert fin["completed"] is True, fin
     assert fin.get("startedAt"), fin
     assert fin.get("completedAt"), fin
-    # Either omitted or empty list — both are acceptable since omitempty drops empty slices.
     assert not fin.get("unsuccessfulIndexes"), fin
+
+    t.compare_all()
 
 
 def test_finalization_section_reports_failed_unique_index(t: Testing):
-    """When the source creates a unique index that conflicts with target data,
-    the finalization section must surface it as type=failed.
-
-    We force the failure by inserting duplicate values into the target collection
-    (after PCSM cloned data) and then creating a unique index on the source.
-    PCSM's apply path attempts the index on the target, fails, and flags it.
-    """
     db = "db_failed_idx"
     coll = "coll_failed_idx"
 
@@ -71,9 +63,9 @@ def test_finalization_section_reports_failed_unique_index(t: Testing):
         for idx in unsuccessful
         if idx["namespace"] == f"{db}.{coll}" and idx["indexName"] == "x_unique_idx"
     ]
-    assert (
-        matching
-    ), f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
+    assert matching, (
+        f"expected unsuccessful index entry for {db}.{coll}.x_unique_idx, got: {unsuccessful}"
+    )
 
     entry = matching[0]
     assert entry["type"] == "failed", entry
