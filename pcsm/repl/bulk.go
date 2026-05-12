@@ -51,9 +51,25 @@ const (
 	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512 KiB
 )
 
-// MongoDB server error code for "PathNotViable" (e.g. "Cannot create field 'X' in
-// element {Y: null}").
-const errCodePathNotViable = 28
+// MongoDB server error codes that indicate a delta update could not be applied
+// because the target document's shape diverged from the source snapshot view
+// against which the delta was computed. Both are recoverable via refetch +
+// upserting replaceOne.
+const (
+	// errCodePathNotViable - "Cannot create field 'X' in element {Y: null}".
+	// Parent path is not a viable container for the requested write.
+	errCodePathNotViable = 28
+	// errCodeNonExistentPath - a required path does not exist on the target
+	// document (e.g. $rename source missing, certain $pop/$pull cases).
+	errCodeNonExistentPath = 29
+)
+
+// isRecoverableUpdateError reports whether code identifies a delta-update
+// failure that is recoverable by refetching the document from source and
+// applying it as an upserting replaceOne on target.
+func isRecoverableUpdateError(code int) bool {
+	return code == errCodePathNotViable || code == errCodeNonExistentPath
+}
 
 // updateOps holds the result of building update operations from a change stream event.
 // When a change event combines an array truncation with conflicting indexed-write updates
@@ -173,13 +189,14 @@ func (cbw *clientBulkWrite) doWithRetry(
 		return cbw.doWithRetry(ctx, m, bulkWrites[idx+1:])
 	}
 
-	idx, ns, filter := cbw.extractPathCollisionTarget(bulkErr, bulkWrites)
-	// Try to handle path-collision error by refetching the document from source
-	// and applying it as an upserting replaceOne on target (PCSM-314).
+	idx, ns, filter := cbw.extractRecoverableUpdateTarget(bulkErr, bulkWrites)
+	// Try to recover from a shape-mismatch update error by refetching the
+	// document from source and applying it as an upserting replaceOne on
+	// target (PCSM-314).
 	if filter != nil {
 		targetColl := m.Database(ns.Database).Collection(ns.Collection)
 
-		err = handlePathCollisionError(ctx, cbw.source, targetColl, ns, filter)
+		err = handleRecoverableUpdateError(ctx, cbw.source, targetColl, ns, filter)
 		if err != nil {
 			return err
 		}
@@ -225,12 +242,13 @@ func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	return minIdx, replaceModel.Replacement
 }
 
-// extractPathCollisionTarget checks whether the bulk error is a path-collision
-// (server error code 28, PathNotViable) on an Update op and returns the index
-// of the failing op together with its namespace and documentKey filter. Returns
-// -1, _, nil when the error is not a path-collision or the failing op is not an
-// Update. The caller uses (ns, filter) to refetch the document from source.
-func (cbw *clientBulkWrite) extractPathCollisionTarget(
+// extractRecoverableUpdateTarget checks whether the bulk error is a
+// recoverable delta-update failure (see isRecoverableUpdateError) on an
+// Update op and returns the index of the failing op together with its
+// namespace and documentKey filter. Returns -1, _, nil when the error is
+// not recoverable or the failing op is not an Update. The caller uses
+// (ns, filter) to refetch the document from source.
+func (cbw *clientBulkWrite) extractRecoverableUpdateTarget(
 	bulkErr error,
 	writes []mongo.ClientBulkWrite,
 ) (int, catalog.Namespace, bson.D) {
@@ -253,7 +271,7 @@ func (cbw *clientBulkWrite) extractPathCollisionTarget(
 		}
 	}
 
-	if firstErr.Code != errCodePathNotViable || firstErr.Index < 0 || firstErr.Index >= len(writes) {
+	if !isRecoverableUpdateError(firstErr.Code) || firstErr.Index < 0 || firstErr.Index >= len(writes) {
 		return -1, catalog.Namespace{}, nil
 	}
 
@@ -484,11 +502,12 @@ func (cbw *collectionBulkWrite) doWithRetry(
 		return cbw.doWithRetry(ctx, coll, ns, bulkWrites[idx+1:])
 	}
 
-	idx, filter := cbw.extractPathCollisionTarget(bulkErr, bulkWrites)
-	// Try to handle path-collision error by refetching the document from source
-	// and applying it as an upserting replaceOne on target (PCSM-314).
+	idx, filter := cbw.extractRecoverableUpdateTarget(bulkErr, bulkWrites)
+	// Try to recover from a shape-mismatch update error by refetching the
+	// document from source and applying it as an upserting replaceOne on
+	// target (PCSM-314).
 	if filter != nil {
-		err = handlePathCollisionError(ctx, cbw.source, coll, ns, filter)
+		err = handleRecoverableUpdateError(ctx, cbw.source, coll, ns, filter)
 		if err != nil {
 			return err
 		}
@@ -525,12 +544,13 @@ func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	return firstErr.Index, replaceModel.Replacement
 }
 
-// extractPathCollisionTarget checks whether the bulk error is a path-collision
-// (server error code 28, PathNotViable) on an Update op and returns the index of
-// the failing op together with its documentKey filter. Returns -1, nil when the
-// error is not a path-collision or the failing op is not an Update. The caller
-// uses the filter to refetch the document from source.
-func (cbw *collectionBulkWrite) extractPathCollisionTarget(
+// extractRecoverableUpdateTarget checks whether the bulk error is a
+// recoverable delta-update failure (see isRecoverableUpdateError) on an
+// Update op and returns the index of the failing op together with its
+// documentKey filter. Returns -1, nil when the error is not recoverable or
+// the failing op is not an Update. The caller uses the filter to refetch
+// the document from source.
+func (cbw *collectionBulkWrite) extractRecoverableUpdateTarget(
 	bulkErr error,
 	ops []mongo.WriteModel,
 ) (int, bson.D) {
@@ -544,7 +564,7 @@ func (cbw *collectionBulkWrite) extractPathCollisionTarget(
 		return -1, nil
 	}
 
-	if firstErr.Code != errCodePathNotViable {
+	if !isRecoverableUpdateError(firstErr.Code) {
 		return -1, nil
 	}
 
@@ -706,17 +726,20 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	return nil
 }
 
-// handlePathCollisionError recovers from a PathNotViable bulk write error by
-// refetching the affected document from source and applying it to target via an
-// upserting replaceOne. When the document is missing on source (deleted between
-// the change-stream event and the refetch), the target document is removed
-// instead. The filter is the change event's documentKey (typically {_id: X}).
+// handleRecoverableUpdateError recovers from a shape-mismatch bulk write
+// error (see isRecoverableUpdateError) by refetching the affected document
+// from source and applying it to target via an upserting replaceOne. When
+// the document is missing on source (deleted between the change-stream
+// event and the refetch), the target document is removed instead. The
+// filter is the change event's documentKey (typically {_id: X}).
 //
-// This is the recovery path for PCSM-314: change-stream delta updates emitted
-// against an array index that has shifted (or been nulled) on the target's
-// cloned snapshot cause "Cannot create field 'X' in element {Y: null}".
-// Refetching from source produces an authoritative replacement.
-func handlePathCollisionError(
+// This is the recovery path for PCSM-314: change-stream delta updates
+// emitted against an array index or path that has shifted on the target's
+// cloned snapshot raise errors such as "Cannot create field 'X' in element
+// {Y: null}" (PathNotViable) or "path does not exist" (NonExistentPath).
+// Refetching from source produces an authoritative replacement that
+// supersedes the failed delta.
+func handleRecoverableUpdateError(
 	ctx context.Context,
 	source *mongo.Client,
 	targetColl *mongo.Collection,
@@ -724,7 +747,7 @@ func handlePathCollisionError(
 	filter bson.D,
 ) error {
 	if source == nil {
-		return errors.New("path-collision recovery requires source client")
+		return errors.New("recoverable-update recovery requires source client")
 	}
 
 	sourceColl := source.Database(ns.Database).Collection(ns.Collection)
@@ -738,7 +761,7 @@ func handlePathCollisionError(
 			// Delete on target idempotently; the eventual delete event from the
 			// change stream will be a no-op.
 			log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
-				Infof("Path-collision recovery: source doc missing for %v, deleting target", filter)
+				Infof("Recoverable-update recovery: source doc missing for %v, deleting target", filter)
 
 			_, delErr := targetColl.DeleteOne(ctx, filter)
 			if delErr != nil && !errors.Is(delErr, mongo.ErrNoDocuments) {
@@ -752,7 +775,7 @@ func handlePathCollisionError(
 	}
 
 	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
-		Infof("Path-collision recovery: replacing target from source for %v", filter)
+		Infof("Recoverable-update recovery: replacing target from source for %v", filter)
 
 	_, err = targetColl.ReplaceOne(ctx, filter, doc, options.Replace().SetUpsert(true))
 	if err != nil {

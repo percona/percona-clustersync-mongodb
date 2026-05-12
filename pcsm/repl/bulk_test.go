@@ -841,11 +841,12 @@ func collectFollowUpKeys(t *testing.T, followUp []bson.D) []string {
 	return keys
 }
 
-// TestExtractPathCollisionTarget_ClientBulk verifies that extractPathCollisionTarget
-// detects a PathNotViable (code 28) error on a ClientUpdateOneModel and returns the
-// failing op's index, namespace, and documentKey filter. Other error codes, non-Update
-// models, and non-bulk errors must return (-1, _, nil).
-func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
+// TestExtractRecoverableUpdateTarget_ClientBulk verifies that the extractor
+// detects a recoverable-update error (PathNotViable=28 or NonExistentPath=29)
+// on a ClientUpdateOneModel and returns the failing op's index, namespace,
+// and documentKey filter. Other error codes, non-Update models, and non-bulk
+// errors must return (-1, _, nil).
+func TestExtractRecoverableUpdateTarget_ClientBulk(t *testing.T) {
 	t.Parallel()
 
 	cbw := newClientBulkWriter(10, false, nil)
@@ -872,25 +873,37 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 		},
 	}
 
-	t.Run("path-collision on update at idx 1", func(t *testing.T) {
+	t.Run("PathNotViable on update at idx 1", func(t *testing.T) {
 		t.Parallel()
 
 		bulkErr := mongo.ClientBulkWriteException{
 			WriteErrors: map[int]mongo.WriteError{
-				1: {
-					Index: 1, Code: errCodePathNotViable,
-					Message: "Cannot create field 'x' in element {arr.0: null}",
-				},
+				1: {Index: 1, Code: errCodePathNotViable, Message: "Cannot create field 'x' in element {arr.0: null}"},
 			},
 		}
 
-		idx, gotNS, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		idx, gotNS, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
 		assert.Equal(t, 1, idx)
 		assert.Equal(t, ns, gotNS)
 		assert.Equal(t, filter, gotFilter)
 	})
 
-	t.Run("non-path-collision error returns -1", func(t *testing.T) {
+	t.Run("NonExistentPath on update at idx 1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.ClientBulkWriteException{
+			WriteErrors: map[int]mongo.WriteError{
+				1: {Index: 1, Code: errCodeNonExistentPath, Message: "path does not exist"},
+			},
+		}
+
+		idx, gotNS, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
+		assert.Equal(t, 1, idx)
+		assert.Equal(t, ns, gotNS)
+		assert.Equal(t, filter, gotFilter)
+	})
+
+	t.Run("non-recoverable error returns -1", func(t *testing.T) {
 		t.Parallel()
 
 		bulkErr := mongo.ClientBulkWriteException{
@@ -899,12 +912,12 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 			},
 		}
 
-		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		idx, _, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
 
-	t.Run("path-collision on non-update model returns -1", func(t *testing.T) {
+	t.Run("recoverable error on non-update model returns -1", func(t *testing.T) {
 		t.Parallel()
 
 		// idx 0 is a replace model, not an update.
@@ -914,7 +927,7 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 			},
 		}
 
-		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		idx, _, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
@@ -922,7 +935,7 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 	t.Run("non-bulk error returns -1", func(t *testing.T) {
 		t.Parallel()
 
-		idx, _, gotFilter := cbw.extractPathCollisionTarget(assert.AnError, writes)
+		idx, _, gotFilter := cbw.extractRecoverableUpdateTarget(assert.AnError, writes)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
@@ -932,7 +945,7 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 
 		bulkErr := mongo.ClientBulkWriteException{WriteErrors: map[int]mongo.WriteError{}}
 
-		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		idx, _, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
@@ -961,16 +974,16 @@ func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
 			},
 		}
 
-		idx, gotNS, _ := cbw.extractPathCollisionTarget(bulkErr, writes)
+		idx, gotNS, _ := cbw.extractRecoverableUpdateTarget(bulkErr, writes)
 		assert.Equal(t, 1, idx, "minimum index must be selected")
 		assert.Equal(t, ns, gotNS)
 	})
 }
 
-// TestExtractPathCollisionTarget_CollectionBulk verifies extraction on the
-// collection-level bulk path. The bulk error here is BulkWriteException with a
-// []BulkWriteError where each element embeds WriteError.
-func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
+// TestExtractRecoverableUpdateTarget_CollectionBulk verifies extraction on
+// the collection-level bulk path. The bulk error here is BulkWriteException
+// with a []BulkWriteError where each element embeds WriteError.
+func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 	t.Parallel()
 
 	cbw := newCollectionBulkWriter(10, false, nil)
@@ -987,7 +1000,7 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 		},
 	}
 
-	t.Run("path-collision on update at idx 1", func(t *testing.T) {
+	t.Run("PathNotViable on update at idx 1", func(t *testing.T) {
 		t.Parallel()
 
 		bulkErr := mongo.BulkWriteException{
@@ -996,12 +1009,26 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 			},
 		}
 
-		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, ops)
 		assert.Equal(t, 1, idx)
 		assert.Equal(t, filter, gotFilter)
 	})
 
-	t.Run("non-path-collision returns -1", func(t *testing.T) {
+	t.Run("NonExistentPath on update at idx 1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.BulkWriteException{
+			WriteErrors: []mongo.BulkWriteError{
+				{WriteError: mongo.WriteError{Index: 1, Code: errCodeNonExistentPath, Message: "..."}},
+			},
+		}
+
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, ops)
+		assert.Equal(t, 1, idx)
+		assert.Equal(t, filter, gotFilter)
+	})
+
+	t.Run("non-recoverable returns -1", func(t *testing.T) {
 		t.Parallel()
 
 		bulkErr := mongo.BulkWriteException{
@@ -1010,12 +1037,12 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 			},
 		}
 
-		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, ops)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
 
-	t.Run("path-collision on non-update model returns -1", func(t *testing.T) {
+	t.Run("recoverable error on non-update model returns -1", func(t *testing.T) {
 		t.Parallel()
 
 		bulkErr := mongo.BulkWriteException{
@@ -1024,7 +1051,7 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 			},
 		}
 
-		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, ops)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
@@ -1032,7 +1059,7 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 	t.Run("non-bulk error returns -1", func(t *testing.T) {
 		t.Parallel()
 
-		idx, gotFilter := cbw.extractPathCollisionTarget(assert.AnError, ops)
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(assert.AnError, ops)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
@@ -1042,7 +1069,7 @@ func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
 
 		bulkErr := mongo.BulkWriteException{WriteErrors: nil}
 
-		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		idx, gotFilter := cbw.extractRecoverableUpdateTarget(bulkErr, ops)
 		assert.Equal(t, -1, idx)
 		assert.Nil(t, gotFilter)
 	})
