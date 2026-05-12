@@ -42,11 +42,11 @@ const (
 )
 
 var (
-	Version   = "v0.8.1" //nolint:gochecknoglobals
-	Platform  = ""       //nolint:gochecknoglobals
-	GitCommit = ""       //nolint:gochecknoglobals
-	GitBranch = ""       //nolint:gochecknoglobals
-	BuildTime = ""       //nolint:gochecknoglobals
+	Version   = "v0.8.1-pcsm314" //nolint:gochecknoglobals
+	Platform  = ""               //nolint:gochecknoglobals
+	GitCommit = ""               //nolint:gochecknoglobals
+	GitBranch = ""               //nolint:gochecknoglobals
+	BuildTime = ""               //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
