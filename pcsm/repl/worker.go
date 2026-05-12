@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"hash/fnv"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -47,11 +48,13 @@ type worker struct {
 	id string
 
 	routedEventCh chan *routedEvent
-	lastTS        atomic.Pointer[bson.Timestamp] // last committed timestamp
-	lastRoutedTS  atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
-	pendingTS     bson.Timestamp                 // timestamp of last event in current batch
-	tickerOffset  time.Duration                  // stagger delay before starting the flush ticker
-	flushInterval time.Duration                  // maximum interval between bulk write flushes
+
+	lastCommitedTS atomic.Pointer[bson.Timestamp] // last committed timestamp
+	lastRoutedTS   atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
+	lastPendingTS  bson.Timestamp                 // timestamp of last event in current batch
+
+	tickerOffset  time.Duration // stagger delay before starting the flush ticker
+	flushInterval time.Duration // maximum interval between bulk write flushes
 
 	target *mongo.Client
 
@@ -150,7 +153,7 @@ func (w *worker) runWriter(ctx context.Context) {
 			metrics.ObserveReplWorkerFlushDuration(w.id, time.Since(start))
 
 			ts := pb.checkpoint
-			w.lastTS.Store(&ts)
+			w.lastCommitedTS.Store(&ts)
 
 			lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
 		}
@@ -340,7 +343,7 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	}
 
 	// Track the timestamp of the last event in the batch
-	w.pendingTS = event.change.ClusterTime
+	w.lastPendingTS = event.change.ClusterTime
 
 	return nil
 }
@@ -364,7 +367,7 @@ func (w *worker) enqueueBulk() bool {
 
 	pb := &pendingBulk{
 		writer:     w.currentBulkWrite,
-		checkpoint: w.pendingTS,
+		checkpoint: w.lastPendingTS,
 	}
 
 	select {
@@ -529,25 +532,64 @@ func (p *workerPool) ReleaseBarrier() {
 	}
 }
 
-// Checkpoint returns the minimum committed timestamp across all workers.
-// This is the safe point to resume from after a restart.
+// Checkpoint returns the minimum safe resume timestamp across all workers.
+// For each worker:
+//   - If the worker was never routed an event (lastRoutedTS == nil), it
+//     imposes no constraint and is skipped.
+//   - If the worker was routed events but has not committed any
+//     (lastCommitedTS == nil, e.g. its first bulk write failed), the safe resume
+//     floor is strictly before the routed event(s). We use the predecessor
+//     of lastRoutedTS as a conservative bound.
+//   - Otherwise the worker's committed lastCommitedTS is used.
+//
+// The returned timestamp is the minimum of these per-worker effective values.
+// A nil lastCommitedTS on a worker that has been routed events must never be silently
+// skipped: doing so would let the checkpoint advance past the worker's
+// uncommitted routed events, causing silent event loss on resume.
 func (p *workerPool) Checkpoint() bson.Timestamp {
 	var minTS bson.Timestamp
 	first := true
 
 	for _, w := range p.workers {
-		ts := w.lastTS.Load()
-		if ts == nil {
+		routed := w.lastRoutedTS.Load()
+		if routed == nil {
+			// Worker never received an event; no constraint imposed.
 			continue
 		}
 
-		if first || ts.Before(minTS) {
-			minTS = *ts
+		var effective bson.Timestamp
+
+		committed := w.lastCommitedTS.Load()
+		if committed == nil {
+			// Worker received events but never committed. Safe floor is
+			// strictly before the routed event(s).
+			effective = tsPredecessor(*routed)
+		} else {
+			effective = *committed
+		}
+
+		if first || effective.Before(minTS) {
+			minTS = effective
 			first = false
 		}
 	}
 
 	return minTS
+}
+
+// tsPredecessor returns the largest bson.Timestamp strictly less than ts.
+// For (T, I) with I > 0 it returns (T, I-1); when I == 0 and T > 0 it
+// returns (T-1, math.MaxUint32). For the zero timestamp it returns the
+// zero timestamp (there is nothing smaller).
+func tsPredecessor(ts bson.Timestamp) bson.Timestamp {
+	switch {
+	case ts.I > 0:
+		return bson.Timestamp{T: ts.T, I: ts.I - 1}
+	case ts.T > 0:
+		return bson.Timestamp{T: ts.T - 1, I: math.MaxUint32}
+	default:
+		return bson.Timestamp{}
+	}
 }
 
 // Idle returns true when every worker that has been routed events has
@@ -565,7 +607,7 @@ func (p *workerPool) Idle() bool {
 			continue
 		}
 
-		committed := w.lastTS.Load()
+		committed := w.lastCommitedTS.Load()
 		if committed == nil || committed.Before(*routed) {
 			return false
 		}
