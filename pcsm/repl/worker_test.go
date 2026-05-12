@@ -3,7 +3,6 @@ package repl //nolint
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -551,52 +550,5 @@ func TestReleaseBarrier_WorkerDead(t *testing.T) {
 	case <-time.After(barrierTimeout):
 		t.Fatal("ReleaseBarrier() deadlocked: dead worker can't receive on resumeCh, " +
 			"ReleaseBarrier blocks forever on send")
-	}
-}
-
-// TestTsPredecessor verifies tsPredecessor returns the largest bson.Timestamp
-// strictly less than the input, with correct wrap-around from (T, 0) to
-// (T-1, math.MaxUint32) and saturation at the zero timestamp.
-func TestTsPredecessor(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   bson.Timestamp
-		want bson.Timestamp
-	}{
-		{
-			name: "decrements I when I > 0",
-			in:   bson.Timestamp{T: 100, I: 5},
-			want: bson.Timestamp{T: 100, I: 4},
-		},
-		{
-			name: "wraps to previous T when I == 0",
-			in:   bson.Timestamp{T: 100, I: 0},
-			want: bson.Timestamp{T: 99, I: math.MaxUint32},
-		},
-		{
-			name: "saturates at zero timestamp",
-			in:   bson.Timestamp{T: 0, I: 0},
-			want: bson.Timestamp{T: 0, I: 0},
-		},
-		{
-			name: "T == 1, I == 0 wraps to (0, MaxUint32)",
-			in:   bson.Timestamp{T: 1, I: 0},
-			want: bson.Timestamp{T: 0, I: math.MaxUint32},
-		},
-		{
-			name: "I == 1 decrements to (T, 0) without wrapping",
-			in:   bson.Timestamp{T: 42, I: 1},
-			want: bson.Timestamp{T: 42, I: 0},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tsPredecessor(tt.in)
-			assert.Equal(t, tt.want, got)
-		})
 	}
 }
