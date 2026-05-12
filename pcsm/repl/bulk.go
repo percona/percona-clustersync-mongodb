@@ -240,22 +240,26 @@ func (cbw *clientBulkWrite) extractPathCollisionTarget(
 		return -1, catalog.Namespace{}, nil
 	}
 
-	// Find the minimum index in the WriteErrors map
+	// Find the minimum-index WriteError in the map
 	// (in ordered mode, there should only be one error)
+	var firstErr mongo.WriteError
+
 	minIdx := -1
 
-	for idx := range bwe.WriteErrors {
+	for idx, we := range bwe.WriteErrors {
 		if minIdx == -1 || idx < minIdx {
 			minIdx = idx
+			firstErr = we
 		}
 	}
 
-	we := bwe.WriteErrors[minIdx]
-	if we.Code != errCodePathNotViable || minIdx < 0 || minIdx >= len(writes) {
+	if firstErr.Code != errCodePathNotViable || firstErr.Index < 0 || firstErr.Index >= len(writes) {
 		return -1, catalog.Namespace{}, nil
 	}
 
-	updateModel, ok := writes[minIdx].Model.(*mongo.ClientUpdateOneModel)
+	op := writes[firstErr.Index]
+
+	updateModel, ok := op.Model.(*mongo.ClientUpdateOneModel)
 	if !ok {
 		return -1, catalog.Namespace{}, nil
 	}
@@ -265,10 +269,9 @@ func (cbw *clientBulkWrite) extractPathCollisionTarget(
 		return -1, catalog.Namespace{}, nil
 	}
 
-	op := writes[minIdx]
 	ns := catalog.Namespace{Database: op.Database, Collection: op.Collection}
 
-	return minIdx, ns, filter
+	return firstErr.Index, ns, filter
 }
 
 func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
@@ -537,7 +540,11 @@ func (cbw *collectionBulkWrite) extractPathCollisionTarget(
 	}
 
 	firstErr := bwe.WriteErrors[0]
-	if firstErr.Code != errCodePathNotViable || firstErr.Index < 0 || firstErr.Index >= len(ops) {
+	if firstErr.Index < 0 || firstErr.Index >= len(ops) {
+		return -1, nil
+	}
+
+	if firstErr.Code != errCodePathNotViable {
 		return -1, nil
 	}
 
