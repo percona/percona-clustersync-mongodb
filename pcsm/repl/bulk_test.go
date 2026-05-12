@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
@@ -322,7 +323,7 @@ func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 func TestClientBulkWrite_FullByBytes(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(10_000, false)
+	cbw := newClientBulkWriter(10_000, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	largeValue := strings.Repeat("X", 1024*1024)
@@ -354,7 +355,7 @@ func TestClientBulkWrite_FullByBytes(t *testing.T) {
 func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(10_000, false)
+	cbw := newCollectionBulkWriter(10_000, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	largeValue := strings.Repeat("X", 1024*1024)
@@ -386,7 +387,7 @@ func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 func TestClientBulkWrite_FullByCount(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(3, false)
+	cbw := newClientBulkWriter(3, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 3 {
@@ -410,7 +411,7 @@ func TestClientBulkWrite_FullByCount(t *testing.T) {
 func TestCollectionBulkWrite_FullByCount(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(3, false)
+	cbw := newCollectionBulkWriter(3, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 3 {
@@ -512,7 +513,7 @@ func TestCollectUpdateOps_TruncationWithRemovedFieldOnSamePathSpills(t *testing.
 func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(3, false)
+	cbw := newClientBulkWriter(3, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	// Two single-op inserts: count = 2.
@@ -557,7 +558,7 @@ func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 func TestCollectionBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(3, false)
+	cbw := newCollectionBulkWriter(3, false, nil)
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 2 {
@@ -604,7 +605,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 	t.Run("client bulk", func(t *testing.T) {
 		t.Parallel()
 
-		cbw := newClientBulkWriter(10_000, false)
+		cbw := newClientBulkWriter(10_000, false, nil)
 
 		// Empty bulk: WouldOverflow must always be false even for huge estimates so a
 		// single oversized event can still be sent on its own bulk.
@@ -637,7 +638,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 	t.Run("collection bulk", func(t *testing.T) {
 		t.Parallel()
 
-		cbw := newCollectionBulkWriter(10_000, false)
+		cbw := newCollectionBulkWriter(10_000, false, nil)
 
 		assert.False(t, cbw.WouldOverflow(2*config.MaxWriteBatchSizeBytes),
 			"empty bulk must accept any estimate")
@@ -838,4 +839,211 @@ func collectFollowUpKeys(t *testing.T, followUp []bson.D) []string {
 	}
 
 	return keys
+}
+
+// TestExtractPathCollisionTarget_ClientBulk verifies that extractPathCollisionTarget
+// detects a PathNotViable (code 28) error on a ClientUpdateOneModel and returns the
+// failing op's index, namespace, and documentKey filter. Other error codes, non-Update
+// models, and non-bulk errors must return (-1, _, nil).
+func TestExtractPathCollisionTarget_ClientBulk(t *testing.T) {
+	t.Parallel()
+
+	cbw := newClientBulkWriter(10, false, nil)
+	ns := catalog.Namespace{Database: "db1", Collection: "coll1"}
+	filter := bson.D{{Key: "_id", Value: 42}}
+
+	// Build a writes slice mirroring a real bulk: a leading insert + an update at idx 1.
+	writes := []mongo.ClientBulkWrite{
+		{
+			Database:   "db0",
+			Collection: "other",
+			Model: &mongo.ClientReplaceOneModel{
+				Filter:      bson.D{{Key: "_id", Value: 1}},
+				Replacement: bson.D{{Key: "_id", Value: 1}},
+			},
+		},
+		{
+			Database:   ns.Database,
+			Collection: ns.Collection,
+			Model: &mongo.ClientUpdateOneModel{
+				Filter: filter,
+				Update: bson.D{{Key: "$set", Value: bson.D{{Key: "arr.0.x", Value: 1}}}},
+			},
+		},
+	}
+
+	t.Run("path-collision on update at idx 1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.ClientBulkWriteException{
+			WriteErrors: map[int]mongo.WriteError{
+				1: {
+					Index: 1, Code: errCodePathNotViable,
+					Message: "Cannot create field 'x' in element {arr.0: null}",
+				},
+			},
+		}
+
+		idx, gotNS, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		assert.Equal(t, 1, idx)
+		assert.Equal(t, ns, gotNS)
+		assert.Equal(t, filter, gotFilter)
+	})
+
+	t.Run("non-path-collision error returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.ClientBulkWriteException{
+			WriteErrors: map[int]mongo.WriteError{
+				1: {Index: 1, Code: 11000, Message: "duplicate key"},
+			},
+		}
+
+		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("path-collision on non-update model returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		// idx 0 is a replace model, not an update.
+		bulkErr := mongo.ClientBulkWriteException{
+			WriteErrors: map[int]mongo.WriteError{
+				0: {Index: 0, Code: errCodePathNotViable, Message: "..."},
+			},
+		}
+
+		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("non-bulk error returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		idx, _, gotFilter := cbw.extractPathCollisionTarget(assert.AnError, writes)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("empty WriteErrors returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.ClientBulkWriteException{WriteErrors: map[int]mongo.WriteError{}}
+
+		idx, _, gotFilter := cbw.extractPathCollisionTarget(bulkErr, writes)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("picks minimum index when multiple errors present", func(t *testing.T) {
+		t.Parallel()
+
+		// Build a longer writes slice with an update at idx 1 and idx 2.
+		writes := []mongo.ClientBulkWrite{
+			writes[0],
+			writes[1],
+			{
+				Database:   "db2",
+				Collection: "coll2",
+				Model: &mongo.ClientUpdateOneModel{
+					Filter: bson.D{{Key: "_id", Value: 99}},
+					Update: bson.D{},
+				},
+			},
+		}
+
+		bulkErr := mongo.ClientBulkWriteException{
+			WriteErrors: map[int]mongo.WriteError{
+				2: {Index: 2, Code: errCodePathNotViable},
+				1: {Index: 1, Code: errCodePathNotViable},
+			},
+		}
+
+		idx, gotNS, _ := cbw.extractPathCollisionTarget(bulkErr, writes)
+		assert.Equal(t, 1, idx, "minimum index must be selected")
+		assert.Equal(t, ns, gotNS)
+	})
+}
+
+// TestExtractPathCollisionTarget_CollectionBulk verifies extraction on the
+// collection-level bulk path. The bulk error here is BulkWriteException with a
+// []BulkWriteError where each element embeds WriteError.
+func TestExtractPathCollisionTarget_CollectionBulk(t *testing.T) {
+	t.Parallel()
+
+	cbw := newCollectionBulkWriter(10, false, nil)
+	filter := bson.D{{Key: "_id", Value: 7}}
+
+	ops := []mongo.WriteModel{
+		&mongo.ReplaceOneModel{
+			Filter:      bson.D{{Key: "_id", Value: 1}},
+			Replacement: bson.D{{Key: "_id", Value: 1}},
+		},
+		&mongo.UpdateOneModel{
+			Filter: filter,
+			Update: bson.D{{Key: "$set", Value: bson.D{{Key: "arr.0.x", Value: 1}}}},
+		},
+	}
+
+	t.Run("path-collision on update at idx 1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.BulkWriteException{
+			WriteErrors: []mongo.BulkWriteError{
+				{WriteError: mongo.WriteError{Index: 1, Code: errCodePathNotViable, Message: "..."}},
+			},
+		}
+
+		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		assert.Equal(t, 1, idx)
+		assert.Equal(t, filter, gotFilter)
+	})
+
+	t.Run("non-path-collision returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.BulkWriteException{
+			WriteErrors: []mongo.BulkWriteError{
+				{WriteError: mongo.WriteError{Index: 1, Code: 11000}},
+			},
+		}
+
+		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("path-collision on non-update model returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.BulkWriteException{
+			WriteErrors: []mongo.BulkWriteError{
+				{WriteError: mongo.WriteError{Index: 0, Code: errCodePathNotViable}},
+			},
+		}
+
+		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("non-bulk error returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		idx, gotFilter := cbw.extractPathCollisionTarget(assert.AnError, ops)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
+
+	t.Run("empty WriteErrors returns -1", func(t *testing.T) {
+		t.Parallel()
+
+		bulkErr := mongo.BulkWriteException{WriteErrors: nil}
+
+		idx, gotFilter := cbw.extractPathCollisionTarget(bulkErr, ops)
+		assert.Equal(t, -1, idx)
+		assert.Nil(t, gotFilter)
+	})
 }

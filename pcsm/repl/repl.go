@@ -351,7 +351,9 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+	)
 
 	r.checkpointOpTime = startAt
 
@@ -444,7 +446,9 @@ func (r *Repl) Resume(ctx context.Context) error {
 
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
-	r.pool = newWorkerPool(context.Background(), r.options, r.target, r.useCollectionBulk, r.useSimpleCollation)
+	r.pool = newWorkerPool(
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+	)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
 

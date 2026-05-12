@@ -88,7 +88,7 @@ type worker struct {
 func newWorker(
 	id int,
 	opts *Options,
-	target *mongo.Client,
+	source, target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
 	errC chan<- error,
@@ -110,11 +110,11 @@ func newWorker(
 
 	if useCollectionBulk {
 		w.newBulkWriter = func() bulkWriter {
-			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation)
+			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, source)
 		}
 	} else {
 		w.newBulkWriter = func() bulkWriter {
-			return newClientBulkWriter(bulkOpsSize, useSimpleCollation)
+			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, source)
 		}
 	}
 
@@ -425,7 +425,7 @@ type workerPool struct {
 func newWorkerPool(
 	ctx context.Context,
 	opts *Options,
-	target *mongo.Client,
+	source, target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
 ) *workerPool {
@@ -443,7 +443,7 @@ func newWorkerPool(
 
 	// Create and start workers
 	for i := range numWorkers {
-		w := newWorker(i, opts, target, useCollectionBulk, useSimpleCollation, p.errCh)
+		w := newWorker(i, opts, source, target, useCollectionBulk, useSimpleCollation, p.errCh)
 		w.tickerOffset = time.Duration(i) * opts.WorkerFlushInterval / time.Duration(numWorkers)
 		p.workers[i] = w
 
