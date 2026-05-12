@@ -49,7 +49,7 @@ func TestEnqueueBulk_SealsBulkAndQueues(t *testing.T) {
 
 	w := &worker{
 		currentBulkWrite: mock,
-		pendingTS:        ts,
+		lastPendingTS:    ts,
 		pendingBulkCh:    make(chan *pendingBulk, 1),
 		writerDone:       make(chan struct{}),
 		newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
@@ -136,7 +136,7 @@ func TestAsyncPipeline_CheckpointAdvances(t *testing.T) {
 	err := pool.Barrier()
 	require.NoError(t, err)
 
-	committed := w.lastTS.Load()
+	committed := w.lastCommitedTS.Load()
 	require.NotNil(t, committed, "lastTS should be set after barrier")
 	assert.Equal(t, ts1, *committed, "lastTS should match phase 1 checkpoint")
 
@@ -149,7 +149,7 @@ func TestAsyncPipeline_CheckpointAdvances(t *testing.T) {
 	err = pool.Barrier()
 	require.NoError(t, err)
 
-	committed = w.lastTS.Load()
+	committed = w.lastCommitedTS.Load()
 	require.NotNil(t, committed, "lastTS should be set after second barrier")
 	assert.Equal(t, ts2, *committed, "lastTS should advance to phase 2 checkpoint")
 
