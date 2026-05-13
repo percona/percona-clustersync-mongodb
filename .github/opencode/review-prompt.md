@@ -222,16 +222,19 @@ Plain prose is acceptable. Don't fabricate a suggestion fence you're not sure ab
 - `RIGHT` is what the reviewer sees by default; comment on added (`+`) or context (` `) lines.
 - `LEFT` is useful when a removed line raises a concern (e.g., removed a needed nil-check). Use sparingly — most useful reviews live on `RIGHT`.
 
-**Multi-line ranges**:
+**Multi-line ranges** (use sparingly):
 
-- Use `start_line` + `line` when the comment refers to a span (a function body, a loop) and the proposed change (if any) replaces the whole span.
-- A suggestion fence inside a multi-line comment replaces all lines [start_line..line].
+- Use `start_line` + `line` **only** when the critique applies uniformly to the entire span, or when a suggestion fence replaces the entire span.
+- Keep spans tight — aim for ≤10 lines. The validator drops `start_line` / `start_side` (collapsing to a single-line comment at `line`) when `line - start_line > 15`, because large highlighted blocks bury the finding under scroll.
+- For a critique about the relationship between two distant lines (e.g., a missing `defer` between `Lock` at line 100 and `Unlock` at line 250), anchor a **single-line** comment at the most actionable line and reference the related line in prose. Do not stretch the range to "show the danger zone" — the visual block does not help the reviewer.
+- A suggestion fence inside a multi-line comment replaces all lines [start_line..line], so the same rule applies: only span as much as the suggestion legitimately replaces.
 
 **Validator behavior** (operates after you write the JSON):
 
 - Drops any comment whose `path` is not in the PR.
 - Drops any comment whose `line` (or `start_line`) is not in a patch hunk on the specified side.
 - Drops any comment whose `body` contains a token-shaped secret.
+- Collapses any multi-line comment whose span exceeds 15 lines to a single-line comment at `line` (silently — the finding is preserved, just the highlight range is narrowed).
 - Drops anything past the 5-comment cap.
 - If anything is dropped, appends a one-line note to the posted review body listing the drop count and reasons.
 - If both `summary` and `comments` end up empty, synthesizes a minimal summary from `verdict` so the posted review is never blank.
