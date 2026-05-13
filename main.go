@@ -1259,6 +1259,8 @@ type unsuccessfulIndexResponse struct {
 	Type string `json:"type"`
 	// Keys is the index key spec, encoded as a JSON object preserving field order.
 	Keys json.RawMessage `json:"keys,omitempty"`
+	// Reason is a human-readable explanation of why the index is unsuccessful.
+	Reason string `json:"reason"`
 }
 
 // makeFinalizationResponse translates a [pcsm.FinalizeStatus] into the wire format.
@@ -1287,6 +1289,7 @@ func makeFinalizationResponse(fs *pcsm.FinalizeStatus) *statusFinalizationRespon
 				IndexName: idx.Name,
 				Type:      string(idx.Type),
 				Keys:      indexKeysToJSON(idx.Keys),
+				Reason:    idx.Reason,
 			})
 		}
 	}

@@ -163,9 +163,10 @@ type collectionCatalog struct {
 type indexCatalogEntry struct {
 	*mdb.IndexSpecification
 
-	Incomplete   bool `bson:"incomplete"`
-	Failed       bool `bson:"failed"`
-	Inconsistent bool `bson:"inconsistent"`
+	Incomplete   bool   `bson:"incomplete"`
+	Failed       bool   `bson:"failed"`
+	Inconsistent bool   `bson:"inconsistent"`
+	Reason       string `bson:"reason,omitempty"`
 }
 
 func (i indexCatalogEntry) Unsuccessful() bool {
@@ -184,6 +185,13 @@ const (
 	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
 )
 
+const (
+	incompleteIndexReason   = "index build was still in progress on source during clone"
+	inconsistentIndexReason = "index is missing on one or more source shards"
+	legacyFailedIndexReason = "index creation failed " +
+		"(reason unavailable, possibly from a checkpoint created before reason capture)"
+)
+
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
 // and was not recovered during finalize.
 type UnsuccessfulIndex struct {
@@ -191,6 +199,10 @@ type UnsuccessfulIndex struct {
 	Name      string
 	Keys      bson.Raw
 	Type      IndexUnsuccessfulType
+	// Reason is a human-readable explanation of why the index is unsuccessful.
+	// Dynamic for Failed indexes (captured error message), static text for
+	// Incomplete and Inconsistent indexes. Always non-empty after population.
+	Reason string
 }
 
 // NewCatalog creates a new Catalog.
@@ -518,14 +530,17 @@ func (c *Catalog) CreateIndexes(
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 
 	failedIdxs := make([]*mdb.IndexSpecification, 0, len(processedIdxs))
+	failedReasons := make(map[string]string, len(processedIdxs))
 
 	var idxErrors []error
 
 	for _, idx := range indexes {
 		err := processedIdxs[idx.Name]
 		if err != nil {
+			wrapped := errors.Wrap(err, "create index: "+idx.Name)
 			failedIdxs = append(failedIdxs, idx)
-			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
+			failedReasons[idx.Name] = wrapped.Error()
+			idxErrors = append(idxErrors, wrapped)
 
 			continue
 		}
@@ -541,7 +556,7 @@ func (c *Catalog) CreateIndexes(
 	c.lock.Unlock()
 
 	if len(idxErrors) > 0 {
-		c.AddFailedIndexes(ctx, db, coll, failedIdxs)
+		c.AddFailedIndexes(ctx, db, coll, failedIdxs, failedReasons)
 
 		lg.Errorf(errors.Join(idxErrors...),
 			"One or more indexes failed to create on %s.%s", db, coll)
@@ -582,12 +597,16 @@ func (c *Catalog) AddIncompleteIndexes(
 }
 
 // AddFailedIndexes adds indexes in the catalog that failed to create on the target cluster.
-// The indexes have set [indexCatalogEntry.Failed] flag.
+// The indexes have set [indexCatalogEntry.Failed] flag. The reasons map carries
+// a human-readable failure message per index, keyed by index name; missing
+// entries fall back to an empty Reason and are surfaced via the legacy fallback
+// in collectUnsuccessfulIndexes.
 func (c *Catalog) AddFailedIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
 	indexes []*mdb.IndexSpecification,
+	reasons map[string]string,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -602,6 +621,7 @@ func (c *Catalog) AddFailedIndexes(
 		indexEntries[i] = indexCatalogEntry{
 			IndexSpecification: index,
 			Failed:             true,
+			Reason:             reasons[index.Name],
 		}
 
 		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
@@ -938,6 +958,7 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 	type modifyFailure struct {
 		db, coll string
 		spec     *mdb.IndexSpecification
+		reason   string
 	}
 
 	var (
@@ -964,11 +985,12 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 					continue
 				}
 
-				modifyFailed := func() {
+				modifyFailed := func(wrappedErr error) {
 					modifyFailures = append(modifyFailures, modifyFailure{
-						db:   db,
-						coll: coll,
-						spec: index.IndexSpecification,
+						db:     db,
+						coll:   coll,
+						spec:   index.IndexSpecification,
+						reason: wrappedErr.Error(),
 					})
 				}
 
@@ -979,10 +1001,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+						wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed()
+						modifyFailed(wrapped)
 
 						continue
 					}
@@ -991,10 +1013,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 
 					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to unique: "+index.Name))
+						wrapped := errors.Wrap(err, "convert to unique: "+index.Name)
+						idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed()
+						modifyFailed(wrapped)
 
 						continue
 					}
@@ -1004,10 +1026,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+						wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed()
+						modifyFailed(wrapped)
 
 						continue
 					}
@@ -1019,10 +1041,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 					err := c.doModifyIndexOption(ctx,
 						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
 					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
+						wrapped := errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+						idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed()
+						modifyFailed(wrapped)
 
 						continue
 					}
@@ -1033,10 +1055,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "modify hidden: "+index.Name))
+						wrapped := errors.Wrap(err, "modify hidden: "+index.Name)
+						idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed()
+						modifyFailed(wrapped)
 
 						continue
 					}
@@ -1053,7 +1075,9 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 	// Flag any indexes that failed during finalize as Failed in the catalog so
 	// they show up in the returned report.
 	for _, f := range modifyFailures {
-		c.AddFailedIndexes(ctx, f.db, f.coll, []*mdb.IndexSpecification{f.spec})
+		c.AddFailedIndexes(ctx, f.db, f.coll,
+			[]*mdb.IndexSpecification{f.spec},
+			map[string]string{f.spec.Name: f.reason})
 	}
 
 	if len(idxErrors) > 0 {
@@ -1082,15 +1106,24 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 			ns := db + "." + coll
 
 			for _, index := range collEntry.Indexes {
-				var typ IndexUnsuccessfulType
+				var (
+					typ    IndexUnsuccessfulType
+					reason string
+				)
 
 				switch {
 				case index.Failed:
 					typ = IndexFailed
+					reason = index.Reason
+					if reason == "" {
+						reason = legacyFailedIndexReason
+					}
 				case index.Incomplete:
 					typ = IndexIncomplete
+					reason = incompleteIndexReason
 				case index.Inconsistent:
 					typ = IndexInconsistent
+					reason = inconsistentIndexReason
 				default:
 					continue
 				}
@@ -1100,6 +1133,7 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 					Name:      index.Name,
 					Keys:      index.KeysDocument,
 					Type:      typ,
+					Reason:    reason,
 				})
 			}
 		}
@@ -1309,6 +1343,10 @@ func (c *Catalog) addIndexesToCatalog(
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
+				if index.Reason == "" && catIndex.Reason != "" {
+					index.Reason = catIndex.Reason
+				}
+
 				collCat.Indexes[i] = index
 				found = true
 

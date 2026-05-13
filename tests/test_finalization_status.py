@@ -69,3 +69,5 @@ def test_finalization_section_reports_failed_unique_index(t: Testing):
 
     entry = matching[0]
     assert entry["type"] == "failed", entry
+    assert entry.get("reason"), f"failed entry must carry a non-empty reason, got: {entry}"
+    assert "x_unique_idx" in entry["reason"], entry
