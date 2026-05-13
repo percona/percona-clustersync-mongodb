@@ -116,27 +116,27 @@ func TestCatalog_collectUnsuccessfulIndexes_AllTypes(t *testing.T) {
 	}
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace:       "mydb.users",
-		Name:            "email_unique_idx",
-		Keys:            keysFailed,
-		Type:            IndexFailed,
-		UnsuccessReason: failedReason,
+		Namespace: "mydb.users",
+		Name:      "email_unique_idx",
+		Keys:      keysFailed,
+		Type:      IndexFailed,
+		Reason:    failedReason,
 	}, byName["email_unique_idx"])
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace:       "mydb.orders",
-		Name:            "name_idx",
-		Keys:            keysIncomplete,
-		Type:            IndexIncomplete,
-		UnsuccessReason: incompleteIndexReason,
+		Namespace: "mydb.orders",
+		Name:      "name_idx",
+		Keys:      keysIncomplete,
+		Type:      IndexIncomplete,
+		Reason:    incompleteIndexReason,
 	}, byName["name_idx"])
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace:       "mydb.products",
-		Name:            "sku_idx",
-		Keys:            keysInconsistent,
-		Type:            IndexInconsistent,
-		UnsuccessReason: inconsistentIndexReason,
+		Namespace: "mydb.products",
+		Name:      "sku_idx",
+		Keys:      keysInconsistent,
+		Type:      IndexInconsistent,
+		Reason:    inconsistentIndexReason,
 	}, byName["sku_idx"])
 }
 
@@ -160,5 +160,5 @@ func TestCatalog_collectUnsuccessfulIndexes_TypePriority(t *testing.T) {
 	got := c.collectUnsuccessfulIndexes()
 	assert.Len(t, got, 1)
 	assert.Equal(t, IndexFailed, got[0].Type)
-	assert.Equal(t, "boom", got[0].UnsuccessReason)
+	assert.Equal(t, "boom", got[0].Reason)
 }

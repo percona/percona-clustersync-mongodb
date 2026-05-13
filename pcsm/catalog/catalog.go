@@ -193,11 +193,11 @@ const (
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
 // and was not recovered during finalize.
 type UnsuccessfulIndex struct {
-	Namespace       string
-	Name            string
-	Keys            bson.Raw
-	Type            IndexUnsuccessfulType
-	UnsuccessReason string
+	Namespace string
+	Name      string
+	Keys      bson.Raw
+	Type      IndexUnsuccessfulType
+	Reason    string
 }
 
 // NewCatalog creates a new Catalog.
@@ -1121,11 +1121,11 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 				}
 
 				out = append(out, UnsuccessfulIndex{
-					Namespace:       ns,
-					Name:            index.Name,
-					Keys:            index.KeysDocument,
-					Type:            typ,
-					UnsuccessReason: reason,
+					Namespace: ns,
+					Name:      index.Name,
+					Keys:      index.KeysDocument,
+					Type:      typ,
+					Reason:    reason,
 				})
 			}
 		}
