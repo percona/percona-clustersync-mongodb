@@ -121,7 +121,7 @@ jobs:
           PR_PAYLOAD_FILE: ${{ env.PR_PAYLOAD_FILE }}
           PR_COMMITS_FILE: ${{ env.PR_COMMITS_FILE }}
           PR_FILES_FILE: ${{ env.PR_FILES_FILE }}
-          REVIEW_BODY_FILE: ${{ runner.temp }}/review_body.md
+          REVIEW_JSON_FILE: ${{ runner.temp }}/review.json
           REVIEW_PROMPT_FILE: ${{ env.REVIEW_PROMPT_FILE }}
         run: |
           set -euo pipefail
@@ -132,7 +132,7 @@ jobs:
             --dangerously-skip-permissions \
             < "$REVIEW_PROMPT_FILE"
 
-      - name: Validate review body
+      - name: Validate and curate review
         if: steps.permission.outputs.skip != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -141,31 +141,15 @@ jobs:
           PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -euo pipefail
-          BODY_FILE="$RUNNER_TEMP/review_body.md"
-          if [[ ! -f "$BODY_FILE" ]]; then
-            echo "::error::Review body file not produced by opencode step at $BODY_FILE."
-            exit 1
-          fi
-          if [[ ! -s "$BODY_FILE" ]]; then
-            echo "::error::Review body file is empty."
-            exit 1
-          fi
-          BYTES=$(wc -c < "$BODY_FILE")
-          if (( BYTES > 60000 )); then
-            echo "::error::Review body is too large ($BYTES bytes)."
-            exit 1
-          fi
-          if [[ -n "${ANTHROPIC_API_KEY:-}" ]] && grep -Fq -- "$ANTHROPIC_API_KEY" "$BODY_FILE"; then
-            echo "::error::Review body contains the Anthropic API key."
-            exit 1
-          fi
-          # Concrete provider tokens and private-key markers only. Generic
-          # hex/base64 patterns were dropped because they false-positive on
-          # legitimate review content (commit hashes, base64 fixtures).
-          if grep -Eq 'github_pat_[A-Za-z0-9_]{80,}|gh[pousr]_[A-Za-z0-9_]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' "$BODY_FILE"; then
-            echo "::error::Review body contains text that looks like a secret."
-            exit 1
-          fi
+          # Schema + hunk-aware line validation + secret scrub. Drops invalid
+          # inline comments and notes them in the posted body. Writes the
+          # final GitHub PR review payload to $PAYLOAD_FILE.
+          PAYLOAD_FILE="$RUNNER_TEMP/review-payload.json"
+          python3 .github/scripts/validate_review.py \
+            "$RUNNER_TEMP/review.json" \
+            "$PR_FILES_FILE" \
+            "$PAYLOAD_FILE"
+          echo "REVIEW_PAYLOAD_FILE=$PAYLOAD_FILE" >> "$GITHUB_ENV"
 
       - name: Post review
         if: steps.permission.outputs.skip != 'true'
@@ -176,8 +160,9 @@ jobs:
           PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -euo pipefail
-          BODY_FILE="$RUNNER_TEMP/review_body.md"
-          gh pr review "$PR_NUMBER" \
-            --repo "$REPO_FULL" \
-            --comment \
-            --body-file "$BODY_FILE"
+          # Atomic POST: one API call carries the top-level body and all
+          # inline comments. GitHub rejects the whole review on any invalid
+          # line, so the validator above must have rejected such comments.
+          gh api --method POST \
+            "repos/$REPO_FULL/pulls/$PR_NUMBER/reviews" \
+            --input "$REVIEW_PAYLOAD_FILE"
