@@ -104,7 +104,20 @@ jobs:
           GITHUB_ACTIONS: "true"
         run: |
           set -euo pipefail
-          curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
+          # Retry once with backoff: the opencode.ai install script fetches
+          # release metadata over the network and occasionally fails on
+          # shared runner IPs (transient GitHub API rate limiting).
+          for attempt in 1 2; do
+            if curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path; then
+              break
+            fi
+            if [[ $attempt -eq 2 ]]; then
+              echo "::error::OpenCode install failed after 2 attempts."
+              exit 1
+            fi
+            echo "Install attempt $attempt failed, retrying in 30s..."
+            sleep 30
+          done
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: OpenCode PR summary
