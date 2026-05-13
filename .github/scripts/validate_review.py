@@ -22,6 +22,10 @@ MAX_COMMENTS = 5
 # 8 KiB per inline comment body, ~60 KiB total payload.
 MAX_BODY_BYTES = 8 * 1024
 MAX_PAYLOAD_BYTES = 60 * 1024
+# Max span (line - start_line) for multi-line comments. Larger spans render
+# a giant highlighted block in the GitHub UI that buries the finding, so we
+# silently collapse them to single-line at `line`.
+MAX_MULTILINE_SPAN = 15
 
 VERDICTS = {
     "Approve",
@@ -148,8 +152,12 @@ def validate_comment(
         start_target = right_lines if start_side == "RIGHT" else left_lines
         if start_line not in start_target:
             return None, f"start_line {start_line} not in patch on {start_side}"
-        out["start_line"] = start_line
-        out["start_side"] = start_side
+        # Collapse over-large spans to single-line at `line` to avoid the
+        # giant-highlight UX issue. The finding is preserved; only the range
+        # is narrowed.
+        if line - start_line <= MAX_MULTILINE_SPAN:
+            out["start_line"] = start_line
+            out["start_side"] = start_side
 
     return out, None
 
