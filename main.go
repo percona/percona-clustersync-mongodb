@@ -1289,7 +1289,7 @@ func makeFinalizationResponse(fs *pcsm.FinalizeStatus) *statusFinalizationRespon
 				IndexName: idx.Name,
 				Type:      string(idx.Type),
 				Keys:      indexKeysToJSON(idx.Keys),
-				Reason:    idx.Reason,
+				Reason:    idx.UnsuccessReason,
 			})
 		}
 	}

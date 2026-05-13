@@ -29,7 +29,7 @@ func TestCopyFinalizeStatus_DeepCopiesIndexes(t *testing.T) {
 		StartedAt:   time.Now(),
 		CompletedAt: time.Now(),
 		UnsuccessfulIndexes: []catalog.UnsuccessfulIndex{
-			{Namespace: "db.coll", Name: "idx", Type: catalog.IndexFailed, Reason: "boom"},
+			{Namespace: "db.coll", Name: "idx", Type: catalog.IndexFailed, UnsuccessReason: "boom"},
 		},
 	}
 
@@ -39,12 +39,12 @@ func TestCopyFinalizeStatus_DeepCopiesIndexes(t *testing.T) {
 	assert.Equal(t, original.StartedAt, copied.StartedAt)
 	assert.Equal(t, original.CompletedAt, copied.CompletedAt)
 	assert.Equal(t, original.UnsuccessfulIndexes, copied.UnsuccessfulIndexes)
-	assert.Equal(t, "boom", copied.UnsuccessfulIndexes[0].Reason)
+	assert.Equal(t, "boom", copied.UnsuccessfulIndexes[0].UnsuccessReason)
 
 	copied.UnsuccessfulIndexes[0].Name = "mutated"
-	copied.UnsuccessfulIndexes[0].Reason = "tampered"
+	copied.UnsuccessfulIndexes[0].UnsuccessReason = "tampered"
 	assert.Equal(t, "idx", original.UnsuccessfulIndexes[0].Name)
-	assert.Equal(t, "boom", original.UnsuccessfulIndexes[0].Reason)
+	assert.Equal(t, "boom", original.UnsuccessfulIndexes[0].UnsuccessReason)
 }
 
 func TestStatus_FinalizationIncluded(t *testing.T) {
@@ -59,10 +59,10 @@ func TestStatus_FinalizationIncluded(t *testing.T) {
 		CompletedAt: completedAt,
 		UnsuccessfulIndexes: []catalog.UnsuccessfulIndex{
 			{
-				Namespace: "mydb.users",
-				Name:      "email_unique_idx",
-				Type:      catalog.IndexFailed,
-				Reason:    "create index: email_unique_idx: duplicate key",
+				Namespace:       "mydb.users",
+				Name:            "email_unique_idx",
+				Type:            catalog.IndexFailed,
+				UnsuccessReason: "create index: email_unique_idx: duplicate key",
 			},
 		},
 	}
@@ -92,7 +92,7 @@ func TestStatus_FinalizationIncluded(t *testing.T) {
 	assert.Equal(t, catalog.IndexFailed, got.FinalizeStatus.UnsuccessfulIndexes[0].Type)
 	assert.Equal(t,
 		"create index: email_unique_idx: duplicate key",
-		got.FinalizeStatus.UnsuccessfulIndexes[0].Reason)
+		got.FinalizeStatus.UnsuccessfulIndexes[0].UnsuccessReason)
 
 	// And the returned slice must be a copy, so mutating it cannot affect PCSM internals.
 	got.FinalizeStatus.UnsuccessfulIndexes[0].Name = "mutated"

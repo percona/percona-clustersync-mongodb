@@ -163,10 +163,10 @@ type collectionCatalog struct {
 type indexCatalogEntry struct {
 	*mdb.IndexSpecification
 
-	Incomplete   bool   `bson:"incomplete"`
-	Failed       bool   `bson:"failed"`
-	Inconsistent bool   `bson:"inconsistent"`
-	Reason       string `bson:"reason,omitempty"`
+	Incomplete      bool   `bson:"incomplete"`
+	Failed          bool   `bson:"failed"`
+	Inconsistent    bool   `bson:"inconsistent"`
+	UnsuccessReason string `bson:"reason,omitempty"`
 }
 
 func (i indexCatalogEntry) Unsuccessful() bool {
@@ -188,21 +188,16 @@ const (
 const (
 	incompleteIndexReason   = "index build was still in progress on source during clone"
 	inconsistentIndexReason = "index is missing on one or more source shards"
-	legacyFailedIndexReason = "index creation failed " +
-		"(reason unavailable, possibly from a checkpoint created before reason capture)"
 )
 
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
 // and was not recovered during finalize.
 type UnsuccessfulIndex struct {
-	Namespace string
-	Name      string
-	Keys      bson.Raw
-	Type      IndexUnsuccessfulType
-	// Reason is a human-readable explanation of why the index is unsuccessful.
-	// Dynamic for Failed indexes (captured error message), static text for
-	// Incomplete and Inconsistent indexes. Always non-empty after population.
-	Reason string
+	Namespace       string
+	Name            string
+	Keys            bson.Raw
+	Type            IndexUnsuccessfulType
+	UnsuccessReason string
 }
 
 // NewCatalog creates a new Catalog.
@@ -621,7 +616,7 @@ func (c *Catalog) AddFailedIndexes(
 		indexEntries[i] = indexCatalogEntry{
 			IndexSpecification: index,
 			Failed:             true,
-			Reason:             reasons[index.Name],
+			UnsuccessReason:    reasons[index.Name],
 		}
 
 		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
@@ -1114,10 +1109,7 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 				switch {
 				case index.Failed:
 					typ = IndexFailed
-					reason = index.Reason
-					if reason == "" {
-						reason = legacyFailedIndexReason
-					}
+					reason = index.UnsuccessReason
 				case index.Incomplete:
 					typ = IndexIncomplete
 					reason = incompleteIndexReason
@@ -1129,11 +1121,11 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 				}
 
 				out = append(out, UnsuccessfulIndex{
-					Namespace: ns,
-					Name:      index.Name,
-					Keys:      index.KeysDocument,
-					Type:      typ,
-					Reason:    reason,
+					Namespace:       ns,
+					Name:            index.Name,
+					Keys:            index.KeysDocument,
+					Type:            typ,
+					UnsuccessReason: reason,
 				})
 			}
 		}
@@ -1343,8 +1335,8 @@ func (c *Catalog) addIndexesToCatalog(
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
-				if index.Reason == "" && catIndex.Reason != "" {
-					index.Reason = catIndex.Reason
+				if index.UnsuccessReason == "" && catIndex.UnsuccessReason != "" {
+					index.UnsuccessReason = catIndex.UnsuccessReason
 				}
 
 				collCat.Indexes[i] = index

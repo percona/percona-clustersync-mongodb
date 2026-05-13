@@ -50,10 +50,10 @@ func newIndexEntry(name string, keys bson.Raw, failed, incomplete, inconsistent 
 			Name:         name,
 			KeysDocument: keys,
 		},
-		Failed:       failed,
-		Incomplete:   incomplete,
-		Inconsistent: inconsistent,
-		Reason:       reason,
+		Failed:          failed,
+		Incomplete:      incomplete,
+		Inconsistent:    inconsistent,
+		UnsuccessReason: reason,
 	}
 }
 
@@ -116,51 +116,28 @@ func TestCatalog_collectUnsuccessfulIndexes_AllTypes(t *testing.T) {
 	}
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace: "mydb.users",
-		Name:      "email_unique_idx",
-		Keys:      keysFailed,
-		Type:      IndexFailed,
-		Reason:    failedReason,
+		Namespace:       "mydb.users",
+		Name:            "email_unique_idx",
+		Keys:            keysFailed,
+		Type:            IndexFailed,
+		UnsuccessReason: failedReason,
 	}, byName["email_unique_idx"])
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace: "mydb.orders",
-		Name:      "name_idx",
-		Keys:      keysIncomplete,
-		Type:      IndexIncomplete,
-		Reason:    incompleteIndexReason,
+		Namespace:       "mydb.orders",
+		Name:            "name_idx",
+		Keys:            keysIncomplete,
+		Type:            IndexIncomplete,
+		UnsuccessReason: incompleteIndexReason,
 	}, byName["name_idx"])
 
 	assert.Equal(t, UnsuccessfulIndex{
-		Namespace: "mydb.products",
-		Name:      "sku_idx",
-		Keys:      keysInconsistent,
-		Type:      IndexInconsistent,
-		Reason:    inconsistentIndexReason,
+		Namespace:       "mydb.products",
+		Name:            "sku_idx",
+		Keys:            keysInconsistent,
+		Type:            IndexInconsistent,
+		UnsuccessReason: inconsistentIndexReason,
 	}, byName["sku_idx"])
-}
-
-// TestCatalog_collectUnsuccessfulIndexes_FailedLegacyFallback verifies that
-// pre-existing checkpoints (Failed=true, Reason=="") get the legacy fallback
-// reason so /status consumers never see an empty reason for unsuccessful indexes.
-func TestCatalog_collectUnsuccessfulIndexes_FailedLegacyFallback(t *testing.T) {
-	t.Parallel()
-
-	keys := mustMarshalKeys(t, bson.D{{"x", 1}})
-
-	c := makeCatalogWithIndexes(t, map[string]map[string][]indexCatalogEntry{
-		"db": {
-			"coll": []indexCatalogEntry{
-				newIndexEntry("legacy_failed_idx", keys, true, false, false, ""),
-			},
-		},
-	})
-
-	got := c.collectUnsuccessfulIndexes()
-
-	assert.Len(t, got, 1)
-	assert.Equal(t, IndexFailed, got[0].Type)
-	assert.Equal(t, legacyFailedIndexReason, got[0].Reason)
 }
 
 // Per the agreed model, an index has at most one of Failed/Incomplete/Inconsistent.
@@ -183,5 +160,5 @@ func TestCatalog_collectUnsuccessfulIndexes_TypePriority(t *testing.T) {
 	got := c.collectUnsuccessfulIndexes()
 	assert.Len(t, got, 1)
 	assert.Equal(t, IndexFailed, got[0].Type)
-	assert.Equal(t, "boom", got[0].Reason)
+	assert.Equal(t, "boom", got[0].UnsuccessReason)
 }
