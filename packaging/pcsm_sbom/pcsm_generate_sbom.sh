@@ -9,10 +9,10 @@ usage () {
     cat <<EOF
 Usage: $0 [OPTIONS]
     The following options may be given :
-        --pcsm_version        PostgreSQL major_version.minor_version
+        --pcsm_version        Percona ClusterSync for MongoDB version (e.g. 0.9.0)
         --repo_type         Repository type
         --help) usage ;;
-Example $0 --pcsm_version=7.0.18-11 --repo_type=testing
+Example $0 --pcsm_version=0.9.0 --repo_type=testing
 EOF
         exit 1
 }
@@ -49,11 +49,16 @@ parse_arguments() {
 }
 
 CWD=$(pwd)
-PCSM_VERSION=0.5.0
+PCSM_VERSION=
 REPO_TYPE=testing
 ARCH=$(uname -m)
 
 parse_arguments PICK-ARGS-FROM-ARGV "$@"
+
+if [ -z "${PCSM_VERSION}" ]; then
+    echo "ERROR: --pcsm_version is required (e.g. --pcsm_version=0.9.0)" >&2
+    usage
+fi
 
 # Set non-interactive tzdata environment variables to avoid prompts
 export DEBIAN_FRONTEND=noninteractive
@@ -102,7 +107,7 @@ install_dependencies() {
 # Install required dependencies
 install_dependencies
 
-# Install Percona repo and PostgreSQL
+# Install Percona repo and Percona ClusterSync for MongoDB
 install_percona_clustersync_mongodb() {
   case "$PLATFORM_ID" in
     ol|rhel|centos|oraclelinux|amzn)
@@ -134,7 +139,7 @@ install_percona_clustersync_mongodb() {
   esac
 }
 
-# Install Percona repository and PostgreSQL
+# Install Percona repository and Percona ClusterSync for MongoDB
 install_percona_clustersync_mongodb
 
 # Install Syft (if not already installed)
@@ -159,4 +164,4 @@ jq '{
   "components": [.components[] | select(.name | test("mongodb|percona"; "i"))]
 }' sbom-full-db.json > $CWD/pcsm_sbom/sbom-percona-clustersync-mongodb-${PCSM_VERSION}-${PLATFORM}-${ARCH}.json
 
-echo "✅ SBOM for Percona Backup for MongoDB ${PCSM_VERSION} written to: $CWD/pcsm_sbom/sbom-percona-clustersync-mongodb-${PCSM_VERSION}-${PLATFORM}-${ARCH}.json"
+echo "✅ SBOM for Percona ClusterSync for MongoDB ${PCSM_VERSION} written to: $CWD/pcsm_sbom/sbom-percona-clustersync-mongodb-${PCSM_VERSION}-${PLATFORM}-${ARCH}.json"
