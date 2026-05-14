@@ -2,6 +2,7 @@ package mdb
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -83,6 +84,10 @@ func isMongoCommandError(err error, name string) bool {
 // It checks for specific MongoDB error codes that indicate transient issues.
 // Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
@@ -91,8 +96,8 @@ func IsTransient(err error) bool {
 		return true
 	}
 
-	le, ok := err.(mongo.LabeledError) //nolint:errorlint
-	if ok && le.HasErrorLabel("RetryableWriteError") {
+	var le mongo.LabeledError
+	if errors.As(err, &le) && le.HasErrorLabel("RetryableWriteError") {
 		return true
 	}
 
@@ -105,37 +110,37 @@ func IsTransient(err error) bool {
 		return true
 	}
 
-	transientErrorCodes := map[int]struct{}{
-		11602: {}, // InterruptedDueToReplStateChange
-		91:    {}, // ShutdownInProgress
-		189:   {}, // PrimarySteppedDown
-		10107: {}, // NotWritablePrimary
-		13435: {}, // NotPrimaryNoSecondaryOk
+	return hasTransientServerError(err)
+}
+
+func hasTransientServerError(err error) bool {
+	var serverErr mongo.ServerError
+	if !errors.As(err, &serverErr) {
+		return false
 	}
 
-	var wEx mongo.WriteException
-	if errors.As(err, &wEx) {
-		for _, we := range wEx.WriteErrors {
-			if _, ok := transientErrorCodes[we.Code]; ok {
-				return true
-			}
-		}
+	return slices.ContainsFunc(serverErr.ErrorCodes(), isTransientServerCode)
+}
 
-		if wEx.WriteConcernError != nil {
-			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
-				return true
-			}
-		}
+func isTransientServerCode(code int) bool {
+	const (
+		interruptedDueToReplStateChangeCode = 11602
+		shutdownInProgressCode              = 91
+		primarySteppedDownCode              = 189
+		notWritablePrimaryCode              = 10107
+		notPrimaryNoSecondaryOkCode         = 13435
+	)
+
+	switch code {
+	case interruptedDueToReplStateChangeCode,
+		shutdownInProgressCode,
+		primarySteppedDownCode,
+		notWritablePrimaryCode,
+		notPrimaryNoSecondaryOkCode:
+		return true
+	default:
+		return false
 	}
-
-	var cmdErr mongo.CommandError
-	if errors.As(err, &cmdErr) {
-		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
-			return true
-		}
-	}
-
-	return false
 }
 
 func isAuthKeyNotFound(err error) bool {

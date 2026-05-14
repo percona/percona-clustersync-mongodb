@@ -2,6 +2,7 @@ package repl
 
 import (
 	"context"
+	"encoding/hex"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -77,25 +78,44 @@ type bulkWriter interface {
 	WouldOverflow(estimate int) bool
 	Do(ctx context.Context, m *mongo.Client) (int, error)
 
-	Insert(ns catalog.Namespace, event *InsertEvent)
-	Update(ns catalog.Namespace, event *UpdateEvent)
-	Replace(ns catalog.Namespace, event *ReplaceEvent)
-	Delete(ns catalog.Namespace, event *DeleteEvent)
+	Insert(change *ChangeEvent, event *InsertEvent)
+	Update(change *ChangeEvent, event *UpdateEvent)
+	Replace(change *ChangeEvent, event *ReplaceEvent)
+	Delete(change *ChangeEvent, event *DeleteEvent)
 }
 
 type clientBulkWrite struct {
+	uuidMap            catalog.UUIDMap
 	useSimpleCollation bool
 	maxOpsSize         int
 	bytes              int
 	writes             []mongo.ClientBulkWrite
 }
 
-func newClientBulkWriter(size int, useSimpleCollation bool) *clientBulkWrite {
+func newClientBulkWriter(size int, useSimpleCollation bool, uuidMap catalog.UUIDMap) *clientBulkWrite {
 	return &clientBulkWrite{
+		uuidMap:            uuidMap,
 		useSimpleCollation: useSimpleCollation,
 		maxOpsSize:         size,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
 	}
+}
+
+//go:inline
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
+	if change.CollectionUUID != nil {
+		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
+			return ns
+		}
+	}
+
+	for _, ns := range uuidMap {
+		if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
+			return ns
+		}
+	}
+
+	return change.Namespace
 }
 
 func (cbw *clientBulkWrite) Full() bool {
@@ -202,7 +222,9 @@ func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	return minIdx, replaceModel.Replacement
 }
 
-func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
+func (cbw *clientBulkWrite) Insert(change *ChangeEvent, event *InsertEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
+
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -223,7 +245,8 @@ func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
 	cbw.bytes += estimateBytes(event.DocumentKey, event.FullDocument)
 }
 
-func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
+func (cbw *clientBulkWrite) Update(change *ChangeEvent, event *UpdateEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
 	ops := collectUpdateOps(event)
 
 	// Marshal the document filter once and reuse for primary + every follow-up.
@@ -263,7 +286,9 @@ func (cbw *clientBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
 	}
 }
 
-func (cbw *clientBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
+func (cbw *clientBulkWrite) Replace(change *ChangeEvent, event *ReplaceEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
+
 	m := &mongo.ClientReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -283,7 +308,9 @@ func (cbw *clientBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
 	cbw.bytes += estimateBytes(event.DocumentKey, event.FullDocument)
 }
 
-func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
+func (cbw *clientBulkWrite) Delete(change *ChangeEvent, event *DeleteEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
+
 	m := &mongo.ClientDeleteOneModel{
 		Filter: event.DocumentKey,
 	}
@@ -303,6 +330,7 @@ func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 }
 
 type collectionBulkWrite struct {
+	uuidMap            catalog.UUIDMap
 	useSimpleCollation bool
 	maxOpsSize         int
 	count              int
@@ -310,8 +338,9 @@ type collectionBulkWrite struct {
 	writes             map[string][]mongo.WriteModel
 }
 
-func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
+func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool, uuidMap catalog.UUIDMap) *collectionBulkWrite {
 	return &collectionBulkWrite{
+		uuidMap:            uuidMap,
 		useSimpleCollation: nonDefaultCollationSupport,
 		maxOpsSize:         size,
 		writes:             make(map[string][]mongo.WriteModel),
@@ -434,7 +463,8 @@ func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	return firstErr.Index, replaceModel.Replacement
 }
 
-func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
+func (cbw *collectionBulkWrite) Insert(change *ChangeEvent, event *InsertEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
 	missingShardKeys := bson.D{}
 
 	if ns.Sharded && ns.ShardKey != nil {
@@ -467,7 +497,8 @@ func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent)
 	cbw.bytes += estimateBytes(event.DocumentKey, event.FullDocument)
 }
 
-func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent) {
+func (cbw *collectionBulkWrite) Update(change *ChangeEvent, event *UpdateEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
 	ops := collectUpdateOps(event)
 
 	filterLen := marshalLen(event.DocumentKey)
@@ -503,7 +534,9 @@ func (cbw *collectionBulkWrite) Update(ns catalog.Namespace, event *UpdateEvent)
 	}
 }
 
-func (cbw *collectionBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEvent) {
+func (cbw *collectionBulkWrite) Replace(change *ChangeEvent, event *ReplaceEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
+
 	m := &mongo.ReplaceOneModel{
 		Filter:      event.DocumentKey,
 		Replacement: event.FullDocument,
@@ -519,7 +552,9 @@ func (cbw *collectionBulkWrite) Replace(ns catalog.Namespace, event *ReplaceEven
 	cbw.bytes += estimateBytes(event.DocumentKey, event.FullDocument)
 }
 
-func (cbw *collectionBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
+func (cbw *collectionBulkWrite) Delete(change *ChangeEvent, event *DeleteEvent) {
+	ns := findNamespaceByUUID(cbw.uuidMap, change)
+
 	m := &mongo.DeleteOneModel{
 		Filter: event.DocumentKey,
 	}

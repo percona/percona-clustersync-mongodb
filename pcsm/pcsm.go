@@ -102,7 +102,8 @@ type PCSM struct {
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
-	sourceVer mdb.ServerVersion
+	sourceVer      mdb.ServerVersion
+	sourceIsMongos bool
 
 	nsInclude []string
 	nsExclude []string
@@ -124,12 +125,18 @@ type PCSM struct {
 }
 
 // New creates a new PCSM.
-func New(lifecycleCtx context.Context, source, target *mongo.Client, sourceVer mdb.ServerVersion) *PCSM {
+func New(
+	lifecycleCtx context.Context,
+	source, target *mongo.Client,
+	sourceVer mdb.ServerVersion,
+	sourceIsMongos bool,
+) *PCSM {
 	return &PCSM{
 		lifecycleCtx:   lifecycleCtx,
 		source:         source,
 		target:         target,
 		sourceVer:      sourceVer,
+		sourceIsMongos: sourceIsMongos,
 		state:          StateIdle,
 		onStateChanged: func(State) {},
 	}
@@ -200,7 +207,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	cat := catalog.NewCatalog(p.target, p.sourceVer)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
 	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{})
-	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{}, p.sourceVer)
+	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{}, p.sourceVer, p.sourceIsMongos)
 
 	if cp.Catalog != nil {
 		err = cat.Recover(cp.Catalog)
@@ -357,7 +364,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.pauseOnInitialSync = options.PauseOnInitialSync
 	p.catalog = catalog.NewCatalog(p.target, p.sourceVer)
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
-	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer)
+	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer, p.sourceIsMongos)
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)
@@ -570,6 +577,11 @@ func (p *PCSM) doPause(ctx context.Context) error {
 
 	if !replStatus.IsRunning() {
 		return errors.New("cannot pause: Change Replication is not running")
+	}
+
+	cloneStatus := p.clone.Status()
+	if !cloneStatus.IsFinished() || !replStatus.LastReplicatedOpTime.After(cloneStatus.FinishTS) {
+		return errors.New("cannot pause: initial sync is not complete")
 	}
 
 	err := p.repl.Pause(ctx)

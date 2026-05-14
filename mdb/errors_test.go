@@ -32,3 +32,49 @@ func TestIsDatabaseDropPending(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTransient(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name: "nil error",
+		},
+		{
+			name:     "wrapped primary stepped down command error",
+			err:      errors.Wrap(mongo.CommandError{Name: "PrimarySteppedDown", Code: 189}, "drop collection"),
+			expected: true,
+		},
+		{
+			name: "wrapped primary stepped down write concern error",
+			err: errors.Wrap(mongo.WriteException{
+				WriteConcernError: &mongo.WriteConcernError{Name: "PrimarySteppedDown", Code: 189},
+			}, "drop collection"),
+			expected: true,
+		},
+		{
+			name: "wrapped retryable write label",
+			err: errors.Wrap(mongo.CommandError{
+				Name:   "SomeTransientLabelOnlyError",
+				Labels: []string{"RetryableWriteError"},
+			}, "write command"),
+			expected: true,
+		},
+		{
+			name: "wrapped non transient command error",
+			err:  errors.Wrap(mongo.CommandError{Name: "NamespaceNotFound", Code: 26}, "drop collection"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
