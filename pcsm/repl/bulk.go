@@ -47,8 +47,8 @@ var collectionBulkOptions = options.BulkWrite().
 // cbw.bytes; the header reserve plus the empty-bulk exception in WouldOverflow provide the
 // safety margin in practice.
 const (
-	maxFieldsPerSetOp = 100        //nolint:mnd
-	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512 KiB
+	maxFieldsPerSetOp = 100
+	maxBytesPerSetOp  = 512 * 1024 // 512 KiB
 )
 
 // MongoDB server error codes that indicate a delta update could not be applied
