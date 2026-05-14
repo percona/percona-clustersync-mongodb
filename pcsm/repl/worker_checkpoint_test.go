@@ -49,23 +49,22 @@ func TestCheckpoint_DoesNotAdvancePastFailedWorker(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		ts := pool.workers[1].lastCommitedTS.Load()
+		ts := pool.workers[1].lastCommittedTS.Load()
 
 		return ts != nil && !ts.Before(tsGood)
 	}, barrierTimeout, 10*time.Millisecond,
 		"healthy worker should have committed up to tsGood=%v", tsGood)
 
-	// Half 1 -- failed-on-first-bulk worker really does leave lastCommitedTS uninitialized
-	failedLastTS := pool.workers[0].lastCommitedTS.Load()
+	// failed-on-first-bulk worker leaves lastCommitedTS uninitialized
+	failedLastTS := pool.workers[0].lastCommittedTS.Load()
 	require.Nil(t, failedLastTS,
 		"expected the failing worker's lastCommitedTS to be nil after its first bulk write failure, "+
 			"but got %v.", failedLastTS)
 	t.Logf("Half 1 -- failed worker lastCommitedTS after error: %v", failedLastTS)
 
-	// Half 2 -- Checkpoint silently skips that nil and min over remaining workers ends up > T_fail
 	cp := pool.Checkpoint()
-	healthyLastTS := pool.workers[1].lastCommitedTS.Load()
-	t.Logf("Half 2 -- Checkpoint=%v (expected: <= T_fail=%v); healthy worker lastTS=%v",
+	healthyLastTS := pool.workers[1].lastCommittedTS.Load()
+	t.Logf("Half 2 -- Checkpoint=%v (expected: <= T_fail=%v); healthy worker lastCommitedTS=%v",
 		cp, tsFail, healthyLastTS)
 
 	assert.False(t, cp.After(tsFail),

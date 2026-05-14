@@ -117,7 +117,7 @@ func TestAsyncPipeline_EventsApplied(t *testing.T) {
 }
 
 // TestAsyncPipeline_CheckpointAdvances verifies that the committed timestamp
-// (lastTS) correctly reflects the checkpoint captured when the bulk was
+// (lastCommitedTS) correctly reflects the checkpoint captured when the bulk was
 // sealed, not the live pendingTS. Tests across two barrier+resume cycles
 // with different timestamps.
 func TestAsyncPipeline_CheckpointAdvances(t *testing.T) {
@@ -136,9 +136,9 @@ func TestAsyncPipeline_CheckpointAdvances(t *testing.T) {
 	err := pool.Barrier()
 	require.NoError(t, err)
 
-	committed := w.lastCommitedTS.Load()
-	require.NotNil(t, committed, "lastTS should be set after barrier")
-	assert.Equal(t, ts1, *committed, "lastTS should match phase 1 checkpoint")
+	committed := w.lastCommittedTS.Load()
+	require.NotNil(t, committed, "lastCommitedTS should be set after barrier")
+	assert.Equal(t, ts1, *committed, "lastCommitedTS should match phase 1 checkpoint")
 
 	pool.ReleaseBarrier()
 
@@ -149,9 +149,9 @@ func TestAsyncPipeline_CheckpointAdvances(t *testing.T) {
 	err = pool.Barrier()
 	require.NoError(t, err)
 
-	committed = w.lastCommitedTS.Load()
-	require.NotNil(t, committed, "lastTS should be set after second barrier")
-	assert.Equal(t, ts2, *committed, "lastTS should advance to phase 2 checkpoint")
+	committed = w.lastCommittedTS.Load()
+	require.NotNil(t, committed, "lastCommitedTS should be set after second barrier")
+	assert.Equal(t, ts2, *committed, "lastCommitedTS should advance to phase 2 checkpoint")
 
 	pool.ReleaseBarrier()
 }

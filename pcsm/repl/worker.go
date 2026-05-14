@@ -49,9 +49,9 @@ type worker struct {
 
 	routedEventCh chan *routedEvent
 
-	lastCommitedTS atomic.Pointer[bson.Timestamp] // last committed timestamp
-	lastRoutedTS   atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
-	lastPendingTS  bson.Timestamp                 // timestamp of last event in current batch
+	lastCommittedTS atomic.Pointer[bson.Timestamp] // last committed timestamp
+	lastRoutedTS    atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
+	lastPendingTS   bson.Timestamp                 // timestamp of last event in current batch
 
 	tickerOffset  time.Duration // stagger delay before starting the flush ticker
 	flushInterval time.Duration // maximum interval between bulk write flushes
@@ -153,7 +153,7 @@ func (w *worker) runWriter(ctx context.Context) {
 			metrics.ObserveReplWorkerFlushDuration(w.id, time.Since(start))
 
 			ts := pb.checkpoint
-			w.lastCommitedTS.Store(&ts)
+			w.lastCommittedTS.Store(&ts)
 
 			lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
 		}
@@ -559,7 +559,7 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 
 		var effective bson.Timestamp
 
-		committed := w.lastCommitedTS.Load()
+		committed := w.lastCommittedTS.Load()
 		if committed == nil {
 			// Worker received events but never committed. Safe floor is
 			// strictly before the routed event(s).
@@ -607,7 +607,7 @@ func (p *workerPool) Idle() bool {
 			continue
 		}
 
-		committed := w.lastCommitedTS.Load()
+		committed := w.lastCommittedTS.Load()
 		if committed == nil || committed.Before(*routed) {
 			return false
 		}
