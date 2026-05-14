@@ -47,9 +47,29 @@ var collectionBulkOptions = options.BulkWrite().
 // cbw.bytes; the header reserve plus the empty-bulk exception in WouldOverflow provide the
 // safety margin in practice.
 const (
-	maxFieldsPerSetOp = 100        //nolint:mnd
-	maxBytesPerSetOp  = 512 * 1024 //nolint:mnd // 512 KiB
+	maxFieldsPerSetOp = 100
+	maxBytesPerSetOp  = 512 * 1024 // 512 KiB
 )
+
+// MongoDB server error codes that indicate a delta update could not be applied
+// because the target document's shape diverged from the source snapshot view
+// against which the delta was computed. Both are recoverable via refetch +
+// upserting replaceOne.
+const (
+	// errCodePathNotViable - "Cannot create field 'X' in element {Y: null}".
+	// Parent path is not a viable container for the requested write.
+	errCodePathNotViable = 28
+	// errCodeNonExistentPath - a required path does not exist on the target
+	// document (e.g. $rename source missing, certain $pop/$pull cases).
+	errCodeNonExistentPath = 29
+)
+
+// isRecoverableUpdateError reports whether code identifies a delta-update
+// failure that is recoverable by refetching the document from source and
+// applying it as an upserting replaceOne on target.
+func isRecoverableUpdateError(code int) bool {
+	return code == errCodePathNotViable || code == errCodeNonExistentPath
+}
 
 // updateOps holds the result of building update operations from a change stream event.
 // When a change event combines an array truncation with conflicting indexed-write updates
@@ -88,13 +108,16 @@ type clientBulkWrite struct {
 	maxOpsSize         int
 	bytes              int
 	writes             []mongo.ClientBulkWrite
+
+	source *mongo.Client
 }
 
-func newClientBulkWriter(size int, useSimpleCollation bool) *clientBulkWrite {
+func newClientBulkWriter(size int, useSimpleCollation bool, source *mongo.Client) *clientBulkWrite {
 	return &clientBulkWrite{
 		useSimpleCollation: useSimpleCollation,
 		maxOpsSize:         size,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
+		source:             source,
 	}
 }
 
@@ -152,21 +175,38 @@ func (cbw *clientBulkWrite) doWithRetry(
 
 	// Try to handle duplicate key error with fallback
 	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
-	if replacement == nil {
-		return err //nolint:wrapcheck
+	if replacement != nil {
+		write := bulkWrites[idx]
+		coll := m.Database(write.Database).Collection(write.Collection)
+
+		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
+		if err != nil {
+			return err
+		}
+
+		// Retry remaining operations (from index+1 onwards)
+		// These operations were never executed due to ordered semantics
+		return cbw.doWithRetry(ctx, m, bulkWrites[idx+1:])
 	}
 
-	write := bulkWrites[idx]
-	coll := m.Database(write.Database).Collection(write.Collection)
+	idx, ns, filter := cbw.extractRecoverableUpdateTarget(bulkErr, bulkWrites)
+	// Try to recover from a shape-mismatch update error by refetching the
+	// document from source and applying it as an upserting replaceOne on
+	// target (PCSM-314).
+	if filter != nil {
+		targetColl := m.Database(ns.Database).Collection(ns.Collection)
 
-	err = handleDuplicateKeyError(ctx, coll, replacement)
-	if err != nil {
-		return err
+		err = handleRecoverableUpdateError(ctx, cbw.source, targetColl, ns, filter, cbw.useSimpleCollation)
+		if err != nil {
+			return err
+		}
+
+		// Retry remaining operations (from index+1 onwards)
+		// These operations were never executed due to ordered semantics
+		return cbw.doWithRetry(ctx, m, bulkWrites[idx+1:])
 	}
 
-	// Retry remaining operations (from index+1 onwards)
-	// These operations were never executed due to ordered semantics
-	return cbw.doWithRetry(ctx, m, bulkWrites[idx+1:])
+	return err //nolint:wrapcheck
 }
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
@@ -200,6 +240,56 @@ func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	}
 
 	return minIdx, replaceModel.Replacement
+}
+
+// extractRecoverableUpdateTarget checks whether the bulk error is a
+// recoverable delta-update failure (see isRecoverableUpdateError) on an
+// Update op and returns the index of the failing op together with its
+// namespace and documentKey filter. Returns -1, _, nil when the error is
+// not recoverable or the failing op is not an Update. The caller uses
+// (ns, filter) to refetch the document from source.
+func (cbw *clientBulkWrite) extractRecoverableUpdateTarget(
+	bulkErr error,
+	writes []mongo.ClientBulkWrite,
+) (int, catalog.Namespace, bson.D) {
+	var bwe mongo.ClientBulkWriteException
+
+	if !errors.As(bulkErr, &bwe) || len(bwe.WriteErrors) == 0 {
+		return -1, catalog.Namespace{}, nil
+	}
+
+	// Find the minimum-index WriteError in the map
+	// (in ordered mode, there should only be one error)
+	var firstErr mongo.WriteError
+
+	minIdx := -1
+
+	for idx, we := range bwe.WriteErrors {
+		if minIdx == -1 || idx < minIdx {
+			minIdx = idx
+			firstErr = we
+		}
+	}
+
+	if !isRecoverableUpdateError(firstErr.Code) || firstErr.Index < 0 || firstErr.Index >= len(writes) {
+		return -1, catalog.Namespace{}, nil
+	}
+
+	op := writes[firstErr.Index]
+
+	updateModel, ok := op.Model.(*mongo.ClientUpdateOneModel)
+	if !ok {
+		return -1, catalog.Namespace{}, nil
+	}
+
+	filter, ok := updateModel.Filter.(bson.D)
+	if !ok {
+		return -1, catalog.Namespace{}, nil
+	}
+
+	ns := catalog.Namespace{Database: op.Database, Collection: op.Collection}
+
+	return firstErr.Index, ns, filter
 }
 
 func (cbw *clientBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
@@ -308,13 +398,18 @@ type collectionBulkWrite struct {
 	count              int
 	bytes              int
 	writes             map[string][]mongo.WriteModel
+
+	source *mongo.Client
 }
 
-func newCollectionBulkWriter(size int, nonDefaultCollationSupport bool) *collectionBulkWrite {
+func newCollectionBulkWriter(
+	size int, nonDefaultCollationSupport bool, source *mongo.Client,
+) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,
 		maxOpsSize:         size,
 		writes:             make(map[string][]mongo.WriteModel),
+		source:             source,
 	}
 }
 
@@ -394,20 +489,35 @@ func (cbw *collectionBulkWrite) doWithRetry(
 		return nil
 	}
 
-	// Try to handle duplicate key error with fallback
 	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
-	if replacement == nil {
-		return err //nolint:wrapcheck
+	// Try to handle duplicate key error with fallback
+	if replacement != nil {
+		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
+		if err != nil {
+			return err
+		}
+
+		// Retry remaining operations (from index+1 onwards)
+		// These operations were never executed due to ordered semantics
+		return cbw.doWithRetry(ctx, coll, ns, bulkWrites[idx+1:])
 	}
 
-	err = handleDuplicateKeyError(ctx, coll, replacement)
-	if err != nil {
-		return err
+	idx, filter := cbw.extractRecoverableUpdateTarget(bulkErr, bulkWrites)
+	// Try to recover from a shape-mismatch update error by refetching the
+	// document from source and applying it as an upserting replaceOne on
+	// target (PCSM-314).
+	if filter != nil {
+		err = handleRecoverableUpdateError(ctx, cbw.source, coll, ns, filter, cbw.useSimpleCollation)
+		if err != nil {
+			return err
+		}
+
+		// Retry remaining operations (from index+1 onwards)
+		// These operations were never executed due to ordered semantics
+		return cbw.doWithRetry(ctx, coll, ns, bulkWrites[idx+1:])
 	}
 
-	// Retry remaining operations (from index+1 onwards)
-	// These operations were never executed due to ordered semantics
-	return cbw.doWithRetry(ctx, coll, ns, bulkWrites[idx+1:])
+	return err //nolint:wrapcheck
 }
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
@@ -432,6 +542,43 @@ func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	}
 
 	return firstErr.Index, replaceModel.Replacement
+}
+
+// extractRecoverableUpdateTarget checks whether the bulk error is a
+// recoverable delta-update failure (see isRecoverableUpdateError) on an
+// Update op and returns the index of the failing op together with its
+// documentKey filter. Returns -1, nil when the error is not recoverable or
+// the failing op is not an Update. The caller uses the filter to refetch
+// the document from source.
+func (cbw *collectionBulkWrite) extractRecoverableUpdateTarget(
+	bulkErr error,
+	ops []mongo.WriteModel,
+) (int, bson.D) {
+	var bwe mongo.BulkWriteException
+	if !errors.As(bulkErr, &bwe) || len(bwe.WriteErrors) == 0 {
+		return -1, nil
+	}
+
+	firstErr := bwe.WriteErrors[0]
+	if firstErr.Index < 0 || firstErr.Index >= len(ops) {
+		return -1, nil
+	}
+
+	if !isRecoverableUpdateError(firstErr.Code) {
+		return -1, nil
+	}
+
+	updateModel, ok := ops[firstErr.Index].(*mongo.UpdateOneModel)
+	if !ok {
+		return -1, nil
+	}
+
+	filter, ok := updateModel.Filter.(bson.D)
+	if !ok {
+		return -1, nil
+	}
+
+	return firstErr.Index, filter
 }
 
 func (cbw *collectionBulkWrite) Insert(ns catalog.Namespace, event *InsertEvent) {
@@ -535,7 +682,12 @@ func (cbw *collectionBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent)
 }
 
 // handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
-func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replacement any) error {
+func handleDuplicateKeyError(
+	ctx context.Context,
+	coll *mongo.Collection,
+	replacement any,
+	useSimpleCollation bool,
+) error {
 	// Extract _id from the replacement document
 	var doc bson.D
 
@@ -566,7 +718,12 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	log.Ctx(ctx).With(log.NS(coll.Database().Name(), coll.Name())).
 		Infof("Retrying with delete+insert fallback for _id: %v", docID)
 
-	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}})
+	deleteOpts := options.DeleteOne()
+	if useSimpleCollation {
+		deleteOpts.SetCollation(simpleCollation)
+	}
+
+	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}}, deleteOpts)
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.Wrap(err, "delete before insert")
 	}
@@ -574,6 +731,89 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	_, err = coll.InsertOne(ctx, replacement)
 	if err != nil {
 		return errors.Wrap(err, "insert after delete")
+	}
+
+	return nil
+}
+
+// handleRecoverableUpdateError recovers from a shape-mismatch bulk write
+// error (see isRecoverableUpdateError) by refetching the affected document
+// from source and applying it to target via an upserting replaceOne. When
+// the document is missing on source (deleted between the change-stream
+// event and the refetch), the target document is removed instead. The
+// filter is the change event's documentKey (typically {_id: X}).
+//
+// This is the recovery path for PCSM-314: change-stream delta updates
+// emitted against an array index or path that has shifted on the target's
+// cloned snapshot raise errors such as "Cannot create field 'X' in element
+// {Y: null}" (PathNotViable) or "path does not exist" (NonExistentPath).
+// Refetching from source produces an authoritative replacement that
+// supersedes the failed delta.
+func handleRecoverableUpdateError(
+	ctx context.Context,
+	source *mongo.Client,
+	targetColl *mongo.Collection,
+	ns catalog.Namespace,
+	filter bson.D,
+	useSimpleCollation bool,
+) error {
+	if source == nil {
+		return errors.New("recoverable-update recovery requires source client")
+	}
+
+	sourceColl := source.Database(ns.Database).Collection(ns.Collection)
+
+	var doc bson.D
+
+	err := sourceColl.FindOne(ctx, filter).Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		// Doc deleted on source between the change event and the refetch.
+		// Delete on target idempotently; the eventual delete event from the
+		// change stream will be a no-op.
+		return deleteTargetAfterSourceMissing(ctx, targetColl, ns, filter, useSimpleCollation)
+	}
+
+	if err != nil {
+		return errors.Wrap(err, "refetch from source")
+	}
+
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
+		Infof("Recoverable-update recovery: replacing target from source for %v", filter)
+
+	replaceOpts := options.Replace().SetUpsert(true)
+	if useSimpleCollation {
+		replaceOpts.SetCollation(simpleCollation)
+	}
+
+	_, err = targetColl.ReplaceOne(ctx, filter, doc, replaceOpts)
+	if err != nil {
+		return errors.Wrap(err, "replace target with source doc")
+	}
+
+	return nil
+}
+
+// deleteTargetAfterSourceMissing performs an idempotent DeleteOne on the
+// target when the source document is missing during recoverable-update
+// recovery. See handleRecoverableUpdateError for collation gating rationale.
+func deleteTargetAfterSourceMissing(
+	ctx context.Context,
+	targetColl *mongo.Collection,
+	ns catalog.Namespace,
+	filter bson.D,
+	useSimpleCollation bool,
+) error {
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
+		Infof("Recoverable-update recovery: source doc missing for %v, deleting target", filter)
+
+	deleteOpts := options.DeleteOne()
+	if useSimpleCollation {
+		deleteOpts.SetCollation(simpleCollation)
+	}
+
+	_, err := targetColl.DeleteOne(ctx, filter, deleteOpts)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.Wrap(err, "delete target after source missing")
 	}
 
 	return nil
