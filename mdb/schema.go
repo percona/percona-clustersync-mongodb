@@ -196,15 +196,18 @@ func ListInProgressIndexBuilds(
 	return names, nil
 }
 
-// ListInconsistentIndexes returns a list of index names that are inconsistent across shards.
-// An index is considered inconsistent if it exists on fewer shards than the _id_ index.
+// ListInconsistentIndexes returns specs of indexes that are inconsistent across
+// shards. An index is considered inconsistent if it exists on fewer shards than
+// the _id_ index. Specs are taken from one of the shards that still has the
+// index, so callers receive the canonical [IndexSpecification] even when
+// mongos `listIndexes` filters partial coverage.
 // For non-sharded collections or replica sets, this returns an empty list.
 func ListInconsistentIndexes(
 	ctx context.Context,
 	m *mongo.Client,
 	db string,
 	coll string,
-) ([]string, error) {
+) ([]*IndexSpecification, error) {
 	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
 		{{"$indexStats", bson.D{}}},
 	})
@@ -217,7 +220,8 @@ func ListInconsistentIndexes(
 	}
 
 	var indexStats []struct {
-		Name string `bson:"name"`
+		Name string              `bson:"name"`
+		Spec *IndexSpecification `bson:"spec"`
 	}
 
 	err = cur.All(ctx, &indexStats)
@@ -230,15 +234,21 @@ func ListInconsistentIndexes(
 	}
 
 	// Count occurrences of each index name (each shard reports separately)
+	// and remember the first non-nil spec seen for it.
 	indexCounts := make(map[string]int)
+	firstSpec := make(map[string]*IndexSpecification)
 	for _, stat := range indexStats {
 		indexCounts[stat.Name]++
+
+		if _, seen := firstSpec[stat.Name]; !seen && stat.Spec != nil {
+			firstSpec[stat.Name] = stat.Spec
+		}
 	}
 
 	// Get the _id_ index count as baseline (represents shards where collection exists)
 	idCount := indexCounts["_id_"]
 
-	var inconsistent []string
+	var inconsistent []*IndexSpecification
 
 	for name, count := range indexCounts {
 		if name == "_id_" {
@@ -246,7 +256,12 @@ func ListInconsistentIndexes(
 		}
 
 		if count < idCount {
-			inconsistent = append(inconsistent, name)
+			spec := firstSpec[name]
+			if spec.Namespace == "" {
+				spec.Namespace = db + "." + coll
+			}
+
+			inconsistent = append(inconsistent, spec)
 		}
 	}
 
