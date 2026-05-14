@@ -179,7 +179,7 @@ func (cbw *clientBulkWrite) doWithRetry(
 		write := bulkWrites[idx]
 		coll := m.Database(write.Database).Collection(write.Collection)
 
-		err = handleDuplicateKeyError(ctx, coll, replacement)
+		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -196,7 +196,7 @@ func (cbw *clientBulkWrite) doWithRetry(
 	if filter != nil {
 		targetColl := m.Database(ns.Database).Collection(ns.Collection)
 
-		err = handleRecoverableUpdateError(ctx, cbw.source, targetColl, ns, filter)
+		err = handleRecoverableUpdateError(ctx, cbw.source, targetColl, ns, filter, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -492,7 +492,7 @@ func (cbw *collectionBulkWrite) doWithRetry(
 	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
 	// Try to handle duplicate key error with fallback
 	if replacement != nil {
-		err = handleDuplicateKeyError(ctx, coll, replacement)
+		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -507,7 +507,7 @@ func (cbw *collectionBulkWrite) doWithRetry(
 	// document from source and applying it as an upserting replaceOne on
 	// target (PCSM-314).
 	if filter != nil {
-		err = handleRecoverableUpdateError(ctx, cbw.source, coll, ns, filter)
+		err = handleRecoverableUpdateError(ctx, cbw.source, coll, ns, filter, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -682,7 +682,12 @@ func (cbw *collectionBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent)
 }
 
 // handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
-func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replacement any) error {
+func handleDuplicateKeyError(
+	ctx context.Context,
+	coll *mongo.Collection,
+	replacement any,
+	useSimpleCollation bool,
+) error {
 	// Extract _id from the replacement document
 	var doc bson.D
 
@@ -713,7 +718,12 @@ func handleDuplicateKeyError(ctx context.Context, coll *mongo.Collection, replac
 	log.Ctx(ctx).With(log.NS(coll.Database().Name(), coll.Name())).
 		Infof("Retrying with delete+insert fallback for _id: %v", docID)
 
-	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}})
+	deleteOpts := options.DeleteOne()
+	if useSimpleCollation {
+		deleteOpts.SetCollation(simpleCollation)
+	}
+
+	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}}, deleteOpts)
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.Wrap(err, "delete before insert")
 	}
@@ -745,6 +755,7 @@ func handleRecoverableUpdateError(
 	targetColl *mongo.Collection,
 	ns catalog.Namespace,
 	filter bson.D,
+	useSimpleCollation bool,
 ) error {
 	if source == nil {
 		return errors.New("recoverable-update recovery requires source client")
@@ -755,31 +766,54 @@ func handleRecoverableUpdateError(
 	var doc bson.D
 
 	err := sourceColl.FindOne(ctx, filter).Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		// Doc deleted on source between the change event and the refetch.
+		// Delete on target idempotently; the eventual delete event from the
+		// change stream will be a no-op.
+		return deleteTargetAfterSourceMissing(ctx, targetColl, ns, filter, useSimpleCollation)
+	}
+
 	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			// Doc deleted on source between the change event and the refetch.
-			// Delete on target idempotently; the eventual delete event from the
-			// change stream will be a no-op.
-			log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
-				Infof("Recoverable-update recovery: source doc missing for %v, deleting target", filter)
-
-			_, delErr := targetColl.DeleteOne(ctx, filter)
-			if delErr != nil && !errors.Is(delErr, mongo.ErrNoDocuments) {
-				return errors.Wrap(delErr, "delete target after source missing")
-			}
-
-			return nil
-		}
-
 		return errors.Wrap(err, "refetch from source")
 	}
 
 	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
 		Infof("Recoverable-update recovery: replacing target from source for %v", filter)
 
-	_, err = targetColl.ReplaceOne(ctx, filter, doc, options.Replace().SetUpsert(true))
+	replaceOpts := options.Replace().SetUpsert(true)
+	if useSimpleCollation {
+		replaceOpts.SetCollation(simpleCollation)
+	}
+
+	_, err = targetColl.ReplaceOne(ctx, filter, doc, replaceOpts)
 	if err != nil {
 		return errors.Wrap(err, "replace target with source doc")
+	}
+
+	return nil
+}
+
+// deleteTargetAfterSourceMissing performs an idempotent DeleteOne on the
+// target when the source document is missing during recoverable-update
+// recovery. See handleRecoverableUpdateError for collation gating rationale.
+func deleteTargetAfterSourceMissing(
+	ctx context.Context,
+	targetColl *mongo.Collection,
+	ns catalog.Namespace,
+	filter bson.D,
+	useSimpleCollation bool,
+) error {
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).
+		Infof("Recoverable-update recovery: source doc missing for %v, deleting target", filter)
+
+	deleteOpts := options.DeleteOne()
+	if useSimpleCollation {
+		deleteOpts.SetCollation(simpleCollation)
+	}
+
+	_, err := targetColl.DeleteOne(ctx, filter, deleteOpts)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.Wrap(err, "delete target after source missing")
 	}
 
 	return nil
