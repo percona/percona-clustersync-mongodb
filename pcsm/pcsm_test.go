@@ -292,6 +292,77 @@ func TestRecover(t *testing.T) {
 		assert.Equal(t, "previous error", p.err.Error())
 	})
 
+	t.Run("restores finalization status on StateFinalized", func(t *testing.T) {
+		t.Parallel()
+
+		keys, err := bson.Marshal(bson.D{{"email", 1}})
+		require.NoError(t, err)
+
+		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
+		cat.AddFailedIndexes(context.Background(), "mydb", "users",
+			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}},
+			map[string]string{"email_idx": "duplicate key"})
+
+		cp := checkpoint{
+			State:   StateFinalized,
+			Catalog: cat.Checkpoint(),
+		}
+		data, err := bson.Marshal(cp)
+		require.NoError(t, err)
+
+		p := &PCSM{
+			state:          StateIdle,
+			onStateChanged: func(State) {},
+		}
+
+		err = p.Recover(context.Background(), data)
+		require.NoError(t, err)
+
+		assert.Equal(t, State(StateFinalized), p.state)
+		require.NotNil(t, p.finalizeStatus)
+		assert.True(t, p.finalizeStatus.Completed)
+		assert.True(t, p.finalizeStatus.StartedAt.IsZero(),
+			"StartedAt is not persisted across recovery")
+		assert.True(t, p.finalizeStatus.CompletedAt.IsZero(),
+			"CompletedAt is not persisted across recovery")
+
+		require.Len(t, p.finalizeStatus.UnsuccessfulIndexes, 1)
+		entry := p.finalizeStatus.UnsuccessfulIndexes[0]
+		assert.Equal(t, "mydb.users", entry.Namespace)
+		assert.Equal(t, "email_idx", entry.Name)
+		assert.Equal(t, catalog.IndexFailed, entry.Type)
+		assert.Equal(t, "duplicate key", entry.Reason)
+	})
+
+	t.Run("leaves finalization status nil for non-finalized recovery", func(t *testing.T) {
+		t.Parallel()
+
+		keys, err := bson.Marshal(bson.D{{"email", 1}})
+		require.NoError(t, err)
+
+		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
+		cat.AddFailedIndexes(context.Background(), "mydb", "users",
+			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}},
+			map[string]string{"email_idx": "duplicate key"})
+
+		cp := checkpoint{
+			State:   StatePaused,
+			Catalog: cat.Checkpoint(),
+		}
+		data, err := bson.Marshal(cp)
+		require.NoError(t, err)
+
+		p := &PCSM{
+			state:          StateIdle,
+			onStateChanged: func(State) {},
+		}
+
+		err = p.Recover(context.Background(), data)
+		require.NoError(t, err)
+
+		assert.Nil(t, p.finalizeStatus)
+	})
+
 	// Note: Recovery from StateRunning triggers doResume() which spawns run() goroutine.
 	// This requires real MongoDB clients to function properly. The goroutine will exit
 	// gracefully when the mocks don't behave like real clients. This path is tested via E2E.

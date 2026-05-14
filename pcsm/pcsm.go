@@ -248,13 +248,25 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		}
 	}
 
+	// Restore the finalization report from the recovered catalog when the
+	// checkpoint represents a completed finalize, so operators that restart
+	// the server between finalize and reading /status still see the report.
+	// StartedAt and CompletedAt are not persisted, so they stay zero.
+	var finalizeStatus *FinalizeStatus
+	if cp.State == StateFinalized {
+		finalizeStatus = &FinalizeStatus{
+			Completed:           true,
+			UnsuccessfulIndexes: cat.CollectUnsuccessfulIndexes(),
+		}
+	}
+
 	p.nsInclude = cp.NSInclude
 	p.nsExclude = cp.NSExclude
 	p.nsFilter = nsFilter
 	p.catalog = cat
 	p.clone = cln
 	p.repl = rpl
-	p.finalizeStatus = nil
+	p.finalizeStatus = finalizeStatus
 	p.state = cp.State
 
 	if cp.Error != "" {
@@ -340,8 +352,10 @@ func (p *PCSM) resetError() {
 	p.repl.ResetError()
 }
 
-// copyFinalizeStatus returns a deep copy of fs so callers cannot mutate
-// PCSM's internal state via the returned Status.
+// copyFinalizeStatus returns a copy of fs with a fresh UnsuccessfulIndexes
+// slice so callers can append or reorder without mutating the source. The
+// bson.Raw Keys field inside each entry still aliases the source entry's
+// bytes; do not mutate Keys in place.
 func copyFinalizeStatus(fs *FinalizeStatus) *FinalizeStatus {
 	if fs == nil {
 		return nil

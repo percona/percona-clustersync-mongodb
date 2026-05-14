@@ -21,7 +21,7 @@ func TestCopyFinalizeStatus_Nil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestCopyFinalizeStatus_DeepCopiesIndexes(t *testing.T) {
+func TestCopyFinalizeStatus_CopiesIndexSlice(t *testing.T) {
 	t.Parallel()
 
 	original := &FinalizeStatus{

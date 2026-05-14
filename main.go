@@ -1238,8 +1238,10 @@ type statusInitialSyncResponse struct {
 type statusFinalizationResponse struct {
 	// Completed indicates whether the finalize stage has finished successfully.
 	Completed bool `json:"completed"`
-	// StartedAt is when the finalize stage was triggered.
-	StartedAt time.Time `json:"startedAt"`
+	// StartedAt is when the finalize stage was triggered. Omitted when the
+	// finalization status was restored from a recovered checkpoint, since
+	// the trigger timestamp is not persisted.
+	StartedAt *time.Time `json:"startedAt,omitempty"`
 	// CompletedAt is when the finalize stage finished. Omitted while in progress.
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 
@@ -1272,7 +1274,11 @@ func makeFinalizationResponse(fs *pcsm.FinalizeStatus) *statusFinalizationRespon
 
 	out := &statusFinalizationResponse{
 		Completed: fs.Completed,
-		StartedAt: fs.StartedAt,
+	}
+
+	if !fs.StartedAt.IsZero() {
+		t := fs.StartedAt
+		out.StartedAt = &t
 	}
 
 	if !fs.CompletedAt.IsZero() {

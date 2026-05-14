@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 
@@ -594,8 +595,8 @@ func (c *Catalog) AddIncompleteIndexes(
 // AddFailedIndexes adds indexes in the catalog that failed to create on the target cluster.
 // The indexes have set [indexCatalogEntry.Failed] flag. The reasons map carries
 // a human-readable failure message per index, keyed by index name; missing
-// entries fall back to an empty Reason and are surfaced via the legacy fallback
-// in collectUnsuccessfulIndexes.
+// entries leave UnsuccessReason empty, which surfaces as an empty `reason`
+// in the /status response.
 func (c *Catalog) AddFailedIndexes(
 	ctx context.Context,
 	db string,
@@ -956,116 +957,121 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 		reason   string
 	}
 
-	var (
-		idxErrors            []error
-		modifyFailures       []modifyFailure
-		foundUnsuccessfulIdx bool
-	)
+	modifyFailures, idxErrors := func() ([]modifyFailure, []error) {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
 
-	c.lock.RLock()
-	for db, colls := range c.Databases {
-		for coll, collEntry := range colls.Collections {
-			nsLg := lg.With(log.NS(db, coll))
+		var (
+			idxErrors            []error
+			modifyFailures       []modifyFailure
+			foundUnsuccessfulIdx bool
+		)
 
-			for _, index := range collEntry.Indexes {
-				if index.Unsuccessful() {
-					foundUnsuccessfulIdx = true
+		for db, colls := range c.Databases {
+			for coll, collEntry := range colls.Collections {
+				nsLg := lg.With(log.NS(db, coll))
 
-					continue
-				}
-
-				if index.IsClustered() {
-					nsLg.Warn("Clustered index with TTL is not supported")
-
-					continue
-				}
-
-				modifyFailed := func(wrappedErr error) {
-					modifyFailures = append(modifyFailures, modifyFailure{
-						db:     db,
-						coll:   coll,
-						spec:   index.IndexSpecification,
-						reason: wrappedErr.Error(),
-					})
-				}
-
-				// restore properties
-				switch { // unique and prepareUnique are mutually exclusive.
-				case index.Unique != nil && *index.Unique:
-					nsLg.Info("Convert index to prepareUnique: " + index.Name)
-
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
-					if err != nil {
-						wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
-						idxErrors = append(idxErrors, wrapped)
-
-						modifyFailed(wrapped)
+				for _, index := range collEntry.Indexes {
+					if index.Unsuccessful() {
+						foundUnsuccessfulIdx = true
 
 						continue
 					}
 
-					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
-
-					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
-					if err != nil {
-						wrapped := errors.Wrap(err, "convert to unique: "+index.Name)
-						idxErrors = append(idxErrors, wrapped)
-
-						modifyFailed(wrapped)
+					if index.IsClustered() {
+						nsLg.Warn("Clustered index with TTL is not supported")
 
 						continue
 					}
 
-				case index.PrepareUnique != nil && *index.PrepareUnique:
-					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
-
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
-					if err != nil {
-						wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
-						idxErrors = append(idxErrors, wrapped)
-
-						modifyFailed(wrapped)
-
-						continue
+					modifyFailed := func(wrappedErr error) {
+						modifyFailures = append(modifyFailures, modifyFailure{
+							db:     db,
+							coll:   coll,
+							spec:   index.IndexSpecification,
+							reason: wrappedErr.Error(),
+						})
 					}
-				}
 
-				if index.ExpireAfterSeconds != nil {
-					nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
+					// restore properties
+					switch { // unique and prepareUnique are mutually exclusive.
+					case index.Unique != nil && *index.Unique:
+						nsLg.Info("Convert index to prepareUnique: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx,
-						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
-					if err != nil {
-						wrapped := errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
-						idxErrors = append(idxErrors, wrapped)
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed(wrapped)
+							modifyFailed(wrapped)
 
-						continue
+							continue
+						}
+
+						nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
+
+						err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to unique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
+
+					case index.PrepareUnique != nil && *index.PrepareUnique:
+						nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
+
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
 					}
-				}
 
-				if index.Hidden != nil {
-					nsLg.Info("Modify index hidden: " + index.Name)
+					if index.ExpireAfterSeconds != nil {
+						nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
-					if err != nil {
-						wrapped := errors.Wrap(err, "modify hidden: "+index.Name)
-						idxErrors = append(idxErrors, wrapped)
+						err := c.doModifyIndexOption(ctx,
+							db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
+						if err != nil {
+							wrapped := errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
 
-						modifyFailed(wrapped)
+							modifyFailed(wrapped)
 
-						continue
+							continue
+						}
+					}
+
+					if index.Hidden != nil {
+						nsLg.Info("Modify index hidden: " + index.Name)
+
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
+						if err != nil {
+							wrapped := errors.Wrap(err, "modify hidden: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
 					}
 				}
 			}
 		}
-	}
 
-	if foundUnsuccessfulIdx {
-		c.finalizeUnsuccessfulIndexes(ctx)
-	}
-	c.lock.RUnlock()
+		if foundUnsuccessfulIdx {
+			c.finalizeUnsuccessfulIndexes(ctx)
+		}
+
+		return modifyFailures, idxErrors
+	}()
 
 	// Flag any indexes that failed during finalize as Failed in the catalog so
 	// they show up in the returned report.
@@ -1079,10 +1085,10 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
-	return c.collectUnsuccessfulIndexes(), nil
+	return c.CollectUnsuccessfulIndexes(), nil
 }
 
-// collectUnsuccessfulIndexes walks the catalog and returns every index entry
+// CollectUnsuccessfulIndexes walks the catalog and returns every index entry
 // that has the Failed, Incomplete, or Inconsistent flag set.
 //
 // An index entry is expected to carry at most one of these flags. If multiple
@@ -1090,7 +1096,7 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 // type: Failed > Incomplete > Inconsistent. This is a fail-loud default that
 // prefers surfacing the more severe condition rather than silently dropping the
 // entry.
-func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
+func (c *Catalog) CollectUnsuccessfulIndexes() []UnsuccessfulIndex {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
@@ -1130,6 +1136,14 @@ func (c *Catalog) collectUnsuccessfulIndexes() []UnsuccessfulIndex {
 			}
 		}
 	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+
+		return out[i].Name < out[j].Name
+	})
 
 	return out
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // makeCatalogWithIndexes builds an empty Catalog and seeds it with index entries
-// so collectUnsuccessfulIndexes can be tested without a live MongoDB.
+// so CollectUnsuccessfulIndexes can be tested without a live MongoDB.
 func makeCatalogWithIndexes(t *testing.T, entries map[string]map[string][]indexCatalogEntry) *Catalog {
 	t.Helper()
 
@@ -57,16 +57,16 @@ func newIndexEntry(name string, keys bson.Raw, failed, incomplete, inconsistent 
 	}
 }
 
-func TestCatalog_collectUnsuccessfulIndexes_Empty(t *testing.T) {
+func TestCatalog_CollectUnsuccessfulIndexes_Empty(t *testing.T) {
 	t.Parallel()
 
 	c := makeCatalogWithIndexes(t, nil)
-	got := c.collectUnsuccessfulIndexes()
+	got := c.CollectUnsuccessfulIndexes()
 
 	assert.Empty(t, got, "empty catalog must yield no unsuccessful indexes")
 }
 
-func TestCatalog_collectUnsuccessfulIndexes_OnlySuccessful(t *testing.T) {
+func TestCatalog_CollectUnsuccessfulIndexes_OnlySuccessful(t *testing.T) {
 	t.Parallel()
 
 	keys := mustMarshalKeys(t, bson.D{{"x", 1}})
@@ -79,11 +79,11 @@ func TestCatalog_collectUnsuccessfulIndexes_OnlySuccessful(t *testing.T) {
 		},
 	})
 
-	got := c.collectUnsuccessfulIndexes()
+	got := c.CollectUnsuccessfulIndexes()
 	assert.Empty(t, got, "successful indexes must not appear")
 }
 
-func TestCatalog_collectUnsuccessfulIndexes_AllTypes(t *testing.T) {
+func TestCatalog_CollectUnsuccessfulIndexes_AllTypes(t *testing.T) {
 	t.Parallel()
 
 	keysFailed := mustMarshalKeys(t, bson.D{{"email", 1}})
@@ -107,8 +107,18 @@ func TestCatalog_collectUnsuccessfulIndexes_AllTypes(t *testing.T) {
 		},
 	})
 
-	got := c.collectUnsuccessfulIndexes()
+	got := c.CollectUnsuccessfulIndexes()
 	assert.Len(t, got, 3)
+
+	assert.Equal(t, []string{
+		"mydb.orders/name_idx",
+		"mydb.products/sku_idx",
+		"mydb.users/email_unique_idx",
+	}, []string{
+		got[0].Namespace + "/" + got[0].Name,
+		got[1].Namespace + "/" + got[1].Name,
+		got[2].Namespace + "/" + got[2].Name,
+	}, "CollectUnsuccessfulIndexes must return entries sorted by (Namespace, Name)")
 
 	byName := map[string]UnsuccessfulIndex{}
 	for _, idx := range got {
@@ -141,9 +151,9 @@ func TestCatalog_collectUnsuccessfulIndexes_AllTypes(t *testing.T) {
 }
 
 // Per the agreed model, an index has at most one of Failed/Incomplete/Inconsistent.
-// If multiple flags ever get set due to a bug, collectUnsuccessfulIndexes prefers
+// If multiple flags ever get set due to a bug, CollectUnsuccessfulIndexes prefers
 // Failed, then Incomplete, then Inconsistent (fail-loud over silently dropping).
-func TestCatalog_collectUnsuccessfulIndexes_TypePriority(t *testing.T) {
+func TestCatalog_CollectUnsuccessfulIndexes_TypePriority(t *testing.T) {
 	t.Parallel()
 
 	keys := mustMarshalKeys(t, bson.D{{"x", 1}})
@@ -157,7 +167,7 @@ func TestCatalog_collectUnsuccessfulIndexes_TypePriority(t *testing.T) {
 		},
 	})
 
-	got := c.collectUnsuccessfulIndexes()
+	got := c.CollectUnsuccessfulIndexes()
 	assert.Len(t, got, 1)
 	assert.Equal(t, IndexFailed, got[0].Type)
 	assert.Equal(t, "boom", got[0].Reason)
