@@ -248,16 +248,15 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		}
 	}
 
-	// Restore the finalization report from the recovered catalog when the
-	// checkpoint represents a completed finalize, so operators that restart
-	// the server between finalize and reading /status still see the report.
-	// StartedAt and CompletedAt are not persisted, so they stay zero.
+	// Restore a minimal finalization status when the checkpoint represents a
+	// completed finalize, so operators that restart the server between finalize
+	// and reading /status still see at least Completed=true. StartedAt,
+	// CompletedAt and UnsuccessfulIndexes are not persisted across restarts:
+	// the per-index reasons are observed at finalize time and are not recorded
+	// in the catalog.
 	var finalizeStatus *FinalizeStatus
 	if cp.State == StateFinalized {
-		finalizeStatus = &FinalizeStatus{
-			Completed:           true,
-			UnsuccessfulIndexes: cat.CollectUnsuccessfulIndexes(),
-		}
+		finalizeStatus = &FinalizeStatus{Completed: true}
 	}
 
 	p.nsInclude = cp.NSInclude

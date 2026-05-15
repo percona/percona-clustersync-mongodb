@@ -164,10 +164,9 @@ type collectionCatalog struct {
 type indexCatalogEntry struct {
 	*mdb.IndexSpecification
 
-	Incomplete      bool   `bson:"incomplete"`
-	Failed          bool   `bson:"failed"`
-	Inconsistent    bool   `bson:"inconsistent"`
-	UnsuccessReason string `bson:"reason,omitempty"`
+	Incomplete   bool `bson:"incomplete"`
+	Failed       bool `bson:"failed"`
+	Inconsistent bool `bson:"inconsistent"`
 }
 
 func (i indexCatalogEntry) Unsuccessful() bool {
@@ -186,10 +185,7 @@ const (
 	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
 )
 
-const (
-	incompleteIndexReason   = "index build was still in progress on source during clone"
-	inconsistentIndexReason = "index is missing on one or more source shards"
-)
+const inconsistentIndexReason = "index is missing on one or more source shards"
 
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
 // and was not recovered during finalize.
@@ -526,17 +522,14 @@ func (c *Catalog) CreateIndexes(
 	successfulIdxNames := make([]string, 0, len(processedIdxs))
 
 	failedIdxs := make([]*mdb.IndexSpecification, 0, len(processedIdxs))
-	failedReasons := make(map[string]string, len(processedIdxs))
 
 	var idxErrors []error
 
 	for _, idx := range indexes {
 		err := processedIdxs[idx.Name]
 		if err != nil {
-			wrapped := errors.Wrap(err, "create index: "+idx.Name)
 			failedIdxs = append(failedIdxs, idx)
-			failedReasons[idx.Name] = wrapped.Error()
-			idxErrors = append(idxErrors, wrapped)
+			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
 
 			continue
 		}
@@ -552,7 +545,7 @@ func (c *Catalog) CreateIndexes(
 	c.lock.Unlock()
 
 	if len(idxErrors) > 0 {
-		c.AddFailedIndexes(ctx, db, coll, failedIdxs, failedReasons)
+		c.AddFailedIndexes(ctx, db, coll, failedIdxs)
 
 		lg.Errorf(errors.Join(idxErrors...),
 			"One or more indexes failed to create on %s.%s", db, coll)
@@ -593,16 +586,12 @@ func (c *Catalog) AddIncompleteIndexes(
 }
 
 // AddFailedIndexes adds indexes in the catalog that failed to create on the target cluster.
-// The indexes have set [indexCatalogEntry.Failed] flag. The reasons map carries
-// a human-readable failure message per index, keyed by index name; missing
-// entries leave UnsuccessReason empty, which surfaces as an empty `reason`
-// in the /status response.
+// The indexes have set [indexCatalogEntry.Failed] flag.
 func (c *Catalog) AddFailedIndexes(
 	ctx context.Context,
 	db string,
 	coll string,
 	indexes []*mdb.IndexSpecification,
-	reasons map[string]string,
 ) {
 	lg := log.Ctx(ctx)
 
@@ -617,7 +606,6 @@ func (c *Catalog) AddFailedIndexes(
 		indexEntries[i] = indexCatalogEntry{
 			IndexSpecification: index,
 			Failed:             true,
-			UnsuccessReason:    reasons[index.Name],
 		}
 
 		lg.Tracef("Added failed index %q for %s.%s to catalog", index.Name, db, coll)
@@ -942,22 +930,32 @@ func (c *Catalog) UUIDMap() UUIDMap {
 
 // Finalize finalizes the indexes in the target MongoDB.
 //
-// It returns the list of indexes that ended up unsuccessful at the end of finalize:
-// indexes flagged as Failed, Incomplete, or Inconsistent in the catalog and not
-// recovered by [finalizeUnsuccessfulIndexes]. Per-index errors are not returned
-// via the error value; only true infrastructure failures would be (currently none).
+// It returns the list of indexes that did not finalize cleanly. The report is
+// assembled from two sources observed at finalize time:
+//
+//  1. Modify-option failures during the per-index pass (e.g. a collMod call
+//     that did not succeed) — surfaced as Type=IndexFailed with the wrapped
+//     error as the reason.
+//  2. Recreate failures and inconsistent leftovers from
+//     [finalizeUnsuccessfulIndexes] — Failed/Incomplete entries whose retry
+//     did not succeed (reason is the retry error) and Inconsistent entries
+//     which are never retried (reason is the static inconsistent-source
+//     description).
+//
+// Per-index errors are not returned via the error value; only true
+// infrastructure failures would be (currently none).
 func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 	lg := log.Ctx(ctx)
 
-	// Track indexes whose modify-options call failed so we can flag them as Failed
-	// after releasing the read lock.
+	// Track indexes whose modify-options call failed so we can surface them
+	// in the returned report after releasing the read lock.
 	type modifyFailure struct {
 		db, coll string
 		spec     *mdb.IndexSpecification
 		reason   string
 	}
 
-	modifyFailures, idxErrors := func() ([]modifyFailure, []error) {
+	modifyFailures, idxErrors, foundUnsuccessfulIdx := func() ([]modifyFailure, []error, bool) {
 		c.lock.RLock()
 		defer c.lock.RUnlock()
 
@@ -1066,93 +1064,55 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 			}
 		}
 
-		if foundUnsuccessfulIdx {
-			c.finalizeUnsuccessfulIndexes(ctx)
-		}
-
-		return modifyFailures, idxErrors
+		return modifyFailures, idxErrors, foundUnsuccessfulIdx
 	}()
 
-	// Flag any indexes that failed during finalize as Failed in the catalog so
-	// they show up in the returned report.
+	report := make([]UnsuccessfulIndex, 0, len(modifyFailures))
 	for _, f := range modifyFailures {
-		c.AddFailedIndexes(ctx, f.db, f.coll,
-			[]*mdb.IndexSpecification{f.spec},
-			map[string]string{f.spec.Name: f.reason})
+		report = append(report, UnsuccessfulIndex{
+			Namespace: f.db + "." + f.coll,
+			Name:      f.spec.Name,
+			Keys:      f.spec.KeysDocument,
+			Type:      IndexFailed,
+			Reason:    f.reason,
+		})
+	}
+
+	if foundUnsuccessfulIdx {
+		report = append(report, c.finalizeUnsuccessfulIndexes(ctx)...)
 	}
 
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
-	return c.CollectUnsuccessfulIndexes(), nil
-}
-
-// CollectUnsuccessfulIndexes walks the catalog and returns every index entry
-// that has the Failed, Incomplete, or Inconsistent flag set.
-//
-// An index entry is expected to carry at most one of these flags. If multiple
-// flags are set due to a bug, the entry is reported once with the highest-priority
-// type: Failed > Incomplete > Inconsistent. This is a fail-loud default that
-// prefers surfacing the more severe condition rather than silently dropping the
-// entry.
-func (c *Catalog) CollectUnsuccessfulIndexes() []UnsuccessfulIndex {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-
-	var out []UnsuccessfulIndex
-
-	for db, colls := range c.Databases {
-		for coll, collEntry := range colls.Collections {
-			ns := db + "." + coll
-
-			for _, index := range collEntry.Indexes {
-				var (
-					typ    IndexUnsuccessfulType
-					reason string
-				)
-
-				switch {
-				case index.Failed:
-					typ = IndexFailed
-					reason = index.UnsuccessReason
-				case index.Incomplete:
-					typ = IndexIncomplete
-					reason = incompleteIndexReason
-				case index.Inconsistent:
-					typ = IndexInconsistent
-					reason = inconsistentIndexReason
-				default:
-					continue
-				}
-
-				out = append(out, UnsuccessfulIndex{
-					Namespace: ns,
-					Name:      index.Name,
-					Keys:      index.KeysDocument,
-					Type:      typ,
-					Reason:    reason,
-				})
-			}
-		}
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Namespace != out[j].Namespace {
-			return out[i].Namespace < out[j].Namespace
+	sort.Slice(report, func(i, j int) bool {
+		if report[i].Namespace != report[j].Namespace {
+			return report[i].Namespace < report[j].Namespace
 		}
 
-		return out[i].Name < out[j].Name
+		return report[i].Name < report[j].Name
 	})
 
-	return out
+	return report, nil
 }
 
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
-// during replication, failed, incomplete, or inconsistent.
-func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
+// during replication: failed, incomplete, or inconsistent.
+//
+// For Failed/Incomplete entries it attempts to recreate the index on the target
+// and clears the flag on success. For Inconsistent entries it does not attempt
+// a recreate (the source itself is inconsistent across shards) and reports the
+// index as-is with a static reason.
+//
+// Returns the indexes that did not recover cleanly, each annotated with the
+// reason: the recreate error for Failed/Incomplete retry failures, or the
+// inconsistent-source reason for Inconsistent entries.
+func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 	lg.Info("Finalizing unsuccessful indexes")
+
+	var report []UnsuccessfulIndex
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
@@ -1164,6 +1124,14 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 				if index.Inconsistent {
 					lg.Warnf("Index %s on %s.%s was inconsistent across shards on source, skipping",
 						index.Name, db, coll)
+
+					report = append(report, UnsuccessfulIndex{
+						Namespace: db + "." + coll,
+						Name:      index.Name,
+						Keys:      index.KeysDocument,
+						Type:      IndexInconsistent,
+						Reason:    inconsistentIndexReason,
+					})
 
 					continue // don't try to recreate inconsistent indexes
 				}
@@ -1190,6 +1158,19 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 					lg.Warnf("Failed to recreate unsuccessful index %s on %s.%s: %v",
 						index.Name, db, coll, err)
 
+					typ := IndexIncomplete
+					if index.Failed {
+						typ = IndexFailed
+					}
+
+					report = append(report, UnsuccessfulIndex{
+						Namespace: db + "." + coll,
+						Name:      index.Name,
+						Keys:      index.KeysDocument,
+						Type:      typ,
+						Reason:    err.Error(),
+					})
+
 					continue
 				}
 
@@ -1199,6 +1180,8 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 			}
 		}
 	}
+
+	return report
 }
 
 // doModifyIndexOption modifies an index property in the target MongoDB.
@@ -1349,10 +1332,6 @@ func (c *Catalog) addIndexesToCatalog(
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
-				if index.UnsuccessReason == "" && catIndex.UnsuccessReason != "" {
-					index.UnsuccessReason = catIndex.UnsuccessReason
-				}
-
 				collCat.Indexes[i] = index
 				found = true
 

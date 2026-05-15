@@ -300,8 +300,7 @@ func TestRecover(t *testing.T) {
 
 		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
 		cat.AddFailedIndexes(context.Background(), "mydb", "users",
-			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}},
-			map[string]string{"email_idx": "duplicate key"})
+			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}})
 
 		cp := checkpoint{
 			State:   StateFinalized,
@@ -325,13 +324,10 @@ func TestRecover(t *testing.T) {
 			"StartedAt is not persisted across recovery")
 		assert.True(t, p.finalizeStatus.CompletedAt.IsZero(),
 			"CompletedAt is not persisted across recovery")
-
-		require.Len(t, p.finalizeStatus.UnsuccessfulIndexes, 1)
-		entry := p.finalizeStatus.UnsuccessfulIndexes[0]
-		assert.Equal(t, "mydb.users", entry.Namespace)
-		assert.Equal(t, "email_idx", entry.Name)
-		assert.Equal(t, catalog.IndexFailed, entry.Type)
-		assert.Equal(t, "duplicate key", entry.Reason)
+		// UnsuccessfulIndexes is not reconstructed across restarts: the
+		// per-index reasons are observed at finalize time and are not
+		// recorded in the catalog.
+		assert.Empty(t, p.finalizeStatus.UnsuccessfulIndexes)
 	})
 
 	t.Run("leaves finalization status nil for non-finalized recovery", func(t *testing.T) {
@@ -342,8 +338,7 @@ func TestRecover(t *testing.T) {
 
 		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
 		cat.AddFailedIndexes(context.Background(), "mydb", "users",
-			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}},
-			map[string]string{"email_idx": "duplicate key"})
+			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}})
 
 		cp := checkpoint{
 			State:   StatePaused,
