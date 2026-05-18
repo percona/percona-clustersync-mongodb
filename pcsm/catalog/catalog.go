@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 
@@ -170,6 +171,30 @@ type indexCatalogEntry struct {
 
 func (i indexCatalogEntry) Unsuccessful() bool {
 	return i.Failed || i.Incomplete || i.Inconsistent
+}
+
+// IndexUnsuccessfulType describes why an index ended up unsuccessful at finalize time.
+type IndexUnsuccessfulType string
+
+const (
+	// IndexFailed means the index failed to create on the target cluster.
+	IndexFailed IndexUnsuccessfulType = "failed"
+	// IndexIncomplete means the index was being built on the source when replication observed it.
+	IndexIncomplete IndexUnsuccessfulType = "incomplete"
+	// IndexInconsistent means the index was inconsistent across shards on the source cluster.
+	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
+)
+
+const inconsistentIndexReason = "index is missing on one or more source shards"
+
+// UnsuccessfulIndex describes an index that did not complete cleanly during replication
+// and was not recovered during finalize.
+type UnsuccessfulIndex struct {
+	Namespace string
+	Name      string
+	Keys      bson.Raw
+	Type      IndexUnsuccessfulType
+	Reason    string
 }
 
 // NewCatalog creates a new Catalog.
@@ -904,112 +929,169 @@ func (c *Catalog) UUIDMap() UUIDMap {
 }
 
 // Finalize finalizes the indexes in the target MongoDB.
-func (c *Catalog) Finalize(ctx context.Context) error {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-
+//
+// It returns the list of indexes that did not finalize cleanly. The report is
+// assembled from two sources observed at finalize time:
+//
+//  1. Modify-option failures during the per-index pass (e.g. a collMod call
+//     that did not succeed) — surfaced as Type=IndexFailed with the wrapped
+//     error as the reason.
+//  2. Recreate failures and inconsistent leftovers from
+//     [finalizeUnsuccessfulIndexes] — Failed/Incomplete entries whose retry
+//     did not succeed (reason is the retry error) and Inconsistent entries
+//     which are never retried (reason is the static inconsistent-source
+//     description).
+func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 
-	var idxErrors []error
+	report, idxErrors, foundUnsuccessfulIdx := func() ([]UnsuccessfulIndex, []error, bool) {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
 
-	foundUnsuccessfulIdx := false
+		var (
+			idxErrors            []error
+			report               []UnsuccessfulIndex
+			foundUnsuccessfulIdx bool
+		)
 
-	for db, colls := range c.Databases {
-		for coll, collEntry := range colls.Collections {
-			nsLg := lg.With(log.NS(db, coll))
+		for db, colls := range c.Databases {
+			for coll, collEntry := range colls.Collections {
+				nsLg := lg.With(log.NS(db, coll))
 
-			for _, index := range collEntry.Indexes {
-				if index.Unsuccessful() {
-					foundUnsuccessfulIdx = true
-
-					continue
-				}
-
-				if index.IsClustered() {
-					nsLg.Warn("Clustered index with TTL is not supported")
-
-					continue
-				}
-
-				// restore properties
-				switch { // unique and prepareUnique are mutually exclusive.
-				case index.Unique != nil && *index.Unique:
-					nsLg.Info("Convert index to prepareUnique: " + index.Name)
-
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
-					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+				for _, index := range collEntry.Indexes {
+					if index.Unsuccessful() {
+						foundUnsuccessfulIdx = true
 
 						continue
 					}
 
-					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
-
-					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
-					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to unique: "+index.Name))
+					if index.IsClustered() {
+						nsLg.Warn("Clustered index with TTL is not supported")
 
 						continue
 					}
 
-				case index.PrepareUnique != nil && *index.PrepareUnique:
-					nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
-
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
-					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
-
-						continue
+					modifyFailed := func(wrappedErr error) {
+						report = append(report, UnsuccessfulIndex{
+							Namespace: db + "." + coll,
+							Name:      index.Name,
+							Keys:      index.KeysDocument,
+							Type:      IndexFailed,
+							Reason:    wrappedErr.Error(),
+						})
 					}
-				}
 
-				if index.ExpireAfterSeconds != nil {
-					nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
+					// restore properties
+					switch { // unique and prepareUnique are mutually exclusive.
+					case index.Unique != nil && *index.Unique:
+						nsLg.Info("Convert index to prepareUnique: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx,
-						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
-					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
 
-						continue
+							modifyFailed(wrapped)
+
+							continue
+						}
+
+						nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
+
+						err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to unique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
+
+					case index.PrepareUnique != nil && *index.PrepareUnique:
+						nsLg.Info("Convert prepareUnique index to unique: " + index.Name)
+
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
+						if err != nil {
+							wrapped := errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
 					}
-				}
 
-				if index.Hidden != nil {
-					nsLg.Info("Modify index hidden: " + index.Name)
+					if index.ExpireAfterSeconds != nil {
+						nsLg.Info("Modify index expireAfterSeconds: " + index.Name)
 
-					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
-					if err != nil {
-						idxErrors = append(idxErrors,
-							errors.Wrap(err, "modify hidden: "+index.Name))
+						err := c.doModifyIndexOption(ctx,
+							db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
+						if err != nil {
+							wrapped := errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
 
-						continue
+							modifyFailed(wrapped)
+
+							continue
+						}
+					}
+
+					if index.Hidden != nil {
+						nsLg.Info("Modify index hidden: " + index.Name)
+
+						err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
+						if err != nil {
+							wrapped := errors.Wrap(err, "modify hidden: "+index.Name)
+							idxErrors = append(idxErrors, wrapped)
+
+							modifyFailed(wrapped)
+
+							continue
+						}
 					}
 				}
 			}
 		}
-	}
+
+		return report, idxErrors, foundUnsuccessfulIdx
+	}()
 
 	if foundUnsuccessfulIdx {
-		c.finalizeUnsuccessfulIndexes(ctx)
+		report = append(report, c.finalizeUnsuccessfulIndexes(ctx)...)
 	}
 
 	if len(idxErrors) > 0 {
 		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
-	return nil
+	sort.Slice(report, func(i, j int) bool {
+		if report[i].Namespace != report[j].Namespace {
+			return report[i].Namespace < report[j].Namespace
+		}
+
+		return report[i].Name < report[j].Name
+	})
+
+	return report
 }
 
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
-// during replication, failed, incomplete, or inconsistent.
-func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
+// during replication: failed, incomplete, or inconsistent.
+//
+// For Failed/Incomplete entries it attempts to recreate the index on the target
+// and clears the flag on success. For Inconsistent entries it does not attempt
+// a recreate (the source itself is inconsistent across shards) and reports the
+// index as-is with a static reason.
+//
+// Returns the indexes that did not recover cleanly, each annotated with the
+// reason: the recreate error for Failed/Incomplete retry failures, or the
+// inconsistent-source reason for Inconsistent entries.
+func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 	lg.Info("Finalizing unsuccessful indexes")
+
+	var report []UnsuccessfulIndex
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
@@ -1021,6 +1103,14 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 				if index.Inconsistent {
 					lg.Warnf("Index %s on %s.%s was inconsistent across shards on source, skipping",
 						index.Name, db, coll)
+
+					report = append(report, UnsuccessfulIndex{
+						Namespace: db + "." + coll,
+						Name:      index.Name,
+						Keys:      index.KeysDocument,
+						Type:      IndexInconsistent,
+						Reason:    inconsistentIndexReason,
+					})
 
 					continue // don't try to recreate inconsistent indexes
 				}
@@ -1047,6 +1137,19 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 					lg.Warnf("Failed to recreate unsuccessful index %s on %s.%s: %v",
 						index.Name, db, coll, err)
 
+					typ := IndexIncomplete
+					if index.Failed {
+						typ = IndexFailed
+					}
+
+					report = append(report, UnsuccessfulIndex{
+						Namespace: db + "." + coll,
+						Name:      index.Name,
+						Keys:      index.KeysDocument,
+						Type:      typ,
+						Reason:    err.Error(),
+					})
+
 					continue
 				}
 
@@ -1056,6 +1159,8 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) {
 			}
 		}
 	}
+
+	return report
 }
 
 // doModifyIndexOption modifies an index property in the target MongoDB.

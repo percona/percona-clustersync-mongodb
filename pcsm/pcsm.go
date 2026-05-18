@@ -93,6 +93,28 @@ type Status struct {
 	Repl repl.Status
 	// Clone is the status of the cloning process.
 	Clone clone.Status
+	// FinalizeStatus is the status of the finalize stage.
+	// It is non-nil once /finalize has been triggered (states: finalizing, finalized,
+	// or failed after a finalize attempt).
+	FinalizeStatus *FinalizeStatus
+}
+
+// FinalizeStatus describes the progress of a finalize run.
+//
+// While finalize is in flight (state == finalizing) Completed is false and
+// CompletedAt is zero. When finalize completes successfully (state == finalized)
+// Completed is true, CompletedAt is set, and UnsuccessfulIndexes is populated
+// from the catalog.
+type FinalizeStatus struct {
+	// Completed indicates whether the finalize stage has finished successfully.
+	Completed bool
+	// StartedAt is when the finalize stage was triggered.
+	StartedAt time.Time
+	// CompletedAt is when the finalize stage finished. Zero unless Completed.
+	CompletedAt time.Time
+	// UnsuccessfulIndexes lists indexes that did not complete cleanly. Empty
+	// until the finalize stage completes.
+	UnsuccessfulIndexes []catalog.UnsuccessfulIndex
 }
 
 // PCSM manages the replication process.
@@ -117,6 +139,9 @@ type PCSM struct {
 	catalog *catalog.Catalog // Catalog for managing collections and indexes
 	clone   Cloner           // Clone process
 	repl    Replicator       // Replication process
+
+	// finalizeStatus tracks finalize-stage state. Nil until /finalize is triggered.
+	finalizeStatus *FinalizeStatus
 
 	err error
 
@@ -223,12 +248,24 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		}
 	}
 
+	// Restore a minimal finalization status when the checkpoint represents a
+	// completed finalize, so operators that restart the server between finalize
+	// and reading /status still see at least Completed=true. StartedAt,
+	// CompletedAt and UnsuccessfulIndexes are not persisted across restarts:
+	// the per-index reasons are observed at finalize time and are not recorded
+	// in the catalog.
+	var finalizeStatus *FinalizeStatus
+	if cp.State == StateFinalized {
+		finalizeStatus = &FinalizeStatus{Completed: true}
+	}
+
 	p.nsInclude = cp.NSInclude
 	p.nsExclude = cp.NSExclude
 	p.nsFilter = nsFilter
 	p.catalog = cat
 	p.clone = cln
 	p.repl = rpl
+	p.finalizeStatus = finalizeStatus
 	p.state = cp.State
 
 	if cp.Error != "" {
@@ -263,9 +300,10 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 	}
 
 	s := &Status{
-		State: p.state,
-		Clone: p.clone.Status(),
-		Repl:  p.repl.Status(),
+		State:          p.state,
+		Clone:          p.clone.Status(),
+		Repl:           p.repl.Status(),
+		FinalizeStatus: copyFinalizeStatus(p.finalizeStatus),
 	}
 
 	switch {
@@ -313,6 +351,25 @@ func (p *PCSM) resetError() {
 	p.repl.ResetError()
 }
 
+// copyFinalizeStatus returns a copy of fs with a fresh UnsuccessfulIndexes
+// slice so callers can append or reorder without mutating the source. The
+// bson.Raw Keys field inside each entry still aliases the source entry's
+// bytes; do not mutate Keys in place.
+func copyFinalizeStatus(fs *FinalizeStatus) *FinalizeStatus {
+	if fs == nil {
+		return nil
+	}
+
+	out := *fs
+
+	if len(fs.UnsuccessfulIndexes) > 0 {
+		out.UnsuccessfulIndexes = make([]catalog.UnsuccessfulIndex, len(fs.UnsuccessfulIndexes))
+		copy(out.UnsuccessfulIndexes, fs.UnsuccessfulIndexes)
+	}
+
+	return &out
+}
+
 // StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
 	// PauseOnInitialSync indicates whether to pause after the initial sync completes.
@@ -358,6 +415,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.catalog = catalog.NewCatalog(p.target, p.sourceVer)
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer)
+	p.finalizeStatus = nil
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)
@@ -673,22 +731,21 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		}
 	}
 
-	startedTime := time.Now()
+	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
 	p.state = StateFinalizing
 
 	go func() {
-		err := p.catalog.Finalize(p.lifecycleCtx)
-		if err != nil {
-			p.setFailed(errors.Wrap(err, "finalization"))
-
-			return
-		}
+		unsuccessful := p.catalog.Finalize(p.lifecycleCtx)
 
 		p.lock.Lock()
+		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful
+		p.finalizeStatus.CompletedAt = time.Now()
+		p.finalizeStatus.Completed = true
 		p.state = StateFinalized
+		startedAt := p.finalizeStatus.StartedAt
 		p.lock.Unlock()
 
-		lg.With(log.Elapsed(time.Since(startedTime))).
+		lg.With(log.Elapsed(time.Since(startedAt))).
 			Info("Finalization is completed")
 
 		go p.onStateChanged(StateFinalized)
