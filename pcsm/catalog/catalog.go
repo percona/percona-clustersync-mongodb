@@ -947,21 +947,13 @@ func (c *Catalog) UUIDMap() UUIDMap {
 func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 	lg := log.Ctx(ctx)
 
-	// Track indexes whose modify-options call failed so we can surface them
-	// in the returned report after releasing the read lock.
-	type modifyFailure struct {
-		db, coll string
-		spec     *mdb.IndexSpecification
-		reason   string
-	}
-
-	modifyFailures, idxErrors, foundUnsuccessfulIdx := func() ([]modifyFailure, []error, bool) {
+	report, idxErrors, foundUnsuccessfulIdx := func() ([]UnsuccessfulIndex, []error, bool) {
 		c.lock.RLock()
 		defer c.lock.RUnlock()
 
 		var (
 			idxErrors            []error
-			modifyFailures       []modifyFailure
+			report               []UnsuccessfulIndex
 			foundUnsuccessfulIdx bool
 		)
 
@@ -983,11 +975,12 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 					}
 
 					modifyFailed := func(wrappedErr error) {
-						modifyFailures = append(modifyFailures, modifyFailure{
-							db:     db,
-							coll:   coll,
-							spec:   index.IndexSpecification,
-							reason: wrappedErr.Error(),
+						report = append(report, UnsuccessfulIndex{
+							Namespace: db + "." + coll,
+							Name:      index.Name,
+							Keys:      index.KeysDocument,
+							Type:      IndexFailed,
+							Reason:    wrappedErr.Error(),
 						})
 					}
 
@@ -1064,19 +1057,8 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 			}
 		}
 
-		return modifyFailures, idxErrors, foundUnsuccessfulIdx
+		return report, idxErrors, foundUnsuccessfulIdx
 	}()
-
-	report := make([]UnsuccessfulIndex, 0, len(modifyFailures))
-	for _, f := range modifyFailures {
-		report = append(report, UnsuccessfulIndex{
-			Namespace: f.db + "." + f.coll,
-			Name:      f.spec.Name,
-			Keys:      f.spec.KeysDocument,
-			Type:      IndexFailed,
-			Reason:    f.reason,
-		})
-	}
 
 	if foundUnsuccessfulIdx {
 		report = append(report, c.finalizeUnsuccessfulIndexes(ctx)...)
