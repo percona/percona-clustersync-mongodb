@@ -941,10 +941,7 @@ func (c *Catalog) UUIDMap() UUIDMap {
 //     did not succeed (reason is the retry error) and Inconsistent entries
 //     which are never retried (reason is the static inconsistent-source
 //     description).
-//
-// Per-index errors are not returned via the error value; only true
-// infrastructure failures would be (currently none).
-func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
+func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 
 	report, idxErrors, foundUnsuccessfulIdx := func() ([]UnsuccessfulIndex, []error, bool) {
@@ -1076,7 +1073,7 @@ func (c *Catalog) Finalize(ctx context.Context) ([]UnsuccessfulIndex, error) {
 		return report[i].Name < report[j].Name
 	})
 
-	return report, nil
+	return report
 }
 
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful

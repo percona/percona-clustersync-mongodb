@@ -735,12 +735,7 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	p.state = StateFinalizing
 
 	go func() {
-		unsuccessful, err := p.catalog.Finalize(p.lifecycleCtx)
-		if err != nil {
-			p.setFailed(errors.Wrap(err, "finalization"))
-
-			return
-		}
+		unsuccessful := p.catalog.Finalize(p.lifecycleCtx)
 
 		p.lock.Lock()
 		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful
