@@ -52,13 +52,21 @@ class PCSM:
 
         return payload
 
-    def start(self, include_namespaces=None, exclude_namespaces=None, pause_on_initial_sync=False):
+    def start(
+        self,
+        include_namespaces=None,
+        exclude_namespaces=None,
+        pause_on_initial_sync=False,
+        clone_segment_size=None,
+    ):
         """Start the PCSM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
         if include_namespaces:
             options["includeNamespaces"] = include_namespaces
         if exclude_namespaces:
             options["excludeNamespaces"] = exclude_namespaces
+        if clone_segment_size is not None:
+            options["cloneSegmentSize"] = clone_segment_size
 
         res = requests.post(f"{self.uri}/start", json=options, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
