@@ -663,10 +663,16 @@ def test_clone_auto_segment_size_not_byte_count(t: Testing):
         f"got {len(entries)} entries without skip"
     )
 
-    buggy = [s for s in skips if s > doc_count]
+    # The bug passes MinCloneSegmentSizeBytes (~480MB, in bytes) as the skip
+    # value for any small collection where the floor kicks in. With the fix,
+    # the skip value is a document count — at most MinCloneSegmentSizeBytes /
+    # AvgObjSize, which is strictly less than the byte floor for any
+    # AvgObjSize > 1. Use the floor as the cutoff to distinguish.
+    byte_floor = 479_994_880  # config.MinCloneSegmentSizeBytes
+    buggy = [s for s in skips if s >= byte_floor]
     assert not buggy, (
         f"segmenter passed byte count to find().skip(): {buggy}; "
-        f"collection has {doc_count} documents"
+        f"expected doc count strictly below the byte floor ({byte_floor})"
     )
 
     t.compare_all(sort=[("_id", pymongo.ASCENDING)])
