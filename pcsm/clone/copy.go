@@ -337,7 +337,7 @@ func (cm *CopyManager) copyCollection(
 		segmenter, err := NewSegmenter(ctx, cm.source, namespace, SegmentOptions{
 			SegmentSizeBytes: cm.options.SegmentSizeBytes,
 			BatchSizeBytes:   cm.options.ReadBatchSizeBytes,
-			AutoNumSegment:   cm.options.NumReadWorkers,
+			AutoSegmentCount: cm.options.NumReadWorkers,
 		})
 		if err != nil {
 			if errors.Is(err, errEOC) {
@@ -619,12 +619,15 @@ type segmentKey = bson.RawValue
 var nilSegmentID segmentKey //nolint:gochecknoglobals
 
 // SegmentOptions configures how a MongoDB collection is segmented during cloning.
-// It defines the logical segment size in bytes, the read batch size, or the exact number of
-// segments to create.
+// It defines the logical segment size in bytes, the read batch size, and the desired
+// number of segments to produce when running in auto mode.
 type SegmentOptions struct {
 	SegmentSizeBytes int64
 	BatchSizeBytes   int32
-	AutoNumSegment   int
+	// AutoSegmentCount is the desired number of segments per collection when
+	// SegmentSizeBytes is AutoCloneSegmentSize. The actual segment count may
+	// differ due to the MinCloneSegmentSizeBytes floor and integer rounding.
+	AutoSegmentCount int
 }
 
 // NewSegmenter initializes a Segmenter for a given MongoDB namespace.
@@ -652,18 +655,24 @@ func NewSegmenter(
 		return nil, errEOC
 	}
 
-	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize]
+	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize].
 	var (
-		segmentSize int64
-		segmentMode string
+		segmentSizeBytes int64
+		segmentMode      string
 	)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
-		segmentSize = max(stats.Size/int64(options.AutoNumSegment), config.MinCloneSegmentSizeBytes)
+		segmentSizeBytes = max(
+			stats.Size/int64(options.AutoSegmentCount),
+			config.MinCloneSegmentSizeBytes,
+		)
 		segmentMode = "auto"
 	} else {
-		segmentSize = options.SegmentSizeBytes / stats.AvgObjSize
+		segmentSizeBytes = options.SegmentSizeBytes
 		segmentMode = "explicit"
 	}
+	// Guard against AvgObjSize > segmentSizeBytes (tiny collection / huge docs)
+	// which would otherwise produce segmentSize = 0 and collapse segmentation.
+	segmentSize := max(segmentSizeBytes/stats.AvgObjSize, 1)
 
 	docCount := stats.Count
 	if docCount == 0 {
