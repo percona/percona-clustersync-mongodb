@@ -1,9 +1,11 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import pymongo
 import pytest
+import testing
 from testing import Testing
 
 from pcsm import Runner
@@ -637,6 +639,43 @@ def test_id_type(t: Testing, phase: Runner.Phase):
         )
 
     t.compare_all()
+
+
+def test_clone_auto_segment_size_not_byte_count(t: Testing):
+    """Auto-mode segmenter must pass doc counts, not byte counts, to find().skip().
+
+    Detection: enable the MongoDB profiler on every source mongod (all RS members,
+    or all members of every shard for sharded clusters), run the clone, then
+    inspect system.profile for the segmenter's boundary query and assert its
+    `skip` value is bounded by the document count.
+    """
+    db, coll = "db_1", "coll_1"
+    doc_count = 50_000
+
+    t.source[db][coll].insert_many(
+        [{"s": random.randbytes(1024)} for _ in range(doc_count)],
+    )
+
+    with testing.enable_profiling(t.source, db) as profile_clients:
+        with t.run(phase=Runner.Phase.CLONE, wait_timeout=60):
+            pass
+        entries = testing.find_profile_entries(
+            profile_clients, db, {"ns": f"{db}.{coll}", "command.find": coll}
+        )
+
+    skips = [e["command"]["skip"] for e in entries if "skip" in e.get("command", {})]
+    assert skips, (
+        f"expected segmenter boundary find() with skip in system.profile; "
+        f"got {len(entries)} entries without skip"
+    )
+
+    buggy = [s for s in skips if s > doc_count]
+    assert not buggy, (
+        f"segmenter passed byte count to find().skip(): {buggy}; "
+        f"collection has {doc_count} documents"
+    )
+
+    t.compare_all(sort=[("_id", pymongo.ASCENDING)])
 
 
 @pytest.mark.timeout(180)
