@@ -133,8 +133,8 @@ def test_slow_clone_2gb_capped_vary_id(t: Testing):
 
 @pytest.mark.slow
 @pytest.mark.timeout(600)
-def test_slow_clone_collection_with_multile_segments(t: Testing):
-    """Clone a collection large enough to be split into multiple segments.
+def test_slow_clone_collection_explicit_segmentation(t: Testing):
+    """Clone a large collection with explicit segmentation (with --clone-segment-size option).
 
     Uses an explicit cloneSegmentSize of 500MB against a ~1.6GB collection so
     the segmenter produces multiple segments. Asserts that source and target
@@ -154,6 +154,44 @@ def test_slow_clone_collection_with_multile_segments(t: Testing):
         phase=Runner.Phase.CLONE,
         wait_timeout=600,
         options={"clone_segment_size": "500MB"},
+    ):
+        pass  # data already populated; just run the clone
+
+    try:
+        source_count = t.source[db][coll].count_documents({})
+        target_count = t.target[db][coll].count_documents({})
+        assert source_count == doc_count, f"source has {source_count} docs, expected {doc_count}"
+        assert target_count == doc_count, f"target has {target_count} docs, expected {doc_count}"
+        t.compare_all(sort=[("_id", pymongo.ASCENDING)])
+    finally:
+        # clean up after to avoid consuming other tests running time
+        testing.drop_all_database(t.source)
+        testing.drop_all_database(t.target)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_slow_clone_collection_auto_segmentation(t: Testing):
+    """Clone a large collection using auto segmentation.
+
+    worker count is pinned via cloneNumReadWorkers so the auto branch
+    produces multiple segments deterministically regardless of runner CPU
+    count.
+
+    Replica-set only.
+    """
+    db, coll = "db_0", "coll_0"
+    doc_count = 1_600_000  # ~1.6 GB at 1 KB per doc
+
+    for _ in range(160):  # 160 batches x 10,000 = 1.6M docs
+        t.source[db][coll].insert_many(
+            [{"s": random.randbytes(1024)} for _ in range(10000)],
+        )
+
+    with t.run(
+        phase=Runner.Phase.CLONE,
+        wait_timeout=600,
+        options={"clone_num_read_workers": 3},
     ):
         pass  # data already populated; just run the clone
 

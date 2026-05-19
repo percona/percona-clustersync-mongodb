@@ -984,7 +984,7 @@ func NewCappedSegmenter(
 		docCount = stats.Size / stats.AvgObjSize
 	}
 	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
-		"Capped segmenter for %s.%s: %s (%d docs), copy sequentially",
+		"Capped segmenter for %s.%s: %s (%d docs), copy sequentially, single segment covering entire collection",
 		ns.Database, ns.Collection,
 		humanize.Bytes(uint64(stats.Size)), //nolint:gosec
 		docCount,

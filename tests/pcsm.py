@@ -58,6 +58,7 @@ class PCSM:
         exclude_namespaces=None,
         pause_on_initial_sync=False,
         clone_segment_size=None,
+        clone_num_read_workers=None,
     ):
         """Start the PCSM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
@@ -67,6 +68,8 @@ class PCSM:
             options["excludeNamespaces"] = exclude_namespaces
         if clone_segment_size is not None:
             options["cloneSegmentSize"] = clone_segment_size
+        if clone_num_read_workers is not None:
+            options["cloneNumReadWorkers"] = clone_num_read_workers
 
         res = requests.post(f"{self.uri}/start", json=options, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
