@@ -333,9 +333,6 @@ func (cm *CopyManager) copyCollection(
 		}
 
 		nextSegment = segmenter.Next
-
-		log.New("clone").With(log.NS(namespace.Database, namespace.Collection)).
-			Debugf("Capped collection %q: copy sequentially", namespace)
 	} else {
 		segmenter, err := NewSegmenter(ctx, cm.source, namespace, SegmentOptions{
 			SegmentSizeBytes: cm.options.SegmentSizeBytes,
@@ -354,6 +351,8 @@ func (cm *CopyManager) copyCollection(
 
 		go segmenter.handleNanIDDoc(session)
 	}
+
+	log.Ctx(ctx).Infof("Starting collection copy: %s.%s", namespace.Database, namespace.Collection)
 
 	go cm.runReadDispatcher(session, nextSegment, progressUpdateCh)
 	go cm.runInsertDispatcher(session, progressUpdateCh)
@@ -654,15 +653,35 @@ func NewSegmenter(
 	}
 
 	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize]
-	var segmentSize int64
+	var (
+		segmentSize int64
+		segmentMode string
+	)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
 		segmentSize = max(stats.Size/int64(options.AutoNumSegment), config.MinCloneSegmentSizeBytes)
-
-		log.Ctx(ctx).Debugf("SegmentSizeBytes (auto): %d (%s)",
-			segmentSize, humanize.Bytes(uint64(segmentSize))) //nolint:gosec
+		segmentMode = "auto"
 	} else {
 		segmentSize = options.SegmentSizeBytes / stats.AvgObjSize
+		segmentMode = "explicit"
 	}
+
+	docCount := stats.Count
+	if docCount == 0 {
+		docCount = stats.Size / stats.AvgObjSize
+	}
+	expectedSegments := int64(1)
+	if segmentSize > 0 {
+		expectedSegments = max(1, (docCount+segmentSize-1)/segmentSize)
+	}
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
+		"Segmenter for %s.%s: %s (%d docs), segmentation: %s, segment size: %d docs, segments: ~%d",
+		ns.Database, ns.Collection,
+		humanize.Bytes(uint64(stats.Size)), //nolint:gosec
+		docCount,
+		segmentMode,
+		segmentSize,
+		expectedSegments,
+	)
 
 	//nolint:gosec
 	batchSize := int32(min(int64(options.BatchSizeBytes)/stats.AvgObjSize, math.MaxInt32))
@@ -950,6 +969,17 @@ func NewCappedSegmenter(
 	if stats.AvgObjSize == 0 {
 		return nil, errEOC
 	}
+
+	docCount := stats.Count
+	if docCount == 0 {
+		docCount = stats.Size / stats.AvgObjSize
+	}
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
+		"Capped segmenter for %s.%s: %s (%d docs), copy sequentially",
+		ns.Database, ns.Collection,
+		humanize.Bytes(uint64(stats.Size)), //nolint:gosec
+		docCount,
+	)
 
 	batchSize := int32(min(int64(batchSizeBytes)/stats.AvgObjSize, math.MaxInt32)) //nolint:gosec
 	mcoll := m.Database(ns.Database).Collection(ns.Collection)
