@@ -129,43 +129,21 @@ def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: s
     assert source_hash == target_hash, f"{ns}: {source_hash=} != {target_hash=}"
 
 
-def _profile_node_uris(client: MongoClient):
-    """Return mongodb:// URIs for every mongod where profiling must be set.
-
-    - Replica set: one URI per member (primary + secondaries).
-    - Sharded cluster: one URI per member of every shard. The `profile`
-      command cannot be issued through mongos.
-    """
+def _replset_member_uris(client: MongoClient):
+    """Return mongodb:// URIs for every member of the replica set."""
     hello = client.admin.command("hello")
-
-    if hello.get("msg") == "isdbgrid":
-        uris: list[str] = []
-        # `config.shards.host` is "<rsName>/<host1>,<host2>,...".
-        for shard in client["config"]["shards"].find({}):
-            host = shard.get("host", "")
-            hosts = host.split("/", 1)[1] if "/" in host else host
-            shard_client = MongoClient(f"mongodb://{hosts}")
-            try:
-                shard_hello = shard_client.admin.command("hello")
-                for h in shard_hello.get("hosts", []):
-                    uris.append(f"mongodb://{h}")
-            finally:
-                shard_client.close()
-        return uris
-
     return [f"mongodb://{h}" for h in hello.get("hosts", [])]
 
 
 @contextlib.contextmanager
 def enable_profiling(client: MongoClient, db: str, level: int = 2):
-    """Enable the MongoDB profiler on every relevant mongod for `db`.
+    """Enable the MongoDB profiler on every replica-set member for `db`.
 
-    Yields a list of MongoClients pointing at each profiled node (one per
-    mongod). On exit, profiling is reset to 0 on each node and clients are
-    closed. Works for replica sets and sharded clusters.
+    Yields one direct-connection MongoClient per profiled mongod. Profiling
+    is reset and clients are closed on exit.
     """
     members: list[MongoClient] = [
-        MongoClient(uri, directConnection=True) for uri in _profile_node_uris(client)
+        MongoClient(uri, directConnection=True) for uri in _replset_member_uris(client)
     ]
     try:
         for m in members:
@@ -181,7 +159,7 @@ def enable_profiling(client: MongoClient, db: str, level: int = 2):
 
 
 def find_profile_entries(clients: list[MongoClient], db: str, filt: dict):
-    """Search `system.profile` across all given mongod clients."""
+    """Search system.profile across all given mongod clients."""
     results = []
     for c in clients:
         results.extend(c[db]["system.profile"].find(filt))

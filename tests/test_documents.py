@@ -642,13 +642,7 @@ def test_id_type(t: Testing, phase: Runner.Phase):
 
 
 def test_clone_auto_segment_size_not_byte_count(t: Testing):
-    """Auto-mode segmenter must pass doc counts, not byte counts, to find().skip().
-
-    Detection: enable the MongoDB profiler on every source mongod (all RS members,
-    or all members of every shard for sharded clusters), run the clone, then
-    inspect system.profile for the segmenter's boundary query and assert its
-    `skip` value is bounded by the document count.
-    """
+    """Auto-mode segmenter must pass doc counts, not byte counts, to find().skip()."""
     db, coll = "db_1", "coll_1"
     doc_count = 50_000
 
