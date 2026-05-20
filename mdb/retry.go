@@ -46,7 +46,7 @@ func RunWithRetry(
 			return err
 		}
 
-		log.Ctx(ctx).Warnf("Transient write error: %v, retry attempt %d retrying in %s",
+		log.Ctx(ctx).Warnf("Transient error: %v, retry attempt %d retrying in %s",
 			err, attempt, currentInterval)
 
 		time.Sleep(currentInterval)

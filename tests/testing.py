@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import contextlib
 import hashlib
 import time
 
@@ -17,9 +18,11 @@ class Testing:
         self.target: MongoClient = target
         self.pcsm: PCSM = pcsm
 
-    def run(self, phase: Runner.Phase, wait_timeout=None):
+    def run(self, phase: Runner.Phase, wait_timeout=None, options=None):
         """Perform the PCSM operation for the given phase."""
-        return Runner(self.source, self.target, self.pcsm, phase, {}, wait_timeout=wait_timeout)
+        return Runner(
+            self.source, self.target, self.pcsm, phase, options or {}, wait_timeout=wait_timeout
+        )
 
     def compare_all(self, sort=None):
         """Compare all databases and collections between source and target MongoDB."""
@@ -126,6 +129,43 @@ def compare_namespace(source: MongoClient, target: MongoClient, db: str, coll: s
     target_count, target_hash = _coll_content(target[db][coll], sort)
     assert source_count == target_count, f"{ns}: {source_count=} != {target_count=}"
     assert source_hash == target_hash, f"{ns}: {source_hash=} != {target_hash=}"
+
+
+def _replset_member_uris(client: MongoClient):
+    """Return mongodb:// URIs for every member of the replica set."""
+    hello = client.admin.command("hello")
+    return [f"mongodb://{h}" for h in hello.get("hosts", [])]
+
+
+@contextlib.contextmanager
+def enable_profiling(client: MongoClient, db: str, level: int = 2):
+    """Enable the MongoDB profiler on every replica-set member for `db`.
+
+    Yields one direct-connection MongoClient per profiled mongod. Profiling
+    is reset and clients are closed on exit.
+    """
+    members: list[MongoClient] = [
+        MongoClient(uri, directConnection=True) for uri in _replset_member_uris(client)
+    ]
+    try:
+        for m in members:
+            m[db].command("profile", level)
+        yield members
+    finally:
+        for m in members:
+            try:
+                m[db].command("profile", 0)
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                pass
+            m.close()
+
+
+def find_profile_entries(clients: list[MongoClient], db: str, filt: dict):
+    """Search system.profile across all given mongod clients."""
+    results = []
+    for c in clients:
+        results.extend(c[db]["system.profile"].find(filt))
+    return results
 
 
 def _coll_content(coll: Collection, sort=None):
