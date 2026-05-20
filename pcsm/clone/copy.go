@@ -823,13 +823,20 @@ func (seg *Segmenter) findSegmentMaxKey(
 	minKey segmentKey,
 	maxKey segmentKey,
 ) (segmentKey, error) {
-	raw, err := seg.mcoll.FindOne(ctx,
-		bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
-		options.FindOne().
-			SetSort(bson.D{{"_id", 1}}).
-			SetSkip(seg.segmentSize).
-			SetProjection(bson.D{{"_id", 1}}),
-	).Raw()
+	var raw bson.Raw
+
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		raw, inner = seg.mcoll.FindOne(ctx,
+			bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
+			options.FindOne().
+				SetSort(bson.D{{"_id", 1}}).
+				SetSkip(seg.segmentSize).
+				SetProjection(bson.D{{"_id", 1}}),
+		).Raw()
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return maxKey, nil
