@@ -678,10 +678,7 @@ func NewSegmenter(
 	if docCount == 0 {
 		docCount = stats.Size / stats.AvgObjSize
 	}
-	expectedSegments := int64(1)
-	if segmentSize > 0 {
-		expectedSegments = max(1, (docCount+segmentSize-1)/segmentSize)
-	}
+	expectedSegments := max(1, (docCount+segmentSize-1)/segmentSize)
 	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
 		"Segmenter for %s.%s: %s (%d docs), segmentation: %s, segment size: %d docs, segments: ~%d",
 		ns.Database, ns.Collection,
