@@ -227,7 +227,9 @@ install_deps() {
 }
 
 get_tar() {
-    TARBALL=$1
+    # `local` keeps TARBALL from clobbering the global flag that controls
+    # whether build_tarball runs at the end of the main flow.
+    local TARBALL=$1
     TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
     if [ -z $TARFILE ]; then
         TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
@@ -244,9 +246,9 @@ get_tar() {
 }
 
 get_deb_sources() {
-    param=$1
+    local param=$1
     echo $param
-    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
+    local FILE=$(basename $(find $WORKDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
     if [ -z $FILE ]; then
         FILE=$(basename $(find $CURDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
         if [ -z $FILE ]; then
@@ -548,8 +550,8 @@ check_workdir
 get_system
 install_deps
 get_sources
+build_tarball
 build_srpm
 build_source_deb
 build_rpm
 build_deb
-build_tarball
