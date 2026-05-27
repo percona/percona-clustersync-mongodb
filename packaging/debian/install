@@ -2,3 +2,4 @@ debian/tmp/pcsm /usr/bin/
 debian/tmp/default/pcsm /etc/default/
 debian/tmp/pcsm.service /lib/systemd/system/
 debian/tmp/LICENSE /usr/share/doc/percona-clustersync-mongodb/
+debian/tmp/percona-clustersync-mongodb-*.cdx.json /usr/share/doc/percona-clustersync-mongodb/
