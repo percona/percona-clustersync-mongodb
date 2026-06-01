@@ -168,6 +168,26 @@ install_golang() {
     ln -s /usr/local/go${GO_VERSION} /usr/local/go
 }
 
+install_sbom_tools() {
+    # Install Syft (SBOM generator) and Grype (vulnerability scanner) on the
+    # build host.
+    #
+    # Use the official Anchore installer scripts because they auto-detect the
+    # host architecture (x86_64 -> amd64, aarch64 -> arm64) and OS.
+    # No pinned version yet.
+    for tool in syft grype; do
+        url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
+        for i in {1..3}; do
+            curl -fsSL "$url" | sh -s -- -b /usr/local/bin && break
+            sleep 10
+        done
+        command -v "$tool" >/dev/null \
+            || { echo "ERROR: ${tool} not installed after 3 attempts" >&2; exit 1; }
+    done
+    syft version
+    grype version
+}
+
 install_deps() {
     if [ $INSTALL = 0 ]; then
         echo "Dependencies will not be installed"
@@ -184,7 +204,7 @@ install_deps() {
         if [ "x${RHEL}" != "x2023" ]; then
             yum -y install epel-release
         fi
-        yum -y install git wget
+        yum -y install git wget jq
         yum -y install rpm-build make rpmdevtools golang systemd
         install_golang
     else
@@ -195,18 +215,21 @@ install_deps() {
         DEBIAN_FRONTEND=noninteractive apt-get -y install lsb-release
         export DEBIAN=$(lsb_release -sc)
         export ARCH=$(echo $(uname -m) | sed -e 's:i686:i386:g')
-        INSTALL_LIST="wget devscripts debhelper debconf pkg-config curl make golang git systemd"
+        INSTALL_LIST="wget devscripts debhelper debconf pkg-config curl make golang git systemd jq"
         until DEBIAN_FRONTEND=noninteractive apt-get -y install ${INSTALL_LIST}; do
             sleep 1
             echo "waiting"
         done
         install_golang
     fi
+    install_sbom_tools
     return
 }
 
 get_tar() {
-    TARBALL=$1
+    # `local` keeps TARBALL from clobbering the global flag that controls
+    # whether build_tarball runs at the end of the main flow.
+    local TARBALL=$1
     TARFILE=$(basename $(find $WORKDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
     if [ -z $TARFILE ]; then
         TARFILE=$(basename $(find $CURDIR/$TARBALL -name 'percona-clustersync-mongodb*.tar.gz' | sort | tail -n1))
@@ -223,9 +246,9 @@ get_tar() {
 }
 
 get_deb_sources() {
-    param=$1
+    local param=$1
     echo $param
-    FILE=$(basename $(find $WORKDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
+    local FILE=$(basename $(find $WORKDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
     if [ -z $FILE ]; then
         FILE=$(basename $(find $CURDIR/source_deb -name "percona-clustersync-mongodb*.$param" | sort | tail -n1))
         if [ -z $FILE ]; then
@@ -456,6 +479,41 @@ build_tarball() {
     export GITCOMMIT
     make build
     cp ./bin/pcsm ${WORKDIR}/${PCSMDIR}/
+
+    # Place SBOM at the root of the tarball staging dir so it will be packed
+    # in the archive root.
+    # Scope = ./bin only (the pcsm Go binary that goes into the tarball).
+    # Catalogers limited to go-module-binary-cataloger because a tarball is
+    # OS-agnostic; the "file" cataloger group is disabled to keep package
+    # granularity (no per-file hashes/metadata).
+    # The jq count below guards against silent syft failures.
+    SBOM_FILE="${WORKDIR}/${PCSMDIR}/${PRODUCT}-${VERSION}.cdx.json"
+    echo "Generating CycloneDX 1.6 SBOM for binary tarball..."
+    syft scan "dir:./bin" \
+        --override-default-catalogers go-module-binary-cataloger \
+        --select-catalogers "-file" \
+        --source-name "percona-clustersync-mongodb" \
+        --source-version "${VERSION}" \
+        -o "cyclonedx-json@1.6=${SBOM_FILE}" \
+        || { echo "ERROR: syft scan failed for binary tarball" >&2; exit 1; }
+    # Overwrite syft's auto-generated metadata.component (type=file, opaque
+    # bom-ref) with a proper application identity including a PURL. Tarball is
+    # OS-agnostic, so PURL type is "generic".
+    SBOM_PURL="pkg:generic/percona-clustersync-mongodb@${VERSION}"
+    jq --arg purl "${SBOM_PURL}" --arg ver "${VERSION}" '.metadata.component = {
+        "bom-ref": $purl,
+        "type": "application",
+        "name": "percona-clustersync-mongodb",
+        "version": $ver,
+        "purl": $purl
+    }' "${SBOM_FILE}" > "${SBOM_FILE}.tmp" && mv "${SBOM_FILE}.tmp" "${SBOM_FILE}"
+    COMPONENT_COUNT=$(jq '.components | length' "${SBOM_FILE}")
+    if [ "$COMPONENT_COUNT" -lt 10 ]; then
+        echo "ERROR: tarball SBOM has only ${COMPONENT_COUNT} components" >&2
+        exit 1
+    fi
+    echo "Tarball SBOM: ${SBOM_FILE} (${COMPONENT_COUNT} components)"
+
     cd ${WORKDIR}/
 
     tar --owner=0 --group=0 -czf ${WORKDIR}/${PCSMDIR}-${ARCH}.tar.gz ${PCSMDIR}
@@ -492,8 +550,8 @@ check_workdir
 get_system
 install_deps
 get_sources
+build_tarball
 build_srpm
 build_source_deb
 build_rpm
 build_deb
-build_tarball
