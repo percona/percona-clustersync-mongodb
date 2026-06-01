@@ -1,6 +1,6 @@
 # AGENTS.md - Percona ClusterSync for MongoDB
 
-Percona ClusterSync for MongoDB (PCSM) replicates data between MongoDB clusters. Supports replica sets and sharded clusters with initial cloning and continuous change replication.
+Percona ClusterSync for MongoDB (PCSM) replicates data between MongoDB clusters. Supports replica sets (RS) and sharded clusters with initial cloning and continuous change replication.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ The MongoDB containers use hostnames that must resolve on the host. Add these en
 ### Tools
 
 - Docker and Docker Compose
-- Go (for building the binary)
+- Go 1.25.0+
 - Python 3.13+ and [Poetry](https://python-poetry.org/) (for E2E tests and monitoring scripts)
 
 Install Python dependencies:
@@ -30,27 +30,49 @@ poetry install
 
 If `poetry run` fails with a "bad interpreter" error (e.g. after a Python version change), use the virtualenv directly: `.venv/bin/pytest` instead of `poetry run pytest`.
 
-### Environment Variables
+### Test Cluster Environment Variables
 
-| Variable        | Default | Description                                            |
-| --------------- | ------- | ------------------------------------------------------ |
-| `MONGO_VERSION` | `8.0`   | MongoDB image version for test clusters                |
-| `SRC_SHARDS`    | `2`     | Number of source shards (sharded topology only, max 3) |
-| `TGT_SHARDS`    | `2`     | Number of target shards (sharded topology only, max 3) |
+| Variable            | Default | Description                                        |
+| ------------------- | ------- | -------------------------------------------------- |
+| `MONGO_VERSION`     | `8.0`   | Fallback MongoDB image version for both clusters   |
+| `SRC_MONGO_VERSION` | unset   | Source MongoDB image version override              |
+| `TGT_MONGO_VERSION` | unset   | Target MongoDB image version override              |
+| `SRC_SHARDS`        | `2`     | Source shard count (sharded topology only, max 3)  |
+| `TGT_SHARDS`        | `2`     | Target shard count (sharded topology only, max 3)  |
 
-## Supported MongoDB Versions
+Per-side precedence: `SRC_MONGO_VERSION` / `TGT_MONGO_VERSION` → `MONGO_VERSION` → `8.0`.
 
-| Source | Target | Topology    |
-| ------ | ------ | ----------- |
-| 6.0    | 6.0    | RS, Sharded |
-| 7.0    | 7.0    | RS, Sharded |
-| 8.0    | 8.0    | RS, Sharded |
-| 6.0    | 7.0    | RS, Sharded |
-| 6.0    | 8.0    | RS, Sharded |
-| 7.0    | 8.0    | RS, Sharded |
+`MONGO_VERSION` also selects the testcontainers image used by `make test-integration`.
 
-Sharded entries (except 8.0 → 8.0) run a reduced E2E scope in CI; the full sharded suite is blocked by PCSM-255.
-Downgrade (higher → lower) is not supported.
+### PCSM Runtime Environment Variables
+
+Common runtime knobs. Every flag has a matching `PCSM_*` env var.
+
+| Env var                          | Flag                          |
+| -------------------------------- | ----------------------------- |
+| `PCSM_SOURCE_URI`                | `--source`                    |
+| `PCSM_TARGET_URI`                | `--target`                    |
+| `PCSM_PORT`                      | `--port` (default `2242`)     |
+| `PCSM_LOG_LEVEL`                 | `--log-level`                 |
+| `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
+| `PCSM_CLONE_SEGMENT_SIZE`        | `--clone-segment-size`        |
+
+Full list lives in [config/config.go](config/config.go).
+
+## Tested MongoDB Versions
+
+CI covers these source → target pairs for both RS and sharded topologies.
+
+| Source | Target |
+| ------ | ------ |
+| 6.0    | 6.0    |
+| 7.0    | 7.0    |
+| 8.0    | 8.0    |
+| 6.0    | 7.0    |
+| 6.0    | 8.0    |
+| 7.0    | 8.0    |
+
+Runtime compatibility check (`mdb.CheckVersionCompat`) is major-only. Source major must be less than or equal to target major. No minor/patch enforcement, no allowlist. Combinations outside the tested matrix may start but are not validated.
 
 ## Cluster Topology
 
@@ -61,20 +83,20 @@ Downgrade (higher → lower) is not supported.
 | Sharded  | `mongodb://src-mongos:27017` | `mongodb://tgt-mongos:29017` |
 | RS       | `mongodb://rs00:30000`       | `mongodb://rs10:30100`       |
 
-**IMPORTANT**: Use these URIs exactly as shown. Do NOT append query parameters like `?replicaSet=rs0` or `?directConnection=true` — PCSM rejects `directConnection` and discovers topology automatically.
+Use these URIs exactly as shown. PCSM strips unsupported URI options (including `directConnection`) and discovers topology through the MongoDB driver. `replicaSet` is accepted by the sanitizer but unnecessary for the local URIs.
+
+The target sharded URI uses host port `29017`. Inside `tgt-mongos`, `mongosh` connects on container port `27017`.
 
 ### Health Verification
 
-After starting clusters, verify they are healthy:
-
-**Sharded clusters:**
+Sharded clusters:
 
 ```bash
 docker exec src-mongos mongosh --port 27017 --quiet --eval "db.adminCommand('ping')"
 docker exec tgt-mongos mongosh --port 27017 --quiet --eval "db.adminCommand('ping')"
 ```
 
-**RS clusters:**
+RS clusters:
 
 ```bash
 docker exec rs00 mongosh --port 30000 --quiet --eval "rs.status().ok"
@@ -83,41 +105,45 @@ docker exec rs10 mongosh --port 30100 --quiet --eval "rs.status().ok"
 
 ## Commands
 
-```bash
-make build            # Production build
-make test-build       # Debug build with race detection
-make test             # Run Go unit tests with race detection
-make test-integration # Run Go integration tests (uses testcontainers, requires Docker)
-make lint             # Run golangci-lint (formats code automatically)
-make pytest           # Run Python E2E tests
-make clean            # Remove binaries and caches
-```
+| Command                 | Purpose                                                         |
+| ----------------------- | --------------------------------------------------------------- |
+| `make build`            | Production build                                                |
+| `make test-build`       | Debug build with race detection                                 |
+| `make test`             | Go unit tests with `-race`                                      |
+| `make test-integration` | Catalog integration tests via testcontainers (requires Docker)  |
+| `make lint`             | golangci-lint checks                                            |
+| `make lint-py`          | Python lint via ruff                                            |
+| `make fmt-py`           | Format Python tests and hack scripts                            |
+| `make pytest`           | Python E2E tests (slow tests skipped by default)                |
+| `make metrics-up`       | Start Prometheus + Grafana stack                                |
+| `make metrics-down`     | Stop Prometheus + Grafana stack                                 |
+| `make clean`            | Remove binaries and Go caches                                   |
 
-Start local MongoDB clusters for testing:
+Start local MongoDB clusters:
 
 ```bash
-./hack/rs/run.sh     # Start replica set clusters (rs0, rs1)
+./hack/rs/run.sh     # Start RS clusters (rs0, rs1)
 ./hack/sh/run.sh     # Start sharded clusters
 ```
 
-**IMPORTANT**: Before running E2E tests or testing any PCSM binary functionality manually, you MUST start the MongoDB containers using the scripts above. The binary requires running source and target MongoDB clusters to function.
+Local PCSM runs require source and target MongoDB clusters to be up.
 
-Single test:
+Single test invocations:
 
 - `go test -race -run TestName ./package` (unit tests)
-- `go test -v -tags integration -run TestName ./pcsm/catalog/...` (integration tests, requires Docker)
-- `.venv/bin/pytest tests/test_file.py::test_name` (requires MongoDB containers running; use `poetry run pytest` if poetry works)
-- manually execute binary from `./bin` for cases not covered by tests (requires MongoDB containers running)
+- `go test -v -tags integration -run TestName ./pcsm/catalog/...` (integration, requires Docker)
+- `.venv/bin/pytest tests/test_documents.py::test_insert_one` (E2E, requires clusters and `TEST_*` env vars)
+- manually execute the binary from `./bin` for cases not covered by tests
 
 Cleanup test environments:
 
 ```bash
-./hack/cleanup.sh       # Clean all environments (rs, sh)
-./hack/cleanup.sh rs    # Clean replica sets only
-./hack/cleanup.sh sh    # Clean sharded cluster only
+./hack/cleanup.sh       # Clean rs, sh, and sh-ha if present
+./hack/cleanup.sh rs    # RS only
+./hack/cleanup.sh sh    # Sharded only
 ```
 
-**IMPORTANT**: Always run `./hack/cleanup.sh` (no arguments) before switching between RS and sharded topologies. Both topologies bind overlapping ports (e.g. 30000), so leftover containers from one topology will cause "port already allocated" errors when starting the other. If cleanup doesn't resolve port conflicts, check for orphaned containers with `docker ps -a`.
+Always run `./hack/cleanup.sh` (no arguments) before switching between RS and sharded topologies. Both topologies bind overlapping ports (e.g. 30000), so leftover containers cause "port already allocated" errors. If cleanup doesn't resolve port conflicts, check for orphans with `docker ps -a`.
 
 ## Project-Specific Patterns
 
@@ -154,7 +180,7 @@ log.Ctx(ctx).Info("message")  // From context
 ### Testing Patterns
 
 - Use `testify` for assertions (`assert`, `require`)
-- Always run tests with `-race` flag
+- Run Go unit tests with `-race` (the `make test` target sets this)
 - Use table-driven tests for multiple cases
 - Use `t.Parallel()` when tests are independent
 
@@ -187,57 +213,58 @@ Use sparingly with justification. Common cases:
 
 ## Verification Requirements
 
-When modifying code, always finish with:
+Run before declaring code changes complete:
 
-1. `make lint` - must pass with no new issues
-2. `make test` - all Go unit tests must pass
-3. `make test-integration` - all Go integration tests must pass (requires Docker)
-4. `make pytest` - all E2E tests must pass (if available)
-
-These checks must be the final tasks before considering work complete.
+1. `make lint`
+2. `make test`
+3. `make test-integration`
+4. `make pytest`
 
 ## Package Structure
 
-| Package   | Purpose                          |
-| --------- | -------------------------------- |
-| `pcsm/`   | Core replication (Clone, Repl)   |
-| `mdb/`    | MongoDB topology and connections |
-| `sel/`    | Namespace filtering              |
-| `config/` | Configuration constants          |
-| `errors/` | Custom error handling            |
-| `log/`    | Logging utilities                |
-| `util/`   | Context helpers                  |
-| `tests/`  | Python E2E tests                 |
+| Package         | Purpose                                          |
+| --------------- | ------------------------------------------------ |
+| root            | CLI entrypoint, HTTP server, client commands     |
+| `config/`       | Configuration loading and validation             |
+| `errors/`       | Project error helpers                            |
+| `log/`          | Logging wrapper and log attributes               |
+| `mdb/`          | MongoDB connections, topology, version checks    |
+| `metrics/`      | Prometheus metrics                               |
+| `pcsm/`         | Replication state machine                        |
+| `pcsm/catalog/` | Target collections and indexes                   |
+| `pcsm/clone/`   | Initial data clone                               |
+| `pcsm/repl/`    | Change stream replication                        |
+| `sel/`          | Namespace filtering                              |
+| `util/`         | Context helpers                                  |
+| `tests/`        | Python E2E tests                                 |
 
-## CLI Architecture (Server + Client)
+## CLI Architecture
 
-PCSM uses a single binary that operates in two modes:
+PCSM is a single binary with two operating modes plus a few direct commands.
 
-### Server Mode (Root Command)
+### Server mode
 
-Running `pcsm --source <uri> --target <uri>` starts a **long-running server process**:
+`pcsm --source <uri> --target <uri>` starts a long-running server:
 
-1. Connects to source and target MongoDB clusters
-2. Creates `pcsm.PCSM` instance with real MongoDB clients
-3. Starts HTTP server on `localhost:<port>` (default 2242)
-4. Exposes REST endpoints: `/status`, `/start`, `/pause`, `/resume`, `/finalize`
+1. Connects to source and target clusters
+2. Creates the `pcsm.PCSM` instance
+3. Starts HTTP server on `localhost:<port>` (default `2242`)
+4. Exposes operational endpoints `/status`, `/start`, `/pause`, `/resume`, `/finalize`, metrics at `/metrics`, and Go pprof under `/debug/pprof/`
 
-The server holds MongoDB connections and manages the replication state machine.
+### Client subcommands
 
-### Client Mode (Subcommands)
+`status`, `start`, `pause`, `resume`, and `finalize` act as HTTP clients against an already-running server.
 
-Running `pcsm start`, `pcsm pause`, etc. operates as an **HTTP client**:
+### Direct commands
 
-1. Creates `PCSMClient` with just the port number
-2. Constructs HTTP request with JSON body
-3. Sends request to the already-running server
-4. Prints JSON response to stdout
+- `pcsm reset`, `pcsm reset recovery`, `pcsm reset heartbeat` connect directly to the target cluster and clear persisted state. Do not run while a server is up.
+- `pcsm version` prints local build metadata.
 
 ## Manual Testing
 
 ### Step-by-Step Runbook
 
-Sharded topology shown as primary. For RS, substitute URIs from the Connection URIs table above.
+Sharded topology shown as primary. RS variants use the URIs from the Connection URIs table.
 
 1. **Clean up previous state**:
 
@@ -250,10 +277,10 @@ Sharded topology shown as primary. For RS, substitute URIs from the Connection U
     ```bash
     ./hack/sh/run.sh     # Sharded (primary)
     # OR
-    ./hack/rs/run.sh     # Replica set (alternative)
+    ./hack/rs/run.sh     # RS (alternative)
     ```
 
-3. **Verify cluster health** (see Health Verification section above)
+3. **Verify cluster health** (see Health Verification)
 
 4. **Build PCSM**:
 
@@ -261,7 +288,7 @@ Sharded topology shown as primary. For RS, substitute URIs from the Connection U
     make build
     ```
 
-5. **Start PCSM server** (runs in foreground — use a separate terminal):
+5. **Start PCSM server** (runs in foreground, use a separate terminal):
 
     ```bash
     ./bin/pcsm --source="mongodb://src-mongos:27017" --target="mongodb://tgt-mongos:29017" --reset-state --log-level=debug
@@ -275,7 +302,7 @@ Sharded topology shown as primary. For RS, substitute URIs from the Connection U
 
     Expected output: `Starting HTTP server at http://localhost:2242`
 
-6. **Trigger replication** (in another terminal):
+6. **Trigger replication**:
 
     ```bash
     curl -s -X POST http://localhost:2242/start -H 'Content-Type: application/json' -d '{}'
@@ -287,61 +314,84 @@ Sharded topology shown as primary. For RS, substitute URIs from the Connection U
     curl -s http://localhost:2242/status | jq .
     ```
 
-8. **Finalize replication**:
+8. **Wait for initial sync to complete** before finalizing:
+
+    ```bash
+    until curl -s http://localhost:2242/status | jq -e '.initialSync.completed == true' >/dev/null; do sleep 1; done
+    ```
+
+9. **Finalize replication**:
 
     ```bash
     curl -s -X POST http://localhost:2242/finalize -H 'Content-Type: application/json' -d '{}'
     ```
 
-9. **Clean up**:
+10. **Clean up**:
 
-    ```bash
-    ./hack/cleanup.sh
-    ```
+     ```bash
+     ./hack/cleanup.sh
+     ```
 
 ### HTTP API
 
-| Endpoint    | Method | Purpose                |
-| ----------- | ------ | ---------------------- |
-| `/status`   | GET    | Get replication status |
-| `/start`    | POST   | Start replication      |
-| `/pause`    | POST   | Pause replication      |
-| `/resume`   | POST   | Resume replication     |
-| `/finalize` | POST   | Finalize replication   |
-| `/metrics`  | GET    | Prometheus metrics     |
+| Endpoint          | Method | Purpose                |
+| ----------------- | ------ | ---------------------- |
+| `/status`         | GET    | Get replication status |
+| `/start`          | POST   | Start replication      |
+| `/pause`          | POST   | Pause replication      |
+| `/resume`         | POST   | Resume replication     |
+| `/finalize`       | POST   | Finalize replication   |
+| `/metrics`        | GET    | Prometheus metrics     |
+| `/debug/pprof/*`  | GET    | Go pprof endpoints     |
+
+`/start` accepts an optional JSON body with namespace include/exclude lists, clone tuning, repl tuning, and a bulk-write override. See `startRequest` in [main.go](main.go) and the matching CLI flags.
 
 ### PCSM State Machine
 
 ```
-idle → running → finalizing → finalized
-         ↓  ↑
-        paused
-         ↓
-        failed
+idle ──start──> running ──finalize──> finalizing ──> finalized
+                  │ ▲
+                  │ └─ resume ─ paused
+                  │
+                  └─ error ──> failed
 ```
 
-| State        | Description                                                       |
-| ------------ | ----------------------------------------------------------------- |
-| `idle`       | Server started, waiting for `/start` command                      |
-| `running`    | Replication active (cloning or change stream replication)         |
-| `paused`     | Replication paused, can be resumed                                |
-| `finalizing` | Final catchup in progress after `/finalize` command               |
-| `finalized`  | Replication complete, target is caught up                         |
-| `failed`     | Error occurred, check logs. Use `/resume --from-failure` to retry |
+Additional transitions not shown:
+
+- `finalized → running` via `/start` (starts a new run)
+- `failed → running` via `/resume` with `fromFailure: true` (CLI: `pcsm resume --from-failure`)
+
+| State        | Description                                                               |
+| ------------ | ------------------------------------------------------------------------- |
+| `idle`       | Server started, waiting for `/start`                                      |
+| `running`    | Replication active (cloning or change stream replication)                 |
+| `paused`     | Replication paused, can be resumed                                        |
+| `finalizing` | Final catchup in progress after `/finalize`                               |
+| `finalized`  | Replication complete, target caught up                                    |
+| `failed`     | Error occurred. Resume with `pcsm resume --from-failure` or `POST /resume` with `{"fromFailure": true}` after checking logs |
 
 ### Status Response Fields
 
-Key fields in the `/status` response:
-
-| Field                        | Type   | Description                                           |
-| ---------------------------- | ------ | ----------------------------------------------------- |
-| `state`                      | string | Current PCSM state (see table above)                  |
-| `initialSync.completed`      | bool   | Whether initial clone + catchup is fully done         |
-| `initialSync.cloneCompleted` | bool   | Whether bulk data clone is finished                   |
-| `lagTimeSeconds`             | int    | How far target is behind source (in logical seconds)  |
-| `eventsRead`                 | int    | Change stream events read from source                 |
-| `eventsApplied`              | int    | Events applied to target                              |
-| `lastReplicatedOpTime`       | object | Last operation timestamp applied (`ts` and `isoDate`) |
+| Field                                 | Type   | Description                                      |
+| ------------------------------------- | ------ | ------------------------------------------------ |
+| `ok`                                  | bool   | Request success flag                             |
+| `error`                               | string | Error message when `ok=false`                    |
+| `state`                               | string | Current PCSM state                               |
+| `info`                                | string | Human-readable state detail                      |
+| `lagTimeSeconds`                      | int64  | Logical lag between source and target            |
+| `eventsRead`                          | int64  | Change stream events read (excluding tick events) |
+| `eventsApplied`                       | int64  | Events applied to target                         |
+| `lastReplicatedOpTime.ts`             | string | Last applied operation timestamp                 |
+| `lastReplicatedOpTime.isoDate`        | string | Last applied operation time as RFC3339           |
+| `initialSync.completed`               | bool   | Initial clone and catchup completed              |
+| `initialSync.cloneCompleted`          | bool   | Bulk clone completed                             |
+| `initialSync.lagTimeSeconds`          | int64  | Initial sync lag                                 |
+| `initialSync.estimatedCloneSizeBytes` | uint64 | Estimated clone size                             |
+| `initialSync.clonedSizeBytes`         | uint64 | Bytes cloned so far                              |
+| `finalization.completed`              | bool   | Finalize completed successfully                  |
+| `finalization.startedAt`              | time   | Finalize start time, when available              |
+| `finalization.completedAt`            | time   | Finalize completion time, when available         |
+| `finalization.unsuccessfulIndexes[]`  | array  | Indexes that did not complete cleanly            |
 
 ## Python E2E Tests
 
@@ -354,7 +404,9 @@ Key fields in the `/status` response:
 | `TEST_PCSM_URL`   | Yes      | PCSM HTTP server URL (e.g. `http://localhost:2242`) |
 | `TEST_PCSM_BIN`   | Optional | Path to PCSM binary for auto-managed mode           |
 
-When `TEST_PCSM_BIN` is set, pytest automatically starts and stops the PCSM server process. You do NOT need to start the PCSM server manually. `TEST_PCSM_URL` is still required — pytest uses it to communicate with the auto-started server.
+When `TEST_PCSM_BIN` is set, pytest starts and stops the PCSM server itself. `TEST_PCSM_URL` is still required so pytest can reach the managed server.
+
+Each env var has a matching pytest option that wins when set: `--source-uri`, `--target-uri`, `--pcsm_url`, `--pcsm-bin`.
 
 ### Running E2E Tests (Sharded)
 
@@ -371,69 +423,71 @@ export TEST_TARGET_URI="mongodb://tgt-mongos:29017"
 export TEST_PCSM_URL="http://localhost:2242"
 export TEST_PCSM_BIN="./bin/pcsm"
 
-# 4. Run all E2E tests
+# 4. Run the default E2E suite (slow tests skipped)
 make pytest
 ```
 
-For RS topology, substitute the URIs:
+For RS, use the RS URIs from the Connection URIs table.
 
-```bash
-export TEST_SOURCE_URI="mongodb://rs00:30000"
-export TEST_TARGET_URI="mongodb://rs10:30100"
-# TEST_PCSM_URL and TEST_PCSM_BIN remain the same as sharded
-```
-
-Run tests including slow tests (disabled by default):
+Run including slow tests:
 
 ```bash
 .venv/bin/pytest --runslow
 ```
 
+Note: local `make pytest` and the GitHub Actions matrix do not cover identical scope. CI runs selected files for RS and a single deselect for sharded. Local runs default to the full discovered suite minus slow tests.
+
 ## Monitoring & Debugging
 
 ### Change Stream Watcher
 
-Watch MongoDB change stream events in real-time. Useful for debugging replication event flow:
-
 ```bash
 poetry run python hack/change_stream.py -u "mongodb://src-mongos:27017"
 poetry run python hack/change_stream.py -u "mongodb://tgt-mongos:29017" --show-checkpoints
-```
-
-For RS topology:
-
-```bash
 poetry run python hack/change_stream.py -u "mongodb://rs00:30000"
 ```
 
 ### Write Operations Monitor
 
-Monitor write operations per second on a cluster:
-
 ```bash
 poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ```
 
-## CI (Jenkins)
+### Metrics Stack
 
-Functional tests run on Jenkins at `https://psmdb.cd.percona.com/view/PCSM/`.
+`make metrics-up` brings up the bundled Prometheus + Grafana stack against the local PCSM `/metrics` endpoint. `make metrics-down` stops it.
+
+## CI
+
+### GitHub Actions
+
+| Workflow                          | Purpose                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `.github/workflows/go.yml`        | Go unit tests, formatter suggestions, golangci-lint, catalog integration tests |
+| `.github/workflows/e2etests.yml`  | Local RS and sharded E2E matrix across 6.0, 7.0, 8.0 and lower-to-higher pairs |
+| `.github/workflows/ci.yml`        | Percona-QA `psmdb-testing` functional suite across PSMDB 6.0, 7.0, 8.0         |
+
+`ci.yml` ignores PR changes confined to `tests/**` and `packaging/**`.
+
+### Jenkins (operationally known, repo-unverified)
+
+Functional tests run at `https://psmdb.cd.percona.com/view/PCSM/`.
 
 | Job                             | Default Cloud | Fallback |
 | ------------------------------- | ------------- | -------- |
 | `hetzner-pcsm-functional-tests` | Hetzner       | AWS      |
 
-Hetzner workers are used by default for cost reasons but sometimes fail to start due to cloud capacity limits. If workers don't start: cancel the stuck build and re-trigger with **AWS** (first cloud option in job parameters).
+Hetzner workers are used by default for cost reasons but sometimes fail to start due to cloud capacity limits. If workers don't start, cancel the stuck build and re-trigger with **AWS** (first cloud option in job parameters).
 
 ## QA Test Branch Override
 
-The CI workflow (`.github/workflows/ci.yml`) extracts the first `PCSM-XXX` ticket key from the PR title and checks if a branch with that name exists in `Percona-QA/psmdb-testing`. If found, the CI checks out that branch instead of `main` for the QA tests.
+`.github/workflows/ci.yml` selects the `Percona-QA/psmdb-testing` branch in this order:
 
-This is useful when QA tests need changes to pass on a PCSM PR. Push the test fixes to a branch named after the ticket (e.g. `PCSM-286`) in the QA repo, and the PCSM CI picks them up automatically.
+1. `tests_ver` workflow dispatch input
+2. First `PCSM-[0-9]+` key in the PR title, if a matching branch exists in `Percona-QA/psmdb-testing`
+3. `main`
 
-- No PR needed on the QA repo, just the branch.
-- Only the first `PCSM-XXX` match from the PR title is used (`grep -oE 'PCSM-[0-9]+' | head -1`).
-- Falls back to `main` if no matching branch exists or no ticket key is found in the title.
-- Can also be overridden manually via the `tests_ver` workflow dispatch input.
+Push test fixes to a branch named after the ticket (e.g. `PCSM-286`) in the QA repo and the PCSM CI picks them up. No PR needed on the QA repo, just the branch.
 
 ## External References
 
