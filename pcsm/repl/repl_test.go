@@ -17,6 +17,9 @@ import (
 type mockCatalog struct {
 	collectionExists bool
 
+	collectionUUIDResult *bson.Binary
+	collectionUUIDExists bool
+
 	dropCollectionCalled bool
 	dropCollectionDB     string
 	dropCollectionColl   string
@@ -67,7 +70,7 @@ func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
 }
 
 func (m *mockCatalog) CollectionUUID(_, _ string) (*bson.Binary, bool) {
-	return nil, false
+	return m.collectionUUIDResult, m.collectionUUIDExists
 }
 
 func (m *mockCatalog) DropDatabase(_ context.Context, _ string) error {
@@ -105,30 +108,168 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
-func TestApplyDDLChange_Create(t *testing.T) {
+func TestApplyCreateDDLChange(t *testing.T) {
 	t.Parallel()
 
-	cat := &mockCatalog{}
-	r := &Repl{catalog: cat}
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
 
-	change := &ChangeEvent{
-		EventHeader: EventHeader{
-			OperationType: Create,
-			Namespace: catalog.Namespace{
-				Database:   "testdb",
-				Collection: "testcoll",
-			},
-			CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")},
+	tests := []struct {
+		name              string
+		catalogUUID       *bson.Binary
+		catalogUUIDExists bool
+		eventUUID         *bson.Binary
+		createEvent       CreateEvent
+		expectDrop        bool
+		expectCreate      bool
+		expectSetUUID     bool
+	}{
+		{
+			name:              "same UUID replay noops",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
 		},
-		Event: CreateEvent{},
+		{
+			name:              "different UUID phantom create updates catalog only",
+			catalogUUID:       differentUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			expectSetUUID:     true,
+		},
+		{
+			name:              "nil event UUID applies real create",
+			catalogUUID:       differentUUID,
+			catalogUUIDExists: true,
+			expectDrop:        true,
+			expectCreate:      true,
+			expectSetUUID:     true,
+		},
+		{
+			name:              "missing catalog entry applies real create",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			expectDrop:        true,
+			expectCreate:      true,
+			expectSetUUID:     true,
+		},
+		{
+			name:              "timeseries create returns without catalog changes",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			createEvent: CreateEvent{
+				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + "testcoll"},
+			},
+		},
 	}
 
-	err := r.applyDDLChange(context.Background(), change)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	assert.True(t, cat.dropCollectionCalled)
-	assert.True(t, cat.createCollectionCalled)
-	assert.True(t, cat.setCollectionUUIDCalled)
+			cat := &mockCatalog{
+				collectionUUIDResult: tt.catalogUUID,
+				collectionUUIDExists: tt.catalogUUIDExists,
+			}
+			r := &Repl{catalog: cat}
+
+			change := &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType:  Create,
+					Namespace:      ns,
+					CollectionUUID: tt.eventUUID,
+				},
+				Event: tt.createEvent,
+			}
+
+			err := r.applyDDLChange(context.Background(), change)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
+			assert.Equal(t, tt.expectCreate, cat.createCollectionCalled)
+			assert.Equal(t, tt.expectSetUUID, cat.setCollectionUUIDCalled)
+			if tt.expectDrop {
+				assert.Equal(t, ns.Database, cat.dropCollectionDB)
+				assert.Equal(t, ns.Collection, cat.dropCollectionColl)
+			}
+			if tt.expectSetUUID {
+				assert.Equal(t, ns.Database, cat.setCollectionUUIDDB)
+				assert.Equal(t, ns.Collection, cat.setCollectionUUIDColl)
+			}
+		})
+	}
+}
+
+func TestApplyDropDDLChange(t *testing.T) {
+	t.Parallel()
+
+	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+
+	tests := []struct {
+		name              string
+		catalogUUID       *bson.Binary
+		catalogUUIDExists bool
+		eventUUID         *bson.Binary
+		expectDrop        bool
+	}{
+		{
+			name:              "missing catalog entry applies real drop",
+			catalogUUIDExists: false,
+			eventUUID:         eventUUID,
+			expectDrop:        true,
+		},
+		{
+			name:              "UUID mismatch suppresses phantom drop",
+			catalogUUID:       differentUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+		},
+		{
+			name:              "UUID match applies drop",
+			catalogUUID:       eventUUID,
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			expectDrop:        true,
+		},
+		{
+			name:              "nil UUIDs apply drop through default branch",
+			catalogUUIDExists: true,
+			expectDrop:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := &mockCatalog{
+				collectionUUIDResult: tt.catalogUUID,
+				collectionUUIDExists: tt.catalogUUIDExists,
+			}
+			r := &Repl{catalog: cat}
+
+			change := &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType:  Drop,
+					Namespace:      ns,
+					CollectionUUID: tt.eventUUID,
+				},
+				Event: DropEvent{},
+			}
+
+			err := r.applyDDLChange(context.Background(), change)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectDrop, cat.dropCollectionCalled)
+			if tt.expectDrop {
+				assert.Equal(t, ns.Database, cat.dropCollectionDB)
+				assert.Equal(t, ns.Collection, cat.dropCollectionColl)
+			}
+		})
+	}
 }
 
 func TestIsChangeStreamUnrecoverable(t *testing.T) {

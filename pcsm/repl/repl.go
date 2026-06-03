@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"runtime"
@@ -820,6 +821,16 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 	return ns
 }
 
+// uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
+// Returns false if either pointer is nil.
+func uuidEqual(a, b *bson.Binary) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	return bytes.Equal(a.Data, b.Data)
+}
+
 // applyDDLChange applies a schema change to the target MongoDB.
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
@@ -830,42 +841,26 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	switch change.OperationType { //nolint:exhaustive
 	case Create:
 		event := change.Event.(CreateEvent) //nolint:forcetypeassert
-		if event.IsTimeseries() {
-			lg.Warn("Timeseries is not supported. skipping")
+		err = r.applyCreateDDLChange(ctx, change, &event, lg)
+
+	case Drop:
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		eventUUID := change.CollectionUUID
+		catalogUUID, _ := r.catalog.CollectionUUID(db, coll)
+
+		// PCSM-249: stale phantom drop from movePrimary is suppressed.
+		// The catalog has the new UUID (assigned by phantom create handler); this drop
+		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+		// UUID comparison only suppresses when both sides are present and differ; views
+		// and other untracked namespaces fall through to the real drop, which is idempotent.
+		if eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID) {
+			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
 
 			return nil
 		}
 
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
-		if err != nil {
-			err = errors.Wrap(err, "drop before create")
-
-			break
-		}
-
-		err = r.catalog.CreateCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			&event.OperationDescription)
-		if err != nil {
-			err = errors.Wrap(err, "create")
-
-			break
-		}
-
-		r.catalog.SetCollectionUUID(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			change.CollectionUUID)
-
-		lg.Infof("Collection %q has been created", change.Namespace)
-
-	case Drop:
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
+		err = r.catalog.DropCollection(ctx, db, coll)
 		if err != nil {
 			break
 		}
@@ -963,6 +958,52 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		return errors.Wrap(err, string(change.OperationType))
 	}
+
+	return nil
+}
+
+func (r *Repl) applyCreateDDLChange(
+	ctx context.Context,
+	change *ChangeEvent,
+	event *CreateEvent,
+	lg log.Logger,
+) error {
+	if event.IsTimeseries() {
+		lg.Warn("Timeseries is not supported. skipping")
+
+		return nil
+	}
+
+	db := change.Namespace.Database
+	coll := change.Namespace.Collection
+	eventUUID := change.CollectionUUID
+
+	catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+	switch {
+	case exists && uuidEqual(catalogUUID, eventUUID):
+		lg.Debug("create event replay detected, namespace already at this UUID; noop")
+
+		return nil
+
+	case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
+		lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+
+		return nil
+	}
+
+	err := r.catalog.DropCollection(ctx, db, coll)
+	if err != nil {
+		return errors.Wrap(err, "drop before create")
+	}
+
+	err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
+	if err != nil {
+		return errors.Wrap(err, "create")
+	}
+
+	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+	lg.Infof("Collection %q has been created", change.Namespace)
 
 	return nil
 }
