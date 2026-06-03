@@ -13,7 +13,7 @@ import (
 func TestMovePrimaryMarker(t *testing.T) {
 	t.Parallel()
 
-	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+	ns := catalog.Namespace{Database: "db", Collection: markerTestColl}
 
 	tests := []struct {
 		name string
@@ -57,7 +57,7 @@ func TestMovePrimaryMarker(t *testing.T) {
 func TestMovePrimaryMarker_Concurrent(t *testing.T) {
 	t.Parallel()
 
-	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+	ns := catalog.Namespace{Database: "db", Collection: markerTestColl}
 	m := &movePrimaryMarker{ns: make(map[string]struct{})}
 	m.Arm(ns)
 

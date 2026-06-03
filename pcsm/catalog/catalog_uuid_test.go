@@ -9,6 +9,12 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
+const (
+	missingDatabaseName     = "missing"
+	testCollectionName      = "coll"
+	testCatalogDatabaseName = "db"
+)
+
 func TestCatalog_CollectionUUID(t *testing.T) {
 	t.Parallel()
 
@@ -23,46 +29,46 @@ func TestCatalog_CollectionUUID(t *testing.T) {
 		{
 			name:      "missing db",
 			databases: map[string]databaseCatalog{},
-			db:        "missing",
-			coll:      "coll",
+			db:        missingDatabaseName,
+			coll:      testCollectionName,
 			expected:  nil,
 			exists:    false,
 		},
 		{
 			name: "missing coll",
 			databases: map[string]databaseCatalog{
-				"db": {Collections: map[string]collectionCatalog{}},
+				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{}},
 			},
-			db:       "db",
-			coll:     "missing",
+			db:       testCatalogDatabaseName,
+			coll:     missingDatabaseName,
 			expected: nil,
 			exists:   false,
 		},
 		{
 			name: "existing entry with nil UUID",
 			databases: map[string]databaseCatalog{
-				"db": {
+				testCatalogDatabaseName: {
 					Collections: map[string]collectionCatalog{
-						"coll": {UUID: nil},
+						testCollectionName: {UUID: nil},
 					},
 				},
 			},
-			db:       "db",
-			coll:     "coll",
+			db:       testCatalogDatabaseName,
+			coll:     testCollectionName,
 			expected: nil,
 			exists:   true,
 		},
 		{
 			name: "existing entry with non-nil UUID",
 			databases: map[string]databaseCatalog{
-				"db": {
+				testCatalogDatabaseName: {
 					Collections: map[string]collectionCatalog{
-						"coll": {UUID: &bson.Binary{Subtype: 0x04, Data: []byte{0x01, 0x02}}},
+						testCollectionName: {UUID: &bson.Binary{Subtype: 0x04, Data: []byte{0x01, 0x02}}},
 					},
 				},
 			},
-			db:       "db",
-			coll:     "coll",
+			db:       testCatalogDatabaseName,
+			coll:     testCollectionName,
 			expected: &bson.Binary{Subtype: 0x04, Data: []byte{0x01, 0x02}},
 			exists:   true,
 		},
@@ -97,32 +103,32 @@ func TestCatalog_SetCollectionShardingMetadata(t *testing.T) {
 		{
 			name:      "missing db",
 			databases: map[string]databaseCatalog{},
-			db:        "missing",
-			coll:      "coll",
+			db:        missingDatabaseName,
+			coll:      testCollectionName,
 			wantErr:   mdb.ErrNotFound,
 		},
 		{
 			name: "missing coll",
 			databases: map[string]databaseCatalog{
-				"db": {Collections: map[string]collectionCatalog{}},
+				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{}},
 			},
-			db:      "db",
-			coll:    "missing",
+			db:      testCatalogDatabaseName,
+			coll:    missingDatabaseName,
 			wantErr: mdb.ErrNotFound,
 		},
 		{
 			name: "existing collection",
 			databases: map[string]databaseCatalog{
-				"db": {Collections: map[string]collectionCatalog{
-					"coll": {},
+				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{
+					testCollectionName: {},
 				}},
 			},
-			db:   "db",
-			coll: "coll",
+			db:   testCatalogDatabaseName,
+			coll: testCollectionName,
 			assert: func(t *testing.T, cat *Catalog) {
 				t.Helper()
 
-				coll := cat.Databases["db"].Collections["coll"]
+				coll := cat.Databases[testCatalogDatabaseName].Collections[testCollectionName]
 				require.True(t, coll.Sharded)
 				require.Equal(t, shardKey, coll.ShardKey)
 			},

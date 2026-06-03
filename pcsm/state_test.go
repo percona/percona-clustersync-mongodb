@@ -150,6 +150,7 @@ func TestPause_FailsBeforeInitialSyncComplete(t *testing.T) {
 	t.Parallel()
 
 	cloneFinishTS := bson.Timestamp{T: 100, I: 1}
+	initialSyncIncompleteErr := "initial sync is not complete"
 	tests := []struct {
 		name          string
 		cloneStatus   clone.Status
@@ -162,7 +163,7 @@ func TestPause_FailsBeforeInitialSyncComplete(t *testing.T) {
 				StartTime: time.Now(),
 			},
 			lastOpTime:    bson.Timestamp{T: 101, I: 1},
-			errorContains: "initial sync is not complete",
+			errorContains: initialSyncIncompleteErr,
 		},
 		{
 			name: "clone finished but catchup equal to finish timestamp",
@@ -171,7 +172,7 @@ func TestPause_FailsBeforeInitialSyncComplete(t *testing.T) {
 				FinishTime: time.Now(),
 			},
 			lastOpTime:    cloneFinishTS,
-			errorContains: "initial sync is not complete",
+			errorContains: initialSyncIncompleteErr,
 		},
 		{
 			name: "clone finished but catchup before finish timestamp",
@@ -180,7 +181,7 @@ func TestPause_FailsBeforeInitialSyncComplete(t *testing.T) {
 				FinishTime: time.Now(),
 			},
 			lastOpTime:    bson.Timestamp{T: 99, I: 1},
-			errorContains: "initial sync is not complete",
+			errorContains: initialSyncIncompleteErr,
 		},
 	}
 

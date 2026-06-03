@@ -16,6 +16,14 @@ import (
 
 var errCursorClosedByMongos = errors.New("cursor closed by mongos")
 
+const (
+	replTestDBName     = "testdb"
+	replTestCollection = "testcoll"
+	markerTestColl     = "coll"
+)
+
+func testDocumentIDKey() string { return string([]byte{'_', 'i', 'd'}) }
+
 type mockCatalog struct {
 	collectionExists bool
 
@@ -273,7 +281,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
 
 	tests := []struct {
 		name              string
@@ -386,7 +394,7 @@ func TestApplyDropDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
 
 	tests := []struct {
 		name              string
