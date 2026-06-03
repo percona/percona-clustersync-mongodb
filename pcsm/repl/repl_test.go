@@ -14,6 +14,8 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
+var errCursorClosedByMongos = errors.New("cursor closed by mongos")
+
 type mockCatalog struct {
 	collectionExists bool
 
@@ -31,6 +33,8 @@ type mockCatalog struct {
 	setCollectionUUIDCalled bool
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
+
+	setCollectionShardingMetadataErr error
 }
 
 type mockPool struct {
@@ -41,7 +45,7 @@ type mockPool struct {
 	onRelease     func()
 }
 
-func (m *mockPool) Route(_ *ChangeEvent, _ catalog.Namespace) {}
+func (m *mockPool) Route(_ *ChangeEvent) {}
 
 func (m *mockPool) Barrier() error {
 	m.barrierCalled = true
@@ -98,6 +102,10 @@ func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.Ind
 
 func (m *mockCatalog) ShardCollection(_ context.Context, _, _ string, _ bson.D, _ bool) error {
 	return nil
+}
+
+func (m *mockCatalog) SetCollectionShardingMetadata(_ context.Context, _, _ string, _ bson.D) error {
+	return m.setCollectionShardingMetadataErr
 }
 
 func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
@@ -337,6 +345,11 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			r.movePrimaryMarker = movePrimaryMarker{ns: make(map[string]struct{})}
 			r.sourceIsMongos = tt.sourceIsMongos
 			r.sourceVer = tt.sourceVer
+			r.getCollectionShardingInfo = func(
+				context.Context, *mongo.Client, string, string,
+			) (*mdb.ShardingInfo, error) {
+				return nil, mdb.ErrNotFound
+			}
 
 			change := &ChangeEvent{
 				EventHeader: EventHeader{
@@ -484,9 +497,7 @@ func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
 		token:       token,
 		clusterTime: bson.Timestamp{T: 123, I: 1},
 	}
-	cursorErr := errors.New("cursor closed by mongos")
-
-	err := changeStreamCursorError(invalidateErr, cursorErr, 0)
+	err := changeStreamCursorError(invalidateErr, errCursorClosedByMongos, 0)
 
 	var target changeStreamInvalidateError
 	require.ErrorAs(t, err, &target)

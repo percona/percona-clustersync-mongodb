@@ -3,7 +3,6 @@ package repl
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"runtime"
 	"strings"
 	"sync"
@@ -52,7 +51,7 @@ var movePrimarySentinelNS = catalog.Namespace{ //nolint:gochecknoglobals
 }
 
 type workerBarrierPool interface {
-	Route(change *ChangeEvent, ns catalog.Namespace)
+	Route(change *ChangeEvent)
 	Barrier() error
 	ReleaseBarrier()
 	Checkpoint() bson.Timestamp
@@ -154,6 +153,8 @@ type Repl struct {
 	movePrimaryMarker movePrimaryMarker
 	sourceIsMongos    bool
 
+	getCollectionShardingInfo func(context.Context, *mongo.Client, string, string) (*mdb.ShardingInfo, error)
+
 	useCollectionBulk  bool
 	useSimpleCollation bool
 }
@@ -208,16 +209,17 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:            source,
-		target:            target,
-		sourceVer:         sourceVer,
-		nsFilter:          nsFilter,
-		catalog:           cat,
-		options:           opts,
-		pauseCh:           make(chan struct{}),
-		doneCh:            make(chan struct{}),
-		movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
-		sourceIsMongos:    sourceIsMongos,
+		source:                    source,
+		target:                    target,
+		sourceVer:                 sourceVer,
+		nsFilter:                  nsFilter,
+		catalog:                   cat,
+		options:                   opts,
+		pauseCh:                   make(chan struct{}),
+		doneCh:                    make(chan struct{}),
+		movePrimaryMarker:         movePrimaryMarker{ns: make(map[string]struct{})},
+		sourceIsMongos:            sourceIsMongos,
+		getCollectionShardingInfo: mdb.GetCollectionShardingInfo,
 	}
 }
 
@@ -379,7 +381,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	}
 
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap,
 	)
 
 	r.checkpointOpTime = startAt
@@ -474,7 +476,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap,
 	)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
@@ -684,8 +686,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 	}()
 
-	uuidMap := r.catalog.UUIDMap()
-
 	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
@@ -761,8 +761,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
-			ns := findNamespaceByUUID(uuidMap, change)
-			r.pool.Route(change, ns)
+			r.pool.Route(change)
 			lastRoutedTS = change.ClusterTime
 
 			r.tryAdvanceOpTime(cpTicker)
@@ -811,11 +810,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.lock.Unlock()
 
 			metrics.AddEventsApplied(1)
-
-			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase, ShardCollection:
-				uuidMap = r.catalog.UUIDMap()
-			}
 
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			r.pool.ReleaseBarrier()
@@ -914,20 +908,6 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	}
 
 	return r.pool.Idle()
-}
-
-//go:inline
-func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID == nil {
-		return change.Namespace
-	}
-
-	ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]
-	if !ok {
-		return change.Namespace
-	}
-
-	return ns
 }
 
 // uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
@@ -1089,6 +1069,12 @@ func (r *Repl) applyCreateDDLChange(
 		if r.sourceIsPre8AndMongos() {
 			r.movePrimaryMarker.Arm(movePrimarySentinelNS)
 		}
+		if r.sourceIsMongos {
+			err := r.repairCollectionShardingMetadata(ctx, db, coll)
+			if err != nil {
+				return errors.Wrap(err, "repair catalog sharding metadata")
+			}
+		}
 
 		return nil
 
@@ -1115,6 +1101,33 @@ func (r *Repl) applyCreateDDLChange(
 
 	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
 	lg.Infof("Collection %q has been created", change.Namespace)
+
+	return nil
+}
+
+func (r *Repl) repairCollectionShardingMetadata(ctx context.Context, db, coll string) error {
+	getShardingInfo := r.getCollectionShardingInfo
+	if getShardingInfo == nil {
+		getShardingInfo = mdb.GetCollectionShardingInfo
+	}
+
+	shInfo, err := getShardingInfo(ctx, r.source, db, coll)
+	if err != nil {
+		if errors.Is(err, mdb.ErrNotFound) {
+			return nil
+		}
+
+		return errors.Wrap(err, "query source sharding info")
+	}
+
+	if shInfo == nil || !shInfo.IsSharded() {
+		return nil
+	}
+
+	err = r.catalog.SetCollectionShardingMetadata(ctx, db, coll, shInfo.ShardKey)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+		return errors.Wrap(err, "set catalog sharding metadata")
+	}
 
 	return nil
 }
