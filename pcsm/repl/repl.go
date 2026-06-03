@@ -137,6 +137,9 @@ type Repl struct {
 
 	pool *workerPool
 
+	movePrimaryMarker movePrimaryMarker
+	sourceIsMongos    bool
+
 	useCollectionBulk  bool
 	useSimpleCollation bool
 }
@@ -176,6 +179,7 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 	sourceVer mdb.ServerVersion,
+	sourceIsMongos bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -190,16 +194,28 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:    source,
-		target:    target,
-		sourceVer: sourceVer,
-		nsFilter:  nsFilter,
-		catalog:   cat,
-		options:   opts,
-		pauseCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		source:            source,
+		target:            target,
+		sourceVer:         sourceVer,
+		nsFilter:          nsFilter,
+		catalog:           cat,
+		options:           opts,
+		pauseCh:           make(chan struct{}),
+		doneCh:            make(chan struct{}),
+		movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
+		sourceIsMongos:    sourceIsMongos,
 	}
 }
+
+// sourceIsPre8AndMongos returns true when the source is a mongos (sharded) and
+// runs MongoDB 6.x or 7.x (pre-8). Used to gate invalidate-stream handling for
+// movePrimary on older sharded topologies.
+func (r *Repl) sourceIsPre8AndMongos() bool {
+	return r.sourceIsMongos && r.sourceVer.Major() < 8
+}
+
+//nolint:gochecknoglobals // Keeps helper lint-clean until follow-up PCSM-249 wiring uses it.
+var _ = (*Repl).sourceIsPre8AndMongos
 
 // Checkpoint represents the checkpoint state for replication recovery.
 type Checkpoint struct {
