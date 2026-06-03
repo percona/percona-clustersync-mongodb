@@ -30,16 +30,6 @@ func TestMovePrimaryMarker(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "arm then clear then take",
-			run: func(m *movePrimaryMarker) bool {
-				m.Arm(ns)
-				m.Clear(ns)
-
-				return m.Take(ns)
-			},
-			want: false,
-		},
-		{
 			name: "double arm single take true once",
 			run: func(m *movePrimaryMarker) bool {
 				m.Arm(ns)

@@ -30,10 +30,3 @@ func (m *movePrimaryMarker) Take(ns catalog.Namespace) bool {
 
 	return ok
 }
-
-func (m *movePrimaryMarker) Clear(ns catalog.Namespace) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.ns, ns.Database+"."+ns.Collection)
-}

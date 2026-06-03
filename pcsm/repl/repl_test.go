@@ -33,6 +33,41 @@ type mockCatalog struct {
 	setCollectionUUIDColl   string
 }
 
+type mockPool struct {
+	barrierErr    error
+	barrierCalled bool
+	releaseCalled bool
+	callOrder     []string
+	onRelease     func()
+}
+
+func (m *mockPool) Route(_ *ChangeEvent, _ catalog.Namespace) {}
+
+func (m *mockPool) Barrier() error {
+	m.barrierCalled = true
+	m.callOrder = append(m.callOrder, "Barrier")
+
+	return m.barrierErr
+}
+
+func (m *mockPool) ReleaseBarrier() {
+	m.releaseCalled = true
+	m.callOrder = append(m.callOrder, "ReleaseBarrier")
+	if m.onRelease != nil {
+		m.onRelease()
+	}
+}
+
+func (m *mockPool) Checkpoint() bson.Timestamp { return bson.Timestamp{} }
+
+func (m *mockPool) Idle() bool { return true }
+
+func (m *mockPool) TotalEventsApplied() int64 { return 0 }
+
+func (m *mockPool) Stop() {}
+
+func (m *mockPool) Err() <-chan error { return make(chan error) }
+
 func (m *mockCatalog) CollectionExists(_, _ string) bool {
 	return m.collectionExists
 }
@@ -108,6 +143,123 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
+func newInvalidateTestRepl(pool *mockPool, sourceIsMongos bool, sourceVer mdb.ServerVersion) *Repl {
+	doneCh := make(chan struct{})
+	close(doneCh)
+
+	return &Repl{
+		pool:              pool,
+		catalog:           &mockCatalog{},
+		sourceIsMongos:    sourceIsMongos,
+		sourceVer:         sourceVer,
+		movePrimaryMarker: movePrimaryMarker{ns: make(map[string]struct{})},
+		pauseCh:           make(chan struct{}, 1),
+		doneCh:            doneCh,
+	}
+}
+
+func TestDispatch_Invalidate(t *testing.T) {
+	t.Parallel()
+
+	change := &ChangeEvent{
+		EventHeader: EventHeader{
+			OperationType: Invalidate,
+			ClusterTime:   bson.Timestamp{T: 123, I: 1},
+		},
+	}
+
+	tests := []struct {
+		name              string
+		sourceIsMongos    bool
+		sourceVer         mdb.ServerVersion
+		markerArmed       bool
+		expectFailed      bool
+		expectCheckpoint  bool
+		expectEventsApply int64
+	}{
+		{
+			name:              "skip_on_armed_marker_pre8_mongos",
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			markerArmed:       true,
+			expectCheckpoint:  true,
+			expectEventsApply: 1,
+		},
+		{
+			name:           "recoverable_no_marker_pre8_mongos",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
+		},
+		{
+			name:           "recoverable_8x_with_marker_mongos",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{8, 0, 0, 0},
+			markerArmed:    true,
+		},
+		{
+			name:         "fail_closed_rs_source",
+			sourceVer:    mdb.ServerVersion{7, 0, 0, 0},
+			markerArmed:  true,
+			expectFailed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pool := &mockPool{}
+			r := newInvalidateTestRepl(pool, tt.sourceIsMongos, tt.sourceVer)
+			if tt.markerArmed {
+				r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+			}
+
+			_ = r.handleInvalidate(change)
+
+			assert.True(t, pool.barrierCalled)
+			assert.True(t, pool.releaseCalled)
+			if tt.expectFailed {
+				require.Error(t, r.err)
+
+				return
+			}
+
+			require.NoError(t, r.err)
+			if tt.expectCheckpoint {
+				assert.Equal(t, change.ClusterTime, r.checkpointOpTime)
+			} else {
+				assert.Equal(t, bson.Timestamp{}, r.checkpointOpTime)
+			}
+
+			assert.Equal(t, tt.expectEventsApply, r.eventsApplied)
+		})
+	}
+}
+
+func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
+	t.Parallel()
+
+	pool := &mockPool{}
+	r := newInvalidateTestRepl(pool, true, mdb.ServerVersion{7, 0, 0, 0})
+	r.movePrimaryMarker.Arm(movePrimarySentinelNS)
+	pool.onRelease = func() {
+		_, markerExists := r.movePrimaryMarker.ns["::movePrimary::.sentinel"]
+		assert.False(t, markerExists)
+	}
+
+	change := &ChangeEvent{
+		EventHeader: EventHeader{
+			OperationType: Invalidate,
+			ClusterTime:   bson.Timestamp{T: 123, I: 1},
+		},
+	}
+
+	_ = r.handleInvalidate(change)
+
+	assert.Equal(t, []string{"Barrier", "ReleaseBarrier"}, pool.callOrder)
+	require.NoError(t, r.err)
+}
+
 func TestApplyCreateDDLChange(t *testing.T) {
 	t.Parallel()
 
@@ -124,19 +276,28 @@ func TestApplyCreateDDLChange(t *testing.T) {
 		expectDrop        bool
 		expectCreate      bool
 		expectSetUUID     bool
+		sourceIsMongos    bool
+		sourceVer         mdb.ServerVersion
+		expectMarker      bool
 	}{
 		{
-			name:              "same UUID replay noops",
+			name:              "same UUID replay on pre8 mongos arms sentinel marker and noops",
 			catalogUUID:       eventUUID,
 			catalogUUIDExists: true,
 			eventUUID:         eventUUID,
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			expectMarker:      true,
 		},
 		{
-			name:              "different UUID phantom create updates catalog only",
+			name:              "different UUID phantom create updates catalog and arms sentinel marker",
 			catalogUUID:       differentUUID,
 			catalogUUIDExists: true,
 			eventUUID:         eventUUID,
 			expectSetUUID:     true,
+			sourceIsMongos:    true,
+			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
+			expectMarker:      true,
 		},
 		{
 			name:              "nil event UUID applies real create",
@@ -173,6 +334,9 @@ func TestApplyCreateDDLChange(t *testing.T) {
 				collectionUUIDExists: tt.catalogUUIDExists,
 			}
 			r := &Repl{catalog: cat}
+			r.movePrimaryMarker = movePrimaryMarker{ns: make(map[string]struct{})}
+			r.sourceIsMongos = tt.sourceIsMongos
+			r.sourceVer = tt.sourceVer
 
 			change := &ChangeEvent{
 				EventHeader: EventHeader{
@@ -197,6 +361,9 @@ func TestApplyCreateDDLChange(t *testing.T) {
 				assert.Equal(t, ns.Database, cat.setCollectionUUIDDB)
 				assert.Equal(t, ns.Collection, cat.setCollectionUUIDColl)
 			}
+
+			_, markerArmed := r.movePrimaryMarker.ns["::movePrimary::.sentinel"]
+			assert.Equal(t, tt.expectMarker, markerArmed)
 		})
 	}
 }
@@ -292,6 +459,40 @@ func TestIsChangeStreamUnrecoverable(t *testing.T) {
 			assert.Equal(t, tt.expected, isChangeStreamUnrecoverable(tt.err))
 		})
 	}
+}
+
+func TestChangeStreamInvalidateError(t *testing.T) {
+	t.Parallel()
+
+	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
+	err := changeStreamInvalidateError{
+		token:       token,
+		clusterTime: bson.Timestamp{T: 123, I: 1},
+	}
+
+	var target changeStreamInvalidateError
+	require.ErrorAs(t, err, &target)
+	assert.Equal(t, token, target.token)
+	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
+}
+
+func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
+	t.Parallel()
+
+	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
+	invalidateErr := &changeStreamInvalidateError{
+		token:       token,
+		clusterTime: bson.Timestamp{T: 123, I: 1},
+	}
+	cursorErr := errors.New("cursor closed by mongos")
+
+	err := changeStreamCursorError(invalidateErr, cursorErr, 0)
+
+	var target changeStreamInvalidateError
+	require.ErrorAs(t, err, &target)
+	assert.Equal(t, token, target.token)
+	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
+	assert.NotContains(t, err.Error(), "cursor")
 }
 
 func advanceCases() []struct {
