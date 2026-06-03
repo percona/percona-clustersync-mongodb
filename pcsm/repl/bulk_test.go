@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
@@ -18,6 +19,53 @@ const (
 	pushOp  = "$push"
 	unsetOp = "$unset"
 )
+
+func TestClientBulkWriteResolvesNamespaceFromBulkSnapshot(t *testing.T) {
+	t.Parallel()
+
+	uuid := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
+	currentNS := catalog.Namespace{Database: "current_db", Collection: "current_coll"}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace:      catalog.Namespace{Database: "stale_db", Collection: "stale_coll"},
+		CollectionUUID: uuid,
+	}}
+	fullDocument, err := bson.Marshal(bson.D{{Key: "_id", Value: 1}})
+	require.NoError(t, err)
+
+	event := &InsertEvent{
+		DocumentKey:  bson.D{{Key: "_id", Value: 1}},
+		FullDocument: bson.Raw(fullDocument),
+	}
+	writer := newClientBulkWriter(1, false, nil, catalog.UUIDMap{
+		"30313233343536373839616263646566": currentNS,
+	})
+
+	writer.Insert(change, event)
+
+	assert.Len(t, writer.writes, 1)
+	assert.Equal(t, currentNS.Database, writer.writes[0].Database)
+	assert.Equal(t, currentNS.Collection, writer.writes[0].Collection)
+}
+
+func TestFindNamespaceByUUIDFallsBackToCatalogEntryForSameNamespace(t *testing.T) {
+	t.Parallel()
+
+	shardKey := bson.D{{Key: "tenant", Value: 1}}
+	currentNS := catalog.Namespace{
+		Database:   "db",
+		Collection: "coll",
+		Sharded:    true,
+		ShardKey:   shardKey,
+		Capped:     true,
+	}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace: catalog.Namespace{Database: "db", Collection: "coll"},
+	}}
+
+	resolved := findNamespaceByUUID(catalog.UUIDMap{"uuid": currentNS}, change)
+
+	assert.Equal(t, currentNS, resolved)
+}
 
 func TestCollectUpdateOps(t *testing.T) {
 	t.Parallel()
@@ -323,7 +371,7 @@ func TestCollectUpdateOpsWithConflicts_NestedArrayTruncation(t *testing.T) {
 func TestClientBulkWrite_FullByBytes(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(10_000, false, nil)
+	cbw := newClientBulkWriter(10_000, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	largeValue := strings.Repeat("X", 1024*1024)
@@ -334,7 +382,7 @@ func TestClientBulkWrite_FullByBytes(t *testing.T) {
 			t.Fatalf("marshal full document: %v", err)
 		}
 
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: raw,
 		})
@@ -355,7 +403,7 @@ func TestClientBulkWrite_FullByBytes(t *testing.T) {
 func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(10_000, false, nil)
+	cbw := newCollectionBulkWriter(10_000, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	largeValue := strings.Repeat("X", 1024*1024)
@@ -366,7 +414,7 @@ func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 			t.Fatalf("marshal full document: %v", err)
 		}
 
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: raw,
 		})
@@ -387,7 +435,7 @@ func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
 func TestClientBulkWrite_FullByCount(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(3, false, nil)
+	cbw := newClientBulkWriter(3, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 3 {
@@ -396,7 +444,7 @@ func TestClientBulkWrite_FullByCount(t *testing.T) {
 			t.Fatalf("marshal full document: %v", err)
 		}
 
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: raw,
 		})
@@ -411,7 +459,7 @@ func TestClientBulkWrite_FullByCount(t *testing.T) {
 func TestCollectionBulkWrite_FullByCount(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(3, false, nil)
+	cbw := newCollectionBulkWriter(3, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 3 {
@@ -420,7 +468,7 @@ func TestCollectionBulkWrite_FullByCount(t *testing.T) {
 			t.Fatalf("marshal full document: %v", err)
 		}
 
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: raw,
 		})
@@ -513,12 +561,12 @@ func TestCollectUpdateOps_TruncationWithRemovedFieldOnSamePathSpills(t *testing.
 func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(3, false, nil)
+	cbw := newClientBulkWriter(3, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	// Two single-op inserts: count = 2.
 	for i := range 2 {
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: i}})),
 		})
@@ -546,7 +594,7 @@ func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 		},
 	}
 
-	cbw.Update(ns, event)
+	cbw.Update(changeForNamespace(ns), event)
 
 	assert.True(t, cbw.Full(), "Full() must be true after Update appended past count cap")
 	assert.Greater(t, len(cbw.writes), cbw.maxOpsSize,
@@ -558,11 +606,11 @@ func TestClientBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 func TestCollectionBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(3, false, nil)
+	cbw := newCollectionBulkWriter(3, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db", Collection: "c"}
 
 	for i := range 2 {
-		cbw.Insert(ns, &InsertEvent{
+		cbw.Insert(changeForNamespace(ns), &InsertEvent{
 			DocumentKey:  bson.D{{Key: "_id", Value: i}},
 			FullDocument: bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: i}})),
 		})
@@ -588,7 +636,7 @@ func TestCollectionBulkWrite_FullAfterUpdateWithFollowUps(t *testing.T) {
 		},
 	}
 
-	cbw.Update(ns, event)
+	cbw.Update(changeForNamespace(ns), event)
 
 	assert.True(t, cbw.Full(), "Full() must be true after Update appended past count cap")
 	assert.Greater(t, cbw.count, cbw.maxOpsSize,
@@ -605,7 +653,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 	t.Run("client bulk", func(t *testing.T) {
 		t.Parallel()
 
-		cbw := newClientBulkWriter(10_000, false, nil)
+		cbw := newClientBulkWriter(10_000, false, nil, catalog.UUIDMap{})
 
 		// Empty bulk: WouldOverflow must always be false even for huge estimates so a
 		// single oversized event can still be sent on its own bulk.
@@ -619,7 +667,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 		for i := range 30 {
 			raw := bson.Raw(mustMarshal(t,
 				bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}}))
-			cbw.Insert(ns, &InsertEvent{
+			cbw.Insert(changeForNamespace(ns), &InsertEvent{
 				DocumentKey:  bson.D{{Key: "_id", Value: i}},
 				FullDocument: raw,
 			})
@@ -638,7 +686,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 	t.Run("collection bulk", func(t *testing.T) {
 		t.Parallel()
 
-		cbw := newCollectionBulkWriter(10_000, false, nil)
+		cbw := newCollectionBulkWriter(10_000, false, nil, catalog.UUIDMap{})
 
 		assert.False(t, cbw.WouldOverflow(2*config.MaxWriteBatchSizeBytes),
 			"empty bulk must accept any estimate")
@@ -649,7 +697,7 @@ func TestBulkWriter_WouldOverflowPreflight(t *testing.T) {
 		for i := range 30 {
 			raw := bson.Raw(mustMarshal(t,
 				bson.D{{Key: "_id", Value: i}, {Key: "blob", Value: largeValue}}))
-			cbw.Insert(ns, &InsertEvent{
+			cbw.Insert(changeForNamespace(ns), &InsertEvent{
 				DocumentKey:  bson.D{{Key: "_id", Value: i}},
 				FullDocument: raw,
 			})
@@ -674,6 +722,10 @@ func mustMarshal(t *testing.T, v any) []byte {
 	}
 
 	return b
+}
+
+func changeForNamespace(ns catalog.Namespace) *ChangeEvent {
+	return &ChangeEvent{EventHeader: EventHeader{Namespace: ns}}
 }
 
 // findUnsetDoc returns the $unset sub-document from a classic update doc, or nil if absent.
@@ -849,7 +901,7 @@ func collectFollowUpKeys(t *testing.T, followUp []bson.D) []string {
 func TestExtractRecoverableUpdateTarget_ClientBulk(t *testing.T) {
 	t.Parallel()
 
-	cbw := newClientBulkWriter(10, false, nil)
+	cbw := newClientBulkWriter(10, false, nil, catalog.UUIDMap{})
 	ns := catalog.Namespace{Database: "db1", Collection: "coll1"}
 	filter := bson.D{{Key: "_id", Value: 42}}
 
@@ -986,7 +1038,7 @@ func TestExtractRecoverableUpdateTarget_ClientBulk(t *testing.T) {
 func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 	t.Parallel()
 
-	cbw := newCollectionBulkWriter(10, false, nil)
+	cbw := newCollectionBulkWriter(10, false, nil, catalog.UUIDMap{})
 	filter := bson.D{{Key: "_id", Value: 7}}
 
 	ops := []mongo.WriteModel{

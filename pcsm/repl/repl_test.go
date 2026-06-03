@@ -39,6 +39,8 @@ type mockCatalog struct {
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
 	setCollectionUUIDValue  *bson.Binary
+
+	setCollectionShardingMetadataErr error
 }
 
 type mockPool struct {
@@ -95,6 +97,10 @@ func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.Ind
 
 func (m *mockCatalog) ShardCollection(_ context.Context, _, _ string, _ bson.D, _ bool) error {
 	return nil
+}
+
+func (m *mockCatalog) SetCollectionShardingMetadata(_ context.Context, _, _ string, _ bson.D) error {
+	return m.setCollectionShardingMetadataErr
 }
 
 func (m *mockCatalog) UUIDMap() catalog.UUIDMap {

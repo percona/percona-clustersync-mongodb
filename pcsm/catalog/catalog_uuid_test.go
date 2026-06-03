@@ -88,3 +88,66 @@ func TestCatalog_CollectionUUID(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalog_SetCollectionShardingMetadata(t *testing.T) {
+	t.Parallel()
+
+	shardKey := bson.D{{Key: "tenant", Value: 1}}
+	tests := []struct {
+		name      string
+		databases map[string]databaseCatalog
+		db        string
+		coll      string
+		wantErr   error
+		assert    func(t *testing.T, cat *Catalog)
+	}{
+		{
+			name:      "missing db",
+			databases: map[string]databaseCatalog{},
+			db:        "missing",
+			coll:      "coll",
+			wantErr:   mdb.ErrNotFound,
+		},
+		{
+			name: "missing coll",
+			databases: map[string]databaseCatalog{
+				"db": {Collections: map[string]collectionCatalog{}},
+			},
+			db:      "db",
+			coll:    "missing",
+			wantErr: mdb.ErrNotFound,
+		},
+		{
+			name: "existing collection",
+			databases: map[string]databaseCatalog{
+				"db": {Collections: map[string]collectionCatalog{
+					"coll": {},
+				}},
+			},
+			db:   "db",
+			coll: "coll",
+			assert: func(t *testing.T, cat *Catalog) {
+				t.Helper()
+
+				coll := cat.Databases["db"].Collections["coll"]
+				require.True(t, coll.Sharded)
+				require.Equal(t, shardKey, coll.ShardKey)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := NewCatalog(nil, mdb.ServerVersion{})
+			cat.Databases = tt.databases
+
+			err := cat.SetCollectionShardingMetadata(t.Context(), tt.db, tt.coll, shardKey)
+			require.ErrorIs(t, err, tt.wantErr)
+			if tt.assert != nil {
+				tt.assert(t, cat)
+			}
+		})
+	}
+}
