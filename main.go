@@ -43,7 +43,7 @@ const (
 )
 
 var (
-	Version   = "v0.8.1" //nolint:gochecknoglobals
+	Version   = "v0.9.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
 	GitCommit = ""       //nolint:gochecknoglobals
 	GitBranch = ""       //nolint:gochecknoglobals
