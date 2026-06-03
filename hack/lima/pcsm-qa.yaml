@@ -1,0 +1,30 @@
+# pcsm-qa.yaml — Lima VM for running the PCSM QA suite on a kernel <6.19.
+# Workaround for SERVER-121912 (mongod 8.0+ refuses to start on Linux >=6.19).
+#
+# Usage from a PCSM checkout:
+#   limactl start --name=pcsm-qa ./hack/lima/pcsm-qa.yaml
+#   ./hack/run-qa-suite.sh --vm                 # uses the VM's docker daemon
+#   limactl stop pcsm-qa                        # when done
+
+base: template:docker-rootful
+
+cpus: 8
+memory: 16GiB
+disk: 80GiB
+
+mounts:
+  - location: "~"
+    writable: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      command -v jq >/dev/null || { apt-get update && apt-get install -y jq; }
+      tmp=$(mktemp)
+      jq '. + {"default-ulimits": {"nofile":{"Name":"nofile","Soft":1048576,"Hard":1048576},"nproc":{"Name":"nproc","Soft":1048576,"Hard":1048576}}}' \
+        /etc/docker/daemon.json > "$tmp"
+      install -m 0644 "$tmp" /etc/docker/daemon.json
+      rm -f "$tmp"
+      systemctl restart docker
