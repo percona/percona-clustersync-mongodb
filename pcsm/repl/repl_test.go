@@ -608,6 +608,33 @@ func TestIsReplay(t *testing.T) {
 	}
 }
 
+func TestShouldSkipReplay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		sourceIsMongos bool
+		checkpoint     bson.Timestamp
+		changeTime     bson.Timestamp
+		want           bool
+	}{
+		{"replica set source skips nothing", false, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, false},
+		{"mongos source skips old event", true, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, true},
+		{"mongos source keeps new event", true, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 11}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := &Repl{sourceIsMongos: tt.sourceIsMongos, checkpointOpTime: tt.checkpoint}
+			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
+
+			assert.Equal(t, tt.want, r.shouldSkipReplay(change))
+		})
+	}
+}
+
 func TestAdvanceReportedOpTime(t *testing.T) {
 	t.Parallel()
 
