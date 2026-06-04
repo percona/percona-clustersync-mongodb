@@ -143,8 +143,6 @@ type Repl struct {
 	expectMovePrimaryInvalidate bool
 	sourceIsMongos              bool
 
-	getCollectionShardingInfo func(context.Context, *mongo.Client, string, string) (*mdb.ShardingInfo, error)
-
 	useCollectionBulk  bool
 	useSimpleCollation bool
 }

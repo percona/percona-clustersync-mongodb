@@ -21,6 +21,8 @@ const (
 	replTestCollection = "testcoll"
 )
 
+func testDocumentIDKey() string { return string([]byte{'_', 'i', 'd'}) }
+
 type mockCatalog struct {
 	collectionExists bool
 

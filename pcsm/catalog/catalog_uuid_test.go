@@ -104,32 +104,32 @@ func TestCatalog_SetCollectionShardingMetadata(t *testing.T) {
 		{
 			name:      "missing db",
 			databases: map[string]databaseCatalog{},
-			db:        "missing",
-			coll:      "coll",
+			db:        missingDatabaseName,
+			coll:      testCollectionName,
 			wantErr:   mdb.ErrNotFound,
 		},
 		{
 			name: "missing coll",
 			databases: map[string]databaseCatalog{
-				"db": {Collections: map[string]collectionCatalog{}},
+				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{}},
 			},
-			db:      "db",
-			coll:    "missing",
+			db:      testCatalogDatabaseName,
+			coll:    missingDatabaseName,
 			wantErr: mdb.ErrNotFound,
 		},
 		{
 			name: "existing collection",
 			databases: map[string]databaseCatalog{
-				"db": {Collections: map[string]collectionCatalog{
-					"coll": {},
+				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{
+					testCollectionName: {},
 				}},
 			},
-			db:   "db",
-			coll: "coll",
+			db:   testCatalogDatabaseName,
+			coll: testCollectionName,
 			assert: func(t *testing.T, cat *Catalog) {
 				t.Helper()
 
-				coll := cat.Databases["db"].Collections["coll"]
+				coll := cat.Databases[testCatalogDatabaseName].Collections[testCollectionName]
 				require.True(t, coll.Sharded)
 				require.Equal(t, shardKey, coll.ShardKey)
 			},

@@ -29,11 +29,11 @@ func TestClientBulkWriteResolvesNamespaceFromBulkSnapshot(t *testing.T) {
 		Namespace:      catalog.Namespace{Database: "stale_db", Collection: "stale_coll"},
 		CollectionUUID: uuid,
 	}}
-	fullDocument, err := bson.Marshal(bson.D{{Key: "_id", Value: 1}})
+	fullDocument, err := bson.Marshal(bson.D{{Key: testDocumentIDKey(), Value: 1}})
 	require.NoError(t, err)
 
 	event := &InsertEvent{
-		DocumentKey:  bson.D{{Key: "_id", Value: 1}},
+		DocumentKey:  bson.D{{Key: testDocumentIDKey(), Value: 1}},
 		FullDocument: bson.Raw(fullDocument),
 	}
 	writer := newClientBulkWriter(1, false, nil, catalog.UUIDMap{
@@ -53,13 +53,13 @@ func TestFindNamespaceByUUIDFallsBackToCatalogEntryForSameNamespace(t *testing.T
 	shardKey := bson.D{{Key: "tenant", Value: 1}}
 	currentNS := catalog.Namespace{
 		Database:   "db",
-		Collection: "coll",
+		Collection: replTestCollection,
 		Sharded:    true,
 		ShardKey:   shardKey,
 		Capped:     true,
 	}
 	change := &ChangeEvent{EventHeader: EventHeader{
-		Namespace: catalog.Namespace{Database: "db", Collection: "coll"},
+		Namespace: catalog.Namespace{Database: "db", Collection: replTestCollection},
 	}}
 
 	resolved := findNamespaceByUUID(catalog.UUIDMap{"uuid": currentNS}, change)
