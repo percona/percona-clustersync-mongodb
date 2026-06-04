@@ -14,6 +14,11 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
+const (
+	replTestDBName     = "testdb"
+	replTestCollection = "testcoll"
+)
+
 type mockCatalog struct {
 	collectionExists bool
 
@@ -113,7 +118,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
 
 	tests := []struct {
 		name              string
@@ -159,7 +164,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			catalogUUIDExists: false,
 			eventUUID:         eventUUID,
 			createEvent: CreateEvent{
-				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + "testcoll"},
+				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + replTestCollection},
 			},
 		},
 	}
@@ -206,7 +211,7 @@ func TestApplyDropDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
 
 	tests := []struct {
 		name              string
