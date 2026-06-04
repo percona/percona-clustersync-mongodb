@@ -14,6 +14,8 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
+var errCursorClosedByMongos = errors.New("cursor closed by mongos")
+
 const (
 	replTestDBName     = "testdb"
 	replTestCollection = "testcoll"
@@ -483,7 +485,7 @@ func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
 		token:       token,
 		clusterTime: bson.Timestamp{T: 123, I: 1},
 	}
-	cursorErr := errors.New("cursor closed by mongos")
+	cursorErr := errCursorClosedByMongos
 
 	err := changeStreamCursorError(invalidateErr, cursorErr, 0)
 
