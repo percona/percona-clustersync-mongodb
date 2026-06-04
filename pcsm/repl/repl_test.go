@@ -581,6 +581,33 @@ func TestAdvanceCheckpoint(t *testing.T) {
 	}
 }
 
+func TestIsReplay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		checkpoint bson.Timestamp
+		changeTime bson.Timestamp
+		want       bool
+	}{
+		{"zero checkpoint", bson.Timestamp{}, bson.Timestamp{T: 99, I: 9}, false},
+		{"event before checkpoint", bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, true},
+		{"event equal checkpoint", bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 10}, false},
+		{"event after checkpoint", bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 11}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := &Repl{checkpointOpTime: tt.checkpoint}
+			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
+
+			assert.Equal(t, tt.want, r.isReplay(change))
+		})
+	}
+}
+
 func TestAdvanceReportedOpTime(t *testing.T) {
 	t.Parallel()
 
