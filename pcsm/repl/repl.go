@@ -732,7 +732,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			continue
 		}
 
-		if r.isReplay(change) {
+		if r.shouldSkipReplay(change) {
 			lg.With(
 				log.NS(change.Namespace.Database, change.Namespace.Collection),
 				log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
@@ -903,6 +903,14 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 	r.lock.Unlock()
 
 	return !checkpoint.IsZero() && change.ClusterTime.Before(checkpoint)
+}
+
+// shouldSkipReplay reports whether change is a replayed event that must be
+// skipped. Replay skipping applies only to mongos (sharded) sources, where
+// movePrimary and resume-from-checkpoint can redeliver already-applied events.
+// Replica set sources never need it and skipping there drops legitimate events.
+func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
+	return r.sourceIsMongos && r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick
