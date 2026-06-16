@@ -42,12 +42,14 @@ type Catalog interface {
 	) error
 }
 
-var (
-	ErrInvalidateEvent  = errors.New("invalidate")
-	ErrOplogHistoryLost = errors.New("oplog history is lost")
-)
+var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
+
+type barrierController interface {
+	Barrier() error
+	ReleaseBarrier()
+}
 
 // Options configures the replication behavior.
 type Options struct {
@@ -138,7 +140,8 @@ type Repl struct {
 
 	pool *workerPool
 
-	sourceIsMongos bool
+	expectMovePrimaryInvalidate bool
+	sourceIsMongos              bool
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
@@ -211,6 +214,21 @@ func NewRepl(
 // movePrimary on older sharded topologies.
 func (r *Repl) sourceIsPre8AndMongos() bool {
 	return r.sourceIsMongos && r.sourceVer.Major() < 8
+}
+
+func (r *Repl) armExpectedMovePrimaryInvalidate() {
+	r.lock.Lock()
+	r.expectMovePrimaryInvalidate = true
+	r.lock.Unlock()
+}
+
+func (r *Repl) takeExpectedMovePrimaryInvalidate() bool {
+	r.lock.Lock()
+	expected := r.expectMovePrimaryInvalidate
+	r.expectMovePrimaryInvalidate = false
+	r.lock.Unlock()
+
+	return expected
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -476,11 +494,29 @@ func (r *Repl) watchWithRetry(
 	changeCh chan<- *ChangeEvent,
 ) error {
 	currentOpts := opts
+	var startAfter bson.Raw
 
 	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
 		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 		if err == nil {
 			return nil
+		}
+
+		var invalidateErr changeStreamInvalidateError
+		if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
+			startAfter = append(startAfter[:0], invalidateErr.token...)
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+			log.New("repl:watch").With(
+				log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
+			).Warn("change stream invalidated; reconnecting with startAfter")
+
+			return err
+		}
+
+		if len(startAfter) > 0 {
+			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+
+			return err
 		}
 
 		r.lock.Lock()
@@ -493,6 +529,15 @@ func (r *Repl) watchWithRetry(
 	}, isChangeStreamUnrecoverable,
 		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
+}
+
+type changeStreamInvalidateError struct {
+	token       bson.Raw
+	clusterTime bson.Timestamp
+}
+
+func (e changeStreamInvalidateError) Error() string {
+	return "change stream invalidated"
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
@@ -528,6 +573,8 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
+	var invalidateErr *changeStreamInvalidateError
+
 	for {
 		lastEventTS := bson.Timestamp{}
 		hasEvents := false
@@ -548,11 +595,18 @@ func (r *Repl) watchChangeEvents(
 			ts := change.ClusterTime
 			changeCh <- change
 			lastEventTS = ts
+
+			if change.OperationType == Invalidate {
+				invalidateErr = &changeStreamInvalidateError{
+					token:       append(bson.Raw(nil), change.ID...),
+					clusterTime: change.ClusterTime,
+				}
+			}
 		}
 
-		err = cur.Err()
-		if err != nil || cur.ID() == 0 {
-			return errors.Wrap(err, "cursor")
+		err = changeStreamCursorError(invalidateErr, cur.Err(), cur.ID())
+		if err != nil {
+			return err
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -578,6 +632,22 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 	}
+}
+
+func changeStreamCursorError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
+	if invalidateErr != nil {
+		return *invalidateErr
+	}
+
+	if cursorErr != nil {
+		return errors.Wrap(cursorErr, "cursor")
+	}
+
+	if cursorID == 0 {
+		return errors.New("change stream cursor closed by server")
+	}
+
+	return nil
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
@@ -700,6 +770,14 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 			r.tryAdvanceOpTime(cpTicker)
 
+		case Invalidate:
+			err := r.handleInvalidate(change)
+			if err != nil {
+				return
+			}
+
+			lastRoutedTS = bson.Timestamp{}
+
 		default:
 			err := r.pool.Barrier()
 			if err != nil {
@@ -746,6 +824,46 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+func (r *Repl) handleInvalidate(change *ChangeEvent) error {
+	return r.handleInvalidateWithBarrier(change, r.pool)
+}
+
+func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierController) error {
+	err := bc.Barrier()
+	if err != nil {
+		bc.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return errors.Wrap(err, "worker error during barrier")
+	}
+	defer bc.ReleaseBarrier()
+
+	if r.sourceIsPre8AndMongos() && r.takeExpectedMovePrimaryInvalidate() {
+		r.lock.Lock()
+		r.advanceCheckpoint(change.ClusterTime)
+		r.eventsApplied++
+		r.lock.Unlock()
+
+		metrics.AddEventsApplied(1)
+
+		return nil
+	}
+
+	if r.sourceIsMongos {
+		log.New("repl:invalidate").With(
+			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			log.NS(change.Namespace.Database, change.Namespace.Collection),
+		).Warn("change stream invalidated; will reconnect from checkpoint")
+
+		return nil
+	}
+
+	invalidateErr := errors.New("change stream invalidated unexpectedly")
+	r.setFailed(invalidateErr, "Invalidate event")
+
+	return invalidateErr
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
@@ -852,11 +970,18 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		switch {
 		case exists && uuidEqual(catalogUUID, eventUUID):
 			lg.Debug("create event replay detected, namespace already at this UUID; noop")
+			if r.sourceIsPre8AndMongos() {
+				r.armExpectedMovePrimaryInvalidate()
+			}
 
 			return nil
 
 		case exists && catalogUUID != nil && eventUUID != nil:
 			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+			if r.sourceIsPre8AndMongos() {
+				r.armExpectedMovePrimaryInvalidate()
+			}
+
 			r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
 
 			return nil
@@ -947,11 +1072,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		lg.Infof("Collection %q has been renamed to %q",
 			change.Namespace, event.OperationDescription.To)
-
-	case Invalidate:
-		lg.Error(ErrInvalidateEvent, "")
-
-		return ErrInvalidateEvent
 
 	case ShardCollection:
 		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
