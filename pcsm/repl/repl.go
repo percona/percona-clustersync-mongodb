@@ -137,6 +137,8 @@ type Repl struct {
 
 	pool *workerPool
 
+	sourceIsMongos bool
+
 	useCollectionBulk  bool
 	useSimpleCollation bool
 }
@@ -176,6 +178,7 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 	sourceVer mdb.ServerVersion,
+	sourceIsMongos bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -190,15 +193,23 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:    source,
-		target:    target,
-		sourceVer: sourceVer,
-		nsFilter:  nsFilter,
-		catalog:   cat,
-		options:   opts,
-		pauseCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		source:         source,
+		target:         target,
+		sourceVer:      sourceVer,
+		nsFilter:       nsFilter,
+		catalog:        cat,
+		options:        opts,
+		pauseCh:        make(chan struct{}),
+		doneCh:         make(chan struct{}),
+		sourceIsMongos: sourceIsMongos,
 	}
+}
+
+// sourceIsPre8AndMongos returns true when the source is a mongos (sharded) and
+// runs MongoDB 6.x or 7.x (pre-8). Used to gate invalidate-stream handling for
+// movePrimary on older sharded topologies.
+func (r *Repl) sourceIsPre8AndMongos() bool {
+	return r.sourceIsMongos && r.sourceVer.Major() < 8
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.

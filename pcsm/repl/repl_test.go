@@ -66,6 +66,10 @@ func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
 	return catalog.UUIDMap{}
 }
 
+func (m *mockCatalog) CollectionUUID(_, _ string) (*bson.Binary, bool) {
+	return nil, false
+}
+
 func (m *mockCatalog) DropDatabase(_ context.Context, _ string) error {
 	return nil
 }
@@ -257,4 +261,45 @@ func TestAlignCappedSize(t *testing.T) {
 			assert.Equal(t, tt.expected, alignCappedSize(tt.input))
 		})
 	}
+}
+
+func TestSourceIsPre8AndMongos(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mongos bool
+		ver    mdb.ServerVersion
+		want   bool
+	}{
+		{"mongos 6.0 is pre-8", true, mdb.ServerVersion{6, 0, 0, 0}, true},
+		{"mongos 7.0 is pre-8", true, mdb.ServerVersion{7, 0, 0, 0}, true},
+		{"mongos 8.0 is not pre-8", true, mdb.ServerVersion{8, 0, 0, 0}, false},
+		{"replica set 6.0 is not mongos", false, mdb.ServerVersion{6, 0, 0, 0}, false},
+		{"replica set 8.0 is not mongos", false, mdb.ServerVersion{8, 0, 0, 0}, false},
+		{"mongos zero version treated as pre-8", true, mdb.ServerVersion{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := &Repl{sourceIsMongos: tt.mongos, sourceVer: tt.ver}
+			assert.Equal(t, tt.want, r.sourceIsPre8AndMongos())
+		})
+	}
+}
+
+func TestParseChangeEvent_Invalidate(t *testing.T) {
+	t.Parallel()
+
+	data, err := bson.Marshal(bson.D{{Key: "operationType", Value: "invalidate"}})
+	require.NoError(t, err)
+
+	var change ChangeEvent
+	err = parseChangeEvent(data, &change)
+	require.NoError(t, err)
+
+	assert.Equal(t, Invalidate, change.OperationType)
+	_, ok := change.Event.(InvalidateEvent)
+	assert.True(t, ok)
 }
