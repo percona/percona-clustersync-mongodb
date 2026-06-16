@@ -827,6 +827,8 @@ func uuidEqual(a, b *bson.Binary) bool {
 }
 
 // applyDDLChange applies a schema change to the target MongoDB.
+//
+//nolint:gocyclo // PCSM-249: flat DDL dispatch switch, complexity is inherent; refactor deferred to final PR
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
 	ctx = lg.WithContext(ctx)
@@ -836,7 +838,46 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	switch change.OperationType { //nolint:exhaustive
 	case Create:
 		event := change.Event.(CreateEvent) //nolint:forcetypeassert
-		err = r.applyCreateDDLChange(ctx, change, &event, lg)
+		if event.IsTimeseries() {
+			lg.Warn("Timeseries is not supported. skipping")
+
+			return nil
+		}
+
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		eventUUID := change.CollectionUUID
+
+		catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+		switch {
+		case exists && uuidEqual(catalogUUID, eventUUID):
+			lg.Debug("create event replay detected, namespace already at this UUID; noop")
+
+			return nil
+
+		case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
+			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+			r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+
+			return nil
+		}
+
+		err = r.catalog.DropCollection(ctx, db, coll)
+		if err != nil {
+			err = errors.Wrap(err, "drop before create")
+
+			break
+		}
+
+		err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
+		if err != nil {
+			err = errors.Wrap(err, "create")
+
+			break
+		}
+
+		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
 		db := change.Namespace.Database
@@ -953,52 +994,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		return errors.Wrap(err, string(change.OperationType))
 	}
-
-	return nil
-}
-
-func (r *Repl) applyCreateDDLChange(
-	ctx context.Context,
-	change *ChangeEvent,
-	event *CreateEvent,
-	lg log.Logger,
-) error {
-	if event.IsTimeseries() {
-		lg.Warn("Timeseries is not supported. skipping")
-
-		return nil
-	}
-
-	db := change.Namespace.Database
-	coll := change.Namespace.Collection
-	eventUUID := change.CollectionUUID
-
-	catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
-	switch {
-	case exists && uuidEqual(catalogUUID, eventUUID):
-		lg.Debug("create event replay detected, namespace already at this UUID; noop")
-
-		return nil
-
-	case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
-		lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
-		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
-
-		return nil
-	}
-
-	err := r.catalog.DropCollection(ctx, db, coll)
-	if err != nil {
-		return errors.Wrap(err, "drop before create")
-	}
-
-	err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
-	if err != nil {
-		return errors.Wrap(err, "create")
-	}
-
-	r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
-	lg.Infof("Collection %q has been created", change.Namespace)
 
 	return nil
 }
