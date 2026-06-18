@@ -860,16 +860,20 @@ func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierContro
 		return nil
 	}
 
-	if r.sourceIsMongos {
+	if r.sourceIsMongos && r.takeExpectedMovePrimaryInvalidate() {
 		log.New("repl:invalidate").With(
 			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 			log.NS(change.Namespace.Database, change.Namespace.Collection),
-		).Warn("change stream invalidated; will reconnect from checkpoint")
+		).Warn("expected movePrimary invalidate; will reconnect from checkpoint")
 
 		return nil
 	}
 
 	invalidateErr := errors.New("change stream invalidated unexpectedly")
+	log.New("repl:invalidate").With(
+		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+		log.NS(change.Namespace.Database, change.Namespace.Collection),
+	).Error(invalidateErr, "unexpected change stream invalidate; failing closed")
 	r.setFailed(invalidateErr, "Invalidate event")
 
 	return invalidateErr

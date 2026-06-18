@@ -181,15 +181,22 @@ func TestDispatch_Invalidate(t *testing.T) {
 			expectEventsApply: 1,
 		},
 		{
-			name:           "recoverable_no_expected_movePrimary_invalidate_pre8_mongos",
+			name:           "fail_closed_no_expected_movePrimary_invalidate_pre8_mongos",
 			sourceIsMongos: true,
 			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
+			expectFailed:   true,
 		},
 		{
 			name:             "recoverable_8x_with_expected_movePrimary_invalidate_mongos",
 			sourceIsMongos:   true,
 			sourceVer:        mdb.ServerVersion{8, 0, 0, 0},
 			expectInvalidate: true,
+		},
+		{
+			name:           "fail_closed_no_expected_movePrimary_invalidate_8x_mongos",
+			sourceIsMongos: true,
+			sourceVer:      mdb.ServerVersion{8, 0, 0, 0},
+			expectFailed:   true,
 		},
 		{
 			name:             "fail_closed_rs_source",
