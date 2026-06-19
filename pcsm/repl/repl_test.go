@@ -36,6 +36,7 @@ type mockCatalog struct {
 	setCollectionUUIDCalled bool
 	setCollectionUUIDDB     string
 	setCollectionUUIDColl   string
+	setCollectionUUIDValue  *bson.Binary
 }
 
 func (m *mockCatalog) CollectionExists(_, _ string) bool {
@@ -56,10 +57,11 @@ func (m *mockCatalog) CreateCollection(_ context.Context, _, _ string, _ *catalo
 	return m.createCollectionErr
 }
 
-func (m *mockCatalog) SetCollectionUUID(_ context.Context, db, coll string, _ *bson.Binary) {
+func (m *mockCatalog) SetCollectionUUID(_ context.Context, db, coll string, uuid *bson.Binary) {
 	m.setCollectionUUIDCalled = true
 	m.setCollectionUUIDDB = db
 	m.setCollectionUUIDColl = coll
+	m.setCollectionUUIDValue = uuid
 }
 
 func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.IndexSpecification) error {
@@ -160,6 +162,14 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			expectSetUUID:     true,
 		},
 		{
+			name:              "nil catalog UUID applies real create",
+			catalogUUIDExists: true,
+			eventUUID:         eventUUID,
+			expectDrop:        true,
+			expectCreate:      true,
+			expectSetUUID:     true,
+		},
+		{
 			name:              "timeseries create returns without catalog changes",
 			catalogUUIDExists: false,
 			eventUUID:         eventUUID,
@@ -201,6 +211,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			if tt.expectSetUUID {
 				assert.Equal(t, ns.Database, cat.setCollectionUUIDDB)
 				assert.Equal(t, ns.Collection, cat.setCollectionUUIDColl)
+				assert.Equal(t, tt.eventUUID, cat.setCollectionUUIDValue)
 			}
 		})
 	}

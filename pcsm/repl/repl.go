@@ -855,7 +855,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 			return nil
 
-		case exists && eventUUID != nil && !uuidEqual(catalogUUID, eventUUID):
+		case exists && catalogUUID != nil && eventUUID != nil:
 			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
 			r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
 
