@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -216,12 +217,19 @@ func (r *Repl) sourceIsPre8AndMongos() bool {
 	return r.sourceIsMongos && r.sourceVer.Major() < 8
 }
 
+// armExpectedMovePrimaryInvalidate signals that a movePrimary is in flight, so
+// the next change-stream invalidate from a mongos source is expected and should
+// be recovered rather than treated as fatal. A worker calls this during DDL
+// apply; the dispatcher consumes it via takeExpectedMovePrimaryInvalidate.
 func (r *Repl) armExpectedMovePrimaryInvalidate() {
 	r.lock.Lock()
 	r.expectMovePrimaryInvalidate = true
 	r.lock.Unlock()
 }
 
+// takeExpectedMovePrimaryInvalidate reports whether a movePrimary invalidate was
+// expected and clears the flag as a side effect, so the dispatcher consumes it
+// exactly once per invalidate after the worker barrier.
 func (r *Repl) takeExpectedMovePrimaryInvalidate() bool {
 	r.lock.Lock()
 	expected := r.expectMovePrimaryInvalidate
@@ -386,6 +394,9 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	)
 
 	r.checkpointOpTime = startAt
+	// Scope the movePrimary-invalidate expectation to this run; clear any stale
+	// arming left over from a prior failed or paused run.
+	r.expectMovePrimaryInvalidate = false
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -504,7 +515,7 @@ func (r *Repl) watchWithRetry(
 
 		var invalidateErr changeStreamInvalidateError
 		if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
-			startAfter = append(startAfter[:0], invalidateErr.token...)
+			startAfter = append(bson.Raw(nil), invalidateErr.token...)
 			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
 			log.New("repl:watch").With(
 				log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
@@ -537,7 +548,7 @@ type changeStreamInvalidateError struct {
 }
 
 func (e changeStreamInvalidateError) Error() string {
-	return "change stream invalidated"
+	return fmt.Sprintf("change stream invalidated at cluster time %d.%d", e.clusterTime.T, e.clusterTime.I)
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
@@ -659,6 +670,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.advanceCheckpoint(r.pool.Checkpoint())
 
 		r.pool = nil
+		// Clear the movePrimary-invalidate expectation so arming never leaks
+		// past the run that set it.
+		r.expectMovePrimaryInvalidate = false
 		r.lock.Unlock()
 
 		close(r.doneCh)
@@ -842,6 +856,9 @@ func (r *Repl) handleInvalidate(change *ChangeEvent) error {
 func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierController) error {
 	err := bc.Barrier()
 	if err != nil {
+		// Safe to release even though Barrier failed: ReleaseBarrier only does
+		// non-blocking sends to resumeCh and skips dead workers, so it has no
+		// held-state dependency on a successful barrier.
 		bc.ReleaseBarrier()
 		r.setFailed(err, "Worker error during barrier")
 
@@ -852,6 +869,10 @@ func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierContro
 	if r.sourceIsPre8AndMongos() && r.takeExpectedMovePrimaryInvalidate() {
 		r.lock.Lock()
 		r.advanceCheckpoint(change.ClusterTime)
+		// pre-8 mongos movePrimary recovery advances the checkpoint past the
+		// invalidate and counts one synthetic applied event that never went
+		// through a worker; this feeds the same total as pool.TotalEventsApplied()
+		// via Checkpoint()/Status() (applied = r.eventsApplied + pool total).
 		r.eventsApplied++
 		r.lock.Unlock()
 
