@@ -507,37 +507,38 @@ func (r *Repl) watchWithRetry(
 	currentOpts := opts
 	var startAfter bson.Raw
 
-	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
-		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
-		if err == nil {
-			return nil
-		}
+	return mdb.RetryWithBackoff(
+		ctx, func() error { //nolint:wrapcheck
+			err := r.watchChangeEvents(ctx, currentOpts, changeCh)
+			if err == nil {
+				return nil
+			}
 
-		var invalidateErr changeStreamInvalidateError
-		if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
-			startAfter = append(bson.Raw(nil), invalidateErr.token...)
-			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
-			log.New("repl:watch").With(
-				log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
-			).Warn("change stream invalidated; reconnecting with startAfter")
+			var invalidateErr changeStreamInvalidateError
+			if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
+				startAfter = append(bson.Raw(nil), invalidateErr.token...)
+				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+				log.New("repl:watch").With(
+					log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
+				).Warn("change stream invalidated; reconnecting with startAfter")
+
+				return err
+			}
+
+			if len(startAfter) > 0 {
+				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+
+				return err
+			}
+
+			r.lock.Lock()
+			lastOpTime := r.checkpointOpTime
+			r.lock.Unlock()
+
+			currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
 
 			return err
-		}
-
-		if len(startAfter) > 0 {
-			currentOpts = options.ChangeStream().SetStartAfter(startAfter)
-
-			return err
-		}
-
-		r.lock.Lock()
-		lastOpTime := r.checkpointOpTime
-		r.lock.Unlock()
-
-		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
-
-		return err
-	}, isChangeStreamUnrecoverable,
+		}, isChangeStreamUnrecoverable,
 		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
 }
@@ -1253,5 +1254,6 @@ func loggerForEvent(change *ChangeEvent) log.Logger {
 	return log.New("repl").With(
 		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 		log.Op(string(change.OperationType)),
-		log.NS(change.Namespace.Database, change.Namespace.Collection))
+		log.NS(change.Namespace.Database, change.Namespace.Collection),
+	)
 }
