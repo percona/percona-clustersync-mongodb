@@ -19,6 +19,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
+// DriverDefaultMaxPoolSize mirrors the MongoDB Go driver's default maxPoolSize,
+// applied to a client when the connection string omits the option.
+const DriverDefaultMaxPoolSize uint64 = 100
+
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client, error) {
 	if uri == "" {
@@ -66,7 +70,7 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 
 	switch {
 	case opts.MaxPoolSize == nil:
-		log.New("connect").Infof("Config: %s client maxPoolSize: 100 (driver default)", role)
+		log.New("connect").Infof("Config: %s client maxPoolSize: %d (driver default)", role, DriverDefaultMaxPoolSize)
 	case *opts.MaxPoolSize == 0:
 		log.New("connect").Infof("Config: %s client maxPoolSize: 0 (unlimited)", role)
 	default:
@@ -100,16 +104,18 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 }
 
 // EffectiveMaxPoolSize returns the maxPoolSize the MongoDB driver will use for a
-// client built from uri, parsed from the sanitized connection string. A nil
-// result means maxPoolSize was not set, so the driver default (100) applies; a
-// value of 0 means an unlimited pool.
+// client built from uri. A nil result means maxPoolSize was not set, so the
+// driver default applies (see [DriverDefaultMaxPoolSize]); a value of 0 means an
+// unlimited pool.
 func EffectiveMaxPoolSize(uri string) (*uint64, error) {
-	sanitized, err := sanitizeMongoURI(uri)
+	opts := options.Client().ApplyURI(uri)
+
+	err := opts.Validate()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "validate MongoDB URI")
 	}
 
-	return options.Client().ApplyURI(sanitized).MaxPoolSize, nil
+	return opts.MaxPoolSize, nil
 }
 
 func sanitizeMongoURI(uri string) (string, error) {

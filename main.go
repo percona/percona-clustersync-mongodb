@@ -507,7 +507,7 @@ func runServer(cfg *config.Config) error {
 	}
 
 	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
-		startOpts, err := resolveStartOptions(cfg, startRequest{
+		startOpts, err := resolveStartOptions(ctx, cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
 		if err != nil {
@@ -835,7 +835,7 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 
 // resolveStartOptions resolves the start options from the HTTP request and config.
 // Clone tuning options use config (env var) as defaults, CLI/HTTP params override.
-func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
+func resolveStartOptions(ctx context.Context, cfg *config.Config, params startRequest) (*pcsm.StartOptions, error) {
 	// Start with config-based options
 	options, err := buildStartOptions(cfg)
 	if err != nil {
@@ -912,14 +912,10 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Repl.UseCollectionBulkWrite = *params.UseCollectionBulkWrite
 	}
 
-	warnIfMaxPoolSizeBelowWorkers(cfg, options)
+	warnIfMaxPoolSizeBelowWorkers(ctx, cfg, options)
 
 	return options, nil
 }
-
-// driverDefaultMaxPoolSize is the Go driver's default maxPoolSize applied when
-// the connection string omits the option.
-const driverDefaultMaxPoolSize uint64 = 100
 
 // poolBelowWorkers reports whether the effective MongoDB maxPoolSize is below
 // the clone worker count, and returns the effective pool size used for the
@@ -927,7 +923,7 @@ const driverDefaultMaxPoolSize uint64 = 100
 // default applies. A maxPool of 0 means an unlimited pool, which is
 // never below the worker count.
 func poolBelowWorkers(maxPool *uint64, workers int) (uint64, bool) {
-	effective := driverDefaultMaxPoolSize
+	effective := mdb.DriverDefaultMaxPoolSize
 	if maxPool != nil {
 		effective = *maxPool
 	}
@@ -939,11 +935,13 @@ func poolBelowWorkers(maxPool *uint64, workers int) (uint64, bool) {
 	return effective, effective < uint64(workers) //nolint:gosec // worker counts are always >= 1
 }
 
-func warnIfMaxPoolSizeBelowWorkers(cfg *config.Config, options *pcsm.StartOptions) {
-	lg := log.New("pcsm")
+func warnIfMaxPoolSizeBelowWorkers(ctx context.Context, cfg *config.Config, options *pcsm.StartOptions) {
+	lg := log.Ctx(ctx)
 
 	target, err := mdb.EffectiveMaxPoolSize(cfg.Target)
-	if err == nil {
+	if err != nil {
+		lg.Debugf("could not determine effective target maxPoolSize: %v", err)
+	} else {
 		workers := clone.EffectiveNumInsertWorkers(options.Clone.InsertWorkers)
 		if effective, warn := poolBelowWorkers(target, workers); warn {
 			lg.Warnf("target maxPoolSize (%d) is below the clone insert worker count (%d); "+
@@ -954,7 +952,9 @@ func warnIfMaxPoolSizeBelowWorkers(cfg *config.Config, options *pcsm.StartOption
 	}
 
 	source, err := mdb.EffectiveMaxPoolSize(cfg.Source)
-	if err == nil {
+	if err != nil {
+		lg.Debugf("could not determine effective source maxPoolSize: %v", err)
+	} else {
 		workers := clone.EffectiveNumReadWorkers(options.Clone.ReadWorkers)
 		if effective, warn := poolBelowWorkers(source, workers); warn {
 			lg.Warnf("source maxPoolSize (%d) is below the clone read worker count (%d); "+
@@ -1008,7 +1008,7 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	options, err := resolveStartOptions(s.cfg, params)
+	options, err := resolveStartOptions(ctx, s.cfg, params)
 	if err != nil {
 		writeResponse(w, startResponse{Err: err.Error()})
 
