@@ -507,8 +507,8 @@ func (r *Repl) watchWithRetry(
 	currentOpts := opts
 	var startAfter bson.Raw
 
-	return mdb.RetryWithBackoff(
-		ctx, func() error { //nolint:wrapcheck
+	return mdb.RetryWithBackoff( //nolint:wrapcheck
+		ctx, func() error {
 			err := r.watchChangeEvents(ctx, currentOpts, changeCh)
 			if err == nil {
 				return nil
