@@ -912,7 +912,57 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 		options.Repl.UseCollectionBulkWrite = *params.UseCollectionBulkWrite
 	}
 
+	warnIfMaxPoolSizeBelowWorkers(cfg, options)
+
 	return options, nil
+}
+
+// driverDefaultMaxPoolSize is the Go driver's default maxPoolSize applied when
+// the connection string omits the option.
+const driverDefaultMaxPoolSize uint64 = 100
+
+// poolBelowWorkers reports whether the effective MongoDB maxPoolSize is below
+// the clone worker count, and returns the effective pool size used for the
+// comparison. A nil maxPool means the option was unset, so the Go driver
+// default applies. A maxPool of 0 means an unlimited pool, which is
+// never below the worker count.
+func poolBelowWorkers(maxPool *uint64, workers int) (uint64, bool) {
+	effective := driverDefaultMaxPoolSize
+	if maxPool != nil {
+		effective = *maxPool
+	}
+
+	if effective == 0 {
+		return effective, false
+	}
+
+	return effective, effective < uint64(workers) //nolint:gosec // worker counts are always >= 1
+}
+
+func warnIfMaxPoolSizeBelowWorkers(cfg *config.Config, options *pcsm.StartOptions) {
+	lg := log.New("pcsm")
+
+	target, err := mdb.EffectiveMaxPoolSize(cfg.Target)
+	if err == nil {
+		workers := clone.EffectiveNumInsertWorkers(options.Clone.InsertWorkers)
+		if effective, warn := poolBelowWorkers(target, workers); warn {
+			lg.Warnf("target maxPoolSize (%d) is below the clone insert worker count (%d); "+
+				"inserts may block on connection-pool checkout. Raise maxPoolSize on the target URI "+
+				"or lower clone-num-insert-workers. maxPoolSize is per MongoDB server/mongos, so this "+
+				"warning is conservative.", effective, workers)
+		}
+	}
+
+	source, err := mdb.EffectiveMaxPoolSize(cfg.Source)
+	if err == nil {
+		workers := clone.EffectiveNumReadWorkers(options.Clone.ReadWorkers)
+		if effective, warn := poolBelowWorkers(source, workers); warn {
+			lg.Warnf("source maxPoolSize (%d) is below the clone read worker count (%d); "+
+				"reads may block on connection-pool checkout. Raise maxPoolSize on the source URI "+
+				"or lower clone-num-read-workers. maxPoolSize is per MongoDB server/mongos, so this "+
+				"warning is conservative.", effective, workers)
+		}
+	}
 }
 
 // HandleStart handles the /start endpoint.

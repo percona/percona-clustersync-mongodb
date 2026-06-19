@@ -21,7 +21,6 @@ func TestSanitizeConnString(t *testing.T) {
 		"socketTimeoutMS",
 		"compressors",
 		"zlibCompressionLevel",
-		"maxPoolSize",
 		"minPoolSize",
 		"maxConnecting",
 		"maxIdleTimeMS",
@@ -76,6 +75,16 @@ func TestSanitizeConnString(t *testing.T) {
 		uri := baseURI + "/admin?" + strings.Join(rv, "&")
 		res, _ := sanitizeMongoURI(uri)
 		assert.Equal(t, uri, res)
+	})
+
+	t.Run("maxPoolSize preserved", func(t *testing.T) {
+		t.Parallel()
+
+		for _, opt := range []string{"maxPoolSize=500", "MaxPoolSize=500", "MAXPOOLSIZE=500"} {
+			uri := baseURI + "/?" + opt
+			res, _ := sanitizeMongoURI(uri)
+			assert.Equal(t, uri, res)
+		}
 	})
 
 	t.Run("not allowed excluded", func(t *testing.T) {

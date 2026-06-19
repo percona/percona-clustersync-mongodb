@@ -64,6 +64,15 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 
 	opts.SetCompressors(compressors)
 
+	switch {
+	case opts.MaxPoolSize == nil:
+		log.New("connect").Infof("Config: %s client maxPoolSize: 100 (driver default)", role)
+	case *opts.MaxPoolSize == 0:
+		log.New("connect").Infof("Config: %s client maxPoolSize: 0 (unlimited)", role)
+	default:
+		log.New("connect").Infof("Config: %s client maxPoolSize: %d", role, *opts.MaxPoolSize)
+	}
+
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().
 			SetSink(log.MongoLogger(ctx)).
@@ -88,6 +97,19 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 	}
 
 	return conn, nil
+}
+
+// EffectiveMaxPoolSize returns the maxPoolSize the MongoDB driver will use for a
+// client built from uri, parsed from the sanitized connection string. A nil
+// result means maxPoolSize was not set, so the driver default (100) applies; a
+// value of 0 means an unlimited pool.
+func EffectiveMaxPoolSize(uri string) (*uint64, error) {
+	sanitized, err := sanitizeMongoURI(uri)
+	if err != nil {
+		return nil, err
+	}
+
+	return options.Client().ApplyURI(sanitized).MaxPoolSize, nil
 }
 
 func sanitizeMongoURI(uri string) (string, error) {
@@ -124,6 +146,8 @@ func sanitizeMongoURI(uri string) (string, error) {
 var allowedConnStringOptions = []string{
 	"appname",
 	"replicaset",
+
+	"maxpoolsize",
 
 	"authsource",
 	"authmechanism",

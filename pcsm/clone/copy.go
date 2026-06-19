@@ -87,14 +87,31 @@ type CopyManagerOptions struct {
 	ReadBatchSizeBytes int32
 }
 
-func (o *CopyManagerOptions) applyDefaults() {
-	if o.NumReadWorkers < minNumWorkers {
-		o.NumReadWorkers = max(runtime.NumCPU()/defaultNumReadWorkersDivisor, minNumWorkers)
+// EffectiveNumReadWorkers returns the read-worker count a clone will actually
+// use: the configured value when set, otherwise the auto default
+// max(runtime.NumCPU()/4, 1).
+func EffectiveNumReadWorkers(configured int) int {
+	if configured < minNumWorkers {
+		return max(runtime.NumCPU()/defaultNumReadWorkersDivisor, minNumWorkers)
 	}
 
-	if o.NumInsertWorkers < minNumWorkers {
-		o.NumInsertWorkers = runtime.NumCPU() * defaultNumInsertWorkersFactor
+	return configured
+}
+
+// EffectiveNumInsertWorkers returns the insert-worker count a clone will
+// actually use: the configured value when set, otherwise the auto default
+// runtime.NumCPU()*2.
+func EffectiveNumInsertWorkers(configured int) int {
+	if configured < minNumWorkers {
+		return runtime.NumCPU() * defaultNumInsertWorkersFactor
 	}
+
+	return configured
+}
+
+func (o *CopyManagerOptions) applyDefaults() {
+	o.NumReadWorkers = EffectiveNumReadWorkers(o.NumReadWorkers)
+	o.NumInsertWorkers = EffectiveNumInsertWorkers(o.NumInsertWorkers)
 
 	if o.SegmentSizeBytes < 0 {
 		o.SegmentSizeBytes = config.AutoCloneSegmentSize
