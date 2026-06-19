@@ -11,6 +11,7 @@ import (
 
 const (
 	missingDatabaseName     = "missing"
+	missingCollectionName   = "missing_coll"
 	testCollectionName      = "coll"
 	testCatalogDatabaseName = "db"
 )
@@ -40,7 +41,7 @@ func TestCatalog_CollectionUUID(t *testing.T) {
 				testCatalogDatabaseName: {Collections: map[string]collectionCatalog{}},
 			},
 			db:       testCatalogDatabaseName,
-			coll:     missingDatabaseName,
+			coll:     missingCollectionName,
 			expected: nil,
 			exists:   false,
 		},

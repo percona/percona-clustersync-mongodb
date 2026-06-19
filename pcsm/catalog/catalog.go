@@ -882,6 +882,7 @@ func (c *Catalog) CollectionExists(db, coll string) bool {
 }
 
 // CollectionUUID returns collection UUID from catalog when collection entry exists.
+// The returned pointer is catalog-owned; callers must not mutate it or its Data.
 func (c *Catalog) CollectionUUID(db, coll string) (*bson.Binary, bool) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
