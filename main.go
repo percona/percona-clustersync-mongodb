@@ -644,6 +644,10 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
+	if srcHello == nil {
+		return nil, errors.New("source hello response is nil")
+	}
+
 	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos())
 
 	err = Restore(ctx, target, pcs)
