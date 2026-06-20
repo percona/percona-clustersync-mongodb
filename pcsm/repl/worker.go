@@ -433,6 +433,8 @@ type workerPool struct {
 
 	target *mongo.Client
 
+	catalogSnapshot func() catalog.UUIDMap
+
 	errCh  chan error
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -452,11 +454,12 @@ func newWorkerPool(
 	poolCtx, cancel := context.WithCancel(ctx)
 
 	p := &workerPool{
-		workers:    make([]*worker, numWorkers),
-		numWorkers: numWorkers,
-		target:     target,
-		errCh:      make(chan error, 1),
-		cancel:     cancel,
+		workers:         make([]*worker, numWorkers),
+		numWorkers:      numWorkers,
+		target:          target,
+		catalogSnapshot: catalogSnapshot,
+		errCh:           make(chan error, 1),
+		cancel:          cancel,
 	}
 
 	// Create and start workers
@@ -506,11 +509,11 @@ func (p *workerPool) Route(change *ChangeEvent) {
 }
 
 func (p *workerPool) resolveNamespace(change *ChangeEvent) catalog.Namespace {
-	if len(p.workers) == 0 || p.workers[0].catalogSnapshot == nil {
+	if p.catalogSnapshot == nil {
 		return change.Namespace
 	}
 
-	return findNamespaceByUUID(p.workers[0].catalogSnapshot(), change)
+	return findNamespaceByUUID(p.catalogSnapshot(), change)
 }
 
 // Barrier flushes all workers and waits for them to complete.
