@@ -338,8 +338,8 @@ func (m *mockBulkWriter) Delete(_ *ChangeEvent, _ *DeleteEvent)   { m.count++ }
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
 func makeInsertEvent(id string) *routedEvent {
 	raw, err := bson.Marshal(bson.D{
-		{"documentKey", bson.D{{testDocumentIDKey(), id}}},
-		{"fullDocument", bson.D{{testDocumentIDKey(), id}, {"x", 1}}},
+		{"documentKey", bson.D{{testDocumentIDKey, id}}},
+		{"fullDocument", bson.D{{testDocumentIDKey, id}, {"x", 1}}},
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal insert event: %v", err))

@@ -19,9 +19,8 @@ var errCursorClosedByMongos = errors.New("cursor closed by mongos")
 const (
 	replTestDBName     = "testdb"
 	replTestCollection = "testcoll"
+	testDocumentIDKey  = "_id"
 )
-
-func testDocumentIDKey() string { return string([]byte{'_', 'i', 'd'}) }
 
 type mockCatalog struct {
 	collectionExists bool

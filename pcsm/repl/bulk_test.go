@@ -29,11 +29,11 @@ func TestClientBulkWriteResolvesNamespaceFromBulkSnapshot(t *testing.T) {
 		Namespace:      catalog.Namespace{Database: "stale_db", Collection: "stale_coll"},
 		CollectionUUID: uuid,
 	}}
-	fullDocument, err := bson.Marshal(bson.D{{Key: testDocumentIDKey(), Value: 1}})
+	fullDocument, err := bson.Marshal(bson.D{{Key: testDocumentIDKey, Value: 1}})
 	require.NoError(t, err)
 
 	event := &InsertEvent{
-		DocumentKey:  bson.D{{Key: testDocumentIDKey(), Value: 1}},
+		DocumentKey:  bson.D{{Key: testDocumentIDKey, Value: 1}},
 		FullDocument: bson.Raw(fullDocument),
 	}
 	writer := newClientBulkWriter(1, false, nil, catalog.UUIDMap{
