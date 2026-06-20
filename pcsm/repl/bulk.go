@@ -135,8 +135,14 @@ func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.N
 		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
 			return ns
 		}
+		// A UUID that is absent from the snapshot means the collection was recreated or
+		// moved under a different UUID; a name-matched entry would be a different
+		// collection generation, so fall back to the event's own namespace.
+		return change.Namespace
 	}
 
+	// UUID-less events resolve by name. The linear scan is acceptable: UUIDMap is
+	// bounded by catalog cardinality and this path is only hit for UUID-less events.
 	for _, ns := range uuidMap {
 		if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
 			return ns
