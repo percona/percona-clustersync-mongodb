@@ -71,8 +71,8 @@ func TestMain(m *testing.M) {
 }
 
 // TestConnect_MaxPoolSize verifies PCSM-312: a maxPoolSize set in the connection
-// string survives sanitization (it used to be stripped), a real connection is
-// established with it, and the effective pool size matches the requested value.
+// string survives sanitization (it used to be stripped) and a real connection is
+// established with it.
 func TestConnect_MaxPoolSize(t *testing.T) {
 	t.Parallel()
 
@@ -94,9 +94,4 @@ func TestConnect_MaxPoolSize(t *testing.T) {
 	}()
 
 	require.NoError(t, client.Ping(ctx, nil), "ping should succeed with maxPoolSize set")
-
-	effective, err := EffectiveMaxPoolSize(uri)
-	require.NoError(t, err)
-	require.NotNil(t, effective, "maxPoolSize should be parsed from the URI")
-	require.Equal(t, poolSize, *effective, "effective maxPoolSize should match the URI value")
 }

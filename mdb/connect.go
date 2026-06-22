@@ -103,21 +103,6 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 	return conn, nil
 }
 
-// EffectiveMaxPoolSize returns the maxPoolSize the MongoDB driver will use for a
-// client built from uri. A nil result means maxPoolSize was not set, so the
-// driver default applies (see [DriverDefaultMaxPoolSize]); a value of 0 means an
-// unlimited pool.
-func EffectiveMaxPoolSize(uri string) (*uint64, error) {
-	opts := options.Client().ApplyURI(uri)
-
-	err := opts.Validate()
-	if err != nil {
-		return nil, errors.Wrap(err, "validate MongoDB URI")
-	}
-
-	return opts.MaxPoolSize, nil
-}
-
 func sanitizeMongoURI(uri string) (string, error) {
 	idx := strings.IndexRune(uri, '?')
 	if idx == -1 {
