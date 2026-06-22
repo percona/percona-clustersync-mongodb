@@ -19,6 +19,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
+// DriverDefaultMaxPoolSize mirrors the MongoDB Go driver's default maxPoolSize,
+// applied to a client when the connection string omits the option.
+const DriverDefaultMaxPoolSize uint64 = 100
+
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client, error) {
 	if uri == "" {
@@ -63,6 +67,15 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 	log.New("connect").Infof("Config: %s client compressors: %v", role, compressors)
 
 	opts.SetCompressors(compressors)
+
+	switch {
+	case opts.MaxPoolSize == nil:
+		log.New("connect").Infof("Config: %s client maxPoolSize: %d (driver default)", role, DriverDefaultMaxPoolSize)
+	case *opts.MaxPoolSize == 0:
+		log.New("connect").Infof("Config: %s client maxPoolSize: 0 (unlimited)", role)
+	default:
+		log.New("connect").Infof("Config: %s client maxPoolSize: %d", role, *opts.MaxPoolSize)
+	}
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().
@@ -124,6 +137,8 @@ func sanitizeMongoURI(uri string) (string, error) {
 var allowedConnStringOptions = []string{
 	"appname",
 	"replicaset",
+
+	"maxpoolsize",
 
 	"authsource",
 	"authmechanism",
