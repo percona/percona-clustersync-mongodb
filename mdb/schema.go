@@ -202,6 +202,13 @@ func ListInProgressIndexBuilds(
 // index, so callers receive the canonical [IndexSpecification] even when
 // mongos `listIndexes` filters partial coverage.
 // For non-sharded collections or replica sets, this returns an empty list.
+//
+// An inconsistent index is only returned when at least one shard's $indexStats
+// row carries a non-nil spec; if every row for a name lacks a spec (e.g. older
+// servers, permission-stripped output), that index is skipped rather than
+// reported with an incomplete spec. Namespace is synthesized from db.coll when
+// the driver did not populate it; downstream callers (AddInconsistentIndexes ->
+// catalog -> unsuccessfulIndexes status) treat the returned specs as authoritative.
 func ListInconsistentIndexes(
 	ctx context.Context,
 	m *mongo.Client,
@@ -257,6 +264,12 @@ func ListInconsistentIndexes(
 
 		if count < idCount {
 			spec := firstSpec[name]
+			if spec == nil {
+				// No shard surfaced a spec for this name; we cannot build
+				// a faithful IndexSpecification. Skip rather than panic.
+				continue
+			}
+
 			if spec.Namespace == "" {
 				spec.Namespace = db + "." + coll
 			}
