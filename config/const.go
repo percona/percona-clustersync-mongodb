@@ -26,6 +26,12 @@ const (
 	RecoveryCollection = "checkpoints"
 	// HeartbeatCollection is the name of the collection used for heartbeats.
 	HeartbeatCollection = "heartbeats"
+	// MembersCollection is the name of the collection holding one liveness/identity
+	// document per PCSM instance (HA member list). Replaces the singleton heartbeat doc.
+	MembersCollection = "members"
+	// LeaseCollection is the name of the collection holding the single HA lease document
+	// used for active-standby election and term-based fencing.
+	LeaseCollection = "lease"
 )
 
 // Recovery and heartbeat settings.
@@ -47,6 +53,21 @@ const (
 	// DefaultMongoDBOperationTimeout is the default timeout for MongoDB client operations.
 	// Override via --mongodb-operation-timeout flag or PCSM_MONGODB_OPERATION_TIMEOUT env var.
 	DefaultMongoDBOperationTimeout = 5 * time.Minute
+)
+
+// High-availability (active-standby) settings.
+const (
+	// MemberHeartbeatInterval is the interval at which each PCSM instance refreshes
+	// its own member document in the members collection.
+	MemberHeartbeatInterval = 3 * time.Second
+	// StaleMemberDuration is the age after which a member document is considered stale
+	// and filtered out of the cluster member list (3x the heartbeat interval).
+	StaleMemberDuration = 3 * MemberHeartbeatInterval
+	// LeaseRenewInterval is the interval at which the active instance renews the lease.
+	LeaseRenewInterval = 3 * time.Second
+	// LeaseTTL is the lease lifetime. The lease expires this long after the last renewal,
+	// after which a standby may win election. Sized to allow several renewal attempts.
+	LeaseTTL = 10 * time.Second
 )
 
 // DefaultClientCompressors is the default compressor list for MongoDB clients.
