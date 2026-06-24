@@ -24,8 +24,10 @@ const (
 	PCSMDatabase = "percona_clustersync_mongodb"
 	// RecoveryCollection is the name of the collection used for recovery data.
 	RecoveryCollection = "checkpoints"
-	// HeartbeatCollection is the name of the collection used for heartbeats.
-	HeartbeatCollection = "heartbeats"
+	// LegacyHeartbeatCollection is the pre-HA (<= 0.9.0) singleton heartbeat
+	// collection. It is retired in 0.10.0 and only referenced by reset, which
+	// drops it as part of the 0.9.0 -> 0.10.0 migration.
+	LegacyHeartbeatCollection = "heartbeats"
 	// MembersCollection is the name of the collection holding one liveness/identity
 	// document per PCSM instance (HA member list). Replaces the singleton heartbeat doc.
 	MembersCollection = "members"

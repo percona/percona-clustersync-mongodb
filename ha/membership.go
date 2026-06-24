@@ -16,10 +16,6 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
-// legacyHeartbeatID is the _id of the pre-HA singleton heartbeat document.
-// It is removed on startup so it does not linger in the members collection.
-const legacyHeartbeatID = "pcsm"
-
 // MembershipOptions configures this instance's participation in the set.
 type MembershipOptions struct {
 	// InstanceID uniquely identifies this PCSM process. If empty, a random
@@ -90,12 +86,7 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 		beatNow:    make(chan struct{}, 1),
 	}
 
-	err := cleanupLegacyHeartbeat(ctx, target)
-	if err != nil {
-		log.New("ha:membership").Warn("cleanup legacy heartbeat: " + err.Error())
-	}
-
-	err = m.beat(ctx)
+	err := m.beat(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "initial heartbeat")
 	}
@@ -240,16 +231,6 @@ func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 
 func membersColl(target *mongo.Client) *mongo.Collection {
 	return target.Database(config.PCSMDatabase).Collection(config.MembersCollection)
-}
-
-// cleanupLegacyHeartbeat removes the pre-HA singleton heartbeat document if it
-// is present in the (now repurposed) members collection.
-func cleanupLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
-	_, err := target.Database(config.PCSMDatabase).
-		Collection(config.HeartbeatCollection).
-		DeleteOne(ctx, bson.D{{"_id", legacyHeartbeatID}})
-
-	return err //nolint:wrapcheck
 }
 
 // DeleteMembers removes all member documents. Used by reset.

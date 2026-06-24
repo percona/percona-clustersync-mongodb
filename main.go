@@ -489,12 +489,28 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 		return errors.Wrap(err, "delete members")
 	}
 
+	err = dropLegacyHeartbeat(ctx, target)
+	if err != nil {
+		return errors.Wrap(err, "drop legacy heartbeat")
+	}
+
 	err = DeleteRecoveryData(ctx, target)
 	if err != nil {
 		return errors.Wrap(err, "delete recovery data")
 	}
 
 	return nil
+}
+
+// dropLegacyHeartbeat removes the pre-HA (<= 0.9.0) singleton heartbeat
+// collection. Replication state from 0.9.0 is not compatible with 0.10.0;
+// operators run `pcsm reset` before starting replication with 0.10.0.
+func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
+	err := target.Database(config.PCSMDatabase).
+		Collection(config.LegacyHeartbeatCollection).
+		Drop(ctx)
+
+	return errors.Wrap(err, "drop legacy heartbeat collection")
 }
 
 // runServer starts the HTTP server with the provided configuration.

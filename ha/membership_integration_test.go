@@ -98,13 +98,11 @@ func membersCollection(client *mongo.Client) *mongo.Collection {
 	return client.Database(config.PCSMDatabase).Collection(config.MembersCollection)
 }
 
-// cleanState drops the members and legacy heartbeat collections so each test
-// starts from a known baseline.
+// cleanState drops the members collection so each test starts from a known baseline.
 func cleanState(t *testing.T, ctx context.Context, client *mongo.Client) {
 	t.Helper()
 
 	require.NoError(t, membersCollection(client).Drop(ctx))
-	require.NoError(t, client.Database(config.PCSMDatabase).Collection(config.HeartbeatCollection).Drop(ctx))
 }
 
 func TestJoinMembershipWritesMemberDoc(t *testing.T) {
@@ -220,28 +218,6 @@ func TestMembersFiltersStale(t *testing.T) {
 
 	assert.True(t, ids["fresh"], "fresh member should be returned")
 	assert.False(t, ids["stale"], "stale member should be filtered out")
-}
-
-func TestCleanupLegacyHeartbeat(t *testing.T) {
-	ctx := t.Context()
-	client := connectToMongoDB(t)
-	defer func() { _ = client.Disconnect(ctx) }()
-
-	cleanState(t, ctx, client)
-
-	legacy := client.Database(config.PCSMDatabase).Collection(config.HeartbeatCollection)
-	_, err := legacy.InsertOne(ctx, bson.D{{"_id", legacyHeartbeatID}, {"time", time.Now().Unix()}})
-	require.NoError(t, err)
-
-	// JoinMembership cleans up the legacy singleton on startup.
-	m, err := JoinMembership(ctx, client, MembershipOptions{InstanceID: "pcsm-legacy"})
-	require.NoError(t, err)
-
-	defer func() { _ = m.Stop(ctx) }()
-
-	count, err := legacy.CountDocuments(ctx, bson.D{{"_id", legacyHeartbeatID}})
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), count, "legacy singleton heartbeat doc should be removed")
 }
 
 func TestDeleteMembers(t *testing.T) {
