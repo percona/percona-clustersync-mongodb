@@ -4,7 +4,7 @@ movePrimary changes a collection's UUID on the recipient shard. On pre-8 mongos
 sources the change stream emits a phantom ``create`` (new UUID) followed by a
 ``drop`` (old UUID); on 8.x only the phantom ``create`` surfaces. PCSM-249
 (steps E/F/G) recovers from the invalidate, skips the replayed drop, and
-resolves DML write-target namespaces by UUID at worker execution. These tests
+resolves DML write-target namespaces by UUID before worker routing. These tests
 exercise that full path end to end: movePrimary -> phantom create/drop DDL ->
 replay skip -> source/target parity.
 
