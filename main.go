@@ -25,6 +25,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/ha"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
@@ -400,7 +401,7 @@ func newResetCmd(cfg *config.Config) *cobra.Command {
 
 	cmd.AddCommand(
 		newResetRecoveryCmd(cfg),
-		newResetHeartbeatCmd(cfg),
+		newResetMembersCmd(cfg),
 	)
 
 	return cmd
@@ -438,11 +439,11 @@ func newResetRecoveryCmd(cfg *config.Config) *cobra.Command {
 	}
 }
 
-func newResetHeartbeatCmd(cfg *config.Config) *cobra.Command {
+func newResetMembersCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
-		Use:    "heartbeat",
+		Use:    "members",
 		Hidden: true,
-		Short:  "Reset heartbeat state",
+		Short:  "Reset HA member state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
@@ -458,12 +459,12 @@ func newResetHeartbeatCmd(cfg *config.Config) *cobra.Command {
 				}
 			}()
 
-			err = DeleteHeartbeat(ctx, target)
+			err = ha.DeleteMembers(ctx, target)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "delete members")
 			}
 
-			log.New("cli").Info("OK: reset heartbeat")
+			log.New("cli").Info("OK: reset members")
 
 			return nil
 		},
@@ -483,14 +484,14 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 		}
 	}()
 
-	err = DeleteHeartbeat(ctx, target)
+	err = ha.DeleteMembers(ctx, target)
 	if err != nil {
-		return errors.Wrap(err, "delete heartbeat")
+		return errors.Wrap(err, "delete members")
 	}
 
 	err = DeleteRecoveryData(ctx, target)
 	if err != nil {
-		return errors.Wrap(err, "delete heartbeat")
+		return errors.Wrap(err, "delete recovery data")
 	}
 
 	return nil
@@ -562,8 +563,8 @@ type server struct {
 	targetCluster *mongo.Client
 	// pcsm is the PCSM instance for cluster replication.
 	pcsm *pcsm.PCSM
-	// stopHeartbeat stops the heartbeat process in the application.
-	stopHeartbeat StopHeartbeat
+	// membership maintains this instance's member document for HA discovery.
+	membership *ha.Membership
 
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
@@ -632,9 +633,12 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
-	stopHeartbeat, err := RunHeartbeat(ctx, target)
+	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{
+		Port:        cfg.Port,
+		PCSMVersion: buildVersion(),
+	})
 	if err != nil {
-		return nil, errors.Wrap(err, "heartbeat")
+		return nil, errors.Wrap(err, "join membership")
 	}
 
 	promRegistry := prometheus.NewRegistry()
@@ -663,16 +667,16 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		sourceCluster: source,
 		targetCluster: target,
 		pcsm:          pcs,
-		stopHeartbeat: stopHeartbeat,
+		membership:    membership,
 		promRegistry:  promRegistry,
 	}
 
 	return s, nil
 }
 
-// Close stops heartbeat and closes the server connections.
+// Close leaves the membership set and closes the server connections.
 func (s *server) Close(ctx context.Context) error {
-	err0 := s.stopHeartbeat(ctx)
+	err0 := s.membership.Stop(ctx)
 	err1 := s.sourceCluster.Disconnect(ctx)
 	err2 := s.targetCluster.Disconnect(ctx)
 
