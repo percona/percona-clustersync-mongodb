@@ -20,6 +20,7 @@ import (
 
 type routedEvent struct {
 	change *ChangeEvent
+	ns     catalog.Namespace
 }
 
 // pendingBulk is a sealed bulk ready for writing by the writer goroutine.
@@ -61,9 +62,8 @@ type worker struct {
 	writerErr        error             // set by runWriter on failure, read after <-writerDone
 
 	// Factory for creating fresh bulkWriters after each enqueueBulk/restart.
-	bulkQueueSize   int
-	newBulkWriter   func(catalog.UUIDMap) bulkWriter
-	catalogSnapshot func() catalog.UUIDMap
+	bulkQueueSize int
+	newBulkWriter func() bulkWriter
 
 	// Barrier coordination
 	barrierReq  chan struct{}
@@ -88,34 +88,33 @@ func newWorker(
 	source, target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
-	catalogSnapshot func() catalog.UUIDMap,
 	errC chan<- error,
 ) *worker {
 	w := &worker{
-		id:              strconv.Itoa(id),
-		routedEventCh:   make(chan *routedEvent, opts.WorkerQueueSize),
-		flushInterval:   opts.WorkerFlushInterval,
-		target:          target,
-		bulkQueueSize:   opts.WorkerBulkQueueSize,
-		barrierReq:      make(chan struct{}),
-		barrierDone:     make(chan error),
-		resumeCh:        make(chan struct{}),
-		done:            make(chan struct{}),
-		errCh:           errC,
-		catalogSnapshot: catalogSnapshot,
+		id:            strconv.Itoa(id),
+		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
+		flushInterval: opts.WorkerFlushInterval,
+		target:        target,
+		bulkQueueSize: opts.WorkerBulkQueueSize,
+		barrierReq:    make(chan struct{}),
+		barrierDone:   make(chan error),
+		resumeCh:      make(chan struct{}),
+		done:          make(chan struct{}),
+		errCh:         errC,
 	}
 
 	bulkOpsSize := opts.BulkOpsSize
 
 	if useCollectionBulk {
-		w.newBulkWriter = func(uuidMap catalog.UUIDMap) bulkWriter {
-			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, source, uuidMap)
+		w.newBulkWriter = func() bulkWriter {
+			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, source)
 		}
 	} else {
-		w.newBulkWriter = func(uuidMap catalog.UUIDMap) bulkWriter {
-			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, source, uuidMap)
+		w.newBulkWriter = func() bulkWriter {
+			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, source)
 		}
 	}
+	w.currentBulkWrite = w.newBulkWriter()
 
 	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
@@ -191,13 +190,7 @@ func (w *worker) ensureBulkWriter() {
 		return
 	}
 
-	if w.catalogSnapshot == nil {
-		w.currentBulkWrite = w.newBulkWriter(catalog.UUIDMap{})
-
-		return
-	}
-
-	w.currentBulkWrite = w.newBulkWriter(w.catalogSnapshot())
+	w.currentBulkWrite = w.newBulkWriter()
 }
 
 // run is the main loop for the worker. It processes events from eventC,
@@ -347,16 +340,16 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 
 	switch e := parsed.(type) { //nolint:exhaustive
 	case InsertEvent:
-		w.currentBulkWrite.Insert(event.change, &e)
+		w.currentBulkWrite.Insert(event.ns, &e)
 
 	case UpdateEvent:
-		w.currentBulkWrite.Update(event.change, &e)
+		w.currentBulkWrite.Update(event.ns, &e)
 
 	case DeleteEvent:
-		w.currentBulkWrite.Delete(event.change, &e)
+		w.currentBulkWrite.Delete(event.ns, &e)
 
 	case ReplaceEvent:
-		w.currentBulkWrite.Replace(event.change, &e)
+		w.currentBulkWrite.Replace(event.ns, &e)
 	}
 
 	// Track the timestamp of the last event in the batch
@@ -433,8 +426,6 @@ type workerPool struct {
 
 	target *mongo.Client
 
-	catalogSnapshot func() catalog.UUIDMap
-
 	errCh  chan error
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -447,24 +438,22 @@ func newWorkerPool(
 	source, target *mongo.Client,
 	useCollectionBulk bool,
 	useSimpleCollation bool,
-	catalogSnapshot func() catalog.UUIDMap,
 ) *workerPool {
 	numWorkers := opts.NumWorkers
 
 	poolCtx, cancel := context.WithCancel(ctx)
 
 	p := &workerPool{
-		workers:         make([]*worker, numWorkers),
-		numWorkers:      numWorkers,
-		target:          target,
-		catalogSnapshot: catalogSnapshot,
-		errCh:           make(chan error, 1),
-		cancel:          cancel,
+		workers:    make([]*worker, numWorkers),
+		numWorkers: numWorkers,
+		target:     target,
+		errCh:      make(chan error, 1),
+		cancel:     cancel,
 	}
 
 	// Create and start workers
 	for i := range numWorkers {
-		w := newWorker(i, opts, source, target, useCollectionBulk, useSimpleCollation, catalogSnapshot, p.errCh)
+		w := newWorker(i, opts, source, target, useCollectionBulk, useSimpleCollation, p.errCh)
 		w.tickerOffset = time.Duration(i) * opts.WorkerFlushInterval / time.Duration(numWorkers)
 		p.workers[i] = w
 
@@ -485,9 +474,7 @@ func newWorkerPool(
 // the same worker, preserving insertion order.
 // Uses bson.Raw.Lookup to extract the documentKey bytes directly from the raw
 // BSON, avoiding the unmarshal-then-remarshal round-trip of extractDocumentKey.
-func (p *workerPool) Route(change *ChangeEvent) {
-	ns := p.resolveNamespace(change)
-
+func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	var workerIdx int
 	if ns.Capped {
 		workerIdx = hashNamespace(ns, p.numWorkers)
@@ -503,17 +490,10 @@ func (p *workerPool) Route(change *ChangeEvent) {
 
 	w.routedEventCh <- &routedEvent{
 		change: change,
+		ns:     ns,
 	}
 
 	metrics.SetReplWorkerEventQueueSize(w.id, len(w.routedEventCh))
-}
-
-func (p *workerPool) resolveNamespace(change *ChangeEvent) catalog.Namespace {
-	if p.catalogSnapshot == nil {
-		return change.Namespace
-	}
-
-	return findNamespaceByUUID(p.catalogSnapshot(), change)
 }
 
 // Barrier flushes all workers and waits for them to complete.

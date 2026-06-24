@@ -10,7 +10,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
-	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
 // makeInsertEventWithTS creates a valid routedEvent with an insert ChangeEvent
@@ -53,7 +52,7 @@ func TestEnqueueBulk_SealsBulkAndQueues(t *testing.T) {
 		lastPendingTS:    ts,
 		pendingBulkCh:    make(chan *pendingBulk, 1),
 		writerDone:       make(chan struct{}),
-		newBulkWriter:    func(catalog.UUIDMap) bulkWriter { return &mockBulkWriter{} },
+		newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
 	}
 
 	ok := w.enqueueBulk()
@@ -66,7 +65,7 @@ func TestEnqueueBulk_SealsBulkAndQueues(t *testing.T) {
 	assert.Equal(t, mock, pb.writer, "queued writer should be the original mock")
 	assert.Equal(t, ts, pb.checkpoint, "checkpoint should match pendingTS at seal time")
 
-	assert.Nil(t, w.currentBulkWrite, "bulkWrite should be recreated lazily from next catalog snapshot")
+	assert.Nil(t, w.currentBulkWrite, "bulkWrite should be recreated lazily on next write")
 }
 
 // TestEnqueueBulk_ReturnsFalseWhenWriterDead verifies that enqueueBulk() returns false

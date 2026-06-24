@@ -3,6 +3,7 @@ package repl
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"runtime"
 	"strings"
@@ -45,6 +46,33 @@ type Catalog interface {
 var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
+
+//go:inline
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
+	if change.CollectionUUID != nil {
+		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
+			return ns
+		}
+
+		// A UUID absent from the snapshot means the collection was recreated or
+		// moved under a different UUID; a name-matched entry would be a different
+		// collection generation, so fall back to the event namespace.
+		return change.Namespace
+	}
+
+	if change.IsView() {
+		// UUID-less/view events resolve by name. The linear scan is acceptable:
+		// UUIDMap is bounded by catalog cardinality and this path is only hit for
+		// UUID-less events.
+		for _, ns := range uuidMap {
+			if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
+				return ns
+			}
+		}
+	}
+
+	return change.Namespace
+}
 
 type barrierController interface {
 	Barrier() error
@@ -389,7 +417,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	}
 
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap,
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
 	r.checkpointOpTime = startAt
@@ -487,7 +515,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation, r.catalog.UUIDMap,
+		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
@@ -702,6 +730,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	}()
 
 	lg := log.New("repl")
+	uuidMap := r.catalog.UUIDMap()
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
 	// Used with Checkpoint() to determine if the pool is idle.
@@ -785,7 +814,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 		switch change.OperationType { //nolint:exhaustive
 		case Insert, Update, Delete, Replace:
-			r.pool.Route(change)
+			ns := findNamespaceByUUID(uuidMap, change)
+			r.pool.Route(change, ns)
 			lastRoutedTS = change.ClusterTime
 
 			r.tryAdvanceOpTime(cpTicker)
@@ -834,6 +864,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.lock.Unlock()
 
 			metrics.AddEventsApplied(1)
+			uuidMap = r.catalog.UUIDMap()
 
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			r.pool.ReleaseBarrier()

@@ -19,8 +19,74 @@ var errCursorClosedByMongos = errors.New("cursor closed by mongos")
 const (
 	replTestDBName     = "testdb"
 	replTestCollection = "testcoll"
+	replTestOtherUUID  = "other"
+	replTestOrdersColl = "orders"
 	testDocumentIDKey  = "_id"
 )
+
+func TestFindNamespaceByUUIDFallsBackToEventNamespaceOnUUIDMiss(t *testing.T) {
+	t.Parallel()
+
+	eventNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl}
+	nameMatchedCurrentNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl, Sharded: true}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace:      eventNS,
+		CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("missing-uuid")},
+	}}
+
+	resolved := findNamespaceByUUID(catalog.UUIDMap{replTestOtherUUID: nameMatchedCurrentNS}, change)
+
+	assert.Equal(t, eventNS, resolved)
+}
+
+func TestFindNamespaceByUUIDEnrichesUUIDLessEventByName(t *testing.T) {
+	t.Parallel()
+
+	shardKey := bson.D{{Key: "tenant", Value: 1}}
+	currentNS := catalog.Namespace{
+		Database:   "db",
+		Collection: replTestCollection,
+		Sharded:    true,
+		ShardKey:   shardKey,
+		Capped:     true,
+	}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace: catalog.Namespace{Database: "db", Collection: replTestCollection},
+	}}
+
+	resolved := findNamespaceByUUID(catalog.UUIDMap{"uuid": currentNS}, change)
+
+	assert.Equal(t, currentNS, resolved)
+}
+
+func TestDispatcherUUIDMapRefreshAfterDDLRestoresShardedMetadata(t *testing.T) {
+	t.Parallel()
+
+	staleNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl}
+	refreshedNS := catalog.Namespace{
+		Database:   "db",
+		Collection: replTestOrdersColl,
+		Sharded:    true,
+		ShardKey:   bson.D{{Key: "tenant", Value: 1}},
+	}
+	cat := &mockCatalog{uuidMaps: []catalog.UUIDMap{
+		{"old": staleNS},
+		{"6e65772d75756964": refreshedNS},
+	}}
+	change := &ChangeEvent{EventHeader: EventHeader{
+		Namespace:      staleNS,
+		CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("new-uuid")},
+	}}
+
+	uuidMap := cat.UUIDMap()
+	resolvedBeforeRefresh := findNamespaceByUUID(uuidMap, change)
+	uuidMap = cat.UUIDMap()
+	resolvedAfterRefresh := findNamespaceByUUID(uuidMap, change)
+
+	assert.Equal(t, staleNS, resolvedBeforeRefresh)
+	assert.Equal(t, refreshedNS, resolvedAfterRefresh)
+	assert.Equal(t, 2, cat.uuidMapCalls)
+}
 
 type mockCatalog struct {
 	collectionExists bool
@@ -41,7 +107,8 @@ type mockCatalog struct {
 	setCollectionUUIDColl   string
 	setCollectionUUIDValue  *bson.Binary
 
-	setCollectionShardingMetadataErr error
+	uuidMaps     []catalog.UUIDMap
+	uuidMapCalls int
 }
 
 type mockPool struct {
@@ -100,11 +167,17 @@ func (m *mockCatalog) ShardCollection(_ context.Context, _, _ string, _ bson.D, 
 	return nil
 }
 
-func (m *mockCatalog) SetCollectionShardingMetadata(_ context.Context, _, _ string, _ bson.D) error {
-	return m.setCollectionShardingMetadataErr
-}
-
 func (m *mockCatalog) UUIDMap() catalog.UUIDMap {
+	if len(m.uuidMaps) > 0 {
+		idx := m.uuidMapCalls
+		if idx >= len(m.uuidMaps) {
+			idx = len(m.uuidMaps) - 1
+		}
+		m.uuidMapCalls++
+
+		return m.uuidMaps[idx]
+	}
+
 	return catalog.UUIDMap{}
 }
 
