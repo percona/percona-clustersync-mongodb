@@ -805,21 +805,31 @@ func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
 		return nil
 	}
 
-	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds)-len(inconsistentIndexes), 0)
+	// Inconsistent index specs come from $indexStats, which sees indexes
+	// that mongos `listIndexes` may hide. Skip those names when partitioning
+	// the mongos-visible list so we don't add the same index twice.
+	inconsistentNames := make(map[string]struct{}, len(inconsistentIndexes))
+	for _, idx := range inconsistentIndexes {
+		inconsistentNames[idx.Name] = struct{}{}
+	}
+
+	builtIndexesCap := max(len(indexes)-len(unfinishedBuilds)-len(inconsistentNames), 0)
 
 	builtIndexes := make([]*mdb.IndexSpecification, 0, builtIndexesCap)
 	incompleteIndexes := make([]*mdb.IndexSpecification, 0, len(unfinishedBuilds))
-	inconsistentIdxSpecs := make([]*mdb.IndexSpecification, 0, len(inconsistentIndexes))
 
 	for _, index := range indexes {
-		switch {
-		case slices.Contains(unfinishedBuilds, index.Name):
+		if slices.Contains(unfinishedBuilds, index.Name) {
 			incompleteIndexes = append(incompleteIndexes, index)
-		case slices.Contains(inconsistentIndexes, index.Name):
-			inconsistentIdxSpecs = append(inconsistentIdxSpecs, index)
-		default:
-			builtIndexes = append(builtIndexes, index)
+
+			continue
 		}
+
+		if _, ok := inconsistentNames[index.Name]; ok {
+			continue
+		}
+
+		builtIndexes = append(builtIndexes, index)
 	}
 
 	if len(builtIndexes) != 0 {
@@ -833,8 +843,8 @@ func (c *Clone) createIndexes(ctx context.Context, ns catalog.Namespace) error {
 		c.catalog.AddIncompleteIndexes(ctx, ns.Database, ns.Collection, incompleteIndexes)
 	}
 
-	if len(inconsistentIdxSpecs) != 0 {
-		c.catalog.AddInconsistentIndexes(ctx, ns.Database, ns.Collection, inconsistentIdxSpecs)
+	if len(inconsistentIndexes) != 0 {
+		c.catalog.AddInconsistentIndexes(ctx, ns.Database, ns.Collection, inconsistentIndexes)
 	}
 
 	return nil

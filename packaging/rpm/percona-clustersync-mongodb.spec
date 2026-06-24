@@ -10,7 +10,7 @@ Group:  Applications/Databases
 License: ASL 2.0
 Source0: percona-clustersync-mongodb-%{version}.tar.gz
 
-BuildRequires: golang make git
+BuildRequires: golang make git jq
 BuildRequires:  systemd
 BuildRequires:  pkgconfig(systemd)
 Requires(pre): /usr/sbin/useradd, /usr/bin/getent
@@ -68,6 +68,31 @@ install -D -m 0640 github.com/percona/percona-clustersync-mongodb/packaging/conf
 install -m 0755 -d $RPM_BUILD_ROOT/%{_unitdir}
 install -m 0644 github.com/percona/percona-clustersync-mongodb/packaging/conf/pcsm.service $RPM_BUILD_ROOT/%{_unitdir}/pcsm.service
 
+# CycloneDX 1.6 SBOM for the .rpm. Scope = Go binaries in %{_bindir}; filename
+# is self-identifying when extracted from /usr/share/doc/. Catalogers limited
+# to go-module-binary-cataloger (tarball-equivalent scope); file catalogers
+# disabled to keep package-level granularity.
+install -m 0755 -d $RPM_BUILD_ROOT/%{_docdir}/percona-clustersync-mongodb
+SBOM_PATH=$RPM_BUILD_ROOT/%{_docdir}/percona-clustersync-mongodb/percona-clustersync-mongodb-%{version}.cdx.json
+syft scan "dir:$RPM_BUILD_ROOT/%{_bindir}" \
+    --override-default-catalogers go-module-binary-cataloger \
+    --select-catalogers "-file" \
+    --source-name "percona-clustersync-mongodb" \
+    --source-version "%{version}" \
+    -o "cyclonedx-json@1.6=$SBOM_PATH"
+# Overwrite syft's auto-generated metadata.component (type=file, opaque
+# bom-ref) with a proper application identity including an rpm PURL.
+SBOM_PURL="pkg:rpm/percona-clustersync-mongodb@%{version}"
+jq --arg purl "$SBOM_PURL" --arg ver "%{version}" '.metadata.component = {
+    "bom-ref": $purl,
+    "type": "application",
+    "name": "percona-clustersync-mongodb",
+    "version": $ver,
+    "purl": $purl
+}' "$SBOM_PATH" > "$SBOM_PATH.tmp" && mv "$SBOM_PATH.tmp" "$SBOM_PATH"
+test "$(jq '.components | length' $SBOM_PATH)" -ge 10 \
+    || { echo "ERROR: RPM SBOM has too few components" >&2; exit 1; }
+
 %pre -n percona-clustersync-mongodb
 	/usr/bin/getent group mongod || /usr/sbin/groupadd -r mongod
 	/usr/bin/getent passwd mongod || /usr/sbin/useradd -M -r -g mongod -d /var/lib/mongo -s /bin/false -c mongod mongod
@@ -103,6 +128,8 @@ esac
 
 %files -n percona-clustersync-mongodb
 %{_bindir}/pcsm
+%dir %{_docdir}/percona-clustersync-mongodb
+%{_docdir}/percona-clustersync-mongodb/percona-clustersync-mongodb-%{version}.cdx.json
 %config(noreplace) %attr(0640,root,root) /%{_sysconfdir}/sysconfig/pcsm
 %{_unitdir}/pcsm.service
 

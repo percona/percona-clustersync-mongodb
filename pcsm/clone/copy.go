@@ -87,14 +87,31 @@ type CopyManagerOptions struct {
 	ReadBatchSizeBytes int32
 }
 
-func (o *CopyManagerOptions) applyDefaults() {
-	if o.NumReadWorkers < minNumWorkers {
-		o.NumReadWorkers = max(runtime.NumCPU()/defaultNumReadWorkersDivisor, minNumWorkers)
+// EffectiveNumReadWorkers returns the read-worker count a clone will actually
+// use: the configured value when set, otherwise the auto default
+// max(runtime.NumCPU()/4, 1).
+func EffectiveNumReadWorkers(configured int) int {
+	if configured < minNumWorkers {
+		return max(runtime.NumCPU()/defaultNumReadWorkersDivisor, minNumWorkers)
 	}
 
-	if o.NumInsertWorkers < minNumWorkers {
-		o.NumInsertWorkers = runtime.NumCPU() * defaultNumInsertWorkersFactor
+	return configured
+}
+
+// EffectiveNumInsertWorkers returns the insert-worker count a clone will
+// actually use: the configured value when set, otherwise the auto default
+// runtime.NumCPU()*2.
+func EffectiveNumInsertWorkers(configured int) int {
+	if configured < minNumWorkers {
+		return runtime.NumCPU() * defaultNumInsertWorkersFactor
 	}
+
+	return configured
+}
+
+func (o *CopyManagerOptions) applyDefaults() {
+	o.NumReadWorkers = EffectiveNumReadWorkers(o.NumReadWorkers)
+	o.NumInsertWorkers = EffectiveNumInsertWorkers(o.NumInsertWorkers)
 
 	if o.SegmentSizeBytes < 0 {
 		o.SegmentSizeBytes = config.AutoCloneSegmentSize
@@ -333,14 +350,11 @@ func (cm *CopyManager) copyCollection(
 		}
 
 		nextSegment = segmenter.Next
-
-		log.New("clone").With(log.NS(namespace.Database, namespace.Collection)).
-			Debugf("Capped collection %q: copy sequentially", namespace)
 	} else {
 		segmenter, err := NewSegmenter(ctx, cm.source, namespace, SegmentOptions{
 			SegmentSizeBytes: cm.options.SegmentSizeBytes,
 			BatchSizeBytes:   cm.options.ReadBatchSizeBytes,
-			AutoNumSegment:   cm.options.NumReadWorkers,
+			AutoSegmentCount: cm.options.NumReadWorkers,
 		})
 		if err != nil {
 			if errors.Is(err, errEOC) {
@@ -354,6 +368,8 @@ func (cm *CopyManager) copyCollection(
 
 		go segmenter.handleNanIDDoc(session)
 	}
+
+	log.Ctx(ctx).Infof("Starting collection copy: %s.%s", namespace.Database, namespace.Collection)
 
 	go cm.runReadDispatcher(session, nextSegment, progressUpdateCh)
 	go cm.runInsertDispatcher(session, progressUpdateCh)
@@ -620,12 +636,15 @@ type segmentKey = bson.RawValue
 var nilSegmentID segmentKey //nolint:gochecknoglobals
 
 // SegmentOptions configures how a MongoDB collection is segmented during cloning.
-// It defines the logical segment size in bytes, the read batch size, or the exact number of
-// segments to create.
+// It defines the logical segment size in bytes, the read batch size, and the desired
+// number of segments to produce when running in auto mode.
 type SegmentOptions struct {
 	SegmentSizeBytes int64
 	BatchSizeBytes   int32
-	AutoNumSegment   int
+	// AutoSegmentCount is the desired number of segments per collection when
+	// SegmentSizeBytes is AutoCloneSegmentSize. The actual segment count may
+	// differ due to the MinCloneSegmentSizeBytes floor and integer rounding.
+	AutoSegmentCount int
 }
 
 // NewSegmenter initializes a Segmenter for a given MongoDB namespace.
@@ -653,16 +672,39 @@ func NewSegmenter(
 		return nil, errEOC
 	}
 
-	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize]
-	var segmentSize int64
+	// AvgObjSize must be less than or equal to 16MiB [config.MaxBSONSize].
+	var (
+		segmentSizeBytes int64
+		segmentMode      string
+	)
 	if options.SegmentSizeBytes == config.AutoCloneSegmentSize {
-		segmentSize = max(stats.Size/int64(options.AutoNumSegment), config.MinCloneSegmentSizeBytes)
-
-		log.Ctx(ctx).Debugf("SegmentSizeBytes (auto): %d (%s)",
-			segmentSize, humanize.Bytes(uint64(segmentSize))) //nolint:gosec
+		segmentSizeBytes = max(
+			stats.Size/int64(options.AutoSegmentCount),
+			config.MinCloneSegmentSizeBytes,
+		)
+		segmentMode = "auto"
 	} else {
-		segmentSize = options.SegmentSizeBytes / stats.AvgObjSize
+		segmentSizeBytes = options.SegmentSizeBytes
+		segmentMode = "explicit"
 	}
+	// Guard against AvgObjSize > segmentSizeBytes (tiny collection / huge docs)
+	// which would otherwise produce segmentSize = 0 and collapse segmentation.
+	segmentSize := max(segmentSizeBytes/stats.AvgObjSize, 1)
+
+	docCount := stats.Count
+	if docCount == 0 {
+		docCount = stats.Size / stats.AvgObjSize
+	}
+	expectedSegments := max(1, (docCount+segmentSize-1)/segmentSize)
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
+		"Segmenter for %s.%s: %s (%d docs), segmentation: %s, segment size: %d docs, segments: ~%d",
+		ns.Database, ns.Collection,
+		humanize.Bytes(uint64(stats.Size)), //nolint:gosec
+		docCount,
+		segmentMode,
+		segmentSize,
+		expectedSegments,
+	)
 
 	//nolint:gosec
 	batchSize := int32(min(int64(options.BatchSizeBytes)/stats.AvgObjSize, math.MaxInt32))
@@ -798,13 +840,20 @@ func (seg *Segmenter) findSegmentMaxKey(
 	minKey segmentKey,
 	maxKey segmentKey,
 ) (segmentKey, error) {
-	raw, err := seg.mcoll.FindOne(ctx,
-		bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
-		options.FindOne().
-			SetSort(bson.D{{"_id", 1}}).
-			SetSkip(seg.segmentSize).
-			SetProjection(bson.D{{"_id", 1}}),
-	).Raw()
+	var raw bson.Raw
+
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		raw, inner = seg.mcoll.FindOne(ctx,
+			bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
+			options.FindOne().
+				SetSort(bson.D{{"_id", 1}}).
+				SetSkip(seg.segmentSize).
+				SetProjection(bson.D{{"_id", 1}}),
+		).Raw()
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return maxKey, nil
@@ -950,6 +999,17 @@ func NewCappedSegmenter(
 	if stats.AvgObjSize == 0 {
 		return nil, errEOC
 	}
+
+	docCount := stats.Count
+	if docCount == 0 {
+		docCount = stats.Size / stats.AvgObjSize
+	}
+	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
+		"Capped segmenter for %s.%s: %s (%d docs), copy sequentially, single segment covering entire collection",
+		ns.Database, ns.Collection,
+		humanize.Bytes(uint64(stats.Size)), //nolint:gosec
+		docCount,
+	)
 
 	batchSize := int32(min(int64(batchSizeBytes)/stats.AvgObjSize, math.MaxInt32)) //nolint:gosec
 	mcoll := m.Database(ns.Database).Collection(ns.Collection)

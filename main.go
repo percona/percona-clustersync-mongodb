@@ -43,7 +43,7 @@ const (
 )
 
 var (
-	Version   = "v0.8.1" //nolint:gochecknoglobals
+	Version   = "v0.9.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
 	GitCommit = ""       //nolint:gochecknoglobals
 	GitBranch = ""       //nolint:gochecknoglobals
@@ -292,8 +292,8 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 		"Number of read workers during clone (0 = auto)")
 	cmd.Flags().Int("clone-num-insert-workers", 0,
 		"Number of insert workers during clone (0 = auto)")
-	cmd.Flags().String("clone-segment-size", "", "")
-	cmd.Flags().MarkHidden("clone-segment-size") //nolint:errcheck
+	cmd.Flags().String("clone-segment-size", "",
+		"Segment size for clone operations (e.g. \"500MB\", \"1GiB\"). Empty = auto.")
 
 	cmd.Flags().String("clone-read-batch-size", "", "")
 	cmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck

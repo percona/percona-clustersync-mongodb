@@ -149,7 +149,10 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest
+          # test_clone_auto_segment_size_not_byte_count is RS-only; the bug it
+          # guards is topology-agnostic and the profiler helpers in tests/testing.py
+          # only support replica sets. See the test's docstring for details.
+          poetry run pytest --deselect tests/test_documents.py::test_clone_auto_segment_size_not_byte_count
 
       - name: Teardown Docker Compose
         if: always()
