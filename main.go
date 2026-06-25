@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -523,7 +524,10 @@ func runServer(cfg *config.Config) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	if cfg.Start && srv.pcsm.Status(ctx).State == pcsm.StateIdle {
+	// Auto-start (--start) is deferred to promotion: replication may only begin
+	// while ACTIVE. A single instance becomes ACTIVE immediately, so this fires
+	// as soon as the lease is acquired; a STANDBY starts once promoted.
+	if cfg.Start {
 		startOpts, err := resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
@@ -531,10 +535,7 @@ func runServer(cfg *config.Config) error {
 			return err
 		}
 
-		err = srv.pcsm.Start(ctx, startOpts)
-		if err != nil {
-			log.New("cli").Error(err, "Failed to start Cluster Replication")
-		}
+		srv.setAutoStart(startOpts)
 	}
 
 	go func() {
@@ -579,11 +580,23 @@ type server struct {
 	targetCluster *mongo.Client
 	// pcsm is the PCSM instance for cluster replication.
 	pcsm *pcsm.PCSM
-	// membership maintains this instance's member document for HA discovery.
+	// membership maintains this instance's member document and runs the lease
+	// loop through which this instance competes to be ACTIVE.
 	membership *ha.Membership
 
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
+
+	// mu guards cpCancel and autoStartOpts, the server-local lifecycle state
+	// driven by lease role transitions. The authoritative (role, term) lives in
+	// membership; read it via membership.CurrentRole().
+	mu sync.Mutex
+	// checkpointCancel stops the checkpointing loop started while ACTIVE. It is nil when
+	// this instance is STANDBY (no checkpointing).
+	checkpointCancel context.CancelFunc
+	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
+	// to ACTIVE (the deferred effect of the --start flag).
+	autoStartOpts *pcsm.StartOptions
 }
 
 // createServer creates a new server with the given options.
@@ -667,17 +680,6 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		return nil, errors.Wrap(err, "recover PCSM")
 	}
 
-	pcs.SetOnStateChanged(func(newState pcsm.State) {
-		err := DoCheckpoint(ctx, target, pcs)
-		if err != nil {
-			log.New("http:checkpointing").Error(err, "checkpoint")
-		} else {
-			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
-		}
-	})
-
-	go RunCheckpointing(ctx, target, pcs)
-
 	s := &server{
 		cfg:           cfg,
 		sourceCluster: source,
@@ -687,16 +689,127 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		promRegistry:  promRegistry,
 	}
 
+	pcs.SetOnStateChanged(func(newState pcsm.State) {
+		// State-change checkpoints are fenced by the current lease term. Only an
+		// ACTIVE instance can persist; a STANDBY (term unchanged, lease held by
+		// another) is rejected by the fence and that is expected.
+		_, term := membership.CurrentRole()
+
+		err := DoCheckpoint(ctx, target, pcs, term)
+		if err != nil {
+			log.New("http:checkpointing").Error(err, "checkpoint")
+		} else {
+			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
+		}
+	})
+
+	// Run the lease loop and react to role transitions. Replication only runs
+	// while this instance holds the lease (ACTIVE); a single instance wins the
+	// lease immediately and becomes ACTIVE. Checkpointing is not started here:
+	// it runs per ACTIVE epoch, started on promotion and stopped on demotion.
+	go s.membership.RunLease(ctx)
+
+	go s.watchRoleChanges(ctx)
+
 	return s, nil
 }
 
-// Close leaves the membership set and closes the server connections.
+// Close releases the lease (so a standby can take over promptly), leaves the
+// membership set, and closes the server connections.
 func (s *server) Close(ctx context.Context) error {
-	err0 := s.membership.Stop(ctx)
-	err1 := s.sourceCluster.Disconnect(ctx)
-	err2 := s.targetCluster.Disconnect(ctx)
+	err0 := s.membership.Release(ctx)
+	err1 := s.membership.Stop(ctx)
+	err2 := s.sourceCluster.Disconnect(ctx)
+	err3 := s.targetCluster.Disconnect(ctx)
 
-	return errors.Join(err0, err1, err2)
+	return errors.Join(err0, err1, err2, err3)
+}
+
+// watchRoleChanges consumes lease role transitions and drives the replication
+// lifecycle: promotion to ACTIVE recovers state and starts checkpointing;
+// demotion to STANDBY stops checkpointing and halts the pipeline so a STANDBY
+// performs no writes. It returns when ctx is canceled.
+func (s *server) watchRoleChanges(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case rc := <-s.membership.RoleChanges():
+			switch rc.Role {
+			case ha.RoleActive:
+				s.onPromote(ctx, rc.Term)
+			case ha.RoleStandby:
+				s.onDemote(ctx, rc.Term)
+			}
+		}
+	}
+}
+
+// onPromote handles a STANDBY->ACTIVE transition. It re-reads any persisted
+// checkpoint so this instance resumes from the latest committed state, then
+// starts the checkpointing loop for this ACTIVE epoch.
+func (s *server) onPromote(ctx context.Context, term int64) {
+	lg := log.New("ha:role").With(log.Int64("term", term))
+	lg.Info("Promoted to ACTIVE")
+
+	err := Restore(ctx, s.targetCluster, s.pcsm)
+	if err != nil {
+		lg.Error(err, "restore on promotion")
+	}
+
+	s.mu.Lock()
+	// Start a checkpointing loop scoped to this ACTIVE epoch, fenced by term.
+	// If a write is fenced by a newer term, this instance has been deposed:
+	// onFenced halts the pipeline immediately rather than waiting for the lease
+	// loop to notice on its next tick.
+	if s.checkpointCancel == nil {
+		cpCtx, cancel := context.WithCancel(ctx)
+		s.checkpointCancel = cancel
+		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, term, func() {
+			s.onDemote(ctx, term)
+		})
+	}
+	autoStartOpts := s.autoStartOpts
+	s.mu.Unlock()
+
+	// Apply a deferred --start now that this instance is ACTIVE.
+	if autoStartOpts != nil && s.pcsm.Status(ctx).State == pcsm.StateIdle {
+		err := s.pcsm.Start(ctx, autoStartOpts)
+		if err != nil {
+			lg.Error(err, "auto-start on promotion")
+		}
+	}
+}
+
+// setAutoStart records StartOptions to apply when this instance becomes ACTIVE.
+func (s *server) setAutoStart(opts *pcsm.StartOptions) {
+	s.mu.Lock()
+	s.autoStartOpts = opts
+	s.mu.Unlock()
+}
+
+// onDemote handles an ACTIVE->STANDBY transition. It stops the checkpointing
+// loop and pauses the pipeline so the demoted instance performs no further
+// writes. Pause is best-effort: term fencing on checkpoint writes is the hard
+// guarantee that a demoted active cannot corrupt the target.
+func (s *server) onDemote(ctx context.Context, term int64) {
+	lg := log.New("ha:role").With(log.Int64("term", term))
+	lg.Info("Demoted to STANDBY")
+
+	s.mu.Lock()
+	if s.checkpointCancel != nil {
+		s.checkpointCancel()
+		s.checkpointCancel = nil
+	}
+	s.mu.Unlock()
+
+	err := s.pcsm.Pause(ctx)
+	if err != nil {
+		// Pause fails when the pipeline is not running (e.g. idle); that is a
+		// benign no-op for a demotion, so only log at debug.
+		lg.Debug("pause on demotion: " + err.Error())
+	}
 }
 
 // Handler returns the HTTP handler for the server.

@@ -41,7 +41,7 @@ type Member struct {
 // may win election once ExpiresAt has passed (compared against server-side $$NOW).
 type Lease struct {
 	ID           string    `bson:"_id"`
-	SetName      string    `bson:"setName"`
+	Group        string    `bson:"group"`
 	Term         int64     `bson:"term"`
 	ActiveID     string    `bson:"activeId"`
 	ElectionDate time.Time `bson:"electionDate"`

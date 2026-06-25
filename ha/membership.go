@@ -28,6 +28,8 @@ type MembershipOptions struct {
 	Port int
 	// PCSMVersion is the build version reported in the member document.
 	PCSMVersion string
+	// Group is the logical name of the active-standby group this instance joins.
+	Group string
 }
 
 // Membership represents this instance's participation in the HA set. It owns the
@@ -41,8 +43,12 @@ type Membership struct {
 	host       string
 	port       int
 	version    string
+	group      string
 	startedAt  time.Time
 	cancel     context.CancelFunc
+
+	// leaseCancel cancels the lease loop started by RunLease.
+	leaseCancel context.CancelFunc
 
 	// mu guards role and term, which change together on a role transition.
 	mu   sync.Mutex
@@ -53,6 +59,11 @@ type Membership struct {
 	// used so a role change is reflected in the member document promptly
 	// instead of waiting up to MemberHeartbeatInterval.
 	beatNow chan struct{}
+
+	// roleChangeCh delivers role transitions to a consumer. It is buffered at cap 1
+	// and coalescing: a pending change is overwritten by a newer one so a slow
+	// consumer always observes the latest transition rather than a stale queue.
+	roleChangeCh chan RoleChange
 }
 
 // NewInstanceID returns a fresh random instance identifier.
@@ -75,15 +86,17 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 	}
 
 	m := &Membership{
-		target:     target,
-		instanceID: instanceID,
-		host:       host,
-		port:       opts.Port,
-		version:    opts.PCSMVersion,
-		startedAt:  time.Now(),
-		role:       RoleStandby,
-		term:       0,
-		beatNow:    make(chan struct{}, 1),
+		target:       target,
+		instanceID:   instanceID,
+		host:         host,
+		port:         opts.Port,
+		version:      opts.PCSMVersion,
+		group:        opts.Group,
+		startedAt:    time.Now(),
+		role:         RoleStandby,
+		term:         0,
+		beatNow:      make(chan struct{}, 1),
+		roleChangeCh: make(chan RoleChange, 1),
 	}
 
 	err := m.beat(ctx)
@@ -108,9 +121,15 @@ func (m *Membership) InstanceID() string { return m.instanceID }
 // document. It is the one-way feed from the election layer (the lease document
 // is authoritative): the elected role is pushed here, and the heartbeat loop
 // publishes it. It triggers an immediate heartbeat so the change is reflected in
-// the member list without waiting for the next tick.
-func (m *Membership) SetRole(role Role, term int64) {
+// the member list without waiting for the next tick. It returns true when the
+// role actually transitioned (a different role than before), so the caller can
+// react to transitions while ignoring ordinary same-role renewals.
+//
+// Membership is the single source of truth for (role, term): the election layer
+// drives transitions through here rather than tracking role/term separately.
+func (m *Membership) SetRole(role Role, term int64) bool {
 	m.mu.Lock()
+	transitioned := m.role != role
 	m.role = role
 	m.term = term
 	m.mu.Unlock()
@@ -119,6 +138,59 @@ func (m *Membership) SetRole(role Role, term int64) {
 	select {
 	case m.beatNow <- struct{}{}:
 	default:
+	}
+
+	return transitioned
+}
+
+// CurrentRole returns the role and term this instance currently advertises.
+func (m *Membership) CurrentRole() (Role, int64) {
+	return m.currentRole()
+}
+
+// RunLease starts the lease loop, through which this member competes for the
+// lease and gains (or loses) the right to be ACTIVE. It runs until ctx is
+// canceled or Release is called. Role transitions are published to the member
+// document and mirrored on RoleChanges.
+func (m *Membership) RunLease(ctx context.Context) {
+	loopCtx, cancel := context.WithCancel(ctx)
+	m.leaseCancel = cancel
+
+	m.runLease(loopCtx)
+}
+
+// Release best-effort relinquishes the lease (if held) so a standby can take
+// over without waiting for it to expire, demotes this member to STANDBY, and
+// stops the lease loop.
+func (m *Membership) Release(ctx context.Context) error {
+	if m.leaseCancel != nil {
+		m.leaseCancel()
+	}
+
+	return m.releaseLease(ctx)
+}
+
+// RoleChanges returns the channel on which role transitions are delivered. The
+// channel is coalescing (cap 1): the consumer always sees the latest transition.
+func (m *Membership) RoleChanges() <-chan RoleChange { return m.roleChangeCh }
+
+// emitRoleChange delivers a role change on the coalescing cap-1 channel. If a
+// change is already pending it is replaced so the consumer observes the latest
+// transition.
+func (m *Membership) emitRoleChange(rc RoleChange) {
+	for {
+		select {
+		case m.roleChangeCh <- rc:
+			return
+		default:
+			// Drop the stale pending change, then retry the send. The drain may
+			// race with the consumer; the loop converges because at most one
+			// value is ever buffered.
+			select {
+			case <-m.roleChangeCh:
+			default:
+			}
+		}
 	}
 }
 
