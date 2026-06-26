@@ -40,6 +40,8 @@ var (
 	})
 )
 
+const labelWorker = "worker"
+
 // Replication pipeline metrics.
 var (
 	//nolint:gochecknoglobals
@@ -54,14 +56,14 @@ var (
 		Name:      "repl_worker_event_queue_size",
 		Help:      "Number of events in a worker's inbound queue.",
 		Namespace: metricNamespace,
-	}, []string{"worker"})
+	}, []string{labelWorker})
 
 	//nolint:gochecknoglobals
 	replWorkerEventsAppliedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name:      "repl_worker_events_applied_total",
 		Help:      "Total events applied by each worker.",
 		Namespace: metricNamespace,
-	}, []string{"worker"})
+	}, []string{labelWorker})
 
 	//nolint:gochecknoglobals
 	replWorkerFlushBatchSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -69,7 +71,7 @@ var (
 		Help:      "Number of operations per bulk write flush.",
 		Namespace: metricNamespace,
 		Buckets:   []float64{10, 50, 100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000},
-	}, []string{"worker"})
+	}, []string{labelWorker})
 
 	//nolint:gochecknoglobals
 	replWorkerFlushDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -77,14 +79,14 @@ var (
 		Help:      "Duration of bulk write flushes in seconds.",
 		Namespace: metricNamespace,
 		Buckets:   []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
-	}, []string{"worker"})
+	}, []string{labelWorker})
 
 	//nolint:gochecknoglobals
 	replWorkerBulkQueueSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name:      "repl_worker_bulk_queue_size",
 		Help:      "Number of sealed bulks pending write in a worker's async queue.",
 		Namespace: metricNamespace,
-	}, []string{"worker"})
+	}, []string{labelWorker})
 )
 
 // Gauges.
