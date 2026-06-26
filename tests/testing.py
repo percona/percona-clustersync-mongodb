@@ -84,6 +84,18 @@ class Testing:
             f"target {db}.{coll}: expected {expected} docs, got {actual} after {timeout}s"
         )
 
+    def wait_target_index(self, db: str, coll: str, index_name: str, timeout: int = 30):
+        for _ in range(timeout * 2):
+            indexes = self.target[db][coll].index_information()
+            if index_name in indexes:
+                return
+            time.sleep(0.5)
+
+        indexes = sorted(self.target[db][coll].index_information())
+        raise AssertionError(
+            f"target {db}.{coll}: expected index {index_name}, got {indexes} after {timeout}s"
+        )
+
 
 def drop_all_database(source: MongoClient):
     """Drop all databases in the MongoDB."""

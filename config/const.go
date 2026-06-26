@@ -77,8 +77,14 @@ const (
 //
 //nolint:gochecknoglobals
 func DefaultClientCompressors() []string {
-	return []string{"snappy", "zstd", "zlib"}
+	return []string{clientCompressorSnappy, clientCompressorZstd, clientCompressorZlib}
 }
+
+const (
+	clientCompressorSnappy = "snappy"
+	clientCompressorZstd   = "zstd"
+	clientCompressorZlib   = "zlib"
+)
 
 // Change stream and replication settings.
 const (
