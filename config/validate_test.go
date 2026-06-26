@@ -174,6 +174,122 @@ func TestValidate_PortBoundaries(t *testing.T) {
 	}
 }
 
+func TestValidate_Webhook(t *testing.T) {
+	t.Parallel()
+
+	validCfg := func(w config.WebhookConfig) *config.Config {
+		return &config.Config{
+			Port:    8080,
+			Source:  "mongodb://source:27017",
+			Target:  "mongodb://target:27017",
+			Webhook: w,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		cfg     *config.Config
+		wantErr string
+	}{
+		{
+			name:    "no webhook options - valid",
+			cfg:     validCfg(config.WebhookConfig{}),
+			wantErr: "",
+		},
+		{
+			name: "url only - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL: "https://example.com/hook",
+			}),
+			wantErr: "",
+		},
+		{
+			name: "url with all events - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://example.com/hook",
+				Events: []string{"all"},
+			}),
+			wantErr: "",
+		},
+		{
+			name: "url with failure events - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://example.com/hook",
+				Events: []string{"failure"},
+			}),
+			wantErr: "",
+		},
+		{
+			name: "url with auth token - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:       "https://example.com/hook",
+				AuthToken: "secret",
+			}),
+			wantErr: "",
+		},
+		{
+			name: "auth token without url",
+			cfg: validCfg(config.WebhookConfig{
+				AuthToken: "secret",
+			}),
+			wantErr: "--webhook-url is required",
+		},
+		{
+			name: "events without url",
+			cfg: validCfg(config.WebhookConfig{
+				Events: []string{"failure"},
+			}),
+			wantErr: "--webhook-url is required",
+		},
+		{
+			name: "invalid events value",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://example.com/hook",
+				Events: []string{"garbage"},
+			}),
+			wantErr: "invalid --webhook-events value \"garbage\"",
+		},
+		{
+			name: "webhook target slack - valid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://hooks.slack.com/services/xxx",
+				Target: "slack",
+			}),
+			wantErr: "",
+		},
+		{
+			name: "webhook target invalid",
+			cfg: validCfg(config.WebhookConfig{
+				URL:    "https://example.com/hook",
+				Target: "unknown",
+			}),
+			wantErr: "invalid --webhook-target value \"unknown\"",
+		},
+		{
+			name: "webhook target without url",
+			cfg: validCfg(config.WebhookConfig{
+				Target: "slack",
+			}),
+			wantErr: "--webhook-url is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := config.Validate(tt.cfg)
+
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateCloneSegmentSize(t *testing.T) {
 	t.Parallel()
 
