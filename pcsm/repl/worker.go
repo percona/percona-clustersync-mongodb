@@ -18,6 +18,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
+// routedEvent bundles a change event with its pre-resolved namespace.
 type routedEvent struct {
 	change *ChangeEvent
 	ns     catalog.Namespace

@@ -554,13 +554,13 @@ func TestChangeStreamInvalidateError(t *testing.T) {
 
 	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
 	err := changeStreamInvalidateError{
-		token:       token,
-		clusterTime: bson.Timestamp{T: 123, I: 1},
+		invalidEventID: token,
+		clusterTime:    bson.Timestamp{T: 123, I: 1},
 	}
 
 	var target changeStreamInvalidateError
 	require.ErrorAs(t, err, &target)
-	assert.Equal(t, token, target.token)
+	assert.Equal(t, token, target.invalidEventID)
 	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
 }
 
@@ -569,8 +569,8 @@ func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
 
 	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
 	invalidateErr := &changeStreamInvalidateError{
-		token:       token,
-		clusterTime: bson.Timestamp{T: 123, I: 1},
+		invalidEventID: token,
+		clusterTime:    bson.Timestamp{T: 123, I: 1},
 	}
 	cursorErr := errCursorClosedByMongos
 
@@ -578,7 +578,7 @@ func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
 
 	var target changeStreamInvalidateError
 	require.ErrorAs(t, err, &target)
-	assert.Equal(t, token, target.token)
+	assert.Equal(t, token, target.invalidEventID)
 	assert.Equal(t, bson.Timestamp{T: 123, I: 1}, target.clusterTime)
 	assert.NotContains(t, err.Error(), "cursor")
 }

@@ -542,8 +542,8 @@ func (r *Repl) watchWithRetry(
 			}
 
 			var invalidateErr changeStreamInvalidateError
-			if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.token) > 0 {
-				startAfter = append(bson.Raw(nil), invalidateErr.token...)
+			if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.invalidEventID) > 0 {
+				startAfter = append(bson.Raw(nil), invalidateErr.invalidEventID...)
 				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
 				log.New("repl:watch").With(
 					log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
@@ -571,8 +571,8 @@ func (r *Repl) watchWithRetry(
 }
 
 type changeStreamInvalidateError struct {
-	token       bson.Raw
-	clusterTime bson.Timestamp
+	invalidEventID bson.Raw
+	clusterTime    bson.Timestamp
 }
 
 func (e changeStreamInvalidateError) Error() string {
@@ -637,8 +637,8 @@ func (r *Repl) watchChangeEvents(
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
-					token:       append(bson.Raw(nil), change.ID...),
-					clusterTime: change.ClusterTime,
+					invalidEventID: append(bson.Raw(nil), change.ID...),
+					clusterTime:    change.ClusterTime,
 				}
 			}
 		}
@@ -1026,11 +1026,11 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		db := change.Namespace.Database
 		coll := change.Namespace.Collection
-		eventUUID := change.CollectionUUID
+		currentCollUUID := change.CollectionUUID
 
-		catalogUUID, exists := r.catalog.CollectionUUID(db, coll)
+		knownCollUUID, exists := r.catalog.CollectionUUID(db, coll)
 		switch {
-		case exists && uuidEqual(catalogUUID, eventUUID):
+		case exists && uuidEqual(knownCollUUID, currentCollUUID):
 			lg.Debug("create event replay detected, namespace already at this UUID; noop")
 			if r.sourceIsPre8AndMongos() {
 				r.armExpectedMovePrimaryInvalidate()
@@ -1038,13 +1038,13 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 			return nil
 
-		case exists && catalogUUID != nil && eventUUID != nil:
+		case exists && knownCollUUID != nil && currentCollUUID != nil:
 			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
 			if r.sourceIsPre8AndMongos() {
 				r.armExpectedMovePrimaryInvalidate()
 			}
 
-			r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+			r.catalog.SetCollectionUUID(ctx, db, coll, currentCollUUID)
 
 			return nil
 		}
@@ -1063,21 +1063,21 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			break
 		}
 
-		r.catalog.SetCollectionUUID(ctx, db, coll, eventUUID)
+		r.catalog.SetCollectionUUID(ctx, db, coll, currentCollUUID)
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
 		db := change.Namespace.Database
 		coll := change.Namespace.Collection
-		eventUUID := change.CollectionUUID
-		catalogUUID, _ := r.catalog.CollectionUUID(db, coll)
+		currentCollUUID := change.CollectionUUID
+		knownCollUUID, _ := r.catalog.CollectionUUID(db, coll)
 
 		// PCSM-249: stale phantom drop from movePrimary is suppressed.
 		// The catalog has the new UUID (assigned by phantom create handler); this drop
 		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
 		// UUID comparison only suppresses when both sides are present and differ; views
 		// and other untracked namespaces fall through to the real drop, which is idempotent.
-		if eventUUID != nil && catalogUUID != nil && !uuidEqual(catalogUUID, eventUUID) {
+		if currentCollUUID != nil && knownCollUUID != nil && !uuidEqual(knownCollUUID, currentCollUUID) {
 			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
 
 			return nil
