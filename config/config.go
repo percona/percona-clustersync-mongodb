@@ -191,7 +191,7 @@ func bindEnvVars() {
 }
 
 //nolint:gochecknoglobals
-var allowedCompressors = []string{"zstd", "zlib", "snappy"}
+var allowedCompressors = []string{clientCompressorZstd, clientCompressorZlib, clientCompressorSnappy}
 
 func filterCompressors(compressors []string) []string {
 	if len(compressors) == 0 {
