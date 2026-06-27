@@ -2,10 +2,12 @@
 import contextlib
 import hashlib
 import time
+from collections.abc import Callable
 
 import bson
 from pymongo import ASCENDING, MongoClient
 from pymongo.collection import Collection
+from pymongo.errors import PyMongoError
 
 from pcsm import PCSM, Runner
 
@@ -65,6 +67,8 @@ class Testing:
                 )
 
                 if source_sharded:
+                    assert source_config is not None
+                    assert target_config is not None
                     assert source_config["key"] == target_config["key"], (
                         f"{db}.{coll}: shard key {source_config['key']} != {target_config['key']}"
                     )
@@ -84,16 +88,29 @@ class Testing:
             f"target {db}.{coll}: expected {expected} docs, got {actual} after {timeout}s"
         )
 
-    def wait_target_index(self, db: str, coll: str, index_name: str, timeout: int = 30):
+    def wait_target_index(
+        self,
+        db: str,
+        coll: str,
+        index_name: str,
+        predicate: Callable[[dict[str, object]], bool] | None = None,
+        timeout: int = 30,
+    ):
+        last_index: dict[str, object] | None = None
+        last_exc = None
+
         for _ in range(timeout * 2):
-            indexes = self.target[db][coll].index_information()
-            if index_name in indexes:
-                return
+            try:
+                last_index = self.target[db][coll].index_information().get(index_name)
+                if last_index is not None and (predicate is None or predicate(last_index)):
+                    return last_index
+            except PyMongoError as exc:
+                last_exc = exc
             time.sleep(0.5)
 
-        indexes = sorted(self.target[db][coll].index_information())
         raise AssertionError(
-            f"target {db}.{coll}: expected index {index_name}, got {indexes} after {timeout}s"
+            f"target {db}.{coll}: index {index_name} not ready after {timeout}s; "
+            f"last_index={last_index!r}; last_exc={last_exc!r}"
         )
 
 

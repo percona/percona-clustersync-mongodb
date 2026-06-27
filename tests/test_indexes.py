@@ -1,6 +1,7 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import threading
 from datetime import datetime
+from typing import Any
 
 import pymongo
 import pytest
@@ -138,9 +139,8 @@ def test_create_geospatial(t: Testing, phase: Runner.Phase):
         t.source["db_1"]["coll_1"].create_index(
             {"loc1": pymongo.GEO2D}, bits=30, min=-179.0, max=178.0
         )
-        t.source["db_1"]["coll_1"].create_index(
-            {"loc2": pymongo.GEOSPHERE}, **{"2dsphereIndexVersion": 2}
-        )
+        geosphere_options: dict[str, Any] = {"2dsphereIndexVersion": 2}
+        t.source["db_1"]["coll_1"].create_index({"loc2": pymongo.GEOSPHERE}, **geosphere_options)
 
     t.compare_all()
 
@@ -330,7 +330,12 @@ def test_internal_create_many_props(t: Testing, phase: Runner.Phase):
 
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index(
+                "db_1",
+                "coll_1",
+                index_name,
+                predicate=lambda idx: idx.get("expireAfterSeconds") == (2**31) - 1,
+            )
             for prop in options:
                 if prop == "expireAfterSeconds":
                     assert target_index["expireAfterSeconds"] == (2**31) - 1
@@ -357,7 +362,7 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
 
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index("db_1", "coll_1", index_name)
             assert "prepareUnique" not in target_index
 
         modify_options = {
@@ -378,7 +383,12 @@ def test_internal_modify_many_props(t: Testing, phase: Runner.Phase):
 
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index(
+                "db_1",
+                "coll_1",
+                index_name,
+                predicate=lambda idx: idx.get("expireAfterSeconds") == (2**31) - 1,
+            )
             for prop in modify_options:
                 if prop == "expireAfterSeconds":
                     assert target_index["expireAfterSeconds"] == (2**31) - 1
@@ -402,7 +412,7 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
     with t.run(phase) as pcsm:
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index("db_1", "coll_1", index_name)
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
             assert "hidden" not in target_index
@@ -429,7 +439,12 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
 
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index(
+                "db_1",
+                "coll_1",
+                index_name,
+                predicate=lambda idx: idx.get("expireAfterSeconds") == (2**31) - 1,
+            )
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
             assert "hidden" not in target_index
@@ -454,7 +469,12 @@ def test_internal_modify_index_props_complex(t: Testing, phase: Runner.Phase):
 
         if phase == Runner.Phase.APPLY:
             pcsm.wait_for_current_optime()
-            target_index = t.target["db_1"]["coll_1"].index_information()[index_name]
+            target_index = t.wait_target_index(
+                "db_1",
+                "coll_1",
+                index_name,
+                predicate=lambda idx: idx.get("expireAfterSeconds") == (2**31) - 1,
+            )
             assert "prepareUnique" not in target_index
             assert "unique" not in target_index
             assert "hidden" not in target_index
