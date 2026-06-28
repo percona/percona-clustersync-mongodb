@@ -112,7 +112,11 @@ type clientBulkWrite struct {
 	source *mongo.Client
 }
 
-func newClientBulkWriter(size int, useSimpleCollation bool, source *mongo.Client) *clientBulkWrite {
+func newClientBulkWriter(
+	size int,
+	useSimpleCollation bool,
+	source *mongo.Client,
+) *clientBulkWrite {
 	return &clientBulkWrite{
 		useSimpleCollation: useSimpleCollation,
 		maxOpsSize:         size,
@@ -403,7 +407,9 @@ type collectionBulkWrite struct {
 }
 
 func newCollectionBulkWriter(
-	size int, nonDefaultCollationSupport bool, source *mongo.Client,
+	size int,
+	nonDefaultCollationSupport bool,
+	source *mongo.Client,
 ) *collectionBulkWrite {
 	return &collectionBulkWrite{
 		useSimpleCollation: nonDefaultCollationSupport,

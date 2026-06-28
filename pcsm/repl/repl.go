@@ -1,8 +1,10 @@
 package repl
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -41,12 +43,41 @@ type Catalog interface {
 	) error
 }
 
-var (
-	ErrInvalidateEvent  = errors.New("invalidate")
-	ErrOplogHistoryLost = errors.New("oplog history is lost")
-)
+var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
+
+//go:inline
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
+	if change.CollectionUUID != nil {
+		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
+			return ns
+		}
+
+		// A UUID absent from the snapshot means the collection was recreated or
+		// moved under a different UUID; a name-matched entry would be a different
+		// collection generation, so fall back to the event namespace.
+		return change.Namespace
+	}
+
+	if change.IsView() {
+		// UUID-less/view events resolve by name. The linear scan is acceptable:
+		// UUIDMap is bounded by catalog cardinality and this path is only hit for
+		// UUID-less events.
+		for _, ns := range uuidMap {
+			if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
+				return ns
+			}
+		}
+	}
+
+	return change.Namespace
+}
+
+type barrierController interface {
+	Barrier() error
+	ReleaseBarrier()
+}
 
 // Options configures the replication behavior.
 type Options struct {
@@ -137,6 +168,9 @@ type Repl struct {
 
 	pool *workerPool
 
+	expectMovePrimaryInvalidate bool
+	sourceIsMongos              bool
+
 	useCollectionBulk  bool
 	useSimpleCollation bool
 }
@@ -176,6 +210,7 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 	sourceVer mdb.ServerVersion,
+	sourceIsMongos bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -190,15 +225,45 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:    source,
-		target:    target,
-		sourceVer: sourceVer,
-		nsFilter:  nsFilter,
-		catalog:   cat,
-		options:   opts,
-		pauseCh:   make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		source:         source,
+		target:         target,
+		sourceVer:      sourceVer,
+		nsFilter:       nsFilter,
+		catalog:        cat,
+		options:        opts,
+		pauseCh:        make(chan struct{}),
+		doneCh:         make(chan struct{}),
+		sourceIsMongos: sourceIsMongos,
 	}
+}
+
+// sourceIsPre8AndMongos returns true when the source is a mongos (sharded) and
+// runs MongoDB 6.x or 7.x (pre-8). Used to gate invalidate-stream handling for
+// movePrimary on older sharded topologies.
+func (r *Repl) sourceIsPre8AndMongos() bool {
+	return r.sourceIsMongos && r.sourceVer.Major() < 8
+}
+
+// armExpectedMovePrimaryInvalidate signals that a movePrimary is in flight, so
+// the next change-stream invalidate from a mongos source is expected and should
+// be recovered rather than treated as fatal. A worker calls this during DDL
+// apply; the dispatcher consumes it via takeExpectedMovePrimaryInvalidate.
+func (r *Repl) armExpectedMovePrimaryInvalidate() {
+	r.lock.Lock()
+	r.expectMovePrimaryInvalidate = true
+	r.lock.Unlock()
+}
+
+// takeExpectedMovePrimaryInvalidate reports whether a movePrimary invalidate was
+// expected and clears the flag as a side effect, so the dispatcher consumes it
+// exactly once per invalidate after the worker barrier.
+func (r *Repl) takeExpectedMovePrimaryInvalidate() bool {
+	r.lock.Lock()
+	expected := r.expectMovePrimaryInvalidate
+	r.expectMovePrimaryInvalidate = false
+	r.lock.Unlock()
+
+	return expected
 }
 
 // Checkpoint represents the checkpoint state for replication recovery.
@@ -356,6 +421,9 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 	)
 
 	r.checkpointOpTime = startAt
+	// Scope the movePrimary-invalidate expectation to this run; clear any stale
+	// arming left over from a prior failed or paused run.
+	r.expectMovePrimaryInvalidate = false
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&startAt))
 
@@ -464,23 +532,51 @@ func (r *Repl) watchWithRetry(
 	changeCh chan<- *ChangeEvent,
 ) error {
 	currentOpts := opts
+	var startAfter bson.Raw
 
-	return mdb.RetryWithBackoff(ctx, func() error { //nolint:wrapcheck
-		err := r.watchChangeEvents(ctx, currentOpts, changeCh)
-		if err == nil {
-			return nil
-		}
+	return mdb.RetryWithBackoff( //nolint:wrapcheck
+		ctx, func() error {
+			err := r.watchChangeEvents(ctx, currentOpts, changeCh)
+			if err == nil {
+				return nil
+			}
 
-		r.lock.Lock()
-		lastOpTime := r.checkpointOpTime
-		r.lock.Unlock()
+			var invalidateErr changeStreamInvalidateError
+			if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.invalidEventID) > 0 {
+				startAfter = append(bson.Raw(nil), invalidateErr.invalidEventID...)
+				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+				log.New("repl:watch").With(
+					log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
+				).Warn("change stream invalidated; reconnecting with startAfter")
 
-		currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
+				return err
+			}
 
-		return err
-	}, isChangeStreamUnrecoverable,
+			if len(startAfter) > 0 {
+				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
+
+				return err
+			}
+
+			r.lock.Lock()
+			lastOpTime := r.checkpointOpTime
+			r.lock.Unlock()
+
+			currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
+
+			return err
+		}, isChangeStreamUnrecoverable,
 		mdb.DefaultRetryInterval, maxWatchDelay, 0,
 	)
+}
+
+type changeStreamInvalidateError struct {
+	invalidEventID bson.Raw
+	clusterTime    bson.Timestamp
+}
+
+func (e changeStreamInvalidateError) Error() string {
+	return fmt.Sprintf("change stream invalidated at cluster time %d.%d", e.clusterTime.T, e.clusterTime.I)
 }
 
 func isChangeStreamUnrecoverable(err error) bool {
@@ -516,6 +612,8 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
+	var invalidateErr *changeStreamInvalidateError
+
 	for {
 		lastEventTS := bson.Timestamp{}
 		hasEvents := false
@@ -536,11 +634,18 @@ func (r *Repl) watchChangeEvents(
 			ts := change.ClusterTime
 			changeCh <- change
 			lastEventTS = ts
+
+			if change.OperationType == Invalidate {
+				invalidateErr = &changeStreamInvalidateError{
+					invalidEventID: append(bson.Raw(nil), change.ID...),
+					clusterTime:    change.ClusterTime,
+				}
+			}
 		}
 
-		err = cur.Err()
-		if err != nil || cur.ID() == 0 {
-			return errors.Wrap(err, "cursor")
+		err = changeStreamCursorError(invalidateErr, cur.Err(), cur.ID())
+		if err != nil {
+			return err
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -568,6 +673,22 @@ func (r *Repl) watchChangeEvents(
 	}
 }
 
+func changeStreamCursorError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
+	if invalidateErr != nil {
+		return *invalidateErr
+	}
+
+	if cursorErr != nil {
+		return errors.Wrap(cursorErr, "cursor")
+	}
+
+	if cursorID == 0 {
+		return errors.New("change stream cursor closed by server")
+	}
+
+	return nil
+}
+
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
 	defer func() {
 		r.lock.Lock()
@@ -577,6 +698,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.advanceCheckpoint(r.pool.Checkpoint())
 
 		r.pool = nil
+		// Clear the movePrimary-invalidate expectation so arming never leaks
+		// past the run that set it.
+		r.expectMovePrimaryInvalidate = false
 		r.lock.Unlock()
 
 		close(r.doneCh)
@@ -605,9 +729,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 	}()
 
-	uuidMap := r.catalog.UUIDMap()
-
 	lg := log.New("repl")
+	uuidMap := r.catalog.UUIDMap()
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
 	// Used with Checkpoint() to determine if the pool is idle.
@@ -650,6 +773,15 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			continue
 		}
 
+		if r.shouldSkipReplay(change) {
+			lg.With(
+				log.NS(change.Namespace.Database, change.Namespace.Collection),
+				log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			).Trace("replayed event skipped")
+
+			continue
+		}
+
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
@@ -688,6 +820,14 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 			r.tryAdvanceOpTime(cpTicker)
 
+		case Invalidate:
+			err := r.handleInvalidate(change)
+			if err != nil {
+				return
+			}
+
+			lastRoutedTS = bson.Timestamp{}
+
 		default:
 			err := r.pool.Barrier()
 			if err != nil {
@@ -724,16 +864,63 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.lock.Unlock()
 
 			metrics.AddEventsApplied(1)
-
-			switch change.OperationType { //nolint:exhaustive
-			case Create, Rename, Drop, DropDatabase, ShardCollection:
-				uuidMap = r.catalog.UUIDMap()
-			}
+			uuidMap = r.catalog.UUIDMap()
 
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+func (r *Repl) handleInvalidate(change *ChangeEvent) error {
+	return r.handleInvalidateWithBarrier(change, r.pool)
+}
+
+func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierController) error {
+	err := bc.Barrier()
+	if err != nil {
+		// Safe to release even though Barrier failed: ReleaseBarrier only does
+		// non-blocking sends to resumeCh and skips dead workers, so it has no
+		// held-state dependency on a successful barrier.
+		bc.ReleaseBarrier()
+		r.setFailed(err, "Worker error during barrier")
+
+		return errors.Wrap(err, "worker error during barrier")
+	}
+	defer bc.ReleaseBarrier()
+
+	if r.sourceIsPre8AndMongos() && r.takeExpectedMovePrimaryInvalidate() {
+		r.lock.Lock()
+		r.advanceCheckpoint(change.ClusterTime)
+		// pre-8 mongos movePrimary recovery advances the checkpoint past the
+		// invalidate and counts one synthetic applied event that never went
+		// through a worker; this feeds the same total as pool.TotalEventsApplied()
+		// via Checkpoint()/Status() (applied = r.eventsApplied + pool total).
+		r.eventsApplied++
+		r.lock.Unlock()
+
+		metrics.AddEventsApplied(1)
+
+		return nil
+	}
+
+	if r.sourceIsMongos && r.takeExpectedMovePrimaryInvalidate() {
+		log.New("repl:invalidate").With(
+			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+			log.NS(change.Namespace.Database, change.Namespace.Collection),
+		).Warn("expected movePrimary invalidate; will reconnect from checkpoint")
+
+		return nil
+	}
+
+	invalidateErr := errors.New("change stream invalidated unexpectedly")
+	log.New("repl:invalidate").With(
+		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
+		log.NS(change.Namespace.Database, change.Namespace.Collection),
+	).Error(invalidateErr, "unexpected change stream invalidate; failing closed")
+	r.setFailed(invalidateErr, "Invalidate event")
+
+	return invalidateErr
 }
 
 // tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
@@ -753,6 +940,25 @@ func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
 		r.lock.Unlock()
 	default:
 	}
+}
+
+// isReplay reports whether change is older than the applied checkpoint frontier.
+// Keep strict `<` semantics: timestamp-only `<=` is unsafe because MongoDB can
+// emit multiple distinct change stream events with the same clusterTime.
+func (r *Repl) isReplay(change *ChangeEvent) bool {
+	r.lock.Lock()
+	checkpoint := r.checkpointOpTime
+	r.lock.Unlock()
+
+	return !checkpoint.IsZero() && change.ClusterTime.Before(checkpoint)
+}
+
+// shouldSkipReplay reports whether change is a replayed event that must be
+// skipped. Replay skipping applies only to mongos (sharded) sources, where
+// movePrimary and resume-from-checkpoint can redeliver already-applied events.
+// Replica set sources never need it and skipping there drops legitimate events.
+func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
+	return r.sourceIsMongos && r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick
@@ -790,21 +996,19 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	return r.pool.Idle()
 }
 
-//go:inline
-func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID == nil {
-		return change.Namespace
+// uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
+// Returns false if either pointer is nil.
+func uuidEqual(a, b *bson.Binary) bool {
+	if a == nil || b == nil {
+		return false
 	}
 
-	ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]
-	if !ok {
-		return change.Namespace
-	}
-
-	return ns
+	return bytes.Equal(a.Data, b.Data)
 }
 
 // applyDDLChange applies a schema change to the target MongoDB.
+//
+//nolint:gocyclo // PCSM-249: flat DDL dispatch switch, complexity is inherent; refactor deferred to final PR
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
 	ctx = lg.WithContext(ctx)
@@ -820,36 +1024,66 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			return nil
 		}
 
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		currentCollUUID := change.CollectionUUID
+
+		knownCollUUID, exists := r.catalog.CollectionUUID(db, coll)
+		switch {
+		case exists && uuidEqual(knownCollUUID, currentCollUUID):
+			lg.Debug("create event replay detected, namespace already at this UUID; noop")
+			if r.sourceIsPre8AndMongos() {
+				r.armExpectedMovePrimaryInvalidate()
+			}
+
+			return nil
+
+		case exists && knownCollUUID != nil && currentCollUUID != nil:
+			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+			if r.sourceIsPre8AndMongos() {
+				r.armExpectedMovePrimaryInvalidate()
+			}
+
+			r.catalog.SetCollectionUUID(ctx, db, coll, currentCollUUID)
+
+			return nil
+		}
+
+		err = r.catalog.DropCollection(ctx, db, coll)
 		if err != nil {
 			err = errors.Wrap(err, "drop before create")
 
 			break
 		}
 
-		err = r.catalog.CreateCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			&event.OperationDescription)
+		err = r.catalog.CreateCollection(ctx, db, coll, &event.OperationDescription)
 		if err != nil {
 			err = errors.Wrap(err, "create")
 
 			break
 		}
 
-		r.catalog.SetCollectionUUID(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection,
-			change.CollectionUUID)
-
+		r.catalog.SetCollectionUUID(ctx, db, coll, currentCollUUID)
 		lg.Infof("Collection %q has been created", change.Namespace)
 
 	case Drop:
-		err = r.catalog.DropCollection(ctx,
-			change.Namespace.Database,
-			change.Namespace.Collection)
+		db := change.Namespace.Database
+		coll := change.Namespace.Collection
+		currentCollUUID := change.CollectionUUID
+		knownCollUUID, _ := r.catalog.CollectionUUID(db, coll)
+
+		// PCSM-249: stale phantom drop from movePrimary is suppressed.
+		// The catalog has the new UUID (assigned by phantom create handler); this drop
+		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
+		// UUID comparison only suppresses when both sides are present and differ; views
+		// and other untracked namespaces fall through to the real drop, which is idempotent.
+		if currentCollUUID != nil && knownCollUUID != nil && !uuidEqual(knownCollUUID, currentCollUUID) {
+			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
+
+			return nil
+		}
+
+		err = r.catalog.DropCollection(ctx, db, coll)
 		if err != nil {
 			break
 		}
@@ -900,11 +1134,6 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		lg.Infof("Collection %q has been renamed to %q",
 			change.Namespace, event.OperationDescription.To)
-
-	case Invalidate:
-		lg.Error(ErrInvalidateEvent, "")
-
-		return ErrInvalidateEvent
 
 	case ShardCollection:
 		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
@@ -1033,5 +1262,6 @@ func loggerForEvent(change *ChangeEvent) log.Logger {
 	return log.New("repl").With(
 		log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 		log.Op(string(change.OperationType)),
-		log.NS(change.Namespace.Database, change.Namespace.Collection))
+		log.NS(change.Namespace.Database, change.Namespace.Collection),
+	)
 }

@@ -65,9 +65,7 @@ func TestEnqueueBulk_SealsBulkAndQueues(t *testing.T) {
 	assert.Equal(t, mock, pb.writer, "queued writer should be the original mock")
 	assert.Equal(t, ts, pb.checkpoint, "checkpoint should match pendingTS at seal time")
 
-	// Verify a fresh bulkWriter replaced the old one.
-	assert.True(t, w.currentBulkWrite.Empty(), "new bulkWriter should be empty")
-	assert.NotEqual(t, mock, w.currentBulkWrite, "bulkWrite should be a new instance")
+	assert.Nil(t, w.currentBulkWrite, "bulkWrite should be recreated lazily on next write")
 }
 
 // TestEnqueueBulk_ReturnsFalseWhenWriterDead verifies that enqueueBulk() returns false

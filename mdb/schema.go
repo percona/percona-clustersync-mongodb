@@ -297,6 +297,8 @@ type ShardingInfo struct {
 	Chunks []ChunkInfo
 }
 
+const configCollectionIDField = "_id"
+
 func (s ShardingInfo) IsSharded() bool {
 	return s.ShardKey != nil
 }
@@ -312,7 +314,7 @@ func GetCollectionShardingInfo(
 
 	err := m.Database("config").
 		Collection("collections").
-		FindOne(ctx, bson.M{"_id": collNS}).
+		FindOne(ctx, bson.M{configCollectionIDField: collNS, "dropped": bson.M{"$ne": true}}).
 		Decode(info)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -344,6 +346,7 @@ func GetCollectionShardingInfo(
 	if err != nil {
 		return nil, errors.Wrap(err, "read chunks")
 	}
+	info.Chunks = chunks
 
 	return info, nil
 }

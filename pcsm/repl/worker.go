@@ -19,8 +19,6 @@ import (
 )
 
 // routedEvent bundles a change event with its pre-resolved namespace.
-// Namespace is resolved in the dispatcher using uuidMap before routing to worker.
-// This includes enriched fields like Sharded and ShardKey from the catalog.
 type routedEvent struct {
 	change *ChangeEvent
 	ns     catalog.Namespace
@@ -117,8 +115,8 @@ func newWorker(
 			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, source)
 		}
 	}
-
 	w.currentBulkWrite = w.newBulkWriter()
+
 	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
 
@@ -179,9 +177,21 @@ func (w *worker) restartWriter(ctx context.Context) {
 	w.writerErr = nil
 	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
-	w.currentBulkWrite = w.newBulkWriter()
+	w.currentBulkWrite = nil
 
 	go w.runWriter(ctx)
+}
+
+func (w *worker) currentBulkEmpty() bool {
+	return w.currentBulkWrite == nil || w.currentBulkWrite.Empty()
+}
+
+func (w *worker) ensureBulkWriter() {
+	if w.currentBulkWrite != nil {
+		return
+	}
+
+	w.currentBulkWrite = w.newBulkWriter()
 }
 
 // run is the main loop for the worker. It processes events from eventC,
@@ -268,7 +278,7 @@ func (w *worker) run(ctx context.Context) {
 			}
 
 		case <-ticker.C:
-			if !w.currentBulkWrite.Empty() {
+			if !w.currentBulkEmpty() {
 				if !w.enqueueBulk() {
 					lg.Debug("Worker stopped (writer error)")
 
@@ -293,7 +303,7 @@ func (w *worker) run(ctx context.Context) {
 				return
 			}
 
-			if w.currentBulkWrite.Full() {
+			if !w.currentBulkEmpty() && w.currentBulkWrite.Full() {
 				if !w.enqueueBulk() {
 					lg.Debug("Worker stopped (writer error)")
 
@@ -318,6 +328,7 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	}
 
 	event.change.RawData = nil // release raw bytes for GC
+	w.ensureBulkWriter()
 
 	// Preflight: if the current bulk would overflow the byte budget, enqueue it first
 	// and start fresh. The WouldOverflow guard returns false when the bulk is empty so
@@ -361,7 +372,7 @@ func (w *worker) reportError(err error) {
 // creates a fresh bulkWriter for the next batch. Returns true on success,
 // false if the writer goroutine has died (error already reported).
 func (w *worker) enqueueBulk() bool {
-	if w.currentBulkWrite.Empty() {
+	if w.currentBulkEmpty() {
 		return true
 	}
 
@@ -377,7 +388,7 @@ func (w *worker) enqueueBulk() bool {
 		return false
 	}
 
-	w.currentBulkWrite = w.newBulkWriter()
+	w.currentBulkWrite = nil
 
 	return true
 }
@@ -398,7 +409,7 @@ func (w *worker) drainRoutedEvents() bool {
 				return false
 			}
 
-			if w.currentBulkWrite.Full() {
+			if !w.currentBulkEmpty() && w.currentBulkWrite.Full() {
 				if !w.enqueueBulk() {
 					return false
 				}

@@ -37,14 +37,15 @@ func makeTestPool(numWorkers int) *workerPool {
 
 // makeChangeEvent builds a minimal ChangeEvent whose RawData contains a
 // documentKey field, matching what Route() reads via bson.Raw.Lookup.
-func makeChangeEvent(docKey bson.D) *ChangeEvent {
+func makeChangeEvent(docKey bson.D, ns catalog.Namespace) *ChangeEvent {
 	raw, err := bson.Marshal(bson.D{{"documentKey", docKey}})
 	if err != nil {
 		panic(fmt.Sprintf("marshal documentKey: %v", err))
 	}
 
 	return &ChangeEvent{
-		RawData: bson.Raw(raw),
+		EventHeader: EventHeader{Namespace: ns},
+		RawData:     bson.Raw(raw),
 	}
 }
 
@@ -151,7 +152,7 @@ func TestRoute_SameDocumentGoesToSameWorker(t *testing.T) {
 	docKey := bson.D{{"_id", "same-doc"}}
 
 	for range numEvents {
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns), ns)
 	}
 
 	counts := workerEventCounts(pool)
@@ -179,7 +180,7 @@ func TestRoute_DifferentDocumentsDistribute(t *testing.T) {
 
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns), ns)
 	}
 
 	counts := workerEventCounts(pool)
@@ -210,7 +211,7 @@ func TestRoute_CappedNamespaceRoutesToSameWorker(t *testing.T) {
 	// Route events with different document keys — they must all go to one worker.
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns), ns)
 	}
 
 	counts := workerEventCounts(pool)
@@ -245,8 +246,8 @@ func TestRoute_CappedDifferentNamespacesCanDiffer(t *testing.T) {
 	ns2Worker := -1
 
 	for i := range numEvents {
-		pool1.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("a-%d", i)}}), ns1)
-		pool2.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("b-%d", i)}}), ns2)
+		pool1.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("a-%d", i)}}, ns1), ns1)
+		pool2.Route(makeChangeEvent(bson.D{{"_id", fmt.Sprintf("b-%d", i)}}, ns2), ns2)
 	}
 
 	counts1 := workerEventCounts(pool1)
@@ -283,7 +284,7 @@ func TestRoute_NonCappedIgnoresCappedRouting(t *testing.T) {
 
 	for i := range numEvents {
 		docKey := bson.D{{"_id", fmt.Sprintf("doc-%d", i)}}
-		pool.Route(makeChangeEvent(docKey), ns)
+		pool.Route(makeChangeEvent(docKey, ns), ns)
 	}
 
 	counts := workerEventCounts(pool)
@@ -337,19 +338,24 @@ func (m *mockBulkWriter) Delete(_ catalog.Namespace, _ *DeleteEvent)   { m.count
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
 func makeInsertEvent(id string) *routedEvent {
 	raw, err := bson.Marshal(bson.D{
-		{"documentKey", bson.D{{"_id", id}}},
-		{"fullDocument", bson.D{{"_id", id}, {"x", 1}}},
+		{"documentKey", bson.D{{testDocumentIDKey, id}}},
+		{"fullDocument", bson.D{{testDocumentIDKey, id}, {"x", 1}}},
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal insert event: %v", err))
 	}
 
+	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
+
 	return &routedEvent{
+		ns: ns,
 		change: &ChangeEvent{
-			EventHeader: EventHeader{OperationType: Insert},
-			RawData:     bson.Raw(raw),
+			EventHeader: EventHeader{
+				OperationType: Insert,
+				Namespace:     ns,
+			},
+			RawData: bson.Raw(raw),
 		},
-		ns: catalog.Namespace{Database: "testdb", Collection: "testcoll"},
 	}
 }
 
