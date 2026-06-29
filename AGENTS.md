@@ -53,6 +53,7 @@ Common runtime knobs. Every flag has a matching `PCSM_*` env var.
 | `PCSM_SOURCE_URI`                | `--source`                    |
 | `PCSM_TARGET_URI`                | `--target`                    |
 | `PCSM_PORT`                      | `--port` (default `2242`)     |
+| `PCSM_HOST`                      | `--host`                      |
 | `PCSM_LOG_LEVEL`                 | `--log-level`                 |
 | `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
 | `PCSM_CLONE_SEGMENT_SIZE`        | `--clone-segment-size`        |

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +138,7 @@ func newRootCmd() *cobra.Command {
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().String("host", "localhost", "Host to bind the HTTP server")
 
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
 		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
@@ -539,7 +542,12 @@ func runServer(cfg *config.Config) error {
 		port = config.DefaultServerPort
 	}
 
-	addr := fmt.Sprintf("localhost:%d", port)
+	host := cfg.Host
+	if host == "" {
+		host = "localhost"
+	}
+
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	httpServer := http.Server{
 		Addr:    addr,
 		Handler: srv.Handler(),
