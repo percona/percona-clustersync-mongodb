@@ -174,6 +174,52 @@ func TestValidate_PortBoundaries(t *testing.T) {
 	}
 }
 
+func TestValidate_Host(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		host    string
+		wantErr bool
+	}{
+		// Accepted: empty (defaults to localhost at runtime), hostnames, IP literals without a port
+		{"empty - valid (defaults to localhost)", "", false},
+		{"localhost - valid", "localhost", false},
+		{"IPv4 loopback - valid", "127.0.0.1", false},
+		{"IPv4 all interfaces - valid", "0.0.0.0", false},
+		{"IPv6 loopback - valid", "::1", false},
+		{"IPv6 link-local - valid", "fe80::1", false},
+		{"DNS name - valid", "example.com", false},
+
+		// Rejected: host already contains a port
+		{"localhost with port - invalid", "localhost:2242", true},
+		{"IPv4 with port - invalid", "127.0.0.1:2242", true},
+		{"bracketed IPv6 with port - invalid", "[::1]:2242", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Config{
+				Port:   8080,
+				Source: "mongodb://source:27017",
+				Target: "mongodb://target:27017",
+				Host:   tt.host,
+			}
+
+			err := config.Validate(cfg)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "host must not include a port")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateCloneSegmentSize(t *testing.T) {
 	t.Parallel()
 

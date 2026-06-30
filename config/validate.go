@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net"
+
 	"github.com/dustin/go-humanize"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -18,6 +20,11 @@ func Validate(cfg *Config) error {
 
 	if port <= 1024 || port > 65535 {
 		return errors.New("port value is outside the supported range [1024 - 65535]")
+	}
+
+	_, _, err := net.SplitHostPort(cfg.Host)
+	if err == nil {
+		return errors.New("host must not include a port")
 	}
 
 	switch {
