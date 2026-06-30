@@ -60,16 +60,32 @@ func (s *IndexSpecification) IsClustered() bool {
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
-	//nolint:wrapcheck
-	return m.ListDatabaseNames(ctx,
-		bson.D{{"name", bson.D{{"$nin", bson.A{"admin", "config", "local"}}}}})
+	var names []string
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		names, inner = m.ListDatabaseNames(ctx,
+			bson.D{{"name", bson.D{{"$nin", bson.A{"admin", "config", "local"}}}}})
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+
+	return names, err //nolint:wrapcheck
 }
 
 // ListCollectionNames returns a list of non-system collection names in the specified database.
 func ListCollectionNames(ctx context.Context, m *mongo.Client, dbName string) ([]string, error) {
-	//nolint:wrapcheck
-	return m.Database(dbName).ListCollectionNames(ctx,
-		bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
+	var names []string
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		names, inner = m.Database(dbName).ListCollectionNames(ctx,
+			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+
+	return names, err //nolint:wrapcheck
 }
 
 var ErrNotFound = errors.New("not found")
@@ -80,9 +96,17 @@ func ListCollectionSpecs(
 	m *mongo.Client,
 	dbName string,
 ) ([]CollectionSpecification, error) {
-	//nolint:wrapcheck
-	return m.Database(dbName).ListCollectionSpecifications(ctx,
-		bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
+	var specs []CollectionSpecification
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		specs, inner = m.Database(dbName).ListCollectionSpecifications(ctx,
+			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+
+	return specs, err //nolint:wrapcheck
 }
 
 // GetCollectionSpec retrieves the specification of a collection.
@@ -92,7 +116,14 @@ func GetCollectionSpec(
 	dbName string,
 	collName string,
 ) (*CollectionSpecification, error) {
-	colls, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"name", collName}})
+	var colls []CollectionSpecification
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		colls, inner = m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"name", collName}})
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if IsNamespaceNotFound(err) {
 			err = ErrNotFound
@@ -117,7 +148,14 @@ func GetCollectionNameByUUID(
 	dbName string,
 	uuid bson.Binary,
 ) (string, error) {
-	specs, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}})
+	var specs []CollectionSpecification
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		specs, inner = m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}})
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return "", errors.Wrap(err, "listCollections")
 	}
@@ -136,14 +174,16 @@ func ListIndexes(
 	db string,
 	coll string,
 ) ([]*IndexSpecification, error) {
-	cur, err := m.Database(db).Collection(coll).Indexes().List(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "list indexes")
-	}
-
 	var indexes []*IndexSpecification
 
-	err = cur.All(ctx, &indexes)
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		cur, err := m.Database(db).Collection(coll).Indexes().List(ctx)
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		return cur.All(ctx, &indexes) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return nil, errors.Wrap(err, "list indexes")
 	}
@@ -160,28 +200,30 @@ func ListInProgressIndexBuilds(
 	opts := options.Database().
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Local())
-	cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
-		{{"$currentOp", bson.D{{"allUsers", true}}}},
-		{{"$match", bson.D{
-			{"op", "command"},
-			{"command.createIndexes", coll},
-			{"command.$db", db},
-		}}},
-		{{"$unwind", "$command.indexes"}},
-		{{"$replaceRoot", bson.D{{"newRoot", "$command.indexes"}}}},
-		{{"$project", bson.D{{"name", 1}}}},
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "$currentOp")
-	}
-
 	var indexBuilds []struct {
 		Name string `bson:"name"`
 	}
 
-	err = cur.All(ctx, &indexBuilds)
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
+			{{"$currentOp", bson.D{{"allUsers", true}}}},
+			{{"$match", bson.D{
+				{"op", "command"},
+				{"command.createIndexes", coll},
+				{"command.$db", db},
+			}}},
+			{{"$unwind", "$command.indexes"}},
+			{{"$replaceRoot", bson.D{{"newRoot", "$command.indexes"}}}},
+			{{"$project", bson.D{{"name", 1}}}},
+		})
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		return cur.All(ctx, &indexBuilds) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, errors.Wrap(err, "cursor: all")
+		return nil, errors.Wrap(err, "$currentOp")
 	}
 
 	if len(indexBuilds) == 0 {
@@ -215,25 +257,27 @@ func ListInconsistentIndexes(
 	db string,
 	coll string,
 ) ([]*IndexSpecification, error) {
-	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
-		{{"$indexStats", bson.D{}}},
-	})
+	var indexStats []struct {
+		Name string              `bson:"name"`
+		Spec *IndexSpecification `bson:"spec"`
+	}
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
+			{{"$indexStats", bson.D{}}},
+		})
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		return cur.All(ctx, &indexStats) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if IsIndexNotFound(err) {
 			return nil, nil
 		}
 
 		return nil, errors.Wrap(err, "$indexStats")
-	}
-
-	var indexStats []struct {
-		Name string              `bson:"name"`
-		Spec *IndexSpecification `bson:"spec"`
-	}
-
-	err = cur.All(ctx, &indexStats)
-	if err != nil {
-		return nil, errors.Wrap(err, "cursor: all")
 	}
 
 	if len(indexStats) == 0 {
@@ -310,10 +354,12 @@ func GetCollectionShardingInfo(
 
 	info := &ShardingInfo{}
 
-	err := m.Database("config").
-		Collection("collections").
-		FindOne(ctx, bson.M{"_id": collNS}).
-		Decode(info)
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		return m.Database("config").
+			Collection("collections").
+			FindOne(ctx, bson.M{"_id": collNS}).
+			Decode(info) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, ErrNotFound
@@ -328,21 +374,24 @@ func GetCollectionShardingInfo(
 
 	chunksColl := m.Database("config").Collection("chunks")
 
-	cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
-	if err != nil {
-		return nil, errors.Wrapf(err, "find chunks for %s", collNS)
-	}
-	defer cur.Close(ctx)
-
-	if err := cur.Err(); err != nil { //nolint:noinlineerr
-		return nil, errors.Wrap(err, "iterate chunks")
-	}
-
 	var chunks []ChunkInfo
 
-	err = cur.All(ctx, &chunks)
+	err = RunWithRetry(ctx, func(ctx context.Context) error {
+		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+		defer cur.Close(ctx)
+
+		cerr := cur.Err()
+		if cerr != nil {
+			return cerr //nolint:wrapcheck
+		}
+
+		return cur.All(ctx, &chunks) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, errors.Wrap(err, "read chunks")
+		return nil, errors.Wrapf(err, "read chunks for %s", collNS)
 	}
 
 	return info, nil
