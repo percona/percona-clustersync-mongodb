@@ -52,7 +52,14 @@ func (v ServerVersion) FullString() string {
 }
 
 func Version(ctx context.Context, m *mongo.Client) (ServerVersion, error) {
-	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"buildInfo", 1}}).Raw()
+	var raw bson.Raw
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		raw, inner = m.Database("admin").RunCommand(ctx, bson.D{{"buildInfo", 1}}).Raw()
+
+		return inner //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return ServerVersion{}, errors.Wrap(err, "$buildInfo")
 	}
