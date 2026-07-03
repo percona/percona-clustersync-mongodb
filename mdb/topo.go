@@ -18,16 +18,11 @@ var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	var raw bson.Raw
-
 	// RunWithRetry caps PCSM retries at DefaultMaxRetries; the mongo-go-driver also
 	// applies its own adaptive retries (default 2) per operation, so worst-case wire
 	// attempts compound multiplicatively rather than being a flat sum.
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		raw, inner = m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw()
-
-		return inner //nolint:wrapcheck
+	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw() //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
@@ -43,16 +38,11 @@ func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 
 // AdvanceClusterTime advances the cluster time of a MongoDB deployment by appending an oplog note.
 func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	var raw bson.Raw
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		raw, inner = m.Database("admin").RunCommand(ctx, bson.D{
+	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return m.Database("admin").RunCommand(ctx, bson.D{
 			{"appendOplogNote", 1},
 			{"data", bson.D{{"msg", "pcsm:tick"}}},
-		}).Raw()
-
-		return inner //nolint:wrapcheck
+		}).Raw() //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
@@ -153,24 +143,30 @@ type CollStats struct {
 
 // SayHello runs the db.hello() command and returns the [Hello].
 func SayHello(ctx context.Context, m *mongo.Client) (*Hello, error) {
-	var result *Hello
+	return RunWithRetryVal(ctx, func(ctx context.Context) (*Hello, error) {
+		result := &Hello{}
 
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		return m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Decode(&result) //nolint:wrapcheck
+		err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Decode(result)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
+
+		return result, nil
 	}, DefaultRetryInterval, DefaultMaxRetries)
-
-	return result, err //nolint:wrapcheck
 }
 
 // GetDBStats runs the dbStats command.
 func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, error) {
-	var result *DBStats
+	return RunWithRetryVal(ctx, func(ctx context.Context) (*DBStats, error) {
+		result := &DBStats{}
 
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		return m.Database(dbName).RunCommand(ctx, bson.D{{"dbStats", 1}}).Decode(&result) //nolint:wrapcheck
+		err := m.Database(dbName).RunCommand(ctx, bson.D{{"dbStats", 1}}).Decode(result)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
+
+		return result, nil
 	}, DefaultRetryInterval, DefaultMaxRetries)
-
-	return result, err //nolint:wrapcheck
 }
 
 // GetCollStats retrieves statistics for a specific collection.

@@ -853,7 +853,8 @@ func (seg *Segmenter) findSegmentMaxKey(
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		var inner error
-		raw, inner = seg.mcoll.FindOne(ctx,
+		raw, inner = seg.mcoll.FindOne(
+			ctx,
 			bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
 			options.FindOne().
 				SetSort(bson.D{{"_id", 1}}).
@@ -893,16 +894,15 @@ func (seg *Segmenter) handleNanIDDoc(
 // It uses two FindOne operations with sort directions of 1 (ascending) and -1 (descending)
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
+// The backoff-sleep-only worst case is roughly 80s: three loops complete after
+// up to 15s of backoff each, then one loop exhausts after 35s and aborts the
+// function. Each FindOne call is separately bounded by MongoDB's per-operation
+// timeout; there is no single timeout budget for getIDKeyRange as a whole.
 func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
 	minIDOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
 
-	var minRaw bson.Raw
-
-	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		minRaw, inner = mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw()
-
-		return inner //nolint:wrapcheck
+	minRaw, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw() //nolint:wrapcheck
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "min _id")
@@ -913,11 +913,8 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(minRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = minRaw
 
-		err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-			var inner error
-			minRaw, inner = mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw()
-
-			return inner //nolint:wrapcheck
+		minRaw, err = mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+			return mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw() //nolint:wrapcheck
 		}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "min _id (skip NaN)")
@@ -926,13 +923,8 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 
 	maxIDOptions := options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
 
-	var maxRaw bson.Raw
-
-	err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		maxRaw, inner = mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw()
-
-		return inner //nolint:wrapcheck
+	maxRaw, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw() //nolint:wrapcheck
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "max _id")
@@ -941,11 +933,8 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(maxRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = maxRaw
 
-		err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-			var inner error
-			maxRaw, inner = mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw()
-
-			return inner //nolint:wrapcheck
+		maxRaw, err = mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+			return mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw() //nolint:wrapcheck
 		}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "max _id (skip NaN)")

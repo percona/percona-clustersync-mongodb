@@ -56,6 +56,28 @@ func RunWithRetry(
 	return err
 }
 
+// RunWithRetryVal is the value-returning variant of RunWithRetry. It runs fn
+// under the same transient-error retry logic and returns fn's value on success.
+//
+//nolint:ireturn // Generic retry helper must return caller-selected value type.
+func RunWithRetryVal[T any](
+	ctx context.Context,
+	fn func(context.Context) (T, error),
+	retryInterval time.Duration,
+	maxRetries int,
+) (T, error) {
+	var result T
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		result, inner = fn(ctx)
+
+		return inner //nolint:wrapcheck
+	}, retryInterval, maxRetries)
+
+	return result, err //nolint:wrapcheck
+}
+
 // RetryWithBackoff retries fn with exponential backoff. When maxRetries > 0 it
 // stops after that many attempts. When maxRetries <= 0 it retries indefinitely
 // until the context is canceled or isUnrecoverable classifies the error as

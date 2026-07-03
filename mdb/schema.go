@@ -22,6 +22,15 @@ const (
 	TypeView       = "view"
 )
 
+const (
+	currentOpStage      = "$currentOp"
+	indexStatsOpenStage = "$indexStats"
+	cursorAllStage      = "cursor: all"
+	chunksFindStage     = "find"
+	chunksReadStage     = "read"
+	chunksErrorStage    = "iterate"
+)
+
 // IndexSpecification contains all index options.
 //
 // NOTE: [mongo.IndexView.CreateMany] and [mongo.IndexView.CreateOne] use [mongo.IndexModel]
@@ -60,14 +69,9 @@ func (s *IndexSpecification) IsClustered() bool {
 }
 
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
-	var names []string
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		names, inner = m.ListDatabaseNames(ctx,
-			bson.D{{"name", bson.D{{"$nin", bson.A{"admin", "config", "local"}}}}})
-
-		return inner //nolint:wrapcheck
+	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
+		return m.ListDatabaseNames(ctx,
+			bson.D{{"name", bson.D{{"$nin", bson.A{"admin", "config", "local"}}}}}) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 
 	return names, err //nolint:wrapcheck
@@ -75,14 +79,9 @@ func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
 
 // ListCollectionNames returns a list of non-system collection names in the specified database.
 func ListCollectionNames(ctx context.Context, m *mongo.Client, dbName string) ([]string, error) {
-	var names []string
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		names, inner = m.Database(dbName).ListCollectionNames(ctx,
-			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
-
-		return inner //nolint:wrapcheck
+	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
+		return m.Database(dbName).ListCollectionNames(ctx,
+			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}}) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 
 	return names, err //nolint:wrapcheck
@@ -96,14 +95,9 @@ func ListCollectionSpecs(
 	m *mongo.Client,
 	dbName string,
 ) ([]CollectionSpecification, error) {
-	var specs []CollectionSpecification
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		specs, inner = m.Database(dbName).ListCollectionSpecifications(ctx,
-			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
-
-		return inner //nolint:wrapcheck
+	specs, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]CollectionSpecification, error) {
+		return m.Database(dbName).ListCollectionSpecifications(ctx,
+			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}}) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 
 	return specs, err //nolint:wrapcheck
@@ -116,13 +110,8 @@ func GetCollectionSpec(
 	dbName string,
 	collName string,
 ) (*CollectionSpecification, error) {
-	var colls []CollectionSpecification
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		colls, inner = m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"name", collName}})
-
-		return inner //nolint:wrapcheck
+	colls, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]CollectionSpecification, error) {
+		return m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"name", collName}}) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if IsNamespaceNotFound(err) {
@@ -148,13 +137,8 @@ func GetCollectionNameByUUID(
 	dbName string,
 	uuid bson.Binary,
 ) (string, error) {
-	var specs []CollectionSpecification
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		var inner error
-		specs, inner = m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}})
-
-		return inner //nolint:wrapcheck
+	specs, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]CollectionSpecification, error) {
+		return m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"info.uuid", uuid}}) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return "", errors.Wrap(err, "listCollections")
@@ -204,9 +188,12 @@ func ListInProgressIndexBuilds(
 		Name string `bson:"name"`
 	}
 
+	indexBuildsStage := currentOpStage
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		indexBuildsStage = currentOpStage
+
 		cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
-			{{"$currentOp", bson.D{{"allUsers", true}}}},
+			{{currentOpStage, bson.D{{"allUsers", true}}}},
 			{{"$match", bson.D{
 				{"op", "command"},
 				{"command.createIndexes", coll},
@@ -219,11 +206,12 @@ func ListInProgressIndexBuilds(
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
+		indexBuildsStage = cursorAllStage
 
 		return cur.All(ctx, &indexBuilds) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, errors.Wrap(err, "$currentOp")
+		return nil, errors.Wrap(err, indexBuildsStage)
 	}
 
 	if len(indexBuilds) == 0 {
@@ -262,13 +250,17 @@ func ListInconsistentIndexes(
 		Spec *IndexSpecification `bson:"spec"`
 	}
 
+	indexStatsStage := indexStatsOpenStage
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		indexStatsStage = indexStatsOpenStage
+
 		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, mongo.Pipeline{
-			{{"$indexStats", bson.D{}}},
+			{{indexStatsOpenStage, bson.D{}}},
 		})
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
+		indexStatsStage = cursorAllStage
 
 		return cur.All(ctx, &indexStats) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
@@ -277,7 +269,7 @@ func ListInconsistentIndexes(
 			return nil, nil
 		}
 
-		return nil, errors.Wrap(err, "$indexStats")
+		return nil, errors.Wrap(err, indexStatsStage)
 	}
 
 	if len(indexStats) == 0 {
@@ -352,13 +344,14 @@ func GetCollectionShardingInfo(
 ) (*ShardingInfo, error) {
 	collNS := dbName + "." + collName
 
-	info := &ShardingInfo{}
-
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		return m.Database("config").
+	info, err := RunWithRetryVal(ctx, func(ctx context.Context) (*ShardingInfo, error) {
+		info := &ShardingInfo{}
+		err := m.Database("config").
 			Collection("collections").
 			FindOne(ctx, bson.M{"_id": collNS}).
-			Decode(info) //nolint:wrapcheck
+			Decode(info)
+
+		return info, err //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -376,22 +369,35 @@ func GetCollectionShardingInfo(
 
 	var chunks []ChunkInfo
 
+	chunksStage := chunksFindStage
 	err = RunWithRetry(ctx, func(ctx context.Context) error {
+		chunksStage = chunksFindStage
+
 		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
 		defer cur.Close(ctx)
 
+		chunksStage = chunksErrorStage
 		cerr := cur.Err()
 		if cerr != nil {
 			return cerr //nolint:wrapcheck
 		}
 
+		chunksStage = chunksReadStage
+
 		return cur.All(ctx, &chunks) //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, errors.Wrapf(err, "read chunks for %s", collNS)
+		switch chunksStage {
+		case chunksFindStage:
+			return nil, errors.Wrapf(err, "find chunks for %s", collNS)
+		case chunksErrorStage:
+			return nil, errors.Wrap(err, "iterate chunks")
+		default:
+			return nil, errors.Wrap(err, "read chunks")
+		}
 	}
 
 	return info, nil
