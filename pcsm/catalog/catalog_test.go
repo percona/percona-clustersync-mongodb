@@ -134,7 +134,7 @@ func TestCreateCollection_Idempotency(t *testing.T) {
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	cat := NewCatalog(client, mdb.ServerVersion{})
+	cat := NewCatalog(client, client, mdb.ServerVersion{})
 
 	db := testDB + "_coll"
 	coll := "test_create_collection"
@@ -166,7 +166,7 @@ func TestCreateView_Idempotency(t *testing.T) {
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
 
-	cat := NewCatalog(client, mdb.ServerVersion{})
+	cat := NewCatalog(client, client, mdb.ServerVersion{})
 
 	db := testDB + "_view"
 	sourceColl := "test_view_source"
