@@ -194,11 +194,9 @@ const (
 	finalizeReasonBecameInconsistent = "became inconsistent at finalize"
 	finalizeReasonNoLongerPresent    = "no longer present on source"
 	finalizeReasonSourceSpecChanged  = "source spec changed"
-	finalizeReasonStillBuilding      = "still building at finalize"
-	finalizeReasonStillIncomplete    = "still incomplete at finalize"
-	finalizeReasonStillInconsistent  = "still inconsistent at finalize"
-	simpleCollationLocaleKey         = "locale"
-	simpleCollationLocaleValue       = "simple"
+	finalizeReasonStillBuilding      = "index is still building on one or more source shards"
+	finalizeReasonStillIncomplete    = "index is still building on one or more source shards"
+	finalizeReasonStillInconsistent  = "index is missing on one or more source shards"
 )
 
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
@@ -308,7 +306,7 @@ func indexCreateSpecsEqual(stored, source *mdb.IndexSpecification) bool {
 
 func ptrEqual[T comparable](left, right *T) bool {
 	if left == nil || right == nil {
-		return left == nil && right == nil
+		return left == right
 	}
 
 	return *left == *right
@@ -345,7 +343,7 @@ func marshalIndexOptionValue(value any) (bson.Raw, bool) {
 }
 
 // NewCatalog creates a new Catalog.
-func NewCatalog(source *mongo.Client, target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
+func NewCatalog(source, target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
 	return &Catalog{
 		source:    source,
 		target:    target,
@@ -624,7 +622,7 @@ func (c *Catalog) CreateIndexes(
 		if index.Collation == nil {
 			lg.Info("Create index with missing collation, setting simple collation: " + index.Name)
 
-			d := bson.D{{simpleCollationLocaleKey, simpleCollationLocaleValue}}
+			d := bson.D{{"locale", "simple"}}
 
 			collation, err := bson.Marshal(d)
 			if err != nil {
@@ -1751,11 +1749,12 @@ func (c *Catalog) ShardCollection(
 	cmd := bson.D{
 		{Key: "shardCollection", Value: db + "." + coll},
 		{Key: "key", Value: shardKey},
-		{"collation", bson.D{{simpleCollationLocaleKey, simpleCollationLocaleValue}}},
+		{"collation", bson.D{{"locale", "simple"}}},
 	}
 
 	if unique {
-		cmd = append(cmd,
+		cmd = append(
+			cmd,
 			bson.E{Key: "unique", Value: true},
 			bson.E{Key: "enforceUniquenessCheck", Value: false},
 		)

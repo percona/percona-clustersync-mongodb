@@ -1,7 +1,7 @@
-//nolint:testpackage // Tests exercise private finalize decision seam without exposing production API.
-package catalog
+package catalog //nolint:testpackage
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -174,7 +174,7 @@ func TestIndexCreateSpecsEqual(t *testing.T) {
 		{
 			name: "detects collation change",
 			mutate: func(spec *mdb.IndexSpecification) {
-				spec.Collation = mustTestRaw(t, bson.D{{Key: simpleCollationLocaleKey, Value: "en"}})
+				spec.Collation = mustTestRaw(t, bson.D{{Key: "simple", Value: "en"}})
 			},
 		},
 		{
@@ -212,6 +212,54 @@ func TestIndexCreateSpecsEqual(t *testing.T) {
 	}
 }
 
+// TestIndexCreateSpecsEqualFieldCoverage fails when a new IndexSpecification
+// field is neither compared by indexCreateSpecsEqual nor deliberately ignored,
+// so finalize cannot silently stop checking a field. Behavioral coverage lives
+// in TestIndexCreateSpecsEqual.
+func TestIndexCreateSpecsEqualFieldCoverage(t *testing.T) {
+	t.Parallel()
+
+	compared := map[string]bool{
+		"KeysDocument":            true,
+		"Sparse":                  true,
+		"Hidden":                  true,
+		"Unique":                  true,
+		"PrepareUnique":           true,
+		"ExpireAfterSeconds":      true,
+		"Weights":                 true,
+		"DefaultLanguage":         true,
+		"LanguageOverride":        true,
+		"TextVersion":             true,
+		"Collation":               true,
+		"WildcardProjection":      true,
+		"PartialFilterExpression": true,
+		"Bits":                    true,
+		"Min":                     true,
+		"Max":                     true,
+		"GeoIdxVer":               true,
+	}
+	ignored := map[string]bool{
+		"Name":      true, // index identity, matched by name before comparison
+		"Namespace": true, // server-managed (ns)
+		"Version":   true, // server-managed (v)
+		"Clustered": true, // collection property, not recreated via createIndexes
+	}
+
+	for _, f := range reflect.VisibleFields(reflect.TypeFor[mdb.IndexSpecification]()) {
+		if !f.IsExported() {
+			continue
+		}
+
+		switch {
+		case compared[f.Name] && ignored[f.Name]:
+			t.Errorf("IndexSpecification field %q classified as both compared and ignored", f.Name)
+		case !compared[f.Name] && !ignored[f.Name]:
+			t.Errorf("IndexSpecification field %q is unclassified: add it to indexCreateSpecsEqual "+
+				"and the compared set, or to the ignored set", f.Name)
+		}
+	}
+}
+
 func testIndexSpec(t *testing.T) *mdb.IndexSpecification {
 	t.Helper()
 
@@ -228,7 +276,7 @@ func testIndexSpec(t *testing.T) *mdb.IndexSpecification {
 		DefaultLanguage:         new("english"),
 		LanguageOverride:        new("language"),
 		TextVersion:             new(int32(3)),
-		Collation:               mustTestRaw(t, bson.D{{Key: simpleCollationLocaleKey, Value: simpleCollationLocaleValue}}),
+		Collation:               mustTestRaw(t, bson.D{{Key: "simple", Value: "local"}}),
 		WildcardProjection:      bson.D{{Key: "profile", Value: 1}},
 		PartialFilterExpression: bson.D{{Key: "active", Value: true}},
 		Bits:                    new(int32(26)),
