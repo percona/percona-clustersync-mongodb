@@ -200,3 +200,90 @@ func TestRetryWithBackoff_UnlimitedRetriesUntilSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(10), calls.Load())
 }
+
+func TestRunWithRetry_FirstAttemptSuccess(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+
+	fn := func(_ context.Context) error {
+		calls++
+
+		return nil
+	}
+
+	err := RunWithRetry(t.Context(), fn, 1*time.Millisecond, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+}
+
+// TestRunWithRetry_NoSleepAfterFinalAttempt locks the fix that removes the
+// wasted backoff wait following the last failed attempt. Backoff waits occur
+// only between attempts, so with a 1s base interval and 3 attempts the total
+// elapsed fake time is 1s + 2s = 3s, not 1s + 2s + 4s = 7s.
+func TestRunWithRetry_NoSleepAfterFinalAttempt(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		transientErr := mongo.WriteException{
+			WriteErrors: []mongo.WriteError{
+				{
+					Code:    91, // ShutdownInProgress
+					Message: "transient error",
+				},
+			},
+		}
+
+		calls := 0
+
+		fn := func(_ context.Context) error {
+			calls++
+
+			return transientErr
+		}
+
+		start := time.Now()
+		err := RunWithRetry(t.Context(), fn, time.Second, 3)
+		elapsed := time.Since(start)
+
+		require.ErrorAs(t, err, &transientErr)
+		assert.Equal(t, 3, calls)
+		assert.Equal(t, 3*time.Second, elapsed)
+	})
+}
+
+// TestRunWithRetry_ContextCanceledDuringBackoff locks the fix that makes the
+// backoff wait cancellable: canceling the context while RunWithRetry is
+// sleeping between attempts returns promptly with the wrapped context error.
+func TestRunWithRetry_ContextCanceledDuringBackoff(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+
+		transientErr := mongo.WriteException{
+			WriteErrors: []mongo.WriteError{
+				{
+					Code:    91, // ShutdownInProgress
+					Message: "transient error",
+				},
+			},
+		}
+
+		fn := func(_ context.Context) error {
+			return transientErr
+		}
+
+		var err error
+
+		go func() {
+			err = RunWithRetry(ctx, fn, time.Second, 3)
+		}()
+
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
