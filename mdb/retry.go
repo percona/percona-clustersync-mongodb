@@ -46,11 +46,18 @@ func RunWithRetry(
 			return err
 		}
 
-		log.Ctx(ctx).Warnf("Transient error: %v, retry attempt %d retrying in %s",
-			err, attempt, currentInterval)
+		if attempt < maxRetries {
+			log.Ctx(ctx).Warnf("Transient error: %v, retry attempt %d retrying in %s",
+				err, attempt, currentInterval)
 
-		time.Sleep(currentInterval)
-		currentInterval *= 2
+			select {
+			case <-time.After(currentInterval):
+			case <-ctx.Done():
+				return errors.Wrap(ctx.Err(), "retry wait")
+			}
+
+			currentInterval *= 2
+		}
 	}
 
 	return err
