@@ -147,7 +147,7 @@ func (c *Clone) Checkpoint() *Checkpoint {
 		TotalSize:  c.totalSize,
 		CopiedSize: c.copiedSize.Load(),
 		StartTS:    c.startTS,
-		FinishTS:   bson.Timestamp{},
+		FinishTS:   c.finishTS,
 		StartTime:  c.startTime,
 		FinishTime: c.finishTime,
 	}
