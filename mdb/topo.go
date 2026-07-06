@@ -207,7 +207,7 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 
 	stats := &CollStats{}
 
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
+	err := func() error {
 		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
 		if err != nil {
 			return err //nolint:wrapcheck
@@ -231,7 +231,7 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 		}
 
 		return cur.Decode(stats) //nolint:wrapcheck
-	}, DefaultRetryInterval, DefaultMaxRetries)
+	}()
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
@@ -266,9 +266,7 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 	stats := &CollStats{}
 	empty := false
 
-	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		empty = false
-
+	err := func() error {
 		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
 		if err != nil {
 			return err //nolint:wrapcheck
@@ -294,7 +292,7 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 		}
 
 		return cur.Decode(stats) //nolint:wrapcheck
-	}, DefaultRetryInterval, DefaultMaxRetries)
+	}()
 	if err != nil {
 		if IsNamespaceNotFound(err) {
 			err = ErrNotFound
