@@ -92,12 +92,25 @@ func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 
 // tryAcquireOrRenew atomically acquires or renews the lease. It first tries to
 // take or renew an existing lease; if no document matches the take/renew filter
-// it attempts a bootstrap insert. A loser (another instance holds an unexpired
-// lease) is reported as held=false with a nil error.
+// it bootstraps the lease with an insert, then immediately re-renews it. A loser
+// (another instance holds an unexpired lease) is reported as held=false with a
+// nil error.
 //
-// MongoDB forbids $expr in the query predicate of an upsert, so take/renew (a
-// non-upsert update with a server-clock predicate) and bootstrap (a plain
-// insert) are kept as separate steps rather than a single upsert.
+// Two-step design, and why bootstrap is not a single upsert:
+//   - Take/renew is a non-upsert update whose filter uses a server-clock $expr
+//     predicate ("I own it OR it has expired"). MongoDB forbids $expr in the
+//     query predicate of an upsert, so this cannot be folded into an upsert.
+//   - Bootstrap is an insert-only write (not an upsert) on purpose: the
+//     duplicate-key error is exactly how a losing contender is detected when the
+//     lease already exists and is held by another instance. An upsert would
+//     instead overwrite the current owner's lease and break the single-active
+//     guarantee.
+//
+// Because the insert cannot use the server clock ($$NOW is only valid in update
+// pipelines), the bootstrap stamps timestamps with the client clock. Every other
+// part of the protocol compares against the server clock, so a fresh leader
+// immediately re-renews to convert those provisional client timestamps into
+// server-stamped ones (see the re-renew step below).
 func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, config.HeartbeatTimeout)
 	defer cancel()
@@ -116,30 +129,46 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 	// insert; a duplicate-key collision means it already exists and is owned by
 	// someone else with an unexpired lease -> we lose.
 	won, term, err := m.tryInsertLease(ctx)
-	if err == nil {
-		return won, term, nil
-	}
-	if mongo.IsDuplicateKeyError(err) {
-		return false, 0, nil
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return false, 0, nil
+		}
+
+		return false, 0, errors.Wrap(err, "bootstrap lease")
 	}
 
-	return false, 0, errors.Wrap(err, "bootstrap lease")
+	held, renewedTerm, matched, err := m.tryTakeOrRenewExisting(ctx)
+	if err != nil {
+		return false, 0, err
+	}
+	if matched {
+		return held, renewedTerm, nil
+	}
+
+	return won, term, nil
 }
 
 // tryInsertLease creates the lease document for the first time at term 1. It
 // inserts only when no lease exists; a duplicate-key error (returned unwrapped)
 // means the document already exists and the caller should treat it as a loss.
+// Insert-only (not upsert) is deliberate: it is how a losing contender is
+// detected when the lease is already held by another instance.
+//
+// The client-stamped timestamps here are provisional bootstrap values. The
+// caller re-renews immediately after a successful bootstrap so expiresAt and
+// electionDate are re-stamped against the server clock ($$NOW); this avoids
+// client/server clock skew making the bootstrap expiresAt inconsistent with
+// subsequent server-stamped renewals.
 func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
+	now := time.Now().UTC()
+
 	_, err := m.leaseColl().InsertOne(ctx, bson.D{
 		{"_id", LeaseID},
 		{"group", m.group},
-		{"activeId", m.instanceID},
-		{"term", int64(1)},
-		// electionDate/expiresAt are stamped relative to insertion time. The next
-		// renew tick re-stamps expiresAt against the server clock; this initial
-		// value only needs to be in the future, which LeaseTTL guarantees.
-		{"electionDate", time.Now().UTC()},
-		{"expiresAt", time.Now().UTC().Add(config.LeaseTTL)},
+		{fieldActiveID, m.instanceID},
+		{fieldTerm, int64(1)},
+		{"electionDate", now},
+		{fieldExpiresAt, now.Add(config.LeaseTTL)},
 	})
 	if err != nil {
 		return false, 0, err //nolint:wrapcheck // caller inspects for duplicate-key
@@ -162,18 +191,18 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	pipeline := mongo.Pipeline{
 		{{"$set", bson.D{
 			{"group", m.group},
-			{"activeId", m.instanceID},
-			{"expiresAt", bson.D{{"$add", bson.A{"$$NOW", ttlMS}}}},
+			{fieldActiveID, m.instanceID},
+			{fieldExpiresAt, bson.D{{aggAdd, bson.A{aggNow, ttlMS}}}},
 			{"electionDate", bson.D{{"$cond", bson.D{
 				{"if", isRenew},
-				{"then", bson.D{{"$ifNull", bson.A{"$electionDate", "$$NOW"}}}},
-				{"else", "$$NOW"},
+				{"then", bson.D{{aggIfNull, bson.A{"$electionDate", aggNow}}}},
+				{"else", aggNow},
 			}}}},
-			{"term", bson.D{{"$cond", bson.D{
+			{fieldTerm, bson.D{{"$cond", bson.D{
 				{"if", isRenew},
-				{"then", bson.D{{"$ifNull", bson.A{"$term", int64(0)}}}},
-				{"else", bson.D{{"$add", bson.A{
-					bson.D{{"$ifNull", bson.A{"$term", int64(0)}}},
+				{"then", bson.D{{aggIfNull, bson.A{"$term", int64(0)}}}},
+				{"else", bson.D{{aggAdd, bson.A{
+					bson.D{{aggIfNull, bson.A{"$term", int64(0)}}},
 					int64(1),
 				}}}},
 			}}}},
@@ -183,7 +212,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	// Filter without upsert may use $expr/$$NOW: take when we own it or it expired.
 	filter := bson.D{{"_id", LeaseID}, {"$expr", bson.D{{"$or", bson.A{
 		bson.D{{"$eq", bson.A{"$activeId", m.instanceID}}},
-		bson.D{{"$lte", bson.A{"$expiresAt", "$$NOW"}}},
+		bson.D{{"$lte", bson.A{"$expiresAt", aggNow}}},
 	}}}}}
 
 	var updated Lease
@@ -211,9 +240,9 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 	defer cancel()
 
 	_, err := m.leaseColl().UpdateOne(ctx,
-		bson.D{{"_id", LeaseID}, {"activeId", m.instanceID}},
+		bson.D{{"_id", LeaseID}, {fieldActiveID, m.instanceID}},
 		mongo.Pipeline{
-			{{"$set", bson.D{{"expiresAt", "$$NOW"}}}},
+			{{"$set", bson.D{{fieldExpiresAt, aggNow}}}},
 		},
 	)
 

@@ -22,6 +22,23 @@ const (
 // LeaseID is the fixed _id of the single lease document in the lease collection.
 const LeaseID = "active"
 
+// BSON field names shared across lease and member documents. Kept as constants
+// so repeated string literals are not duplicated across queries and pipelines.
+const (
+	fieldActiveID  = "activeId"
+	fieldTerm      = "term"
+	fieldExpiresAt = "expiresAt"
+)
+
+// MongoDB aggregation variables/operators referenced in update pipelines.
+const (
+	// aggNow is the server-side current-time variable. Using it keeps lease and
+	// heartbeat time comparisons independent of client wall-clock time.
+	aggNow    = "$$NOW"
+	aggIfNull = "$ifNull"
+	aggAdd    = "$add"
+)
+
 // Member is a per-instance liveness/identity document stored in the members
 // collection (one document per instanceId). It carries no authoritative election
 // state; Term here is informational and the lease document is the source of truth.

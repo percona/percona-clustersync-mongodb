@@ -244,10 +244,10 @@ func (m *Membership) beat(ctx context.Context) error {
 			{"host", m.host},
 			{"port", m.port},
 			{"role", role},
-			{"term", term},
+			{fieldTerm, term},
 			{"pcsmVersion", m.version},
 			{"startedAt", m.startedAt},
-			{"lastHeartbeat", "$$NOW"},
+			{"lastHeartbeat", aggNow},
 		}}},
 	}
 
@@ -281,7 +281,7 @@ func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 			{"$expr", bson.D{
 				{"$gte", bson.A{
 					"$lastHeartbeat",
-					bson.D{{"$subtract", bson.A{"$$NOW", config.StaleMemberDuration.Milliseconds()}}},
+					bson.D{{"$subtract", bson.A{aggNow, config.StaleMemberDuration.Milliseconds()}}},
 				}},
 			}},
 		}}},
