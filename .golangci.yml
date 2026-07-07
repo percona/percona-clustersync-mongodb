@@ -25,6 +25,15 @@ linters:
         - name: var-naming
           disabled: true
   exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - goconst
+      - linters:
+          - goconst
+        text: "string `(_id|name|size|count|avgObjSize|\
+            collation|createIndexes|indexes|collMod|index|\
+            \\$_id|\\$project|\\$set|\\$unset|\\$push|\\$each|\\$slice)`"
     generated: lax
     presets:
       - comments

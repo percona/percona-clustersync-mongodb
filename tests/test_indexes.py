@@ -475,7 +475,8 @@ def test_manual_create_ttl(t: Testing):
         pcsm.start()
         t.source["db_1"]["coll_1"].create_index({"b": 1}, expireAfterSeconds=1)
         pcsm.wait_for_initial_sync()
-        t.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
+        index_name = t.source["db_1"]["coll_1"].create_index({"c": 1}, expireAfterSeconds=1)
+        t.wait_target_index("db_1", "coll_1", index_name)
         pcsm.finalize()
     except:
         pcsm.finalize(fast=True)
