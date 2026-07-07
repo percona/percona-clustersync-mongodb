@@ -205,10 +205,9 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-run")
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go m.RunLease(runCtx)
+	// FirstLeaseTick settles the role synchronously (production wiring), then
+	// RunLease keeps renewing.
+	m.FirstLeaseTick(ctx)
 
 	select {
 	case rc := <-m.RoleChanges():
@@ -221,3 +220,5 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 	role, _ := m.CurrentRole()
 	assert.Equal(t, RoleActive, role)
 }
+
+

@@ -139,6 +139,9 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
+	rootCmd.Flags().String("group", config.DefaultGroup,
+		"HA group name; all instances coordinating over the same target must share it")
+
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
 		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
 			strings.Join(config.DefaultClientCompressors(), ",")))
@@ -403,9 +406,42 @@ func newResetCmd(cfg *config.Config) *cobra.Command {
 	cmd.AddCommand(
 		newResetRecoveryCmd(cfg),
 		newResetMembersCmd(cfg),
+		newResetLeaseCmd(cfg),
 	)
 
 	return cmd
+}
+
+func newResetLeaseCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:    "lease",
+		Hidden: true,
+		Short:  "Reset HA lease state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+
+			target, err := mdb.Connect(ctx, cfg.Target, cfg)
+			if err != nil {
+				return errors.Wrap(err, "connect")
+			}
+
+			defer func() {
+				err := util.CtxWithTimeout(ctx, config.DisconnectTimeout, target.Disconnect)
+				if err != nil {
+					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+				}
+			}()
+
+			err = ha.DeleteLease(ctx, target)
+			if err != nil {
+				return errors.Wrap(err, "delete lease")
+			}
+
+			log.New("cli").Info("OK: reset lease")
+
+			return nil
+		},
+	}
 }
 
 func newResetRecoveryCmd(cfg *config.Config) *cobra.Command {
@@ -484,6 +520,11 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 			log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 		}
 	}()
+
+	err = ha.DeleteLease(ctx, target)
+	if err != nil {
+		return errors.Wrap(err, "delete lease")
+	}
 
 	err = ha.DeleteMembers(ctx, target)
 	if err != nil {
@@ -671,7 +712,13 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
+	group := cfg.Group
+	if group == "" {
+		group = config.DefaultGroup
+	}
+
 	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{
+		Group:       group,
 		Port:        cfg.Port,
 		PCSMVersion: buildVersion(),
 	})
@@ -712,13 +759,17 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		}
 	})
 
-	// Run the lease loop and react to role transitions. Replication only runs
-	// while this instance holds the lease (ACTIVE); a single instance wins the
-	// lease immediately and becomes ACTIVE. Checkpointing is not started here:
-	// it runs per ACTIVE epoch, started on promotion and stopped on demotion.
-	go s.membership.RunLease(ctx)
+	// Settle the initial role synchronously, before the HTTP server serves any
+	// request. A single instance becomes ACTIVE immediately; a contender that
+	// loses stays STANDBY. This closes the window in which a freshly started
+	// instance would still report the STANDBY default and spuriously reject
+	// writes. The transition is buffered on the (coalescing) role-change channel
+	// and consumed by watchRoleChanges below.
+	s.membership.FirstLeaseTick(ctx)
 
 	go s.watchRoleChanges(ctx)
+
+	go s.membership.RunLease(ctx)
 
 	return s, nil
 }
@@ -873,8 +924,9 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.pcsm.Status(ctx)
 
 	res := statusResponse{
-		Ok:    status.Error == nil,
-		State: status.State,
+		responseEnvelope: s.buildEnvelope(ctx),
+		Ok:               status.Error == nil,
+		State:            status.State,
 	}
 
 	err := status.Error
@@ -1078,6 +1130,10 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireActive(ctx, w) {
+		return
+	}
+
 	var params startRequest
 
 	if r.ContentLength != 0 {
@@ -1102,19 +1158,19 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 
 	options, err := resolveStartOptions(s.cfg, params)
 	if err != nil {
-		writeResponse(w, startResponse{Err: err.Error()})
+		writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
 	err = s.pcsm.Start(ctx, options)
 	if err != nil {
-		writeResponse(w, startResponse{Err: err.Error()})
+		writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, startResponse{Ok: true})
+	writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandleFinalize handles the /finalize endpoint.
@@ -1138,14 +1194,18 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireActive(ctx, w) {
+		return
+	}
+
 	err := s.pcsm.Finalize(ctx)
 	if err != nil {
-		writeResponse(w, finalizeResponse{Err: err.Error()})
+		writeResponse(w, finalizeResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, finalizeResponse{Ok: true})
+	writeResponse(w, finalizeResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandlePause handles the /pause endpoint.
@@ -1169,14 +1229,18 @@ func (s *server) HandlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.requireActive(ctx, w) {
+		return
+	}
+
 	err := s.pcsm.Pause(ctx)
 	if err != nil {
-		writeResponse(w, pauseResponse{Err: err.Error()})
+		writeResponse(w, pauseResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, pauseResponse{Ok: true})
+	writeResponse(w, pauseResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandleResume handles the /resume endpoint.
@@ -1197,6 +1261,10 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 			http.StatusText(http.StatusRequestEntityTooLarge),
 			http.StatusRequestEntityTooLarge)
 
+		return
+	}
+
+	if !s.requireActive(ctx, w) {
 		return
 	}
 
@@ -1228,12 +1296,12 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pcsm.Resume(ctx, *options)
 	if err != nil {
-		writeResponse(w, resumeResponse{Err: err.Error()})
+		writeResponse(w, resumeResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, resumeResponse{Ok: true})
+	writeResponse(w, resumeResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 func (s *server) HandleMetrics() http.Handler {
@@ -1248,6 +1316,140 @@ func writeResponse[T any](w http.ResponseWriter, resp T) {
 			http.StatusText(http.StatusInternalServerError),
 			http.StatusInternalServerError)
 	}
+}
+
+// meInfo identifies the instance that produced a response.
+type meInfo struct {
+	InstanceID string `json:"instanceId"`
+	Host       string `json:"host,omitempty"`
+	Port       int    `json:"port,omitempty"`
+}
+
+// groupMember is one instance in the HA group, as advertised in the members
+// collection and surfaced in every API response.
+type groupMember struct {
+	InstanceID string  `json:"instanceId"`
+	Host       string  `json:"host,omitempty"`
+	Port       int     `json:"port,omitempty"`
+	Role       ha.Role `json:"role"`
+	Self       bool    `json:"self,omitempty"`
+}
+
+// groupInfo describes the HA group this instance belongs to.
+type groupInfo struct {
+	Name    string        `json:"name,omitempty"`
+	Term    int64         `json:"term"`
+	Members []groupMember `json:"members"`
+}
+
+// responseEnvelope is embedded in every API response (success and error). It advertises
+// the responding instance's identity and role plus the HA group view, so an
+// operator hitting any node can see who is ACTIVE and where.
+type responseEnvelope struct {
+	Me    meInfo    `json:"me"`
+	Role  ha.Role   `json:"role"`
+	Group groupInfo `json:"group"`
+}
+
+// buildEnvelope assembles the response envelope from membership state and the
+// live member list. A failure reading members degrades to an empty member list
+// rather than failing the request; the caller's own payload still returns.
+func (s *server) buildEnvelope(ctx context.Context) responseEnvelope {
+	role, term := s.membership.CurrentRole()
+	selfID := s.membership.InstanceID()
+
+	env := responseEnvelope{
+		Me: meInfo{
+			InstanceID: selfID,
+			Host:       s.membership.Host(),
+			Port:       s.membership.Port(),
+		},
+		Role: role,
+		Group: groupInfo{
+			Name: s.membership.Group(),
+			Term: term,
+		},
+	}
+
+	members, err := ha.Members(ctx, s.targetCluster)
+	if err != nil {
+		log.New("http:envelope").Warn("list members: " + err.Error())
+
+		return env
+	}
+
+	env.Group.Members = make([]groupMember, 0, len(members))
+	for _, mem := range members {
+		env.Group.Members = append(env.Group.Members, groupMember{
+			InstanceID: mem.InstanceID,
+			Host:       mem.Host,
+			Port:       mem.Port,
+			Role:       mem.Role,
+			Self:       mem.InstanceID == selfID,
+		})
+	}
+
+	return env
+}
+
+// activeMemberAddr returns the "host:port" of the ACTIVE member from the member
+// list, or "" if none is currently known. Used to point a rejected client at
+// the instance that can serve its write.
+func activeMemberAddr(env responseEnvelope) string {
+	for _, mem := range env.Group.Members {
+		if mem.Role == ha.RoleActive {
+			return fmt.Sprintf("%s:%d", mem.Host, mem.Port)
+		}
+	}
+
+	return ""
+}
+
+// notActiveResponse is the HTTP 409 body returned when a write command is sent
+// to a STANDBY instance. It carries the full envelope so the caller can locate
+// the ACTIVE instance.
+type notActiveResponse struct {
+	responseEnvelope
+
+	Ok      bool   `json:"ok"`
+	Err     string `json:"error"`
+	Message string `json:"message"`
+}
+
+// requireActive rejects write commands on a non-ACTIVE instance with HTTP 409.
+// It returns true when the caller may proceed (this instance is ACTIVE) and
+// false when it has already written the 409 response.
+func (s *server) requireActive(ctx context.Context, w http.ResponseWriter) bool {
+	role, _ := s.membership.CurrentRole()
+	if role == ha.RoleActive {
+		return true
+	}
+
+	env := s.buildEnvelope(ctx)
+
+	msg := "This instance is " + string(role) + "."
+	if addr := activeMemberAddr(env); addr != "" {
+		msg += " Active is running on " + addr + "."
+	} else {
+		msg += " No active instance is currently known."
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+
+	err := json.NewEncoder(w).Encode(notActiveResponse{
+		responseEnvelope: env,
+		Ok:               false,
+		Err:              "not_active",
+		Message:          msg,
+	})
+	if err != nil {
+		http.Error(w,
+			http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError)
+	}
+
+	return false
 }
 
 // startRequest represents the request body for the /start endpoint.
@@ -1301,6 +1503,8 @@ type clientResponse interface {
 
 // startResponse represents the response body for the /start endpoint.
 type startResponse struct {
+	responseEnvelope
+
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
@@ -1312,6 +1516,8 @@ func (r startResponse) GetError() string { return r.Err }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
+	responseEnvelope
+
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
@@ -1323,6 +1529,8 @@ func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
+	responseEnvelope
+
 	// PauseOnInitialSync indicates if the replication is paused on initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 
@@ -1496,6 +1704,8 @@ func indexKeysToJSON(raw bson.Raw) json.RawMessage {
 
 // pauseResponse represents the response body for the /pause endpoint.
 type pauseResponse struct {
+	responseEnvelope
+
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
@@ -1514,6 +1724,8 @@ type resumeRequest struct {
 // resumeResponse represents the response body for the /resume
 // endpoint.
 type resumeResponse struct {
+	responseEnvelope
+
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
@@ -1582,9 +1794,24 @@ func doClientRequest[T clientResponse](ctx context.Context, port int, method, pa
 	}
 	defer res.Body.Close()
 
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return errors.Wrap(err, "read response")
+	}
+
+	// A STANDBY rejects write commands with 409 and a not_active body carrying a
+	// human-readable message that points at the ACTIVE instance. Surface that
+	// message directly instead of the generic decoded error.
+	if res.StatusCode == http.StatusConflict {
+		var na notActiveResponse
+		if json.Unmarshal(data, &na) == nil && na.Message != "" {
+			return errors.New(na.Message)
+		}
+	}
+
 	var resp T
 
-	err = json.NewDecoder(res.Body).Decode(&resp)
+	err = json.Unmarshal(data, &resp)
 	if err != nil {
 		return errors.Wrap(err, "decode response")
 	}

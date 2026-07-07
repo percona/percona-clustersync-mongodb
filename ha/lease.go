@@ -34,9 +34,6 @@ func (m *Membership) runLease(ctx context.Context) {
 	ticker := time.NewTicker(config.LeaseRenewInterval)
 	defer ticker.Stop()
 
-	// Attempt immediately so the first role is established without waiting a tick.
-	m.leaseTick(ctx, lg)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -48,6 +45,19 @@ func (m *Membership) runLease(ctx context.Context) {
 			m.leaseTick(ctx, lg)
 		}
 	}
+}
+
+// FirstLeaseTick performs a single synchronous acquire/renew attempt and
+// reconciles the resulting role. It is meant to be called once at startup,
+// before the HTTP server begins serving, so the instance's role is already
+// settled (ACTIVE for an uncontested single instance, STANDBY if another
+// instance holds the lease) by the time requests arrive. Without it there is a
+// brief window where a freshly started instance still reports the STANDBY
+// default and would spuriously reject writes. Subsequent renewals run in
+// RunLease.
+func (m *Membership) FirstLeaseTick(ctx context.Context) {
+	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
+	m.leaseTick(ctx, lg)
 }
 
 // leaseTick performs one acquire/renew attempt and reconciles the resulting role.
@@ -164,7 +174,7 @@ func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 
 	_, err := m.leaseColl().InsertOne(ctx, bson.D{
 		{"_id", LeaseID},
-		{"group", m.group},
+		{fieldGroup, m.group},
 		{fieldActiveID, m.instanceID},
 		{fieldTerm, int64(1)},
 		{"electionDate", now},
@@ -190,7 +200,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 
 	pipeline := mongo.Pipeline{
 		{{"$set", bson.D{
-			{"group", m.group},
+			{fieldGroup, m.group},
 			{fieldActiveID, m.instanceID},
 			{fieldExpiresAt, bson.D{{aggAdd, bson.A{aggNow, ttlMS}}}},
 			{"electionDate", bson.D{{"$cond", bson.D{

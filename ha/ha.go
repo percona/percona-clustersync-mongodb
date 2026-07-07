@@ -25,6 +25,7 @@ const LeaseID = "active"
 // BSON field names shared across lease and member documents. Kept as constants
 // so repeated string literals are not duplicated across queries and pipelines.
 const (
+	fieldGroup     = "group"
 	fieldActiveID  = "activeId"
 	fieldTerm      = "term"
 	fieldExpiresAt = "expiresAt"
@@ -44,6 +45,7 @@ const (
 // state; Term here is informational and the lease document is the source of truth.
 type Member struct {
 	InstanceID    string    `bson:"_id"`
+	Group         string    `bson:"group"`
 	Host          string    `bson:"host"`
 	Port          int       `bson:"port"`
 	Role          Role      `bson:"role"`
