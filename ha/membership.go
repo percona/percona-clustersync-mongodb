@@ -117,12 +117,6 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 // InstanceID returns this instance's identifier.
 func (m *Membership) InstanceID() string { return m.instanceID }
 
-// Host returns the advertised host for this instance.
-func (m *Membership) Host() string { return m.host }
-
-// Port returns the advertised HTTP port for this instance.
-func (m *Membership) Port() int { return m.port }
-
 // Group returns the HA group name this instance joined.
 func (m *Membership) Group() string { return m.group }
 

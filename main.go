@@ -1321,8 +1321,6 @@ func writeResponse[T any](w http.ResponseWriter, resp T) {
 // meInfo identifies the instance that produced a response.
 type meInfo struct {
 	InstanceID string `json:"instanceId"`
-	Host       string `json:"host,omitempty"`
-	Port       int    `json:"port,omitempty"`
 }
 
 // groupMember is one instance in the HA group, as advertised in the members
@@ -1332,7 +1330,6 @@ type groupMember struct {
 	Host       string  `json:"host,omitempty"`
 	Port       int     `json:"port,omitempty"`
 	Role       ha.Role `json:"role"`
-	Self       bool    `json:"self,omitempty"`
 }
 
 // groupInfo describes the HA group this instance belongs to.
@@ -1356,14 +1353,9 @@ type responseEnvelope struct {
 // rather than failing the request; the caller's own payload still returns.
 func (s *server) buildEnvelope(ctx context.Context) responseEnvelope {
 	role, term := s.membership.CurrentRole()
-	selfID := s.membership.InstanceID()
 
 	env := responseEnvelope{
-		Me: meInfo{
-			InstanceID: selfID,
-			Host:       s.membership.Host(),
-			Port:       s.membership.Port(),
-		},
+		Me:   meInfo{InstanceID: s.membership.InstanceID()},
 		Role: role,
 		Group: groupInfo{
 			Name: s.membership.Group(),
@@ -1385,7 +1377,6 @@ func (s *server) buildEnvelope(ctx context.Context) responseEnvelope {
 			Host:       mem.Host,
 			Port:       mem.Port,
 			Role:       mem.Role,
-			Self:       mem.InstanceID == selfID,
 		})
 	}
 

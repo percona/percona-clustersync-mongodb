@@ -54,14 +54,14 @@ func TestEnvelopeJSONShape(t *testing.T) {
 	t.Parallel()
 
 	env := responseEnvelope{
-		Me:   meInfo{InstanceID: "pcsm-xyz", Host: "host-1", Port: 2242},
+		Me:   meInfo{InstanceID: "pcsm-xyz"},
 		Role: ha.RoleStandby,
 		Group: groupInfo{
 			Name: "default",
 			Term: 7,
 			Members: []groupMember{
 				{InstanceID: "pcsm-abc", Host: "host-2", Port: 2242, Role: ha.RoleActive},
-				{InstanceID: "pcsm-xyz", Host: "host-1", Port: 2242, Role: ha.RoleStandby, Self: true},
+				{InstanceID: "pcsm-xyz", Host: "host-1", Port: 2242, Role: ha.RoleStandby},
 			},
 		},
 	}
