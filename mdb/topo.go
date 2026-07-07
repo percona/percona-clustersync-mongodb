@@ -198,9 +198,11 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 		}}},
 	}
 
-	stats := &CollStats{}
+	var stats *CollStats
 
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		stats = &CollStats{}
+
 		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
 		if err != nil {
 			return err //nolint:wrapcheck
@@ -256,10 +258,11 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 		}}},
 	}
 
-	stats := &CollStats{}
+	var stats *CollStats
 	empty := false
 
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		stats = &CollStats{}
 		empty = false
 
 		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
