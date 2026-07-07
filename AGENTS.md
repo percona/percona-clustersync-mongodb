@@ -251,13 +251,23 @@ PCSM is a single binary with two operating modes plus a few direct commands.
 3. Starts HTTP server on `localhost:<port>` (default `2242`)
 4. Exposes operational endpoints `/status`, `/start`, `/pause`, `/resume`, `/finalize`, metrics at `/metrics`, and Go pprof under `/debug/pprof/`
 
+### High Availability (active-standby)
+
+Multiple PCSM instances can point at the same source/target. They coordinate through a MongoDB-backed lease on the target (`percona_clustersync_mongodb.lease`): exactly one instance holds the lease and is **ACTIVE** (runs replication), the rest stay **STANDBY** and take over on failover. Each instance also maintains a per-instance liveness document in `percona_clustersync_mongodb.members`. HA is always on — a single instance simply wins the lease immediately and behaves as before.
+
+Design notes:
+
+- **Standbys hold an idle source connection.** Every instance connects to source and target at startup (before its role is known) so an unreachable source or incompatible version fails fast at boot rather than on the failover path, and promotion stays low-latency. A STANDBY performs no source reads; the connection only carries driver monitoring traffic.
+- **Term-based fencing.** The lease term is a monotonic fencing token stamped into every checkpoint write. A deposed ACTIVE cannot overwrite a newer ACTIVE's checkpoint; its write is rejected and it self-demotes.
+- **0.9.0 → 0.10.0 migration.** Replication state from 0.9.0 is not compatible. Run `pcsm reset` against the target before starting replication with 0.10.0.
+
 ### Client subcommands
 
 `status`, `start`, `pause`, `resume`, and `finalize` act as HTTP clients against an already-running server.
 
 ### Direct commands
 
-- `pcsm reset`, `pcsm reset recovery`, `pcsm reset heartbeat` connect directly to the target cluster and clear persisted state. Do not run while a server is up.
+- `pcsm reset`, `pcsm reset recovery`, `pcsm reset members` connect directly to the target cluster and clear persisted state. Do not run while a server is up.
 - `pcsm version` prints local build metadata.
 
 ## Manual Testing

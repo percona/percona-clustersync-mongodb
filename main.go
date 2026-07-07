@@ -600,6 +600,15 @@ type server struct {
 }
 
 // createServer creates a new server with the given options.
+//
+// Source and target connections are established eagerly here, at process
+// startup, before the HA role is known. Every instance — including one that
+// stays STANDBY for its whole life — therefore holds an idle source connection.
+// This is intentional: connecting up front fail-fasts an unreachable source or
+// an incompatible source/target version at boot rather than on the failover
+// critical path, and keeps promotion latency low (no connect + topology
+// discovery when a STANDBY is promoted). A STANDBY performs no reads on the
+// source; the connection only carries the driver's own monitoring traffic.
 func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
