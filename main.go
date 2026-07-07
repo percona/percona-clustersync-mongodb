@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -138,6 +140,7 @@ func newRootCmd() *cobra.Command {
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
 
 	rootCmd.Flags().String("group", config.DefaultGroup,
 		"HA group name; all instances coordinating over the same target must share it")
@@ -598,7 +601,12 @@ func runServer(cfg *config.Config) error {
 		port = config.DefaultServerPort
 	}
 
-	addr := fmt.Sprintf("localhost:%d", port)
+	host := cfg.ListenHost
+	if host == "" {
+		host = "localhost"
+	}
+
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	httpServer := http.Server{
 		Addr:    addr,
 		Handler: srv.Handler(),
