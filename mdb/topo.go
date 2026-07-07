@@ -18,12 +18,7 @@ var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	// RunWithRetry caps PCSM retries at DefaultMaxRetries; the mongo-go-driver also
-	// applies its own adaptive retries (default 2) per operation, so worst-case wire
-	// attempts compound multiplicatively rather than being a flat sum.
-	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
-		return m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw() //nolint:wrapcheck
-	}, DefaultRetryInterval, DefaultMaxRetries)
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw() //nolint:wrapcheck
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
@@ -38,12 +33,10 @@ func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
 
 // AdvanceClusterTime advances the cluster time of a MongoDB deployment by appending an oplog note.
 func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
-		return m.Database("admin").RunCommand(ctx, bson.D{
-			{"appendOplogNote", 1},
-			{"data", bson.D{{"msg", "pcsm:tick"}}},
-		}).Raw() //nolint:wrapcheck
-	}, DefaultRetryInterval, DefaultMaxRetries)
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{
+		{"appendOplogNote", 1},
+		{"data", bson.D{{"msg", "pcsm:tick"}}},
+	}).Raw() //nolint:wrapcheck
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
