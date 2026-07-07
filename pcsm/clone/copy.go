@@ -892,10 +892,6 @@ func (seg *Segmenter) handleNanIDDoc(
 // It uses two FindOne operations with sort directions of 1 (ascending) and -1 (descending)
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
-// The backoff-sleep-only worst case is roughly 80s: three loops complete after
-// up to 15s of backoff each, then one loop exhausts after 35s and aborts the
-// function. Each FindOne call is separately bounded by MongoDB's per-operation
-// timeout; there is no single timeout budget for getIDKeyRange as a whole.
 func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
 	minIDOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
 

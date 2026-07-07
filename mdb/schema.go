@@ -22,15 +22,6 @@ const (
 	TypeView       = "view"
 )
 
-const (
-	currentOpStage      = "$currentOp"
-	indexStatsOpenStage = "$indexStats"
-	cursorAllStage      = "cursor: all"
-	chunksFindStage     = "find"
-	chunksReadStage     = "read"
-	chunksErrorStage    = "iterate"
-)
-
 // IndexSpecification contains all index options.
 //
 // NOTE: [mongo.IndexView.CreateMany] and [mongo.IndexView.CreateOne] use [mongo.IndexModel]
@@ -188,6 +179,11 @@ func ListInProgressIndexBuilds(
 		Name string `bson:"name"`
 	}
 
+	const (
+		currentOpStage = "$currentOp"
+		cursorAllStage = "cursor: all"
+	)
+
 	indexBuildsStage := currentOpStage
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
 		indexBuildsStage = currentOpStage
@@ -249,6 +245,11 @@ func ListInconsistentIndexes(
 		Name string              `bson:"name"`
 		Spec *IndexSpecification `bson:"spec"`
 	}
+
+	const (
+		indexStatsOpenStage = "$indexStats"
+		cursorAllStage      = "cursor: all"
+	)
 
 	indexStatsStage := indexStatsOpenStage
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
@@ -368,6 +369,12 @@ func GetCollectionShardingInfo(
 	chunksColl := m.Database("config").Collection("chunks")
 
 	var chunks []ChunkInfo
+
+	const (
+		chunksFindStage  = "find"
+		chunksErrorStage = "iterate"
+		chunksReadStage  = "read"
+	)
 
 	chunksStage := chunksFindStage
 	err = RunWithRetry(ctx, func(ctx context.Context) error {
