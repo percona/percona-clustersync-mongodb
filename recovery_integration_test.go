@@ -103,6 +103,18 @@ func readCheckpoint(t *testing.T, ctx context.Context, client *mongo.Client) che
 	return cp
 }
 
+// dataFieldType returns the BSON type of the stored checkpoint's "data" field.
+// It is used to assert that data is persisted as an embedded document (readable
+// in the shell) rather than BSON Binary.
+func dataFieldType(t *testing.T, ctx context.Context, client *mongo.Client) bson.Type {
+	t.Helper()
+
+	raw, err := recoveryColl(client).FindOne(ctx, bson.D{{"_id", recoveryID}}).Raw()
+	require.NoError(t, err)
+
+	return raw.Lookup("data").Type
+}
+
 func TestDoCheckpointBootstrapAndTerm(t *testing.T) {
 	ctx := t.Context()
 	client := recoveryTestClient(t)
@@ -112,18 +124,25 @@ func TestDoCheckpointBootstrapAndTerm(t *testing.T) {
 
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
 
-	// First write bootstraps at term 1.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 1))
+	// First write bootstraps at term 1 and records the writer's instance id.
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
 	cp := readCheckpoint(t, ctx, client)
 	assert.Equal(t, int64(1), cp.Term)
+	assert.Equal(t, "pcsm-a", cp.InstanceID)
+	assert.Equal(t, bson.TypeEmbeddedDocument, dataFieldType(t, ctx, client),
+		"bootstrap write must store data as an embedded document")
 
 	// Same term renews.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 1))
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
 	assert.Equal(t, int64(1), readCheckpoint(t, ctx, client).Term)
+	assert.Equal(t, bson.TypeEmbeddedDocument, dataFieldType(t, ctx, client),
+		"update write must store data as an embedded document")
 
-	// Newer term advances the stored term.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 2))
-	assert.Equal(t, int64(2), readCheckpoint(t, ctx, client).Term)
+	// Newer term advances the stored term and the recorded instance id.
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 2, "pcsm-b"))
+	cp = readCheckpoint(t, ctx, client)
+	assert.Equal(t, int64(2), cp.Term)
+	assert.Equal(t, "pcsm-b", cp.InstanceID)
 }
 
 func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
@@ -136,10 +155,10 @@ func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
 
 	// A new active establishes term 2.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 2))
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 2, "pcsm-b"))
 
 	// A deposed active still on term 1 must be fenced.
-	err := DoCheckpoint(ctx, client, rec, 1)
+	err := DoCheckpoint(ctx, client, rec, 1, "pcsm-a")
 	require.ErrorIs(t, err, errCheckpointFenced)
 
 	// The stored term is unchanged by the fenced write.
@@ -154,7 +173,7 @@ func TestDeleteRecoveryData(t *testing.T) {
 	require.NoError(t, recoveryColl(client).Drop(ctx))
 
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 1))
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
 
 	require.NoError(t, DeleteRecoveryData(ctx, client))
 

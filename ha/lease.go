@@ -175,7 +175,7 @@ func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 	_, err := m.leaseColl().InsertOne(ctx, bson.D{
 		{"_id", LeaseID},
 		{fieldGroup, m.group},
-		{fieldActiveID, m.instanceID},
+		{fieldInstanceID, m.instanceID},
 		{fieldTerm, int64(1)},
 		{"electionDate", now},
 		{fieldExpiresAt, now.Add(config.LeaseTTL)},
@@ -196,12 +196,12 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	ttlMS := config.LeaseTTL.Milliseconds()
 
 	// isRenew is true when this instance already owns the lease in the pre-image.
-	isRenew := bson.D{{"$eq", bson.A{"$activeId", m.instanceID}}}
+	isRenew := bson.D{{"$eq", bson.A{"$instanceId", m.instanceID}}}
 
 	pipeline := mongo.Pipeline{
 		{{"$set", bson.D{
 			{fieldGroup, m.group},
-			{fieldActiveID, m.instanceID},
+			{fieldInstanceID, m.instanceID},
 			{fieldExpiresAt, bson.D{{aggAdd, bson.A{aggNow, ttlMS}}}},
 			{"electionDate", bson.D{{"$cond", bson.D{
 				{"if", isRenew},
@@ -221,7 +221,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 
 	// Filter without upsert may use $expr/$$NOW: take when we own it or it expired.
 	filter := bson.D{{"_id", LeaseID}, {"$expr", bson.D{{"$or", bson.A{
-		bson.D{{"$eq", bson.A{"$activeId", m.instanceID}}},
+		bson.D{{"$eq", bson.A{"$instanceId", m.instanceID}}},
 		bson.D{{"$lte", bson.A{"$expiresAt", aggNow}}},
 	}}}}}
 
@@ -239,7 +239,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		return false, 0, false, errors.Wrap(decodeErr, "take or renew lease")
 	}
 
-	return updated.ActiveID == m.instanceID, updated.Term, true, nil
+	return updated.InstanceID == m.instanceID, updated.Term, true, nil
 }
 
 // releaseLease best-effort clears the lease so a standby can take over without
@@ -250,7 +250,7 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 	defer cancel()
 
 	_, err := m.leaseColl().UpdateOne(ctx,
-		bson.D{{"_id", LeaseID}, {fieldActiveID, m.instanceID}},
+		bson.D{{"_id", LeaseID}, {fieldInstanceID, m.instanceID}},
 		mongo.Pipeline{
 			{{"$set", bson.D{{fieldExpiresAt, aggNow}}}},
 		},
@@ -267,11 +267,13 @@ func (m *Membership) leaseColl() *mongo.Collection {
 	return m.target.Database(config.PCSMDatabase).Collection(config.LeaseCollection)
 }
 
-// DeleteLease removes the lease document. Used by reset.
+// DeleteLease clears the lease collection. Used by reset. It removes all
+// documents (not just the current LeaseID) so a lease written under a previous
+// _id scheme is also cleared.
 func DeleteLease(ctx context.Context, target *mongo.Client) error {
 	_, err := target.Database(config.PCSMDatabase).
 		Collection(config.LeaseCollection).
-		DeleteOne(ctx, bson.D{{"_id", LeaseID}})
+		DeleteMany(ctx, bson.D{})
 
 	return err //nolint:wrapcheck
 }

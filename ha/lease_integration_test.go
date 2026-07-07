@@ -80,7 +80,7 @@ func TestLeaseSingleAcquirer(t *testing.T) {
 	assert.Equal(t, int64(1), term, "first acquisition should be term 1")
 
 	lease := readLease(t, ctx, client)
-	assert.Equal(t, "pcsm-solo", lease.ActiveID)
+	assert.Equal(t, "pcsm-solo", lease.InstanceID)
 	assert.Equal(t, "group-a", lease.Group)
 	assert.Equal(t, int64(1), lease.Term)
 	assert.False(t, lease.ExpiresAt.IsZero(), "expiresAt should be stamped by the server")
@@ -170,7 +170,7 @@ func TestLeaseFailoverBumpsTerm(t *testing.T) {
 	assert.Equal(t, int64(2), term, "failover must bump the term")
 
 	lease := readLease(t, ctx, client)
-	assert.Equal(t, "pcsm-standby", lease.ActiveID)
+	assert.Equal(t, "pcsm-standby", lease.InstanceID)
 }
 
 func TestLeaseReleaseFreesPromptly(t *testing.T) {

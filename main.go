@@ -751,7 +751,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		// another) is rejected by the fence and that is expected.
 		_, term := membership.CurrentRole()
 
-		err := DoCheckpoint(ctx, target, pcs, term)
+		err := DoCheckpoint(ctx, target, pcs, term, membership.InstanceID())
 		if err != nil {
 			log.New("http:checkpointing").Error(err, "checkpoint")
 		} else {
@@ -826,7 +826,7 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 	if s.checkpointCancel == nil {
 		cpCtx, cancel := context.WithCancel(ctx)
 		s.checkpointCancel = cancel
-		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, term, func() {
+		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, term, s.membership.InstanceID(), func() {
 			s.onDemote(ctx, term)
 		})
 	}

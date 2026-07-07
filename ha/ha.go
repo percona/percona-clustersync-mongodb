@@ -20,15 +20,15 @@ const (
 )
 
 // LeaseID is the fixed _id of the single lease document in the lease collection.
-const LeaseID = "active"
+const LeaseID = "lease"
 
 // BSON field names shared across lease and member documents. Kept as constants
 // so repeated string literals are not duplicated across queries and pipelines.
 const (
-	fieldGroup     = "group"
-	fieldActiveID  = "activeId"
-	fieldTerm      = "term"
-	fieldExpiresAt = "expiresAt"
+	fieldGroup      = "group"
+	fieldInstanceID = "instanceId"
+	fieldTerm       = "term"
+	fieldExpiresAt  = "expiresAt"
 )
 
 // MongoDB aggregation variables/operators referenced in update pipelines.
@@ -62,7 +62,7 @@ type Lease struct {
 	ID           string    `bson:"_id"`
 	Group        string    `bson:"group"`
 	Term         int64     `bson:"term"`
-	ActiveID     string    `bson:"activeId"`
+	InstanceID   string    `bson:"instanceId"`
 	ElectionDate time.Time `bson:"electionDate"`
 	ExpiresAt    time.Time `bson:"expiresAt"`
 }
