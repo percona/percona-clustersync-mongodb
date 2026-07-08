@@ -1,0 +1,52 @@
+# Local multi-instance HA group for manual/E2E failover testing.
+#
+# Three PCSM instances (pcsm0/1/2) point at the same source/target clusters and
+# compete for a single lease: one becomes ACTIVE, the others STANDBY. They join
+# the deployed cluster's Docker network (set via PCSM_HA_NETWORK) so they resolve
+# the cluster hostnames (rs00, src-mongos, ...) exactly like the host does.
+#
+# Driven by hack/ha/run.sh. Required env:
+#   PCSM_HA_NETWORK  external docker network of the running clusters
+#   PCSM_SOURCE_URI  source cluster URI
+#   PCSM_TARGET_URI  target cluster URI
+
+x-pcsm-common: &pcsm-common
+  image: pcsm:dev
+  networks:
+    - clusters
+  environment:
+    PCSM_SOURCE_URI: ${PCSM_SOURCE_URI}
+    PCSM_TARGET_URI: ${PCSM_TARGET_URI}
+    PCSM_LISTEN_HOST: "0.0.0.0"
+    PCSM_LOG_LEVEL: debug
+  restart: unless-stopped
+
+services:
+  pcsm0:
+    <<: *pcsm-common
+    container_name: pcsm0
+    hostname: pcsm0
+    command: ["--port", "2242"]
+    ports:
+      - "2242:2242"
+
+  pcsm1:
+    <<: *pcsm-common
+    container_name: pcsm1
+    hostname: pcsm1
+    command: ["--port", "2243"]
+    ports:
+      - "2243:2243"
+
+  pcsm2:
+    <<: *pcsm-common
+    container_name: pcsm2
+    hostname: pcsm2
+    command: ["--port", "2244"]
+    ports:
+      - "2244:2244"
+
+networks:
+  clusters:
+    external: true
+    name: ${PCSM_HA_NETWORK}

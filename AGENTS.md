@@ -139,9 +139,10 @@ Single test invocations:
 Cleanup test environments:
 
 ```bash
-./hack/cleanup.sh       # Clean rs, sh, and sh-ha if present
-./hack/cleanup.sh rs    # RS only
-./hack/cleanup.sh sh    # Sharded only
+./hack/cleanup.sh          # Clean pcsm-ha, rs, sh, and sh-ha if present
+./hack/cleanup.sh rs       # RS only
+./hack/cleanup.sh sh       # Sharded only
+./hack/cleanup.sh pcsm-ha  # PCSM HA instance group only
 ```
 
 Always run `./hack/cleanup.sh` (no arguments) before switching between RS and sharded topologies. Both topologies bind overlapping ports (e.g. 30000), so leftover containers cause "port already allocated" errors. If cleanup doesn't resolve port conflicts, check for orphans with `docker ps -a`.
@@ -342,6 +343,37 @@ Sharded topology shown as primary. RS variants use the URIs from the Connection 
      ```bash
      ./hack/cleanup.sh
      ```
+
+### HA Multi-Instance Testing
+
+`hack/ha/` runs a 3-node PCSM HA group (`pcsm0`/`pcsm1`/`pcsm2`) in Docker against already-running clusters, for manual failover testing. The instances join the cluster's Docker network and reach it via the same hostnames the host uses; API ports `2242`/`2243`/`2244` are published to the host.
+
+```bash
+# 1. Start clusters first (RS shown; use hack/sh/run.sh for sharded)
+./hack/rs/run.sh
+
+# 2. Start the HA group (builds pcsm:dev image). --reset clears target state.
+./hack/ha/run.sh rs --reset        # or: ./hack/ha/run.sh sh --reset
+
+# 3. Inspect roles: one ACTIVE, two STANDBY
+./hack/ha/status-group.sh
+
+# 4. Trigger replication on the ACTIVE (writes to a STANDBY return HTTP 409)
+curl -s -X POST http://localhost:2242/start -H 'Content-Type: application/json' -d '{}'
+
+# 5. Failover drill: hard-kill the ACTIVE; it restarts after ~5s and rejoins
+./hack/ha/kill-active.sh            # or: kill-active.sh 15 / kill-active.sh --no-restart
+./hack/ha/status-group.sh           # PORT | INSTANCE_ID | HOST | ROLE | STATE | TERM
+
+# 6. Full status of the current ACTIVE instance
+./hack/ha/status-active.sh
+
+# 7. Logs / stop
+docker logs -f pcsm0
+./hack/ha/stop.sh
+```
+
+Client commands work from the host against any instance's published port, e.g. `./bin/pcsm status --port 2243`. Cleanup: `./hack/cleanup.sh pcsm-ha` (or `./hack/cleanup.sh` cleans everything, PCSM group first).
 
 ### HTTP API
 

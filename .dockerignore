@@ -1,0 +1,8 @@
+bin/
+.git/
+.venv/
+tests/
+hack/
+*.log
+.idea/
+.vscode/
