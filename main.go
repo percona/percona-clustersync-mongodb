@@ -739,11 +739,6 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 
 	pcs := pcsm.New(ctx, source, target, sourceVersion)
 
-	err = Restore(ctx, target, pcs)
-	if err != nil {
-		return nil, errors.Wrap(err, "recover PCSM")
-	}
-
 	s := &server{
 		cfg:           cfg,
 		sourceCluster: source,
@@ -775,11 +770,36 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	// and consumed by watchRoleChanges below.
 	s.membership.FirstLeaseTick(ctx)
 
+	s.logInitialRole(ctx)
+
 	go s.watchRoleChanges(ctx)
 
 	go s.membership.RunLease(ctx)
 
 	return s, nil
+}
+
+// logInitialRole logs the role this instance settled into at startup. A STANDBY
+// also reports where the ACTIVE instance is, so an operator reading standby logs
+// knows which node to talk to. This complements the transition logs in
+// onPromote/onDemote, which do not fire for an instance that starts (and stays)
+// STANDBY.
+func (s *server) logInitialRole(ctx context.Context) {
+	role, term := s.membership.CurrentRole()
+	lg := log.New("ha:role").With(log.Int64("term", term))
+
+	if role == ha.RoleActive {
+		lg.Info("Instance role: ACTIVE")
+
+		return
+	}
+
+	active := activeMemberAddr(s.buildEnvelope(ctx))
+	if active == "" {
+		active = "unknown"
+	}
+
+	lg.Info("Instance role: STANDBY; active is " + active)
 }
 
 // Close releases the lease (so a standby can take over promptly), leaves the
@@ -819,7 +839,7 @@ func (s *server) watchRoleChanges(ctx context.Context) {
 // starts the checkpointing loop for this ACTIVE epoch.
 func (s *server) onPromote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
-	lg.Info("Promoted to ACTIVE")
+	lg.Info("Instance role: ACTIVE (promoted)")
 
 	err := Restore(ctx, s.targetCluster, s.pcsm)
 	if err != nil {
@@ -863,7 +883,7 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 // guarantee that a demoted active cannot corrupt the target.
 func (s *server) onDemote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
-	lg.Info("Demoted to STANDBY")
+	lg.Info("Instance role: STANDBY (demoted)")
 
 	s.mu.Lock()
 	if s.checkpointCancel != nil {
