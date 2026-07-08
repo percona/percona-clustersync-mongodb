@@ -20,9 +20,10 @@ import (
 
 // Config holds all PCSM configuration.
 type Config struct {
-	Port   int    `mapstructure:"port"`
-	Source string `mapstructure:"source"`
-	Target string `mapstructure:"target"`
+	Port       int    `mapstructure:"port"`
+	ListenHost string `mapstructure:"listen-host"`
+	Source     string `mapstructure:"source"`
+	Target     string `mapstructure:"target"`
 
 	Log LogConfig `mapstructure:",squash"`
 
@@ -154,6 +155,7 @@ func WarnDeprecatedEnvVars(ctx context.Context) {
 
 func bindEnvVars() {
 	_ = viper.BindEnv("port", "PCSM_PORT")
+	_ = viper.BindEnv("listen-host", "PCSM_LISTEN_HOST")
 
 	_ = viper.BindEnv("source", "PCSM_SOURCE_URI")
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
