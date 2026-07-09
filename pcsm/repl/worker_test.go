@@ -338,14 +338,14 @@ func (m *mockBulkWriter) Delete(_ catalog.Namespace, _ *DeleteEvent)   { m.count
 // The RawData contains the minimal BSON that parseDMLEvent can unmarshal.
 func makeInsertEvent(id string) *routedEvent {
 	raw, err := bson.Marshal(bson.D{
-		{"documentKey", bson.D{{testDocumentIDKey, id}}},
-		{"fullDocument", bson.D{{testDocumentIDKey, id}, {"x", 1}}},
+		{"documentKey", bson.D{{"_id", id}}},
+		{"fullDocument", bson.D{{"_id", id}, {"x", 1}}},
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal insert event: %v", err))
 	}
 
-	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
 
 	return &routedEvent{
 		ns: ns,

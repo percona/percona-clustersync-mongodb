@@ -47,33 +47,6 @@ var ErrOplogHistoryLost = errors.New("oplog history is lost")
 
 const advanceTimePseudoEvent = "@tick"
 
-//go:inline
-func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
-	if change.CollectionUUID != nil {
-		if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
-			return ns
-		}
-
-		// A UUID absent from the snapshot means the collection was recreated or
-		// moved under a different UUID; a name-matched entry would be a different
-		// collection generation, so fall back to the event namespace.
-		return change.Namespace
-	}
-
-	if change.IsView() {
-		// UUID-less/view events resolve by name. The linear scan is acceptable:
-		// UUIDMap is bounded by catalog cardinality and this path is only hit for
-		// UUID-less events.
-		for _, ns := range uuidMap {
-			if ns.Database == change.Namespace.Database && ns.Collection == change.Namespace.Collection {
-				return ns
-			}
-		}
-	}
-
-	return change.Namespace
-}
-
 type barrierController interface {
 	Barrier() error
 	ReleaseBarrier()
@@ -643,7 +616,7 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 
-		err = changeStreamCursorError(invalidateErr, cur.Err(), cur.ID())
+		err = isChangeStreamTerminationError(invalidateErr, cur.Err(), cur.ID())
 		if err != nil {
 			return err
 		}
@@ -673,7 +646,7 @@ func (r *Repl) watchChangeEvents(
 	}
 }
 
-func changeStreamCursorError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
+func isChangeStreamTerminationError(invalidateErr *changeStreamInvalidateError, cursorErr error, cursorID int64) error {
 	if invalidateErr != nil {
 		return *invalidateErr
 	}
@@ -698,6 +671,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.advanceCheckpoint(r.pool.Checkpoint())
 
 		r.pool = nil
+
 		// Clear the movePrimary-invalidate expectation so arming never leaks
 		// past the run that set it.
 		r.expectMovePrimaryInvalidate = false
@@ -729,8 +703,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 	}()
 
-	lg := log.New("repl")
 	uuidMap := r.catalog.UUIDMap()
+
+	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
 	// Used with Checkpoint() to determine if the pool is idle.
@@ -821,7 +796,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.tryAdvanceOpTime(cpTicker)
 
 		case Invalidate:
-			err := r.handleInvalidate(change)
+			err := r.handleInvalidate(change, r.pool)
 			if err != nil {
 				return
 			}
@@ -872,11 +847,12 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	}
 }
 
-func (r *Repl) handleInvalidate(change *ChangeEvent) error {
-	return r.handleInvalidateWithBarrier(change, r.pool)
-}
-
-func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierController) error {
+// handleInvalidate barriers the worker pool, then recovers or fails on a
+// change-stream invalidate. It takes bc as a barrierController rather than
+// using r.pool directly so tests can inject a fake pool and exercise the
+// barrier/recovery/fail-closed paths without a live worker pool; production
+// passes r.pool.
+func (r *Repl) handleInvalidate(change *ChangeEvent, bc barrierController) error {
 	err := bc.Barrier()
 	if err != nil {
 		// Safe to release even though Barrier failed: ReleaseBarrier only does
@@ -908,7 +884,7 @@ func (r *Repl) handleInvalidateWithBarrier(change *ChangeEvent, bc barrierContro
 		log.New("repl:invalidate").With(
 			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 			log.NS(change.Namespace.Database, change.Namespace.Collection),
-		).Warn("expected movePrimary invalidate; will reconnect from checkpoint")
+		).Warn("expected movePrimary invalidate; will reconnect with startAfter the invalidate token")
 
 		return nil
 	}
@@ -954,9 +930,13 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 }
 
 // shouldSkipReplay reports whether change is a replayed event that must be
-// skipped. Replay skipping applies only to mongos (sharded) sources, where
-// movePrimary and resume-from-checkpoint can redeliver already-applied events.
-// Replica set sources never need it and skipping there drops legitimate events.
+// skipped. This is a catch-up convergence guard, not a data-safety one: DML
+// apply is already idempotent so re-applying a redelivered event cannot corrupt
+// the target. What it prevents is a mongos forced reconnect
+// (SetStartAfter / SetStartAtOperationTime) redelivering already-applied events,
+// increasing the lag.
+//
+// A replica set resumes from its own token and never redelivers applied writes.
 func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
 	return r.sourceIsMongos && r.isReplay(change)
 }
@@ -996,6 +976,29 @@ func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	return r.pool.Idle()
 }
 
+// findNamespaceByUUID resolves change.CollectionUUID to a catalog namespace.
+//
+// DML events carry collectionUUID only when the stream is opened with
+// showExpandedEvents (MongoDB 6.0+); the only UUID-less ops are invalidate,
+// dropDatabase and endOfTransaction, none of which reach here, so a nil UUID on
+// this path is unexpected and falls back to the raw event namespace. See:
+// https://www.mongodb.com/docs/manual/reference/change-events/insert/
+//
+//go:inline
+func findNamespaceByUUID(uuidMap catalog.UUIDMap, change *ChangeEvent) catalog.Namespace {
+	if change.CollectionUUID == nil {
+		return change.Namespace
+	}
+
+	if ns, ok := uuidMap[hex.EncodeToString(change.CollectionUUID.Data)]; ok {
+		return ns
+	}
+
+	// UUID absent from snapshot = collection recreated/moved under a different
+	// UUID; a name match would be a different generation, so use the event ns.
+	return change.Namespace
+}
+
 // uuidEqual reports whether two BSON UUID binaries refer to the same UUID.
 // Returns false if either pointer is nil.
 func uuidEqual(a, b *bson.Binary) bool {
@@ -1008,7 +1011,7 @@ func uuidEqual(a, b *bson.Binary) bool {
 
 // applyDDLChange applies a schema change to the target MongoDB.
 //
-//nolint:gocyclo // PCSM-249: flat DDL dispatch switch, complexity is inherent; refactor deferred to final PR
+//nolint:gocyclo // flat DDL dispatch switch
 func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 	lg := loggerForEvent(change)
 	ctx = lg.WithContext(ctx)
@@ -1029,9 +1032,15 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		currentCollUUID := change.CollectionUUID
 
 		knownCollUUID, exists := r.catalog.CollectionUUID(db, coll)
+
+		// SERVER-120349: create/drop events from a movePrimary 'leak' into the change stream.
+		// We have to make them idempotent. On top of that pre-8 mongos fires
+		// an invalidate right after movePrimary, so we earmark (arm) the expectation before returning.
+		// Regular creates fall through this guard.
 		switch {
 		case exists && uuidEqual(knownCollUUID, currentCollUUID):
 			lg.Debug("create event replay detected, namespace already at this UUID; noop")
+
 			if r.sourceIsPre8AndMongos() {
 				r.armExpectedMovePrimaryInvalidate()
 			}
@@ -1040,6 +1049,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 
 		case exists && knownCollUUID != nil && currentCollUUID != nil:
 			lg.Info("phantom create from movePrimary, updating UUID; preserving Sharded/ShardKey/Indexes")
+
 			if r.sourceIsPre8AndMongos() {
 				r.armExpectedMovePrimaryInvalidate()
 			}
@@ -1072,11 +1082,10 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 		currentCollUUID := change.CollectionUUID
 		knownCollUUID, _ := r.catalog.CollectionUUID(db, coll)
 
-		// PCSM-249: stale phantom drop from movePrimary is suppressed.
+		// SERVER-120349: events from a movePrimary 'leak' into the change stream.
 		// The catalog has the new UUID (assigned by phantom create handler); this drop
-		// carries the old UUID. SERVER-120349: phantom create is not marked fromMigrate.
-		// UUID comparison only suppresses when both sides are present and differ; views
-		// and other untracked namespaces fall through to the real drop, which is idempotent.
+		// carries the old UUID.
+		// Regular creates fall through this guard.
 		if currentCollUUID != nil && knownCollUUID != nil && !uuidEqual(knownCollUUID, currentCollUUID) {
 			lg.Infof("stale phantom drop suppressed (event UUID does not match catalog)")
 

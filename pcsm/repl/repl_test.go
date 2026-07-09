@@ -16,56 +16,28 @@ import (
 
 var errCursorClosedByMongos = errors.New("cursor closed by mongos")
 
-const (
-	replTestDBName     = "testdb"
-	replTestCollection = "testcoll"
-	replTestOtherUUID  = "other"
-	replTestOrdersColl = "orders"
-	testDocumentIDKey  = "_id"
-)
-
 func TestFindNamespaceByUUIDFallsBackToEventNamespaceOnUUIDMiss(t *testing.T) {
 	t.Parallel()
 
-	eventNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl}
-	nameMatchedCurrentNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl, Sharded: true}
+	eventNS := catalog.Namespace{Database: "db", Collection: "orders"}
+	nameMatchedCurrentNS := catalog.Namespace{Database: "db", Collection: "orders", Sharded: true}
 	change := &ChangeEvent{EventHeader: EventHeader{
 		Namespace:      eventNS,
 		CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("missing-uuid")},
 	}}
 
-	resolved := findNamespaceByUUID(catalog.UUIDMap{replTestOtherUUID: nameMatchedCurrentNS}, change)
+	resolved := findNamespaceByUUID(catalog.UUIDMap{"other": nameMatchedCurrentNS}, change)
 
 	assert.Equal(t, eventNS, resolved)
-}
-
-func TestFindNamespaceByUUIDEnrichesUUIDLessEventByName(t *testing.T) {
-	t.Parallel()
-
-	shardKey := bson.D{{Key: "tenant", Value: 1}}
-	currentNS := catalog.Namespace{
-		Database:   "db",
-		Collection: replTestCollection,
-		Sharded:    true,
-		ShardKey:   shardKey,
-		Capped:     true,
-	}
-	change := &ChangeEvent{EventHeader: EventHeader{
-		Namespace: catalog.Namespace{Database: "db", Collection: replTestCollection},
-	}}
-
-	resolved := findNamespaceByUUID(catalog.UUIDMap{"uuid": currentNS}, change)
-
-	assert.Equal(t, currentNS, resolved)
 }
 
 func TestDispatcherUUIDMapRefreshAfterDDLRestoresShardedMetadata(t *testing.T) {
 	t.Parallel()
 
-	staleNS := catalog.Namespace{Database: "db", Collection: replTestOrdersColl}
+	staleNS := catalog.Namespace{Database: "db", Collection: "orders"}
 	refreshedNS := catalog.Namespace{
 		Database:   "db",
-		Collection: replTestOrdersColl,
+		Collection: "orders",
 		Sharded:    true,
 		ShardKey:   bson.D{{Key: "tenant", Value: 1}},
 	}
@@ -296,7 +268,7 @@ func TestDispatch_Invalidate(t *testing.T) {
 				r.armExpectedMovePrimaryInvalidate()
 			}
 
-			_ = r.handleInvalidateWithBarrier(change, pool)
+			_ = r.handleInvalidate(change, pool)
 
 			assert.True(t, pool.barrierCalled)
 			assert.True(t, pool.releaseCalled)
@@ -335,7 +307,7 @@ func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
 		},
 	}
 
-	_ = r.handleInvalidateWithBarrier(change, pool)
+	_ = r.handleInvalidate(change, pool)
 
 	assert.Equal(t, []string{"Barrier", "ReleaseBarrier"}, pool.callOrder)
 	require.NoError(t, r.err)
@@ -346,7 +318,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
 
 	tests := []struct {
 		name              string
@@ -409,7 +381,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			catalogUUIDExists: false,
 			eventUUID:         eventUUID,
 			createEvent: CreateEvent{
-				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + replTestCollection},
+				OperationDescription: catalog.CreateCollectionOptions{ViewOn: catalog.TimeseriesPrefix + "testcoll"},
 			},
 		},
 	}
@@ -461,7 +433,7 @@ func TestApplyDropDDLChange(t *testing.T) {
 
 	eventUUID := &bson.Binary{Subtype: 4, Data: []byte("0123456789abcdef")}
 	differentUUID := &bson.Binary{Subtype: 4, Data: []byte("fedcba9876543210")}
-	ns := catalog.Namespace{Database: replTestDBName, Collection: replTestCollection}
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
 
 	tests := []struct {
 		name              string
@@ -574,7 +546,7 @@ func TestChangeStreamCursorErrorPrefersInvalidateError(t *testing.T) {
 	}
 	cursorErr := errCursorClosedByMongos
 
-	err := changeStreamCursorError(invalidateErr, cursorErr, 0)
+	err := isChangeStreamTerminationError(invalidateErr, cursorErr, 0)
 
 	var target changeStreamInvalidateError
 	require.ErrorAs(t, err, &target)

@@ -203,13 +203,6 @@ func (e *EventHeader) IsSameTransaction(other *EventHeader) bool {
 	return *e.TxnNumber == *other.TxnNumber && bytes.Equal(e.LSID, other.LSID)
 }
 
-// IsView returns true if the event is for a view.
-//
-//go:inline
-func (e *EventHeader) IsView() bool {
-	return e.CollectionUUID == nil
-}
-
 // CreateEvent occurs when a collection is created on a watched database and the change stream has
 // the showExpandedEvents option set to true.
 //
