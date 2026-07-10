@@ -723,12 +723,20 @@ func handleDuplicateKeyError(
 		deleteOpts.SetCollation(simpleCollation)
 	}
 
-	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}}, deleteOpts)
+	err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, inner := coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: docID}}, deleteOpts)
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.Wrap(err, "delete before insert")
 	}
 
-	_, err = coll.InsertOne(ctx, replacement)
+	err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, inner := coll.InsertOne(ctx, replacement)
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return errors.Wrap(err, "insert after delete")
 	}
@@ -765,7 +773,9 @@ func handleRecoverableUpdateError(
 
 	var doc bson.D
 
-	err := sourceColl.FindOne(ctx, filter).Decode(&doc)
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		return sourceColl.FindOne(ctx, filter).Decode(&doc) //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		// Doc deleted on source between the change event and the refetch.
 		// Delete on target idempotently; the eventual delete event from the
@@ -785,7 +795,11 @@ func handleRecoverableUpdateError(
 		replaceOpts.SetCollation(simpleCollation)
 	}
 
-	_, err = targetColl.ReplaceOne(ctx, filter, doc, replaceOpts)
+	err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, inner := targetColl.ReplaceOne(ctx, filter, doc, replaceOpts)
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return errors.Wrap(err, "replace target with source doc")
 	}
@@ -811,7 +825,11 @@ func deleteTargetAfterSourceMissing(
 		deleteOpts.SetCollation(simpleCollation)
 	}
 
-	_, err := targetColl.DeleteOne(ctx, filter, deleteOpts)
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, inner := targetColl.DeleteOne(ctx, filter, deleteOpts)
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 		return errors.Wrap(err, "delete target after source missing")
 	}

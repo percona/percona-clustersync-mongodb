@@ -18,7 +18,7 @@ var errMissingClusterTime = errors.New("missig clusterTime")
 
 // ClusterTime retrieves the cluster time from the MongoDB client.
 func ClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, error) {
-	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw()
+	raw, err := m.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Raw() //nolint:wrapcheck
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
@@ -36,7 +36,7 @@ func AdvanceClusterTime(ctx context.Context, m *mongo.Client) (bson.Timestamp, e
 	raw, err := m.Database("admin").RunCommand(ctx, bson.D{
 		{"appendOplogNote", 1},
 		{"data", bson.D{{"msg", "pcsm:tick"}}},
-	}).Raw()
+	}).Raw() //nolint:wrapcheck
 	if err != nil {
 		return bson.Timestamp{}, err //nolint:wrapcheck
 	}
@@ -136,20 +136,30 @@ type CollStats struct {
 
 // SayHello runs the db.hello() command and returns the [Hello].
 func SayHello(ctx context.Context, m *mongo.Client) (*Hello, error) {
-	var result *Hello
+	return RunWithRetryVal(ctx, func(ctx context.Context) (*Hello, error) {
+		result := &Hello{}
 
-	err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Decode(&result)
+		err := m.Database("admin").RunCommand(ctx, bson.D{{"hello", 1}}).Decode(result)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
 
-	return result, err //nolint:wrapcheck
+		return result, nil
+	}, DefaultRetryInterval, DefaultMaxRetries)
 }
 
 // GetDBStats runs the dbStats command.
 func GetDBStats(ctx context.Context, m *mongo.Client, dbName string) (*DBStats, error) {
-	var result *DBStats
+	return RunWithRetryVal(ctx, func(ctx context.Context) (*DBStats, error) {
+		result := &DBStats{}
 
-	err := m.Database(dbName).RunCommand(ctx, bson.D{{"dbStats", 1}}).Decode(&result)
+		err := m.Database(dbName).RunCommand(ctx, bson.D{{"dbStats", 1}}).Decode(result)
+		if err != nil {
+			return nil, err //nolint:wrapcheck
+		}
 
-	return result, err //nolint:wrapcheck
+		return result, nil
+	}, DefaultRetryInterval, DefaultMaxRetries)
 }
 
 // GetCollStats retrieves statistics for a specific collection.
@@ -188,37 +198,45 @@ func collStatsFromStorageStats(ctx context.Context, m *mongo.Client, db, coll st
 		}}},
 	}
 
-	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
-	if err != nil {
-		if IsNamespaceNotFound(err) {
-			err = ErrNotFound
-		}
+	var stats *CollStats
 
-		return nil, errors.Wrap(err, "$collStats")
-	}
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		stats = &CollStats{}
 
-	defer func() {
-		//nolint:contextcheck // fresh context for cleanup
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
 		if err != nil {
-			log.Ctx(ctx).Errorf(err, "$collStas: %s: close cursor", db)
+			return err //nolint:wrapcheck
 		}
-	}()
 
-	stats := &CollStats{}
+		defer func() {
+			//nolint:contextcheck // fresh context for cleanup
+			cerr := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+			if cerr != nil {
+				log.Ctx(ctx).Errorf(cerr, "$collStas: %s: close cursor", db)
+			}
+		}()
 
-	if !cur.Next(ctx) {
-		err = cur.Err()
-		if err == nil {
+		if !cur.Next(ctx) {
+			cerr := cur.Err()
+			if cerr != nil {
+				return cerr //nolint:wrapcheck
+			}
+
+			return ErrNotFound
+		}
+
+		return cur.Decode(stats) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
 			return nil, ErrNotFound
 		}
 
-		return nil, errors.Wrap(err, "$collStas: cursor")
-	}
+		if IsNamespaceNotFound(err) {
+			return nil, errors.Wrap(ErrNotFound, "$collStats")
+		}
 
-	err = cur.Decode(stats)
-	if err != nil {
-		return nil, errors.Wrap(err, "decode")
+		return nil, errors.Wrap(err, "$collStats")
 	}
 
 	return stats, nil
@@ -240,7 +258,39 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 		}}},
 	}
 
-	cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
+	var stats *CollStats
+	empty := false
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		stats = &CollStats{}
+		empty = false
+
+		cur, err := m.Database(db).Collection(coll).Aggregate(ctx, p)
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		defer func() {
+			//nolint:contextcheck // fresh context for cleanup
+			cerr := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+			if cerr != nil {
+				log.Ctx(ctx).Errorf(cerr, "aggregate coll stats: %s: close cursor", db)
+			}
+		}()
+
+		if !cur.Next(ctx) {
+			cerr := cur.Err()
+			if cerr != nil {
+				return cerr //nolint:wrapcheck
+			}
+
+			empty = true
+
+			return nil
+		}
+
+		return cur.Decode(stats) //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		if IsNamespaceNotFound(err) {
 			err = ErrNotFound
@@ -249,28 +299,8 @@ func collStatsFromDocsAggregation(ctx context.Context, m *mongo.Client, db, coll
 		return nil, errors.Wrap(err, "aggregate coll stats")
 	}
 
-	defer func() {
-		//nolint:contextcheck // fresh context for cleanup
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
-		if err != nil {
-			log.Ctx(ctx).Errorf(err, "aggregate coll stats: %s: close cursor", db)
-		}
-	}()
-
-	stats := &CollStats{}
-
-	if !cur.Next(ctx) {
-		err = cur.Err()
-		if err == nil {
-			return &CollStats{Count: 0, Size: 0, AvgObjSize: 0}, nil
-		}
-
-		return nil, errors.Wrap(err, "cursor")
-	}
-
-	err = cur.Decode(stats)
-	if err != nil {
-		return nil, errors.Wrap(err, "decode")
+	if empty {
+		return &CollStats{Count: 0, Size: 0, AvgObjSize: 0}, nil
 	}
 
 	return stats, nil
