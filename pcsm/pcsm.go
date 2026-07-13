@@ -273,7 +273,13 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.State == StateRunning {
-		return p.doResume(ctx, false)
+		// Launch the run loop directly rather than doResume. run() starts repl
+		// when the recovered checkpoint had not yet begun it (state=running was
+		// persisted at /start time, before repl.Start ran) and resumes it when
+		// it had. doResume assumes an already-started repl and would reject the
+		// not-yet-started case.
+		go p.run(p.lifecycleCtx)
+		go p.onStateChanged(StateRunning)
 	}
 
 	return nil
@@ -419,6 +425,12 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)
+
+	// Persist the idle->running transition immediately (like doPause/doResume/
+	// setFailed). Without this the first checkpoint would only land on the next
+	// periodic tick; a crash before then leaves no recovery data, so a promoted
+	// instance could not resume the run that /start began.
+	go p.onStateChanged(StateRunning)
 
 	return nil
 }

@@ -52,6 +52,19 @@ class PCSM:
 
         return payload
 
+    def role(self):
+        """Return the HA role advertised in the /status envelope (ACTIVE/STANDBY)."""
+        return self.status().get("role")
+
+    def start_expect_conflict(self):
+        """Attempt /start and return (status_code, body) without raising.
+
+        Used to assert that a STANDBY rejects write commands with HTTP 409 and a
+        not_active body. On an ACTIVE instance this would return 200.
+        """
+        res = requests.post(f"{self.uri}/start", json={}, timeout=DFL_REQ_TIMEOUT)
+        return res.status_code, res.json()
+
     def start(
         self,
         include_namespaces=None,

@@ -841,9 +841,20 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
 	lg.Info("Instance role: ACTIVE (promoted)")
 
+	// Recover persisted state before doing anything else. If this fails, this
+	// instance cannot safely act as ACTIVE (it would resume from unknown state),
+	// so release the lease and let another instance try rather than sitting as a
+	// broken ACTIVE. Term fencing still protects the target in the meantime.
 	err := Restore(ctx, s.targetCluster, s.pcsm)
 	if err != nil {
-		lg.Error(err, "restore on promotion")
+		lg.Error(err, "restore on promotion; releasing lease")
+
+		rerr := s.membership.Release(ctx)
+		if rerr != nil {
+			lg.Error(rerr, "release lease after failed restore")
+		}
+
+		return
 	}
 
 	s.mu.Lock()
