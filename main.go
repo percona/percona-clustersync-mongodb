@@ -1853,12 +1853,16 @@ func doClientRequest[T clientResponse](ctx context.Context, port int, method, pa
 		return errors.Wrap(err, "read response")
 	}
 
-	// A STANDBY rejects write commands with 409 and a not_active body carrying a
-	// human-readable message that points at the ACTIVE instance. Surface that
-	// message directly instead of the generic decoded error.
+	// A STANDBY rejects write commands with 409 and a not_active body carrying
+	// the full cluster envelope plus a human-readable message pointing at the
+	// ACTIVE instance. Print the whole envelope (like the success path) so the
+	// operator can see the members and locate the active, then return the
+	// message as the error for a non-zero exit.
 	if res.StatusCode == http.StatusConflict {
 		var na notActiveResponse
 		if json.Unmarshal(data, &na) == nil && na.Message != "" {
+			_ = printJSON(na) // best-effort; the message error below is authoritative
+
 			return errors.New(na.Message)
 		}
 	}
@@ -1874,11 +1878,15 @@ func doClientRequest[T clientResponse](ctx context.Context, port int, method, pa
 		return errors.New(resp.GetError())
 	}
 
-	j := json.NewEncoder(os.Stdout)
-	j.SetIndent("", "  ")
-	err = j.Encode(resp)
+	return errors.Wrap(printJSON(resp), "print response")
+}
 
-	return errors.Wrap(err, "print response")
+// printJSON writes v to stdout as indented JSON.
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(v) //nolint:wrapcheck
 }
 
 func doStatusRequest(ctx context.Context, port int) error {
