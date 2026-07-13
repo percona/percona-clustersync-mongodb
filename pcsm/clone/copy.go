@@ -815,9 +815,16 @@ func (seg *Segmenter) doNext(ctx context.Context) (*mongo.Cursor, error) {
 	log.New("seg").With(log.NS(seg.mcoll.Database().Name(), seg.mcoll.Name())).
 		Tracef("[%v <=> %v]", seg.currIDRange.Min, maxKey)
 
-	cur, err := seg.mcoll.Find(ctx,
-		bson.D{{"_id", bson.D{{"$gte", seg.currIDRange.Min}, {"$lte", maxKey}}}},
-		options.Find().SetSort(bson.D{{"_id", 1}}).SetBatchSize(seg.batchSize))
+	var cur *mongo.Cursor
+
+	err = mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		cur, inner = seg.mcoll.Find(ctx,
+			bson.D{{"_id", bson.D{{"$gte", seg.currIDRange.Min}, {"$lte", maxKey}}}},
+			options.Find().SetSort(bson.D{{"_id", 1}}).SetBatchSize(seg.batchSize))
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return nil, errors.Wrap(err, "query")
 	}
@@ -844,7 +851,8 @@ func (seg *Segmenter) findSegmentMaxKey(
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		var inner error
-		raw, inner = seg.mcoll.FindOne(ctx,
+		raw, inner = seg.mcoll.FindOne(
+			ctx,
 			bson.D{{"_id", bson.D{{"$gt", minKey}, {"$lte", maxKey}}}},
 			options.FindOne().
 				SetSort(bson.D{{"_id", 1}}).
@@ -887,7 +895,9 @@ func (seg *Segmenter) handleNanIDDoc(
 func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
 	minIDOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
 
-	minRaw, err := mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw()
+	minRaw, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw() //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "min _id")
 	}
@@ -897,7 +907,9 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(minRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = minRaw
 
-		minRaw, err = mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw()
+		minRaw, err = mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+			return mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw() //nolint:wrapcheck
+		}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "min _id (skip NaN)")
 		}
@@ -905,7 +917,9 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 
 	maxIDOptions := options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
 
-	maxRaw, err := mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw()
+	maxRaw, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw() //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return keyRange{}, nil, errors.Wrap(err, "max _id")
 	}
@@ -913,7 +927,9 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 	if strings.Contains(maxRaw.Lookup("_id").DebugString(), "NaN") {
 		nanDoc = maxRaw
 
-		maxRaw, err = mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw()
+		maxRaw, err = mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+			return mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw() //nolint:wrapcheck
+		}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 		if err != nil {
 			return keyRange{}, nil, errors.Wrap(err, "max _id (skip NaN)")
 		}
@@ -932,31 +948,33 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bso
 // for each group. This allows the Segmenter to handle collections with heterogeneous _id types
 // by processing each type range sequentially.
 func getMultiTypeIDKeyRanges(ctx context.Context, mcoll *mongo.Collection) ([]keyRange, error) {
-	cur, err := mcoll.Aggregate(ctx,
-		mongo.Pipeline{
-			// Match only numeric types that are not NaN
-			bson.D{{"$match", bson.D{
-				{"$expr", bson.D{
-					// Only allow if _id is not NaN
-					{"$ne", bson.A{"$_id", bson.D{{"$literal", math.NaN()}}}},
-				}},
-			}}},
-			// Group by type and find min/max
-			bson.D{{"$group", bson.D{
-				{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
-				{"minKey", bson.D{{"$min", "$_id"}}},
-				{"maxKey", bson.D{{"$max", "$_id"}}},
-			}}},
-		})
-	if err != nil {
-		return nil, errors.Wrap(err, "query")
-	}
-
 	var keyRanges []keyRange
 
-	err = cur.All(ctx, &keyRanges)
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		cur, err := mcoll.Aggregate(ctx,
+			mongo.Pipeline{
+				// Match only numeric types that are not NaN
+				bson.D{{"$match", bson.D{
+					{"$expr", bson.D{
+						// Only allow if _id is not NaN
+						{"$ne", bson.A{"$_id", bson.D{{"$literal", math.NaN()}}}},
+					}},
+				}}},
+				// Group by type and find min/max
+				bson.D{{"$group", bson.D{
+					{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
+					{"minKey", bson.D{{"$min", "$_id"}}},
+					{"maxKey", bson.D{{"$max", "$_id"}}},
+				}}},
+			})
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		return cur.All(ctx, &keyRanges) //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
-		return nil, errors.Wrap(err, "all")
+		return nil, errors.Wrap(err, "query")
 	}
 
 	for i := range keyRanges {
@@ -1030,8 +1048,15 @@ func (cs *CappedSegmenter) Next(ctx context.Context) (*mongo.Cursor, error) {
 		return nil, errEOC
 	}
 
-	cur, err := cs.mcoll.Find(ctx, bson.D{},
-		options.Find().SetHint(bson.D{{"$natural", 1}}).SetBatchSize(cs.batchSize))
+	var cur *mongo.Cursor
+
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		cur, inner = cs.mcoll.Find(ctx, bson.D{},
+			options.Find().SetHint(bson.D{{"$natural", 1}}).SetBatchSize(cs.batchSize))
+
+		return inner //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return nil, errors.Wrap(err, "query")
 	}
