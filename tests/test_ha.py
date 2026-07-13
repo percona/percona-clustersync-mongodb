@@ -16,7 +16,6 @@ import os
 import threading
 import time
 
-import conftest
 import pytest
 import testing
 from pymongo import MongoClient
@@ -30,54 +29,27 @@ HA_PORTS = [int(p) for p in os.getenv("TEST_PCSM_HA_PORTS", "2252,2253,2254").sp
 
 
 @pytest.fixture(scope="module", autouse=True)
-def suspend_session_pcsm(pcsm_bin: str):
-    """Stop the session-managed single PCSM for the duration of this module.
-
-    That instance points at the same target and would compete for the lease.
-    We also clear conftest.PCSM_PROC so the autouse restart_pcsm_on_failure
-    fixture does not resurrect it between HA tests. It is restarted on teardown.
-    """
+def _require_bin(pcsm_bin: str):
+    """Skip the whole module unless a managed binary is available."""
     if not pcsm_bin:
         pytest.skip("TEST_PCSM_BIN not set; HA tests need a managed binary")
 
-    proc = conftest.PCSM_PROC
-    if proc is not None:
-        conftest.stop_pcsm(proc)
-        conftest.PCSM_PROC = None
-
-    yield
-
-    # Restart the session instance so any later (non-HA) usage still works.
-    if proc is not None:
-        conftest.PCSM_PROC = conftest.start_pcsm(pcsm_bin, request=_DummyRequest())
-
-
-class _DummyRequest:
-    """Minimal shim exposing config.getoption used by conftest.start_pcsm.
-
-    start_pcsm only reads source/target URIs via the request; reuse the real
-    env-var fallbacks by returning None for options.
-    """
-
-    class _Config:
-        @staticmethod
-        def getoption(_name):
-            return None
-
-    config = _Config()
-
 
 @pytest.fixture
-def ha_cluster(request, pcsm_bin, drop_all_database):  # noqa: ARG001 - ordering dep
+def ha_cluster(
+    pcsm_bin,
+    source_uri_str,
+    target_uri_str,
+    suspend_managed_pcsm,  # noqa: ARG001 - stops the singleton PCSM for these tests
+    drop_all_database,  # noqa: ARG001 - ordering dep: wipe runs before the group starts
+):
     """A fresh 3-instance HA group per test.
 
-    Depends on drop_all_database so the (autouse) source/target wipe runs before
-    the group starts. Tears the group down afterwards.
+    suspend_managed_pcsm stops the session singleton (which would otherwise
+    compete for the lease); drop_all_database orders the source/target wipe
+    before the group starts. The group is torn down afterwards.
     """
-    source = conftest.source_uri(request)
-    target = conftest.target_uri(request)
-
-    cluster = PCSMCluster(pcsm_bin, source, target, HA_PORTS)
+    cluster = PCSMCluster(pcsm_bin, source_uri_str, target_uri_str, HA_PORTS)
     cluster.start()
     try:
         yield cluster

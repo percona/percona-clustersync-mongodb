@@ -59,6 +59,11 @@ export PCSM_TARGET_URI="$TARGET_URI"
 echo "Building pcsm:dev image..."
 docker build -f "$HA_DIR/Dockerfile" -t pcsm:dev "$ROOT"
 
+# Stop any existing group first. Otherwise a --reset would wipe the lease/state
+# out from under running instances, leaving them with stale in-memory terms.
+echo "Stopping any existing HA group..."
+docker compose -f "$COMPOSE" down --remove-orphans 2>/dev/null || true
+
 if [[ "$RESET" == "true" ]]; then
     echo "Resetting target state on $TARGET_URI..."
     docker run --rm --network "$NETWORK" pcsm:dev reset --target "$TARGET_URI"

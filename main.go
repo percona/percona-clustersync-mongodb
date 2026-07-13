@@ -143,7 +143,8 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
 
 	rootCmd.Flags().String("group", config.DefaultGroup,
-		"HA group name; all instances coordinating over the same target must share it")
+		"HA group name, recorded and advertised for observability "+
+			"(cross-group isolation is not yet enforced)")
 
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
 		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
@@ -754,11 +755,18 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		// another) is rejected by the fence and that is expected.
 		_, term := membership.CurrentRole()
 
+		lg := log.New("http:checkpointing")
+
 		err := DoCheckpoint(ctx, target, pcs, term, membership.InstanceID())
-		if err != nil {
-			log.New("http:checkpointing").Error(err, "checkpoint")
-		} else {
-			log.New("http:checkpointing").Debugf("Checkpoint saved on %q", newState)
+		switch {
+		case err == nil:
+			lg.Debugf("Checkpoint saved on %q", newState)
+		case errors.Is(err, errCheckpointFenced):
+			// A STANDBY (or a just-deposed active) is expected to be fenced on a
+			// state-change checkpoint; this is normal, not an error.
+			lg.Debug("Checkpoint fenced by a newer term")
+		default:
+			lg.Error(err, "checkpoint")
 		}
 	})
 
@@ -843,15 +851,16 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 
 	// Recover persisted state before doing anything else. If this fails, this
 	// instance cannot safely act as ACTIVE (it would resume from unknown state),
-	// so release the lease and let another instance try rather than sitting as a
-	// broken ACTIVE. Term fencing still protects the target in the meantime.
+	// so relinquish the lease and let another instance try. It keeps competing
+	// (the lease loop is not stopped), so a transient error does not bench it
+	// until restart. Term fencing still protects the target in the meantime.
 	err := Restore(ctx, s.targetCluster, s.pcsm)
 	if err != nil {
-		lg.Error(err, "restore on promotion; releasing lease")
+		lg.Error(err, "restore on promotion; relinquishing lease")
 
-		rerr := s.membership.Release(ctx)
+		rerr := s.membership.RelinquishLease(ctx)
 		if rerr != nil {
-			lg.Error(rerr, "release lease after failed restore")
+			lg.Error(rerr, "relinquish lease after failed restore")
 		}
 
 		return
@@ -888,12 +897,27 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 	s.mu.Unlock()
 }
 
-// onDemote handles an ACTIVE->STANDBY transition. It stops the checkpointing
-// loop and pauses the pipeline so the demoted instance performs no further
-// writes. Pause is best-effort: term fencing on checkpoint writes is the hard
-// guarantee that a demoted active cannot corrupt the target.
+// onDemote handles an ACTIVE->STANDBY transition for a given term. It stops the
+// checkpointing loop and pauses the pipeline so the demoted instance performs no
+// further writes. Pause is best-effort: term fencing on checkpoint writes is the
+// hard guarantee that a demoted active cannot corrupt the target.
+//
+// term identifies the ACTIVE epoch being demoted. onDemote can be invoked
+// out-of-band by the checkpointing fence callback (onFenced), which may race a
+// subsequent re-promotion into a newer term. If this instance has already moved
+// past term, the demotion is stale and ignored so it does not tear down the
+// newer epoch's checkpointing/pipeline.
 func (s *server) onDemote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
+
+	_, currentTerm := s.membership.CurrentRole()
+	if currentTerm > term {
+		lg.With(log.Int64("currentTerm", currentTerm)).
+			Debug("Ignoring stale demotion for an older term")
+
+		return
+	}
+
 	lg.Info("Instance role: STANDBY (demoted)")
 
 	s.mu.Lock()

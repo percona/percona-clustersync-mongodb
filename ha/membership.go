@@ -47,11 +47,11 @@ type Membership struct {
 	startedAt  time.Time
 	cancel     context.CancelFunc
 
+	// mu guards role, term, and leaseCancel.
+	mu sync.Mutex
 	// leaseCancel cancels the lease loop started by RunLease.
 	leaseCancel context.CancelFunc
-
-	// mu guards role and term, which change together on a role transition.
-	mu   sync.Mutex
+	// role and term change together on a role transition.
 	role Role
 	term int64
 
@@ -157,19 +157,35 @@ func (m *Membership) CurrentRole() (Role, int64) {
 // document and mirrored on RoleChanges.
 func (m *Membership) RunLease(ctx context.Context) {
 	loopCtx, cancel := context.WithCancel(ctx)
+
+	m.mu.Lock()
 	m.leaseCancel = cancel
+	m.mu.Unlock()
 
 	m.runLease(loopCtx)
 }
 
 // Release best-effort relinquishes the lease (if held) so a standby can take
 // over without waiting for it to expire, demotes this member to STANDBY, and
-// stops the lease loop.
+// stops the lease loop. Use it on shutdown; the instance no longer competes
+// afterwards.
 func (m *Membership) Release(ctx context.Context) error {
-	if m.leaseCancel != nil {
-		m.leaseCancel()
+	m.mu.Lock()
+	cancel := m.leaseCancel
+	m.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 
+	return m.releaseLease(ctx)
+}
+
+// RelinquishLease gives up the lease (if held) and demotes to STANDBY without
+// stopping the lease loop, so this instance keeps competing and can be elected
+// again. Use it when an instance cannot currently act as ACTIVE (e.g. failed to
+// recover on promotion) but should remain a viable standby.
+func (m *Membership) RelinquishLease(ctx context.Context) error {
 	return m.releaseLease(ctx)
 }
 
