@@ -142,7 +142,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
 
-	rootCmd.Flags().String("group", config.DefaultGroup,
+	rootCmd.Flags().String("group-name", config.DefaultGroup,
 		"HA group name, recorded and advertised for observability "+
 			"(cross-group isolation is not yet enforced)")
 
@@ -721,13 +721,13 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
-	group := cfg.Group
-	if group == "" {
-		group = config.DefaultGroup
+	groupName := cfg.GroupName
+	if groupName == "" {
+		groupName = config.DefaultGroup
 	}
 
 	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{
-		Group:       group,
+		Group:       groupName,
 		Port:        cfg.Port,
 		PCSMVersion: buildVersion(),
 	})
@@ -1418,28 +1418,39 @@ type responseEnvelope struct {
 }
 
 // buildEnvelope assembles the response envelope from membership state and the
-// live member list. A failure reading members degrades to an empty member list
-// rather than failing the request; the caller's own payload still returns.
-func (s *server) buildEnvelope(ctx context.Context) responseEnvelope {
-	role, term := s.membership.CurrentRole()
-
-	env := responseEnvelope{
-		Me:   meInfo{InstanceID: s.membership.InstanceID()},
-		Role: role,
-		Group: groupInfo{
-			Name: s.membership.Group(),
-			Term: term,
-		},
-	}
-
+// live member list, or returns nil when this instance is running standalone.
+//
+// The envelope is included only when the instance currently observes other
+// group members (more than one live member). A single-instance deployment — the
+// common case — thus returns responses byte-identical to the pre-HA API, with
+// no me/role/group fields. This is pessimistic by design: a member-read error
+// (e.g. target connectivity lost, which is a far bigger problem) or a degraded
+// group momentarily down to one live node also omits the envelope. HA consumers
+// must treat the envelope as optional.
+func (s *server) buildEnvelope(ctx context.Context) *responseEnvelope {
 	members, err := ha.Members(ctx, s.targetCluster)
 	if err != nil {
 		log.New("http:envelope").Warn("list members: " + err.Error())
 
-		return env
+		return nil
 	}
 
-	env.Group.Members = make([]groupMember, 0, len(members))
+	if len(members) <= 1 {
+		return nil
+	}
+
+	role, term := s.membership.CurrentRole()
+
+	env := &responseEnvelope{
+		Me:   meInfo{InstanceID: s.membership.InstanceID()},
+		Role: role,
+		Group: groupInfo{
+			Name:    s.membership.Group(),
+			Term:    term,
+			Members: make([]groupMember, 0, len(members)),
+		},
+	}
+
 	for _, mem := range members {
 		env.Group.Members = append(env.Group.Members, groupMember{
 			InstanceID: mem.InstanceID,
@@ -1453,9 +1464,13 @@ func (s *server) buildEnvelope(ctx context.Context) responseEnvelope {
 }
 
 // activeMemberAddr returns the "host:port" of the ACTIVE member from the member
-// list, or "" if none is currently known. Used to point a rejected client at
-// the instance that can serve its write.
-func activeMemberAddr(env responseEnvelope) string {
+// list, or "" if the envelope is nil or no ACTIVE is currently known. Used to
+// point a rejected client at the instance that can serve its write.
+func activeMemberAddr(env *responseEnvelope) string {
+	if env == nil {
+		return ""
+	}
+
 	for _, mem := range env.Group.Members {
 		if mem.Role == ha.RoleActive {
 			return fmt.Sprintf("%s:%d", mem.Host, mem.Port)
@@ -1469,7 +1484,7 @@ func activeMemberAddr(env responseEnvelope) string {
 // to a STANDBY instance. It carries the full envelope so the caller can locate
 // the ACTIVE instance.
 type notActiveResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	Ok      bool   `json:"ok"`
 	Err     string `json:"error"`
@@ -1563,7 +1578,7 @@ type clientResponse interface {
 
 // startResponse represents the response body for the /start endpoint.
 type startResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
@@ -1576,7 +1591,7 @@ func (r startResponse) GetError() string { return r.Err }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
@@ -1589,7 +1604,7 @@ func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	// PauseOnInitialSync indicates if the replication is paused on initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
@@ -1764,7 +1779,7 @@ func indexKeysToJSON(raw bson.Raw) json.RawMessage {
 
 // pauseResponse represents the response body for the /pause endpoint.
 type pauseResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
@@ -1784,7 +1799,7 @@ type resumeRequest struct {
 // resumeResponse represents the response body for the /resume
 // endpoint.
 type resumeResponse struct {
-	responseEnvelope
+	*responseEnvelope
 
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`

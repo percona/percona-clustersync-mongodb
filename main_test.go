@@ -44,16 +44,23 @@ func TestActiveMemberAddr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := responseEnvelope{Group: groupInfo{Members: tt.members}}
+			env := &responseEnvelope{Group: groupInfo{Members: tt.members}}
 			assert.Equal(t, tt.want, activeMemberAddr(env))
 		})
 	}
 }
 
+func TestActiveMemberAddrNilEnvelope(t *testing.T) {
+	t.Parallel()
+
+	// A single-instance deployment has no envelope; the helper must be nil-safe.
+	assert.Empty(t, activeMemberAddr(nil))
+}
+
 func TestEnvelopeJSONShape(t *testing.T) {
 	t.Parallel()
 
-	env := responseEnvelope{
+	env := &responseEnvelope{
 		Me:   meInfo{InstanceID: "pcsm-xyz"},
 		Role: ha.RoleStandby,
 		Group: groupInfo{
@@ -93,11 +100,28 @@ func TestEnvelopeJSONShape(t *testing.T) {
 	assert.Len(t, members, 2)
 }
 
+func TestEnvelopeOmittedForSingleNode(t *testing.T) {
+	t.Parallel()
+
+	// A single-instance deployment has a nil envelope: the response must carry
+	// no me/role/group fields, i.e. be byte-identical to the pre-HA API.
+	data, err := json.Marshal(startResponse{Ok: true})
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	assert.NotContains(t, decoded, "me")
+	assert.NotContains(t, decoded, "role")
+	assert.NotContains(t, decoded, "group")
+	assert.Equal(t, true, decoded["ok"])
+}
+
 func TestNotActiveResponseJSONShape(t *testing.T) {
 	t.Parallel()
 
 	na := notActiveResponse{
-		responseEnvelope: responseEnvelope{
+		responseEnvelope: &responseEnvelope{
 			Me:   meInfo{InstanceID: "pcsm-xyz"},
 			Role: ha.RoleStandby,
 			Group: groupInfo{

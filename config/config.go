@@ -25,11 +25,11 @@ type Config struct {
 	Source     string `mapstructure:"source"`
 	Target     string `mapstructure:"target"`
 
-	// Group is the logical name of the active-standby HA group this instance
+	// GroupName is the logical name of the active-standby HA group this instance
 	// joins. All instances that should coordinate (compete for one lease on the
-	// same target) must share the same value. Guards against an instance
-	// accidentally pointing at a target owned by an unrelated group.
-	Group string `mapstructure:"group"`
+	// same target) share the same value. Advisory: recorded and advertised for
+	// observability.
+	GroupName string `mapstructure:"group-name"`
 
 	Log LogConfig `mapstructure:",squash"`
 
@@ -166,7 +166,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("source", "PCSM_SOURCE_URI")
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
 
-	_ = viper.BindEnv("group", "PCSM_GROUP")
+	_ = viper.BindEnv("group-name", "PCSM_GROUP_NAME")
 
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")

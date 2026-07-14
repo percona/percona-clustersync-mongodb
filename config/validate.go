@@ -11,8 +11,8 @@ import (
 // DefaultServerPort is the default port for the PCSM HTTP server.
 const DefaultServerPort = 2242
 
-// DefaultGroup is the default active-standby HA group name used when --group is
-// not set. Single-instance deployments never need to change it.
+// DefaultGroup is the default active-standby HA group name used when
+// --group-name is not set. Single-instance deployments never need to change it.
 const DefaultGroup = "default"
 
 // Validate validates the Config for required fields and value ranges.

@@ -14,6 +14,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
 // MembershipOptions configures this instance's participation in the set.
@@ -294,7 +295,8 @@ func (m *Membership) Stop(ctx context.Context) error {
 
 // Members returns the current set of live members, filtering out documents whose
 // lastHeartbeat is older than the stale threshold. Staleness is evaluated using
-// the server clock via an aggregation match against $$NOW.
+// the server clock via an aggregation match against $$NOW. The read is retried
+// on transient target errors.
 func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 	pipeline := mongo.Pipeline{
 		{{"$match", bson.D{
@@ -307,18 +309,22 @@ func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 		}}},
 	}
 
-	cur, err := membersColl(target).Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, errors.Wrap(err, "aggregate members")
-	}
+	members, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) ([]Member, error) {
+		cur, err := membersColl(target).Aggregate(ctx, pipeline)
+		if err != nil {
+			return nil, errors.Wrap(err, "aggregate members")
+		}
 
-	var members []Member
-	err = cur.All(ctx, &members)
-	if err != nil {
-		return nil, errors.Wrap(err, "decode members")
-	}
+		var out []Member
+		err = cur.All(ctx, &out)
+		if err != nil {
+			return nil, errors.Wrap(err, "decode members")
+		}
 
-	return members, nil
+		return out, nil
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+
+	return members, errors.Wrap(err, "list members")
 }
 
 func membersColl(target *mongo.Client) *mongo.Collection {
