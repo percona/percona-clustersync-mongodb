@@ -127,6 +127,23 @@ def test_standby_rejects_writes(ha_cluster: PCSMCluster):
     assert "message" in body
 
 
+@pytest.mark.timeout(120)
+def test_standby_status_rejected(ha_cluster: PCSMCluster):
+    """GET /status on a STANDBY returns 409 with the not_active envelope.
+
+    Status is active-only: a STANDBY must not serve misleading idle pipeline
+    stats. The 409 body still carries role and the group member list.
+    """
+    standbys = ha_cluster.standbys()
+    assert standbys, "expected at least one STANDBY"
+
+    code, body = standbys[0].client.raw_status()
+    assert code == 409, body
+    assert body.get("error") == "not_active", body
+    assert body.get("role") == "STANDBY", body
+    assert body.get("group", {}).get("members"), body
+
+
 @pytest.mark.timeout(600)
 def test_failover_data_integrity(ha_cluster: PCSMCluster, source_conn, target_conn):
     """Data survives repeated ACTIVE crashes during replication.

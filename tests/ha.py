@@ -15,8 +15,6 @@ import subprocess
 import tempfile
 import time
 
-import requests
-
 from pcsm import PCSM
 
 # Failover budget: lease TTL (10s) plus margin for the new active to renew,
@@ -90,11 +88,17 @@ class PCSMInstance:
         return self.proc is not None and self.proc.poll() is None
 
     def try_status(self):
-        """Return the /status payload, or None if unreachable/not ready."""
+        """Return the /status body, or None if unreachable/not ready.
+
+        Uses raw_status so a STANDBY's 409 response is still read: the body
+        carries role and the group member list regardless of the status code.
+        """
         try:
-            return self.client.status()
-        except (requests.RequestException, Exception):  # noqa: BLE001
+            _, body = self.client.raw_status()
+        except Exception:  # noqa: BLE001 - any failure during startup is retryable
             return None
+
+        return body
 
 
 class PCSMCluster:

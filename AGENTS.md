@@ -261,6 +261,7 @@ Design notes:
 
 - **Standbys hold an idle source connection.** Every instance connects to source and target at startup (before its role is known) so an unreachable source or incompatible version fails fast at boot rather than on the failover path, and promotion stays low-latency. A STANDBY performs no source reads; the connection only carries driver monitoring traffic.
 - **Term-based fencing.** The lease term is a monotonic fencing token stamped into every checkpoint write. A deposed ACTIVE cannot overwrite a newer ACTIVE's checkpoint; its write is rejected and it self-demotes.
+- **Active-only operational endpoints.** All HTTP endpoints except `/metrics` (`/status`, `/start`, `/pause`, `/resume`, `/finalize`) return HTTP 409 `not_active` on a STANDBY; the 409 body is the cluster envelope, so it still carries the responder's role and the group member list pointing at the ACTIVE. `/status` is included: a STANDBY has no meaningful pipeline state. Use `/metrics` (always served) as the target for HTTP liveness/readiness probes.
 - **0.9.0 → 0.10.0 migration.** Replication state from 0.9.0 is not compatible. Run `pcsm reset` against the target before starting replication with 0.10.0.
 
 ### Client subcommands
@@ -377,15 +378,17 @@ Client commands work from the host against any instance's published port, e.g. `
 
 ### HTTP API
 
-| Endpoint          | Method | Purpose                |
-| ----------------- | ------ | ---------------------- |
-| `/status`         | GET    | Get replication status |
-| `/start`          | POST   | Start replication      |
-| `/pause`          | POST   | Pause replication      |
-| `/resume`         | POST   | Resume replication     |
-| `/finalize`       | POST   | Finalize replication   |
-| `/metrics`        | GET    | Prometheus metrics     |
-| `/debug/pprof/*`  | GET    | Go pprof endpoints     |
+| Endpoint          | Method | Purpose                | Standby (STANDBY) |
+| ----------------- | ------ | ---------------------- | ----------------- |
+| `/status`         | GET    | Get replication status | 409 `not_active`  |
+| `/start`          | POST   | Start replication      | 409 `not_active`  |
+| `/pause`          | POST   | Pause replication      | 409 `not_active`  |
+| `/resume`         | POST   | Resume replication     | 409 `not_active`  |
+| `/finalize`       | POST   | Finalize replication   | 409 `not_active`  |
+| `/metrics`        | GET    | Prometheus metrics     | served            |
+| `/debug/pprof/*`  | GET    | Go pprof endpoints     | served            |
+
+On a STANDBY, every operational endpoint returns HTTP 409 with the cluster envelope (`error: "not_active"`, plus `role` and `group.members[]` locating the ACTIVE). Only `/metrics` (and pprof) are served on all roles; use `/metrics` for HTTP liveness/readiness probes.
 
 `/start` accepts an optional JSON body with namespace include/exclude lists, clone tuning, repl tuning, and a bulk-write override. See `startRequest` in [main.go](main.go) and the matching CLI flags.
 

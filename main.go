@@ -984,6 +984,12 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Status is a read on the active pipeline. A STANDBY has no meaningful
+	// repl state.
+	if !s.requireActive(ctx, w) {
+		return
+	}
+
 	status := s.pcsm.Status(ctx)
 
 	res := statusResponse{
@@ -1905,17 +1911,30 @@ func doStatusRequest(ctx context.Context, port int) error {
 	}
 	defer res.Body.Close()
 
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return errors.Wrap(err, "read response")
+	}
+
+	// A STANDBY rejects /status with 409 and a not_active envelope pointing at
+	// the active. Print the whole envelope, then return the message as the error.
+	if res.StatusCode == http.StatusConflict {
+		var na notActiveResponse
+		if json.Unmarshal(data, &na) == nil && na.Message != "" {
+			_ = printJSON(na) // best-effort; the message error below is authoritative
+
+			return errors.New(na.Message)
+		}
+	}
+
 	var resp statusResponse
 
-	err = json.NewDecoder(res.Body).Decode(&resp)
+	err = json.Unmarshal(data, &resp)
 	if err != nil {
 		return errors.Wrap(err, "decode response")
 	}
 
-	j := json.NewEncoder(os.Stdout)
-	j.SetIndent("", "  ")
-
-	err = j.Encode(resp)
+	err = printJSON(resp)
 	if err != nil {
 		return errors.Wrap(err, "print response")
 	}
