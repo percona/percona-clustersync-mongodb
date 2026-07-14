@@ -11,6 +11,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
 // RoleChange is a single active-standby role transition. Term is the lease term
@@ -172,14 +173,21 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 	now := time.Now().UTC()
 
-	_, err := m.leaseColl().InsertOne(ctx, bson.D{
-		{"_id", LeaseID},
-		{fieldGroup, m.group},
-		{fieldInstanceID, m.instanceID},
-		{fieldTerm, int64(1)},
-		{"electionDate", now},
-		{fieldExpiresAt, now.Add(config.LeaseTTL)},
-	})
+	// Retried on transient errors. A duplicate-key error is not transient, so it
+	// is returned immediately and unwrapped for the caller's IsDuplicateKeyError
+	// check.
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := m.leaseColl().InsertOne(ctx, bson.D{
+			{"_id", LeaseID},
+			{fieldGroup, m.group},
+			{fieldInstanceID, m.instanceID},
+			{fieldTerm, int64(1)},
+			{"electionDate", now},
+			{fieldExpiresAt, now.Add(config.LeaseTTL)},
+		})
+
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return false, 0, err //nolint:wrapcheck // caller inspects for duplicate-key
 	}
@@ -225,18 +233,37 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		bson.D{{"$lte", bson.A{"$expiresAt", aggNow}}},
 	}}}}}
 
-	var updated Lease
+	var (
+		updated Lease
+		matched bool
+	)
 
-	decodeErr := m.leaseColl().FindOneAndUpdate(ctx, filter, pipeline,
-		options.FindOneAndUpdate().SetReturnDocument(options.After),
-	).Decode(&updated)
-	if decodeErr != nil {
+	// ErrNoDocuments is a normal "filter did not match" signal (lease absent or
+	// held by another instance), not a failure to retry, so it is absorbed inside
+	// the closure. Other errors are retried on transient classification.
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		decodeErr := m.leaseColl().FindOneAndUpdate(ctx, filter, pipeline,
+			options.FindOneAndUpdate().SetReturnDocument(options.After),
+		).Decode(&updated)
 		if errors.Is(decodeErr, mongo.ErrNoDocuments) {
-			// Filter did not match: lease is absent or held by another instance.
-			return false, 0, false, nil
+			matched = false
+
+			return nil
+		}
+		if decodeErr != nil {
+			return decodeErr //nolint:wrapcheck
 		}
 
-		return false, 0, false, errors.Wrap(decodeErr, "take or renew lease")
+		matched = true
+
+		return nil
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+	if err != nil {
+		return false, 0, false, errors.Wrap(err, "take or renew lease")
+	}
+
+	if !matched {
+		return false, 0, false, nil
 	}
 
 	return updated.InstanceID == m.instanceID, updated.Term, true, nil
@@ -249,12 +276,16 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, config.HeartbeatTimeout)
 	defer cancel()
 
-	_, err := m.leaseColl().UpdateOne(ctx,
-		bson.D{{"_id", LeaseID}, {fieldInstanceID, m.instanceID}},
-		mongo.Pipeline{
-			{{"$set", bson.D{{fieldExpiresAt, aggNow}}}},
-		},
-	)
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := m.leaseColl().UpdateOne(ctx,
+			bson.D{{"_id", LeaseID}, {fieldInstanceID, m.instanceID}},
+			mongo.Pipeline{
+				{{"$set", bson.D{{fieldExpiresAt, aggNow}}}},
+			},
+		)
+
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 
 	// Reflect the demotion in the single source of truth, preserving the term.
 	_, term := m.CurrentRole()
@@ -271,9 +302,13 @@ func (m *Membership) leaseColl() *mongo.Collection {
 // documents (not just the current LeaseID) so a lease written under a previous
 // _id scheme is also cleared.
 func DeleteLease(ctx context.Context, target *mongo.Client) error {
-	_, err := target.Database(config.PCSMDatabase).
-		Collection(config.LeaseCollection).
-		DeleteMany(ctx, bson.D{})
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := target.Database(config.PCSMDatabase).
+			Collection(config.LeaseCollection).
+			DeleteMany(ctx, bson.D{})
 
-	return err //nolint:wrapcheck
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+
+	return errors.Wrap(err, "delete lease")
 }

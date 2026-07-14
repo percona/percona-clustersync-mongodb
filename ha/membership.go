@@ -272,13 +272,17 @@ func (m *Membership) beat(ctx context.Context) error {
 		}}},
 	}
 
-	_, err := membersColl(m.target).UpdateOne(ctx,
-		bson.D{{"_id", m.instanceID}},
-		update,
-		options.UpdateOne().SetUpsert(true),
-	)
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := membersColl(m.target).UpdateOne(ctx,
+			bson.D{{"_id", m.instanceID}},
+			update,
+			options.UpdateOne().SetUpsert(true),
+		)
 
-	return err //nolint:wrapcheck
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+
+	return errors.Wrap(err, "heartbeat")
 }
 
 // Stop cancels the refresh loop and removes this instance's member document,
@@ -288,9 +292,13 @@ func (m *Membership) Stop(ctx context.Context) error {
 		m.cancel()
 	}
 
-	_, err := membersColl(m.target).DeleteOne(ctx, bson.D{{"_id", m.instanceID}})
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := membersColl(m.target).DeleteOne(ctx, bson.D{{"_id", m.instanceID}})
 
-	return err //nolint:wrapcheck
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+
+	return errors.Wrap(err, "delete member")
 }
 
 // Members returns the current set of live members, filtering out documents whose
@@ -333,7 +341,11 @@ func membersColl(target *mongo.Client) *mongo.Collection {
 
 // DeleteMembers removes all member documents. Used by reset.
 func DeleteMembers(ctx context.Context, target *mongo.Client) error {
-	_, err := membersColl(target).DeleteMany(ctx, bson.D{})
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		_, err := membersColl(target).DeleteMany(ctx, bson.D{})
 
-	return err //nolint:wrapcheck
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+
+	return errors.Wrap(err, "delete members")
 }
