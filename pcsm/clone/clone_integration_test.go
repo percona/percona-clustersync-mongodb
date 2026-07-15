@@ -22,10 +22,8 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/sel"
 )
 
-// sourceURI points at a single-node replica-set mongod (the clone source). A
-// replica set is required because the behavior under test depends on the oplog,
-// which standalone deployments do not have. targetURI points at a standalone
-// mongod used as the clone target.
+// sourceURI is a single-node replica set (needed for the oplog); targetURI is a
+// standalone used as the clone target. Both are set by TestMain.
 var (
 	sourceURI string //nolint:gochecknoglobals // test fixture set by TestMain
 	targetURI string //nolint:gochecknoglobals // test fixture set by TestMain
@@ -166,11 +164,8 @@ func connect(t *testing.T, uri string) *mongo.Client {
 }
 
 const (
-	// oplogHole is how long the sleepBetweenInsertOpTimeGenerationAndLogOp
-	// failpoint holds each oplog hole open: an in-flight insert reserves its
-	// oplog timestamp, then sleeps this long before the entry becomes visible.
-	// It must be comfortably larger than the full clone-capture-plus-scan window
-	// (Clone.Start -> run() startTS capture -> collectSizeMap -> collection scan).
+	// oplogHole is how long the failpoint keeps each in-flight insert invisible.
+	// It must exceed the clone's startTS-capture-plus-scan window.
 	oplogHole = 10 * time.Second
 
 	inflightFailpoint = "sleepBetweenInsertOpTimeGenerationAndLogOp"
@@ -190,42 +185,23 @@ func setFailpoint(t *testing.T, client *mongo.Client, name, mode string, data bs
 }
 
 // TestClone_DoesNotLoseInflightWrite is the clone-path regression gate for
-// PCSM-241. It runs the REAL clone (clone.Clone), so startTS is captured by
-// whatever clone.go run() actually calls. The test therefore FAILS today
-// (clone.go uses ping, mdb.ClusterTime) and PASSES once clone.go switches to
-// appendOplogNote (mdb.AdvanceClusterTime).
+// PCSM-241. It runs the real clone, so startTS is captured by clone.go itself:
+// the test FAILS with ping (mdb.ClusterTime) and PASSES with appendOplogNote
+// (mdb.AdvanceClusterTime).
 //
-// PCSM's contract: every source write must be captured by the clone scan OR by
-// the change stream that replication opens at startAtOperationTime = startTS
-// (repl.go). startAtOperationTime is INCLUSIVE, so any write whose oplog
-// timestamp is STRICTLY LESS THAN startTS is invisible to the stream forever
-// and MUST have been seen by the clone scan, or it is silently lost.
+// A write must be seen by the clone scan or by the change stream that starts at
+// startTS; startTS is inclusive, so any write with oplog ts < startTS that the
+// scan misses is lost. An in-flight insert reserves its oplog ts (advancing the
+// clock) before the entry is visible. ping returns that advanced clock without
+// waiting, so startTS can land past a write the scan cannot yet see;
+// appendOplogNote blocks until every in-flight write is durable, so the scan
+// sees them.
 //
-// The race: inserting a doc reserves its oplog timestamp (advancing the logical
-// clock) BEFORE the entry becomes visible ("oplog hole"). ping reports that
-// advanced clusterTime without waiting for the in-flight write to commit, so
-// startTS can land past a write the clone scan cannot yet see. appendOplogNote
-// instead performs a durable oplog write that cannot be acknowledged until the
-// no-holes point passes all in-flight writes, so by the time startTS is
-// returned they are committed and the clone scan copies them.
+// Two writes make the loss deterministic: lostDoc reserves the earlier ts,
+// boundaryDoc a later one, so startTS lands strictly after lostDoc. A single
+// write would sit on the inclusive startTS boundary and survive.
 //
-// Two writes are held in the hole so the loss is deterministic:
-//
-//   - lostDoc reserves the earlier timestamp T_lost,
-//   - boundaryDoc reserves a later timestamp T_boundary > T_lost.
-//
-// startTS >= T_boundary > T_lost STRICTLY, so lostDoc is strictly before startTS
-// and thus never streamed. If the clone scan (running inside the hole with ping)
-// also misses it, it is lost. A single write would sit on the inclusive startTS
-// boundary and survive, which is why two are needed.
-//
-// The sleepBetweenInsertOpTimeGenerationAndLogOp failpoint holds the holes open
-// long enough to cover the whole clone capture+scan window, removing flakiness.
-//
-// Not parallel: it drives the server-global failpoint on the shared source
-// container and must not run concurrently with other tests.
-//
-//nolint:paralleltest // global failpoint forbids parallel execution
+//nolint:paralleltest // drives a server-global failpoint; must not run in parallel
 func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 	ctx := t.Context()
 
@@ -240,20 +216,19 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 	defer func() { _ = source.Database(dbName).Drop(ctx) }()
 	defer func() { _ = target.Database(dbName).Drop(ctx) }()
 
-	// Baseline document so the collection exists and gets cloned.
 	_, err := coll.InsertOne(ctx, bson.D{{"_id", "base"}})
 	require.NoError(t, err, "baseline insert")
 
-	// Open the oplog hole: each insert reserves its timestamp, then sleeps
-	// waitForMillis before the entry becomes visible.
+	// Open the oplog hole: each insert reserves its timestamp, then sleeps before
+	// the entry becomes visible.
 	setFailpoint(t, source, inflightFailpoint, "alwaysOn", bson.D{
 		{"waitForMillis", oplogHole.Milliseconds()},
 	})
 	failpointOff := func() { setFailpoint(t, source, inflightFailpoint, "off", nil) }
 
-	// insertInflight fires an insert on a dedicated goroutine (a maxTimeMS insert
-	// would be rolled back instead of committing) and, once its oplog slot is
-	// reserved, returns a channel that reports the insert's completion.
+	// insertInflight starts an insert in the background (a maxTimeMS insert would
+	// roll back instead of committing) and returns once its oplog slot is
+	// reserved, which is when the cluster clock advances past `before`.
 	insertInflight := func(id string) chan error {
 		before, e := mdb.ClusterTime(ctx, source)
 		require.NoError(t, e, "cluster time before %s", id)
@@ -264,26 +239,20 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 			done <- insErr
 		}()
 
-		// Wait until the logical clock advances past `before`, which happens the
-		// moment this insert reserves its oplog timestamp. This both confirms the
-		// reservation and orders the two reservations deterministically.
 		require.Eventuallyf(t, func() bool {
 			ts, te := mdb.ClusterTime(ctx, source)
 
 			return te == nil && ts.After(before)
-		}, oplogHole, 20*time.Millisecond, "cluster time should advance as %s reserves its oplog slot", id)
+		}, oplogHole, 20*time.Millisecond, "%s should reserve its oplog slot", id)
 
 		return done
 	}
 
-	// lostDoc reserves the earlier timestamp; boundaryDoc reserves a later one.
+	// lostDoc reserves the earlier timestamp; boundaryDoc pushes startTS past it.
 	lostInserted := insertInflight("lostDoc")
 	boundaryInserted := insertInflight("boundaryDoc")
 
-	// Run the REAL clone. clone.run() captures startTS (via clone.go's actual
-	// code path) then scans the collection. With ping, the scan runs inside the
-	// hole and misses lostDoc; with appendOplogNote, capture blocks until the
-	// holes fill so the scan copies lostDoc.
+	// Run the real clone: clone.go captures startTS, then scans the collection.
 	sourceVer, err := mdb.Version(ctx, source)
 	require.NoError(t, err, "source server version")
 
@@ -303,40 +272,33 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 	require.NoError(t, status.Err, "clone should complete without error")
 	require.False(t, status.StartTS.IsZero(), "clone must record a startTS")
 
-	// Open the change stream at startAtOperationTime = startTS, exactly as
-	// replication does (repl.go SetStartAtOperationTime). Events with
-	// ts < startTS are never delivered; startTS itself is inclusive.
+	// Open the change stream at startTS, exactly as replication does (repl.go).
 	startTS := status.StartTS
 	stream, err := coll.Watch(ctx, mongo.Pipeline{},
 		options.ChangeStream().SetStartAtOperationTime(&startTS))
 	require.NoError(t, err, "open change stream at startTS")
 	defer func() { _ = stream.Close(ctx) }()
 
-	// Ensure the holes are closed and both in-flight inserts have committed.
+	// Close the holes and let both in-flight inserts commit.
 	failpointOff()
-	require.NoError(t, <-lostInserted, "background insert of lostDoc should succeed")
-	require.NoError(t, <-boundaryInserted, "background insert of boundaryDoc should succeed")
+	require.NoError(t, <-lostInserted, "insert lostDoc")
+	require.NoError(t, <-boundaryInserted, "insert boundaryDoc")
 
-	// Sentinel strictly AFTER startTS. Draining until it arrives guarantees we
-	// have observed every event replication would apply at or after startTS, so
-	// any absence of lostDoc is a real loss, not a timing artifact.
+	// Sentinel is strictly after startTS; draining until it arrives means we have
+	// seen every event replication would apply, so a missing lostDoc is real loss.
 	_, err = coll.InsertOne(ctx, bson.D{{"_id", "sentinel"}})
 	require.NoError(t, err, "sentinel insert")
 
 	streamed := drainUntil(t, ctx, stream, "sentinel")
-	require.Contains(t, streamed, "sentinel", "sentinel proves the change stream is live")
 
-	// What the target ends up with: cloned rows + rows replication would apply.
+	// What the target ends up with: cloned rows plus rows replication would apply.
 	cloned := scanIDs(t, ctx, target.Database(dbName).Collection("c"))
 	replicated := union(cloned, streamed)
 
-	// The gate: lostDoc must survive. With ping it is neither cloned (scan ran
-	// inside the hole) nor streamed (its oplog ts < startTS) -> FAIL. With
-	// appendOplogNote the clone scan copies it -> PASS.
 	require.Containsf(t, replicated, "lostDoc",
-		"DATA LOSS (PCSM-241): in-flight write lostDoc is neither cloned to the target "+
-			"nor replicated (its oplog ts is < startTS %v). clone.go must capture startTS "+
-			"with appendOplogNote (mdb.AdvanceClusterTime), not ping (mdb.ClusterTime)", startTS)
+		"DATA LOSS (PCSM-241): in-flight write lostDoc was neither cloned nor replicated "+
+			"(its oplog ts < startTS %v); clone.go must capture startTS with appendOplogNote, "+
+			"not ping", startTS)
 }
 
 // scanIDs returns the set of _id string values currently visible in coll,
