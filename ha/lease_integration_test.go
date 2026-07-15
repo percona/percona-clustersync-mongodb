@@ -220,5 +220,3 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 	role, _ := m.CurrentRole()
 	assert.Equal(t, RoleActive, role)
 }
-
-
