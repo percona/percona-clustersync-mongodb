@@ -273,7 +273,7 @@ func (c *Clone) run(ctx context.Context) error {
 	lg := log.New("clone")
 	ctx = lg.WithContext(ctx)
 
-	startTS, err := mdb.ClusterTime(ctx, c.source)
+	startTS, err := mdb.AdvanceClusterTime(ctx, c.source)
 	if err != nil {
 		return errors.Wrap(err, "startTS: get source cluster time")
 	}
