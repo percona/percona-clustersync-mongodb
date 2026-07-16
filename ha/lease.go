@@ -242,7 +242,8 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	// held by another instance), not a failure to retry, so it is absorbed inside
 	// the closure. Other errors are retried on transient classification.
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-		decodeErr := m.leaseColl().FindOneAndUpdate(ctx, filter, pipeline,
+		decodeErr := m.leaseColl().FindOneAndUpdate(
+			ctx, filter, pipeline,
 			options.FindOneAndUpdate().SetReturnDocument(options.After),
 		).Decode(&updated)
 		if errors.Is(decodeErr, mongo.ErrNoDocuments) {
@@ -277,7 +278,8 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 	defer cancel()
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
-		_, err := m.leaseColl().UpdateOne(ctx,
+		_, err := m.leaseColl().UpdateOne(
+			ctx,
 			bson.D{{"_id", LeaseID}, {fieldInstanceID, m.instanceID}},
 			mongo.Pipeline{
 				{{"$set", bson.D{{fieldExpiresAt, aggNow}}}},

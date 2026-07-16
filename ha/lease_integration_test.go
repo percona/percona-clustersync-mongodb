@@ -45,7 +45,8 @@ func newLeaseMemberForTest(t *testing.T, ctx context.Context, client *mongo.Clie
 func forceExpireLease(t *testing.T, ctx context.Context, client *mongo.Client) {
 	t.Helper()
 
-	res, err := leaseCollection(client).UpdateOne(ctx,
+	res, err := leaseCollection(client).UpdateOne(
+		ctx,
 		bson.D{{"_id", LeaseID}},
 		mongo.Pipeline{
 			{{"$set", bson.D{{"expiresAt", bson.D{{"$subtract", bson.A{"$$NOW", config.LeaseTTL.Milliseconds()}}}}}}},

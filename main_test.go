@@ -44,7 +44,7 @@ func TestActiveMemberAddr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := &responseEnvelope{Group: groupInfo{Members: tt.members}}
+			env := &ResponseEnvelope{Group: groupInfo{Members: tt.members}}
 			assert.Equal(t, tt.want, activeMemberAddr(env))
 		})
 	}
@@ -60,7 +60,7 @@ func TestActiveMemberAddrNilEnvelope(t *testing.T) {
 func TestEnvelopeJSONShape(t *testing.T) {
 	t.Parallel()
 
-	env := &responseEnvelope{
+	env := &ResponseEnvelope{
 		Me:   meInfo{InstanceID: "pcsm-xyz"},
 		Role: ha.RoleStandby,
 		Group: groupInfo{
@@ -73,7 +73,7 @@ func TestEnvelopeJSONShape(t *testing.T) {
 		},
 	}
 
-	data, err := json.Marshal(startResponse{responseEnvelope: env, Ok: true})
+	data, err := json.Marshal(startResponse{ResponseEnvelope: env, Ok: true})
 	require.NoError(t, err)
 
 	var decoded map[string]any
@@ -117,11 +117,51 @@ func TestEnvelopeOmittedForSingleNode(t *testing.T) {
 	assert.Equal(t, true, decoded["ok"])
 }
 
+// TestResponseEnvelopeRoundTrip guards the CLI decode path: a response carrying
+// the envelope must unmarshal back into the response struct. encoding/json
+// cannot decode into an embedded pointer to an unexported struct, so the
+// envelope type must stay exported. Marshaling alone (server side) never
+// exercises this; only decoding (client side) does.
+func TestResponseEnvelopeRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	orig := statusResponse{
+		ResponseEnvelope: &ResponseEnvelope{
+			Me:   meInfo{InstanceID: "pcsm-xyz"},
+			Role: ha.RoleStandby,
+			Group: groupInfo{
+				Name: "default",
+				Term: 3,
+				Members: []groupMember{
+					{InstanceID: "pcsm-abc", Host: "host-2", Port: 2242, Role: ha.RoleActive},
+				},
+			},
+		},
+		Ok:    true,
+		State: "running",
+	}
+
+	data, err := json.Marshal(orig)
+	require.NoError(t, err)
+
+	// This is exactly what the CLI client does; it errored before the envelope
+	// type was exported.
+	var decoded statusResponse
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	require.NotNil(t, decoded.ResponseEnvelope)
+	assert.Equal(t, "pcsm-xyz", decoded.Me.InstanceID)
+	assert.Equal(t, ha.RoleStandby, decoded.Role)
+	assert.Equal(t, "default", decoded.Group.Name)
+	assert.Len(t, decoded.Group.Members, 1)
+	assert.True(t, decoded.Ok)
+}
+
 func TestNotActiveResponseJSONShape(t *testing.T) {
 	t.Parallel()
 
 	na := notActiveResponse{
-		responseEnvelope: &responseEnvelope{
+		ResponseEnvelope: &ResponseEnvelope{
 			Me:   meInfo{InstanceID: "pcsm-xyz"},
 			Role: ha.RoleStandby,
 			Group: groupInfo{

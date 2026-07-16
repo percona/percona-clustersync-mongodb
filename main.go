@@ -180,8 +180,9 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the version",
 		Run: func(cmd *cobra.Command, _ []string) {
-			info := fmt.Sprintf("Version:   %s\nPlatform:  %s\nGitCommit: "+
-				"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
+			info := fmt.Sprintf(
+				"Version:   %s\nPlatform:  %s\nGitCommit: "+
+					"%s\nGitBranch: %s\nBuildTime: %s\nGoVersion: %s",
 				Version,
 				Platform,
 				GitCommit,
@@ -778,7 +779,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	// and consumed by watchRoleChanges below.
 	s.membership.FirstLeaseTick(ctx)
 
-	s.logInitialRole(ctx)
+	s.logInitialRole()
 
 	go s.watchRoleChanges(ctx)
 
@@ -792,7 +793,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 // knows which node to talk to. This complements the transition logs in
 // onPromote/onDemote, which do not fire for an instance that starts (and stays)
 // STANDBY.
-func (s *server) logInitialRole(ctx context.Context) {
+func (s *server) logInitialRole() {
 	role, term := s.membership.CurrentRole()
 	lg := log.New("ha:role").With(log.Int64("term", term))
 
@@ -802,12 +803,7 @@ func (s *server) logInitialRole(ctx context.Context) {
 		return
 	}
 
-	active := activeMemberAddr(s.buildEnvelope(ctx))
-	if active == "" {
-		active = "unknown"
-	}
-
-	lg.Info("Instance role: STANDBY; active is " + active)
+	lg.Info("Instance role: STANDBY")
 }
 
 // Close releases the lease (so a standby can take over promptly), leaves the
@@ -993,7 +989,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.pcsm.Status(ctx)
 
 	res := statusResponse{
-		responseEnvelope: s.buildEnvelope(ctx),
+		ResponseEnvelope: s.buildEnvelope(ctx),
 		Ok:               status.Error == nil,
 		State:            status.State,
 	}
@@ -1227,19 +1223,19 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 
 	options, err := resolveStartOptions(s.cfg, params)
 	if err != nil {
-		writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
+		writeResponse(w, startResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
 	err = s.pcsm.Start(ctx, options)
 	if err != nil {
-		writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
+		writeResponse(w, startResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, startResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
+	writeResponse(w, startResponse{ResponseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandleFinalize handles the /finalize endpoint.
@@ -1269,12 +1265,12 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pcsm.Finalize(ctx)
 	if err != nil {
-		writeResponse(w, finalizeResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
+		writeResponse(w, finalizeResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, finalizeResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
+	writeResponse(w, finalizeResponse{ResponseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandlePause handles the /pause endpoint.
@@ -1304,12 +1300,12 @@ func (s *server) HandlePause(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pcsm.Pause(ctx)
 	if err != nil {
-		writeResponse(w, pauseResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
+		writeResponse(w, pauseResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, pauseResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
+	writeResponse(w, pauseResponse{ResponseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 // HandleResume handles the /resume endpoint.
@@ -1365,12 +1361,12 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pcsm.Resume(ctx, *options)
 	if err != nil {
-		writeResponse(w, resumeResponse{responseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
+		writeResponse(w, resumeResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
 		return
 	}
 
-	writeResponse(w, resumeResponse{responseEnvelope: s.buildEnvelope(ctx), Ok: true})
+	writeResponse(w, resumeResponse{ResponseEnvelope: s.buildEnvelope(ctx), Ok: true})
 }
 
 func (s *server) HandleMetrics() http.Handler {
@@ -1408,10 +1404,15 @@ type groupInfo struct {
 	Members []groupMember `json:"members"`
 }
 
-// responseEnvelope is embedded in every API response (success and error). It advertises
-// the responding instance's identity and role plus the HA group view, so an
-// operator hitting any node can see who is ACTIVE and where.
-type responseEnvelope struct {
+// ResponseEnvelope is embedded in every API response (success and error). It
+// advertises the responding instance's identity and role plus the HA group
+// view, so an operator hitting any node can see who is ACTIVE and where.
+//
+// It is embedded as a pointer so a single-instance deployment (nil envelope)
+// omits these fields entirely. The type must be exported: encoding/json cannot
+// decode into an embedded pointer to an unexported struct, which the CLI client
+// relies on when unmarshaling responses that carry the envelope.
+type ResponseEnvelope struct {
 	Me    meInfo    `json:"me"`
 	Role  ha.Role   `json:"role"`
 	Group groupInfo `json:"group"`
@@ -1427,7 +1428,7 @@ type responseEnvelope struct {
 // (e.g. target connectivity lost, which is a far bigger problem) or a degraded
 // group momentarily down to one live node also omits the envelope. HA consumers
 // must treat the envelope as optional.
-func (s *server) buildEnvelope(ctx context.Context) *responseEnvelope {
+func (s *server) buildEnvelope(ctx context.Context) *ResponseEnvelope {
 	members, err := ha.Members(ctx, s.targetCluster)
 	if err != nil {
 		log.New("http:envelope").Warn("list members: " + err.Error())
@@ -1441,7 +1442,7 @@ func (s *server) buildEnvelope(ctx context.Context) *responseEnvelope {
 
 	role, term := s.membership.CurrentRole()
 
-	env := &responseEnvelope{
+	env := &ResponseEnvelope{
 		Me:   meInfo{InstanceID: s.membership.InstanceID()},
 		Role: role,
 		Group: groupInfo{
@@ -1466,7 +1467,7 @@ func (s *server) buildEnvelope(ctx context.Context) *responseEnvelope {
 // activeMemberAddr returns the "host:port" of the ACTIVE member from the member
 // list, or "" if the envelope is nil or no ACTIVE is currently known. Used to
 // point a rejected client at the instance that can serve its write.
-func activeMemberAddr(env *responseEnvelope) string {
+func activeMemberAddr(env *ResponseEnvelope) string {
 	if env == nil {
 		return ""
 	}
@@ -1484,11 +1485,12 @@ func activeMemberAddr(env *responseEnvelope) string {
 // to a STANDBY instance. It carries the full envelope so the caller can locate
 // the ACTIVE instance.
 type notActiveResponse struct {
-	*responseEnvelope
-
 	Ok      bool   `json:"ok"`
 	Err     string `json:"error"`
 	Message string `json:"message"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 // requireActive rejects write commands on a non-ACTIVE instance with HTTP 409.
@@ -1513,7 +1515,7 @@ func (s *server) requireActive(ctx context.Context, w http.ResponseWriter) bool 
 	w.WriteHeader(http.StatusConflict)
 
 	err := json.NewEncoder(w).Encode(notActiveResponse{
-		responseEnvelope: env,
+		ResponseEnvelope: env,
 		Ok:               false,
 		Err:              "not_active",
 		Message:          msg,
@@ -1578,12 +1580,13 @@ type clientResponse interface {
 
 // startResponse represents the response body for the /start endpoint.
 type startResponse struct {
-	*responseEnvelope
-
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 func (r startResponse) IsOk() bool       { return r.Ok }
@@ -1591,12 +1594,13 @@ func (r startResponse) GetError() string { return r.Err }
 
 // finalizeResponse represents the response body for the /finalize endpoint.
 type finalizeResponse struct {
-	*responseEnvelope
-
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 func (r finalizeResponse) IsOk() bool       { return r.Ok }
@@ -1604,8 +1608,6 @@ func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
-	*responseEnvelope
-
 	// PauseOnInitialSync indicates if the replication is paused on initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 
@@ -1633,6 +1635,9 @@ type statusResponse struct {
 
 	// Finalization contains the finalize stage status details.
 	Finalization *statusFinalizationResponse `json:"finalization,omitempty"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 func (r statusResponse) IsOk() bool       { return r.Ok }
@@ -1779,12 +1784,13 @@ func indexKeysToJSON(raw bson.Raw) json.RawMessage {
 
 // pauseResponse represents the response body for the /pause endpoint.
 type pauseResponse struct {
-	*responseEnvelope
-
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 func (r pauseResponse) IsOk() bool       { return r.Ok }
@@ -1799,12 +1805,13 @@ type resumeRequest struct {
 // resumeResponse represents the response body for the /resume
 // endpoint.
 type resumeResponse struct {
-	*responseEnvelope
-
 	// Ok indicates if the operation was successful.
 	Ok bool `json:"ok"`
 	// Err is the error message if the operation failed.
 	Err string `json:"error,omitempty"`
+
+	//nolint:embeddedstructfieldcheck // intentional: envelope must be last in JSON
+	*ResponseEnvelope
 }
 
 func (r resumeResponse) IsOk() bool       { return r.Ok }
