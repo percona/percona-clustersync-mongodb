@@ -46,14 +46,43 @@ func RunWithRetry(
 			return err
 		}
 
-		log.Ctx(ctx).Warnf("Transient error: %v, retry attempt %d retrying in %s",
-			err, attempt, currentInterval)
+		if attempt < maxRetries {
+			log.Ctx(ctx).Warnf("Transient error: %v, retry attempt %d retrying in %s",
+				err, attempt, currentInterval)
 
-		time.Sleep(currentInterval)
-		currentInterval *= 2
+			select {
+			case <-time.After(currentInterval):
+			case <-ctx.Done():
+				return errors.Wrap(ctx.Err(), "retry wait")
+			}
+
+			currentInterval *= 2
+		}
 	}
 
 	return err
+}
+
+// RunWithRetryVal is the value-returning variant of RunWithRetry. It runs fn
+// under the same transient-error retry logic and returns fn's value on success.
+//
+//nolint:ireturn // Generic retry helper must return caller-selected value type.
+func RunWithRetryVal[T any](
+	ctx context.Context,
+	fn func(context.Context) (T, error),
+	retryInterval time.Duration,
+	maxRetries int,
+) (T, error) {
+	var result T
+
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
+		var inner error
+		result, inner = fn(ctx)
+
+		return inner //nolint:wrapcheck
+	}, retryInterval, maxRetries)
+
+	return result, err //nolint:wrapcheck
 }
 
 // RetryWithBackoff retries fn with exponential backoff. When maxRetries > 0 it

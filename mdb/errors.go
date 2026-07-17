@@ -91,8 +91,8 @@ func IsTransient(err error) bool {
 		return true
 	}
 
-	le, ok := err.(mongo.LabeledError) //nolint:errorlint
-	if ok && le.HasErrorLabel("RetryableWriteError") {
+	var le mongo.LabeledError
+	if errors.As(err, &le) && le.HasErrorLabel("RetryableWriteError") {
 		return true
 	}
 
