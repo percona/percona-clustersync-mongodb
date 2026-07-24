@@ -1311,7 +1311,9 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []Unsuccessfu
 
 				lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
 
+				c.lock.Lock()
 				c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: index.IndexSpecification}})
+				c.lock.Unlock()
 			}
 		}
 	}
