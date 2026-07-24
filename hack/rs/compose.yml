@@ -19,6 +19,7 @@ services:
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30000",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs01:
@@ -38,6 +39,7 @@ services:
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30001",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs02:
@@ -57,6 +59,7 @@ services:
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30002",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs10:
