@@ -189,7 +189,7 @@ func ListInProgressIndexBuilds(
 		indexBuildsStage = currentOpStage
 
 		cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
-			{{currentOpStage, bson.D{{"allUsers", true}}}},
+			{{currentOpStage, bson.D{{"allUsers", true}, {"idleConnections", true}}}},
 			{{"$match", bson.D{
 				{"op", "command"},
 				{"command.createIndexes", coll},
