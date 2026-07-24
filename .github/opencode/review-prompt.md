@@ -42,6 +42,8 @@ This is Percona ClusterSync for MongoDB (PCSM). Before reviewing, skim `AGENTS.m
 - **Logging**: `log.New("scope")`, `lg.With(log.Elapsed(d), log.NS(db, coll))`, `log.Ctx(ctx)`. Never direct `fmt.Println` / `log.Print`.
 - **Testing**: `testify` (`assert`, `require`), `-race` always, table-driven tests, `t.Parallel()` when independent.
 - **Nolint**: Must include justification. Common cases: `wrapcheck`, `gochecknoglobals` (cobra), `err113` (errors package), `gosec` (bounded conversions).
+- **Go version**: This repo targets **Go 1.26** (`go.mod` declares `go 1.26.4`).
+  - If you are unsure whether a construct is valid in a recent Go release, do not assert it is a compile error. Assume it compiles and move on.
 
 ## Scope Discipline
 
@@ -88,7 +90,6 @@ This review runs inside a bounded CI job. Prefer a complete, high-confidence rev
 - **Channels**: sender/receiver symmetry; close ownership is explicit and singular; `select { default: }` is justified, not masking a blocking bug; channel direction types (`chan<-`, `<-chan`) enforce ownership.
 - **Synchronization**: `sync.WaitGroup.Add` before `go`, never inside. `sync.Once` for lazy init. Mutex held for minimum duration; no I/O under lock.
 - **Context**: `context.Context` is first param, never stored in structs, cancellation respected in loops and blocking calls.
-- **Common traps**: loop variable capture (pre-Go-1.22), `time.After` in select loops (timer leaks), unbounded goroutine-per-request.
 
 ### 3. Performance & Allocations
 
@@ -139,12 +140,22 @@ Patterns worth suggesting when applicable:
 - **Idiomatic**: community convention violations. Low severity but matters for codebase consistency.
 - **Comment quality**: documentation gaps for exported APIs > internal style.
 
+## No Unverified Build, Compile, or Test Claims
+
+You **cannot** build, compile, `go vet`, lint, or run tests in this environment. You have only the default-branch checkout and the PR diff as JSON — no PR-head working tree, no Go toolchain, and the reviewer runs in `--pure` mode.
+
+- **Never** state that code "does not compile", "fails to build", "fails `go vet`", "fails the linter", or "fails tests" as established fact. You have not run any of these, so you cannot know.
+- CI (`.github/workflows/go.yml`) builds, vets, and tests every PR in a sandboxed job. **CI is the authority** for build/vet/test status — defer to it.
+- If a diff reading genuinely suggests a compile-level problem, phrase it as a **non-blocking, low-confidence** note ("please verify locally; CI will confirm"). Never raise it as `Critical`, and never set `verdict` to `Needs Work` or `Request Changes` on the strength of an unverified build/compile/vet/test claim.
+- A modern-Go construct you do not recognize is far more likely to be valid new syntax (see Project Context → Go version) than a real error. When in doubt, stay silent.
+
 ## Confidence Gate
 
 Every inline comment must be backed by a concrete, diff-grounded finding tied to specific lines.
 
 - Drop any comment whose justification is generic, speculative, or hedged ("probably fine", "might want to consider", "no obvious issues").
 - If you cannot point to specific lines in the diff, do not write the comment.
+- Any finding that asserts a build, compile, `go vet`, lint, or test **failure** requires executed tool output as evidence. This environment runs none of those, so such assertions are out of scope — drop them or downgrade to a non-blocking "verify locally" note (see "No Unverified Build, Compile, or Test Claims").
 - Silence is a valid signal. Zero inline comments means "no high-confidence findings within budget", not "I forgot".
 - `verdict` and `effort` are always required.
 - `summary` and `comments` are both optional. An inline-only review is fine. An empty-comments approve is fine. Both empty is fine if there is genuinely nothing to say beyond the verdict.

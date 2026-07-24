@@ -153,7 +153,7 @@ jobs:
       - name: OpenCode Jira create
         if: env.SKIP != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
+        uses: anomalyco/opencode/github@49c69c5ed3ccf706b61b3febb43c8aaff7f8325e  # github-v1.18.4
         # GH_TOKEN is intentionally not passed
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -165,7 +165,7 @@ jobs:
           ISSUE_COMMENTS_FILE: ${{ env.ISSUE_COMMENTS_FILE }}
           TICKET_KEY_FILE: ${{ runner.temp }}/jira_ticket_key.txt
         with:
-          model: anthropic/claude-opus-4-7
+          model: anthropic/claude-opus-5
           prompt: ${{ steps.prompt.outputs.content }}
 
       - name: Post Jira marker comment

@@ -141,7 +141,7 @@ jobs:
           opencode --version
           timeout --kill-after=30s 25m opencode run \
             --pure \
-            --model anthropic/claude-opus-4-7 \
+            --model anthropic/claude-opus-5 \
             --dangerously-skip-permissions \
             < "$SUMMARY_PROMPT_FILE"
 

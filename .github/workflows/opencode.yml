@@ -47,11 +47,11 @@ jobs:
       - name: Run opencode
         if: env.SKIP != 'true'
         timeout-minutes: 20
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
+        uses: anomalyco/opencode/github@49c69c5ed3ccf706b61b3febb43c8aaff7f8325e  # github-v1.18.4
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          model: anthropic/claude-opus-4-7
+          model: anthropic/claude-opus-5
           # Use GITHUB_TOKEN directly so the agent shell can perform GitHub
           # operations. Default OIDC exchange holds the App token internally
           # and strips it from the agent shell, leaving gh CLI unauthenticated.
