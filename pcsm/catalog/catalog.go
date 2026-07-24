@@ -194,7 +194,7 @@ const (
 	finalizeReasonBecameInconsistent = "became inconsistent at finalize"
 	finalizeReasonNoLongerPresent    = "no longer present on source"
 	finalizeReasonSourceSpecChanged  = "source spec changed"
-	finalizeReasonStillBuilding      = "index is still building on one or more source shards"
+	finalizeReasonStillBuilding      = "index became an in-progress build on one or more source shards at finalize"
 	finalizeReasonStillIncomplete    = "index is still building on one or more source shards"
 	finalizeReasonStillInconsistent  = "index is missing on one or more source shards"
 )
@@ -242,10 +242,7 @@ func decideFinalizeUnsuccessfulIndex(input finalizeIndexDecisionInput) finalizeI
 		}
 	}
 
-	switch input.originalType {
-	case IndexFailed:
-		return finalizeIndexDecision{recreate: true}
-
+	switch input.originalType { //nolint:exhaustive // IndexFailed handled by the guard above
 	case IndexIncomplete:
 		if input.inProgress {
 			return finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonStillIncomplete}
@@ -281,8 +278,8 @@ func indexCreateSpecsEqual(stored, source *mdb.IndexSpecification) bool {
 		return stored == nil && source == nil
 	}
 
-	// Compare only createIndexes-relevant fields. Ignore server-managed or non-create
-	// metadata: v, ns, background, and clustered. Clustered is a collection
+	// Compare only createIndexes-relevant fields. Ignore server-managed or
+	// non-create metadata: v, ns, and clustered. Clustered is a collection
 	// property surfaced on IndexSpecification, not an index recreated through
 	// createIndexes during finalize.
 	return bytes.Equal(stored.KeysDocument, source.KeysDocument) &&
@@ -313,6 +310,8 @@ func ptrEqual[T comparable](left, right *T) bool {
 	return *left == *right
 }
 
+// indexOptionValueEqual compares option sub-documents by marshaled BSON
+// (field-order sensitive; relies on stable same-source key order).
 func indexOptionValueEqual(left, right any) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -1102,11 +1101,13 @@ func (c *Catalog) UUIDMap() UUIDMap {
 //  1. Modify-option failures during the per-index pass (e.g. a collMod call
 //     that did not succeed) — surfaced as Type=IndexFailed with the wrapped
 //     error as the reason.
-//  2. Recreate failures and inconsistent leftovers from
-//     [finalizeUnsuccessfulIndexes] — Failed/Incomplete entries whose retry
-//     did not succeed (reason is the retry error) and Inconsistent entries
-//     which are never retried (reason is the static inconsistent-source
-//     description).
+//  2. Recreate failures and unrecoverable leftovers from
+//     [finalizeUnsuccessfulIndexes]. Failed entries are recreated
+//     unconditionally; Incomplete and Inconsistent entries are rechecked
+//     against the source and recreated only when still valid there. Entries
+//     that cannot be recreated (retry error, still building or inconsistent on
+//     source, no longer present, or a changed spec) are reported with the
+//     corresponding reason.
 func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 
@@ -1245,6 +1246,8 @@ func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 // finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful during
 // replication. Failed entries keep the historical always-recreate behavior.
 // Incomplete/Inconsistent entries are rechecked on source before recreate.
+// The recheck and recreate are not atomic: replication is paused, but source
+// DDL is not fenced, so the source-still-valid decision is best-effort.
 func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 	lg.Info("Finalizing unsuccessful indexes")

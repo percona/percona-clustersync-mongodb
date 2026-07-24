@@ -230,6 +230,11 @@ func ListInProgressIndexBuilds(
 // mongos `listIndexes` filters partial coverage.
 // For non-sharded collections or replica sets, this returns an empty list.
 //
+// Limitation: only missing-shard inconsistency is detected. An index present on
+// every shard but with differing keys or options is not reported here; callers
+// relying on this as a correctness gate (e.g. finalize) will not catch that
+// form of divergence.
+//
 // An inconsistent index is only returned when at least one shard's $indexStats
 // row carries a non-nil spec; if every row for a name lacks a spec (e.g. older
 // servers, permission-stripped output), that index is skipped rather than
