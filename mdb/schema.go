@@ -38,6 +38,7 @@ type IndexSpecification struct {
 	PrepareUnique      *bool    `bson:"prepareUnique,omitempty"`      // Prepare unique index
 	Clustered          *bool    `bson:"clustered,omitempty"`          // Clustered index
 	ExpireAfterSeconds *int64   `bson:"expireAfterSeconds,omitempty"` // Expire after seconds
+	StorageEngine      bson.Raw `bson:"storageEngine,omitempty"`      // Storage engine options
 
 	Weights          any      `bson:"weights,omitempty"`           // Weights
 	DefaultLanguage  *string  `bson:"default_language,omitempty"`  // Default language

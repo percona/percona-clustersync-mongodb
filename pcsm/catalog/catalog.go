@@ -292,6 +292,7 @@ func indexCreateSpecsEqual(stored, source *mdb.IndexSpecification) bool {
 		ptrEqual(stored.Hidden, source.Hidden) &&
 		ptrEqual(stored.ExpireAfterSeconds, source.ExpireAfterSeconds) &&
 		bytes.Equal(stored.Collation, source.Collation) &&
+		bytes.Equal(stored.StorageEngine, source.StorageEngine) &&
 		indexOptionValueEqual(stored.Weights, source.Weights) &&
 		ptrEqual(stored.DefaultLanguage, source.DefaultLanguage) &&
 		ptrEqual(stored.LanguageOverride, source.LanguageOverride) &&

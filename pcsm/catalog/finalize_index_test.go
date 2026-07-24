@@ -195,6 +195,12 @@ func TestIndexCreateSpecsEqual(t *testing.T) {
 				spec.Max = new(200.0)
 			},
 		},
+		{
+			name: "detects storage engine change",
+			mutate: func(spec *mdb.IndexSpecification) {
+				spec.StorageEngine = mustTestRaw(t, bson.D{{Key: "wiredTiger", Value: bson.D{}}})
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -231,6 +237,7 @@ func TestIndexCreateSpecsEqualFieldCoverage(t *testing.T) {
 		"LanguageOverride":        true,
 		"TextVersion":             true,
 		"Collation":               true,
+		"StorageEngine":           true,
 		"WildcardProjection":      true,
 		"PartialFilterExpression": true,
 		"Bits":                    true,
