@@ -179,5 +179,42 @@ func TestDeleteRecoveryData(t *testing.T) {
 
 	count, err := recoveryColl(client).CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), count)
+	assert.Zero(t, count)
+}
+
+func TestCheckNoLegacyInstance(t *testing.T) {
+	ctx := t.Context()
+	client := recoveryTestClient(t)
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	hbColl := client.Database(config.PCSMDatabase).Collection(config.LegacyHeartbeatCollection)
+	require.NoError(t, hbColl.Drop(ctx))
+
+	// Case 1: no heartbeat collection or doc present -> ok.
+	require.NoError(t, checkNoLegacyInstance(ctx, client))
+
+	// Case 2: fresh legacy heartbeat present -> error.
+	_, err := hbColl.InsertOne(ctx, bson.D{
+		{"_id", "pcsm"},
+		{"time", time.Now().Unix()},
+	})
+	require.NoError(t, err)
+
+	err = checkNoLegacyInstance(ctx, client)
+	require.ErrorIs(t, err, errLegacyInstance)
+
+	// Case 3: stale legacy heartbeat present (> StaleHeartbeatDuration old) -> ok.
+	oldTime := time.Now().Add(-2 * config.StaleHeartbeatDuration).Unix()
+	_, err = hbColl.UpdateOne(
+		ctx,
+		bson.D{{"_id", "pcsm"}},
+		bson.D{{"$set", bson.D{{"time", oldTime}}}},
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, checkNoLegacyInstance(ctx, client))
+
+	// Case 4: dropLegacyHeartbeat drops the collection -> ok.
+	require.NoError(t, dropLegacyHeartbeat(ctx, client))
+	require.NoError(t, checkNoLegacyInstance(ctx, client))
 }

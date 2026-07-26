@@ -536,6 +536,9 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 		return errors.Wrap(err, "delete members")
 	}
 
+	// Drop the pre-HA heartbeat collection as part of the 0.9.0 -> 0.10.0
+	// migration (see docs). Startup separately refuses to run against a live
+	// 0.9 instance via checkNoLegacyInstance.
 	err = dropLegacyHeartbeat(ctx, target)
 	if err != nil {
 		return errors.Wrap(err, "drop legacy heartbeat")
@@ -549,9 +552,41 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
+var errLegacyInstance = errors.New(
+	"live pre-0.10.0 PCSM instance detected on target cluster; " +
+		"stop it and run 'pcsm reset' before upgrading",
+)
+
+// checkNoLegacyInstance checks for a live pre-0.10.0 (<= 0.9.0) PCSM instance on
+// the target cluster. 0.9 checkpoints carry no term and bypass 0.10's fence.
+func checkNoLegacyInstance(ctx context.Context, target *mongo.Client) error {
+	var doc struct {
+		Time int64 `bson:"time"`
+	}
+
+	err := target.Database(config.PCSMDatabase).
+		Collection(config.LegacyHeartbeatCollection).
+		FindOne(ctx, bson.D{{"_id", "pcsm"}}).
+		Decode(&doc)
+
+	switch {
+	case err == nil:
+		if time.Since(time.Unix(doc.Time, 0)) < config.StaleHeartbeatDuration {
+			return errLegacyInstance
+		}
+
+		return nil
+
+	case errors.Is(err, mongo.ErrNoDocuments):
+		return nil
+
+	default:
+		return errors.Wrap(err, "check legacy heartbeat")
+	}
+}
+
 // dropLegacyHeartbeat removes the pre-HA (<= 0.9.0) singleton heartbeat
-// collection. Replication state from 0.9.0 is not compatible with 0.10.0;
-// operators run `pcsm reset` before starting replication with 0.10.0.
+// collection.
 func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
 	err := target.Database(config.PCSMDatabase).
 		Collection(config.LegacyHeartbeatCollection).
@@ -720,6 +755,11 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 
 	if crossVersion {
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
+	}
+
+	err = checkNoLegacyInstance(ctx, target)
+	if err != nil {
+		return nil, err
 	}
 
 	groupName := cfg.GroupName
