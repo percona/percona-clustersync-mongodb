@@ -33,11 +33,10 @@ type MembershipOptions struct {
 	Group string
 }
 
-// Membership represents this instance's participation in the HA set. It owns the
-// instance identity and maintains the instance's document in the members
-// collection, refreshing it on a timer so other instances can discover it and
-// detect liveness. It is identity/liveness only; election lives in the lease
-// document.
+// Membership is this instance's participation in the HA set. It owns the
+// instance identity and refreshes the instance's member document on a timer so
+// other instances can discover it and detect liveness. Election state lives in
+// the lease document.
 type Membership struct {
 	target     *mongo.Client
 	instanceID string
@@ -56,14 +55,12 @@ type Membership struct {
 	role Role
 	term int64
 
-	// beatNow signals the refresh loop to write an immediate heartbeat,
-	// used so a role change is reflected in the member document promptly
-	// instead of waiting up to MemberHeartbeatInterval.
+	// beatNow signals the refresh loop to write an immediate heartbeat so a
+	// role change lands in the member document without waiting for the next tick.
 	beatNow chan struct{}
 
-	// roleChangeCh delivers role transitions to a consumer. It is buffered at cap 1
-	// and coalescing: a pending change is overwritten by a newer one so a slow
-	// consumer always observes the latest transition rather than a stale queue.
+	// roleChangeCh delivers role transitions. Cap-1 and coalescing: a pending
+	// change is replaced by a newer one, so a slow consumer sees the latest.
 	roleChangeCh chan RoleChange
 }
 
@@ -93,7 +90,7 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 		port:         opts.Port,
 		version:      opts.PCSMVersion,
 		group:        opts.Group,
-		startedAt:    time.Now(),
+		startedAt:    time.Now().UTC(),
 		role:         RoleStandby,
 		term:         0,
 		beatNow:      make(chan struct{}, 1),
@@ -121,16 +118,11 @@ func (m *Membership) InstanceID() string { return m.instanceID }
 // Group returns the HA group name this instance joined.
 func (m *Membership) Group() string { return m.group }
 
-// SetRole updates the role and term this instance advertises in its member
-// document. It is the one-way feed from the election layer (the lease document
-// is authoritative): the elected role is pushed here, and the heartbeat loop
-// publishes it. It triggers an immediate heartbeat so the change is reflected in
-// the member list without waiting for the next tick. It returns true when the
-// role actually transitioned (a different role than before), so the caller can
-// react to transitions while ignoring ordinary same-role renewals.
-//
-// Membership is the single source of truth for (role, term): the election layer
-// drives transitions through here rather than tracking role/term separately.
+// SetRole updates the advertised role and term and triggers an immediate
+// heartbeat so the member document reflects the change without waiting for the
+// next tick. It returns true when the role actually transitioned. Membership is
+// the single source of truth for (role, term); the election layer drives all
+// transitions through here.
 func (m *Membership) SetRole(role Role, term int64) bool {
 	m.mu.Lock()
 	transitioned := m.role != role
@@ -152,10 +144,9 @@ func (m *Membership) CurrentRole() (Role, int64) {
 	return m.currentRole()
 }
 
-// RunLease starts the lease loop, through which this member competes for the
-// lease and gains (or loses) the right to be ACTIVE. It runs until ctx is
-// canceled or Release is called. Role transitions are published to the member
-// document and mirrored on RoleChanges.
+// RunLease runs the lease loop, through which this member competes to be
+// ACTIVE, until ctx is canceled or Release is called. Role transitions are
+// published to the member document and mirrored on RoleChanges.
 func (m *Membership) RunLease(ctx context.Context) {
 	loopCtx, cancel := context.WithCancel(ctx)
 
@@ -166,10 +157,9 @@ func (m *Membership) RunLease(ctx context.Context) {
 	m.runLease(loopCtx)
 }
 
-// Release best-effort relinquishes the lease (if held) so a standby can take
-// over without waiting for it to expire, demotes this member to STANDBY, and
-// stops the lease loop. Use it on shutdown; the instance no longer competes
-// afterwards.
+// Release stops the lease loop, best-effort releases the lease (if held) so a
+// standby can take over without waiting for the TTL, and demotes this member.
+// Use it on shutdown; the instance no longer competes afterwards.
 func (m *Membership) Release(ctx context.Context) error {
 	m.mu.Lock()
 	cancel := m.leaseCancel
@@ -183,29 +173,28 @@ func (m *Membership) Release(ctx context.Context) error {
 }
 
 // RelinquishLease gives up the lease (if held) and demotes to STANDBY without
-// stopping the lease loop, so this instance keeps competing and can be elected
-// again. Use it when an instance cannot currently act as ACTIVE (e.g. failed to
-// recover on promotion) but should remain a viable standby.
+// stopping the lease loop, so the instance keeps competing. Use it when an
+// instance cannot currently act as ACTIVE (e.g. failed to recover on promotion)
+// but should remain a viable standby.
 func (m *Membership) RelinquishLease(ctx context.Context) error {
 	return m.releaseLease(ctx)
 }
 
-// RoleChanges returns the channel on which role transitions are delivered. The
-// channel is coalescing (cap 1): the consumer always sees the latest transition.
+// RoleChanges returns the channel on which role transitions are delivered.
+// Coalescing (cap 1): the consumer always sees the latest transition.
 func (m *Membership) RoleChanges() <-chan RoleChange { return m.roleChangeCh }
 
-// emitRoleChange delivers a role change on the coalescing cap-1 channel. If a
-// change is already pending it is replaced so the consumer observes the latest
-// transition.
+// emitRoleChange delivers a role change, replacing any pending one so the
+// consumer observes the latest transition.
 func (m *Membership) emitRoleChange(rc RoleChange) {
 	for {
 		select {
 		case m.roleChangeCh <- rc:
 			return
 		default:
-			// Drop the stale pending change, then retry the send. The drain may
-			// race with the consumer; the loop converges because at most one
-			// value is ever buffered.
+			// Drop the stale pending change, then retry. The drain may race
+			// with the consumer; the loop converges because at most one value
+			// is ever buffered.
 			select {
 			case <-m.roleChangeCh:
 			default:
@@ -249,11 +238,10 @@ func (m *Membership) run(ctx context.Context) {
 	}
 }
 
-// beat upserts this instance's member document with the currently advertised
-// role and term, stamping lastHeartbeat with the server-side clock ($$NOW) to
-// avoid relying on client wall-clock time.
+// beat upserts this instance's member document, stamping lastHeartbeat with the
+// server clock ($$NOW) so staleness checks do not depend on client clocks.
 func (m *Membership) beat(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, config.HeartbeatTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
 
 	role, term := m.currentRole()
@@ -301,10 +289,8 @@ func (m *Membership) Stop(ctx context.Context) error {
 	return errors.Wrap(err, "delete member")
 }
 
-// Members returns the current set of live members, filtering out documents whose
-// lastHeartbeat is older than the stale threshold. Staleness is evaluated using
-// the server clock via an aggregation match against $$NOW. The read is retried
-// on transient target errors.
+// Members returns the live members: documents whose lastHeartbeat is within the
+// stale threshold, evaluated against the server clock ($$NOW).
 func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 	pipeline := mongo.Pipeline{
 		{{"$match", bson.D{

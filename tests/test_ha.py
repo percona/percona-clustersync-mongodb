@@ -1,15 +1,9 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 """Multi-instance HA E2E tests.
 
-These are isolated from the rest of the suite: the whole module is marked slow,
-so it is skipped by default (and in CI) and only runs with --runslow, e.g.
-
-    .venv/bin/pytest tests/test_ha.py --runslow
-
-They require TEST_PCSM_BIN (the module skips otherwise) and running source/target
-clusters. The tests spin up their own 3-instance PCSM group on dedicated ports;
-they temporarily suspend the session-managed single PCSM (port 2242) so it does
-not compete for the same lease.
+Marked slow: skipped by default, run with `pytest tests/test_ha.py --runslow`.
+Requires TEST_PCSM_BIN and running clusters. Spins up its own 3-instance group
+and suspends the session-managed PCSM so it does not compete for the lease.
 """
 
 import os
@@ -43,12 +37,7 @@ def ha_cluster(
     suspend_managed_pcsm,  # noqa: ARG001 - stops the singleton PCSM for these tests
     drop_all_database,  # noqa: ARG001 - ordering dep: wipe runs before the group starts
 ):
-    """A fresh 3-instance HA group per test.
-
-    suspend_managed_pcsm stops the session singleton (which would otherwise
-    compete for the lease); drop_all_database orders the source/target wipe
-    before the group starts. The group is torn down afterwards.
-    """
+    """A fresh 3-instance HA group per test, torn down afterwards."""
     cluster = PCSMCluster(pcsm_bin, source_uri_str, target_uri_str, HA_PORTS)
     cluster.start()
     try:
@@ -64,14 +53,12 @@ class _Writer:
         self._coll = source[db][coll]
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
-        self.inserted = 0
 
     def _run(self):
         i = 0
         while not self._stop.is_set():
             try:
                 self._coll.insert_one({"_id": i, "n": i})
-                self.inserted = i + 1
                 i += 1
             except Exception:  # noqa: BLE001 - keep writing through transient blips
                 pass
@@ -129,11 +116,8 @@ def test_standby_rejects_writes(ha_cluster: PCSMCluster):
 
 @pytest.mark.timeout(120)
 def test_standby_status_rejected(ha_cluster: PCSMCluster):
-    """GET /status on a STANDBY returns 409 with the not_active envelope.
-
-    Status is active-only: a STANDBY must not serve misleading idle pipeline
-    stats. The 409 body still carries role and the group member list.
-    """
+    """GET /status on a STANDBY returns 409; the body still carries role and
+    the group member list."""
     standbys = ha_cluster.standbys()
     assert standbys, "expected at least one STANDBY"
 
@@ -146,12 +130,9 @@ def test_standby_status_rejected(ha_cluster: PCSMCluster):
 
 @pytest.mark.timeout(600)
 def test_failover_data_integrity(ha_cluster: PCSMCluster, source_conn, target_conn):
-    """Data survives repeated ACTIVE crashes during replication.
-
-    Start replication on the ACTIVE, stream writes into the source while killing
-    and restarting the ACTIVE several times, then finalize and compare source and
-    target. This is the deterministic reproducer for failover-time data loss.
-    """
+    """Data survives repeated ACTIVE crashes during replication: stream writes
+    while killing/restarting the ACTIVE, then finalize and compare source and
+    target."""
     db, coll = "ha_db", "events"
 
     active = ha_cluster.active()
@@ -183,11 +164,8 @@ def test_failover_data_integrity(ha_cluster: PCSMCluster, source_conn, target_co
 
 
 def _assert_active_running(cluster, timeout=15):
-    """Assert the current ACTIVE reaches state 'running' (resumed replication).
-
-    Catches the failure mode where a promoted instance stays idle because it
-    could not resume the run the previous ACTIVE began.
-    """
+    """Assert the current ACTIVE reaches state 'running', catching a promoted
+    instance that stays idle because it could not resume the previous run."""
     active = cluster.active()
     deadline = time.monotonic() + timeout
     state = None

@@ -22,8 +22,7 @@ const (
 // LeaseID is the fixed _id of the single lease document in the lease collection.
 const LeaseID = "lease"
 
-// BSON field names shared across lease and member documents. Kept as constants
-// so repeated string literals are not duplicated across queries and pipelines.
+// BSON field names shared across lease and member documents.
 const (
 	fieldGroup      = "group"
 	fieldInstanceID = "instanceId"
@@ -31,18 +30,18 @@ const (
 	fieldExpiresAt  = "expiresAt"
 )
 
-// MongoDB aggregation variables/operators referenced in update pipelines.
+// MongoDB aggregation variables/operators used in update pipelines.
 const (
-	// aggNow is the server-side current-time variable. Using it keeps lease and
-	// heartbeat time comparisons independent of client wall-clock time.
+	// aggNow is the server-side current time, which keeps lease and heartbeat
+	// comparisons independent of client clocks.
 	aggNow    = "$$NOW"
 	aggIfNull = "$ifNull"
 	aggAdd    = "$add"
 )
 
-// Member is a per-instance liveness/identity document stored in the members
-// collection (one document per instanceId). It carries no authoritative election
-// state; Term here is informational and the lease document is the source of truth.
+// Member is the per-instance liveness/identity document in the members
+// collection. Role and Term are informational; the lease document is the
+// source of truth for election state.
 type Member struct {
 	InstanceID    string    `bson:"_id"`
 	Group         string    `bson:"group"`
@@ -55,9 +54,9 @@ type Member struct {
 	LastHeartbeat time.Time `bson:"lastHeartbeat"`
 }
 
-// Lease is the single active-standby lease document used for election and
-// term-based fencing. The active instance renews ExpiresAt on a timer; a standby
-// may win election once ExpiresAt has passed (compared against server-side $$NOW).
+// Lease is the single lease document used for election and term-based fencing.
+// The active instance renews ExpiresAt on a timer; a standby may take over once
+// ExpiresAt has passed (per the server clock).
 type Lease struct {
 	ID           string    `bson:"_id"`
 	Group        string    `bson:"group"`

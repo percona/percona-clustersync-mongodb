@@ -13,9 +13,8 @@ func testLogger() log.Logger {
 	return log.New("ha:lease:test")
 }
 
-// newTestLeaseMember builds an in-memory Membership for lease role logic (the
-// single source of truth for role/term). It does not touch MongoDB and never
-// starts the loop.
+// newTestLeaseMember builds an in-memory Membership for lease role logic. It
+// does not touch MongoDB and never starts the loop.
 func newTestLeaseMember() *Membership {
 	m := newTestMembership()
 	m.instanceID = "pcsm-test"

@@ -103,8 +103,7 @@ func TestEnvelopeJSONShape(t *testing.T) {
 func TestEnvelopeOmittedForSingleNode(t *testing.T) {
 	t.Parallel()
 
-	// A single-instance deployment has a nil envelope: the response must carry
-	// no me/role/group fields, i.e. be byte-identical to the pre-HA API.
+	// A nil envelope must keep the response byte-identical to the pre-HA API.
 	data, err := json.Marshal(startResponse{Ok: true})
 	require.NoError(t, err)
 
@@ -117,11 +116,9 @@ func TestEnvelopeOmittedForSingleNode(t *testing.T) {
 	assert.Equal(t, true, decoded["ok"])
 }
 
-// TestResponseEnvelopeRoundTrip guards the CLI decode path: a response carrying
-// the envelope must unmarshal back into the response struct. encoding/json
+// TestResponseEnvelopeRoundTrip guards the CLI decode path: encoding/json
 // cannot decode into an embedded pointer to an unexported struct, so the
-// envelope type must stay exported. Marshaling alone (server side) never
-// exercises this; only decoding (client side) does.
+// envelope type must stay exported. Only decoding exercises this.
 func TestResponseEnvelopeRoundTrip(t *testing.T) {
 	t.Parallel()
 

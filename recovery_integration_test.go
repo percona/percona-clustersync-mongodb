@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -19,51 +19,65 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
 )
+
+const mongodStartupTimeout = 60 * time.Second
 
 //nolint:gochecknoglobals // shared testcontainer for the recovery integration suite
 var (
 	recoveryMongoURI  string
+	errRecoveryMongo  error
 	recoveryMongoOnce sync.Once
 )
 
-// recoveryMongo starts a MongoDB testcontainer once for the suite and returns
-// its URI. The container is cleaned up via t.Cleanup on the first caller.
+// recoveryMongo starts the suite's MongoDB container once. No TestMain is
+// possible here (cli_test.go in the external test package already defines
+// one), so termination is left to the testcontainers reaper.
 func recoveryMongo(t *testing.T) string {
 	t.Helper()
 
 	recoveryMongoOnce.Do(func() {
-		ctx := context.Background()
-
-		mongoVersion := os.Getenv("MONGO_VERSION")
-		if mongoVersion == "" {
-			mongoVersion = "8.0"
-		}
-
-		mongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-			ContainerRequest: testcontainers.ContainerRequest{
-				Image:        "percona/percona-server-mongodb:" + mongoVersion,
-				ExposedPorts: []string{"27017/tcp"},
-				Cmd: []string{
-					"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
-					"--wiredTigerCacheSizeGB", "0.5", "--port", "27017",
-				},
-				WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
-			},
-			Started: true,
-		})
-		require.NoError(t, err)
-
-		host, err := mongod.Host(ctx)
-		require.NoError(t, err)
-
-		port, err := mongod.MappedPort(ctx, "27017/tcp")
-		require.NoError(t, err)
-
-		recoveryMongoURI = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, port.Port())
+		recoveryMongoURI, errRecoveryMongo = startRecoveryMongo(context.Background())
 	})
+	require.NoError(t, errRecoveryMongo)
 
 	return recoveryMongoURI
+}
+
+func startRecoveryMongo(ctx context.Context) (string, error) {
+	version := os.Getenv("MONGO_VERSION")
+	if version == "" {
+		version = "8.0"
+	}
+
+	mongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        "percona/percona-server-mongodb:" + version,
+			ExposedPorts: []string{"27017/tcp"},
+			Cmd: []string{
+				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
+				"--wiredTigerCacheSizeGB", "0.5", "--port", "27017",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(mongodStartupTimeout),
+		},
+		Started: true,
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "start mongod container")
+	}
+
+	host, err := mongod.Host(ctx)
+	if err != nil {
+		return "", errors.Wrap(err, "container host")
+	}
+
+	port, err := mongod.MappedPort(ctx, "27017/tcp")
+	if err != nil {
+		return "", errors.Wrap(err, "container mapped port")
+	}
+
+	return "mongodb://" + net.JoinHostPort(host, port.Port()) + "/?directConnection=true", nil
 }
 
 // staticRecoverable is a Recoverable that returns fixed checkpoint bytes.
@@ -77,12 +91,11 @@ func (s staticRecoverable) Recover(context.Context, []byte) error      { return 
 func recoveryTestClient(t *testing.T) *mongo.Client {
 	t.Helper()
 
-	uri := recoveryMongo(t)
-
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetServerSelectionTimeout(5 * time.Second))
+	client, err := mongo.Connect(
+		options.Client().ApplyURI(recoveryMongo(t)).SetServerSelectionTimeout(5 * time.Second))
 	require.NoError(t, err)
 	require.NoError(t, client.Ping(ctx, nil))
 
@@ -103,9 +116,8 @@ func readCheckpoint(t *testing.T, ctx context.Context, client *mongo.Client) che
 	return cp
 }
 
-// dataFieldType returns the BSON type of the stored checkpoint's "data" field.
-// It is used to assert that data is persisted as an embedded document (readable
-// in the shell) rather than BSON Binary.
+// dataFieldType returns the BSON type of the stored checkpoint's "data" field,
+// asserting it is an embedded document rather than BSON Binary.
 func dataFieldType(t *testing.T, ctx context.Context, client *mongo.Client) bson.Type {
 	t.Helper()
 

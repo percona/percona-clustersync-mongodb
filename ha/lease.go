@@ -15,20 +15,16 @@ import (
 )
 
 // RoleChange is a single active-standby role transition. Term is the lease term
-// in effect at the transition; it increases monotonically across acquisitions
-// and doubles as the fencing token.
+// at the transition; it grows monotonically and doubles as the fencing token.
 type RoleChange struct {
 	Role Role
 	Term int64
 }
 
-// runLease drives the lease loop until ctx is canceled. There is no election:
-// the member competes for a single lease document via an atomic conditional
-// write, and holding the lease grants the right to be ACTIVE. Time comparisons
-// use the target server clock ($$NOW), so the loop does not depend on client
-// wall-clock time. On each tick it attempts to acquire or renew the lease and
-// reconciles the member's role; a failed renewal while ACTIVE (lost lease,
-// expired, or target unreachable) demotes the member so it fails safe.
+// runLease tries to acquire or renew the lease on every tick and reconciles the
+// member's role, until ctx is canceled. Holding the lease grants the right to be
+// ACTIVE. Time comparisons use the target server clock ($$NOW), not the client
+// clock. A failed renewal while ACTIVE demotes the member so it fails safe.
 func (m *Membership) runLease(ctx context.Context) {
 	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
 
@@ -48,14 +44,10 @@ func (m *Membership) runLease(ctx context.Context) {
 	}
 }
 
-// FirstLeaseTick performs a single synchronous acquire/renew attempt and
-// reconciles the resulting role. It is meant to be called once at startup,
-// before the HTTP server begins serving, so the instance's role is already
-// settled (ACTIVE for an uncontested single instance, STANDBY if another
-// instance holds the lease) by the time requests arrive. Without it there is a
-// brief window where a freshly started instance still reports the STANDBY
-// default and would spuriously reject writes. Subsequent renewals run in
-// RunLease.
+// FirstLeaseTick performs one synchronous acquire/renew attempt. Called once at
+// startup, before the HTTP server serves requests, so the role is settled by
+// then: without it a fresh instance would briefly report the STANDBY default
+// and spuriously reject writes. Subsequent renewals run in RunLease.
 func (m *Membership) FirstLeaseTick(ctx context.Context) {
 	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
 	m.leaseTick(ctx, lg)
@@ -69,8 +61,8 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 			return
 		}
 
-		// An acquire/renew error is not authoritative about lease ownership.
-		// Fail safe: demote, since we can no longer prove we hold the lease.
+		// The error says nothing about ownership; we can no longer prove we
+		// hold the lease, so fail safe and demote.
 		lg.Error(err, "acquire or renew lease")
 		_, lastTerm := m.CurrentRole()
 		m.reconcileRole(RoleStandby, lastTerm, lg)
@@ -87,9 +79,8 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 	m.reconcileRole(RoleStandby, term, lg)
 }
 
-// reconcileRole records the role/term (the member is the single source of truth)
-// and emits a RoleChange when the role actually transitions. Term-only changes
-// while staying in the same role (ordinary renewals) do not emit.
+// reconcileRole records the role/term on the member and emits a RoleChange when
+// the role actually transitions. Same-role renewals do not emit.
 func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 	if !m.SetRole(role, term) {
 		return
@@ -101,32 +92,24 @@ func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 	m.emitRoleChange(RoleChange{Role: role, Term: term})
 }
 
-// tryAcquireOrRenew atomically acquires or renews the lease. It first tries to
-// take or renew an existing lease; if no document matches the take/renew filter
-// it bootstraps the lease with an insert, then immediately re-renews it. A loser
-// (another instance holds an unexpired lease) is reported as held=false with a
-// nil error.
+// tryAcquireOrRenew atomically acquires or renews the lease. Losing to another
+// instance's unexpired lease is reported as held=false with a nil error.
 //
-// Two-step design, and why bootstrap is not a single upsert:
-//   - Take/renew is a non-upsert update whose filter uses a server-clock $expr
-//     predicate ("I own it OR it has expired"). MongoDB forbids $expr in the
-//     query predicate of an upsert, so this cannot be folded into an upsert.
-//   - Bootstrap is an insert-only write (not an upsert) on purpose: the
-//     duplicate-key error is exactly how a losing contender is detected when the
-//     lease already exists and is held by another instance. An upsert would
-//     instead overwrite the current owner's lease and break the single-active
-//     guarantee.
+// Two steps, because MongoDB forbids $expr in an upsert predicate:
+//  1. Take/renew an existing lease with a non-upsert update whose server-clock
+//     $expr filter is "I own it OR it has expired".
+//  2. If nothing matched, bootstrap with an insert. Insert (not upsert) is
+//     deliberate: a duplicate-key error is how a losing contender is detected,
+//     without overwriting the current owner's lease.
 //
-// Because the insert cannot use the server clock ($$NOW is only valid in update
-// pipelines), the bootstrap stamps timestamps with the client clock. Every other
-// part of the protocol compares against the server clock, so a fresh leader
-// immediately re-renews to convert those provisional client timestamps into
-// server-stamped ones (see the re-renew step below).
+// $$NOW is invalid in an insert, so the bootstrap stamps client-clock times; a
+// successful bootstrap immediately re-renews to replace them with server-clock
+// stamps.
 func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error) {
-	ctx, cancel := context.WithTimeout(ctx, config.HeartbeatTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
 
-	// Step 1 (common path): conditionally take or renew an existing lease.
+	// Step 1 (common path): take or renew an existing lease.
 	held, term, matched, err := m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
 		return false, 0, err
@@ -135,10 +118,8 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 		return held, term, nil
 	}
 
-	// Step 2: no document matched. Either the lease does not exist yet
-	// (bootstrap) or it is held by another instance. Attempt the bootstrap
-	// insert; a duplicate-key collision means it already exists and is owned by
-	// someone else with an unexpired lease -> we lose.
+	// Step 2: the lease is absent (bootstrap it) or held by another instance
+	// (duplicate key -> we lose).
 	won, term, err := m.tryInsertLease(ctx)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -159,23 +140,14 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 	return won, term, nil
 }
 
-// tryInsertLease creates the lease document for the first time at term 1. It
-// inserts only when no lease exists; a duplicate-key error (returned unwrapped)
-// means the document already exists and the caller should treat it as a loss.
-// Insert-only (not upsert) is deliberate: it is how a losing contender is
-// detected when the lease is already held by another instance.
-//
-// The client-stamped timestamps here are provisional bootstrap values. The
-// caller re-renews immediately after a successful bootstrap so expiresAt and
-// electionDate are re-stamped against the server clock ($$NOW); this avoids
-// client/server clock skew making the bootstrap expiresAt inconsistent with
-// subsequent server-stamped renewals.
+// tryInsertLease creates the lease document at term 1. A duplicate-key error
+// (returned unwrapped) means another instance owns the lease: a loss. The
+// client-clock timestamps are provisional; the caller re-renews immediately so
+// they are re-stamped with the server clock.
 func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 	now := time.Now().UTC()
 
-	// Retried on transient errors. A duplicate-key error is not transient, so it
-	// is returned immediately and unwrapped for the caller's IsDuplicateKeyError
-	// check.
+	// A duplicate-key error is not transient: returned immediately, unwrapped.
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := m.leaseColl().InsertOne(ctx, bson.D{
 			{"_id", LeaseID},
@@ -195,11 +167,9 @@ func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 	return true, 1, nil
 }
 
-// tryTakeOrRenewExisting conditionally updates an existing lease document. The
-// filter (server-clock $expr) matches only when this instance already owns the
-// lease or the lease has expired. The matched return reports whether any
-// document matched the filter; when false, the lease either does not exist or is
-// held by another instance (the caller disambiguates).
+// tryTakeOrRenewExisting updates an existing lease when this instance owns it
+// or it has expired (per the server clock). matched=false means the lease is
+// absent or held by another instance; the caller disambiguates.
 func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, bool, error) {
 	ttlMS := config.LeaseTTL.Milliseconds()
 
@@ -238,9 +208,8 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		matched bool
 	)
 
-	// ErrNoDocuments is a normal "filter did not match" signal (lease absent or
-	// held by another instance), not a failure to retry, so it is absorbed inside
-	// the closure. Other errors are retried on transient classification.
+	// ErrNoDocuments is the normal "filter did not match" outcome, not an error
+	// to retry, so it is absorbed inside the closure.
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		decodeErr := m.leaseColl().FindOneAndUpdate(
 			ctx, filter, pipeline,
@@ -270,11 +239,10 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	return updated.InstanceID == m.instanceID, updated.Term, true, nil
 }
 
-// releaseLease best-effort clears the lease so a standby can take over without
-// waiting for it to expire. It only clears the lease when this instance still
-// owns it, then reflects the demotion in the member.
+// releaseLease expires the lease (only if this instance still owns it) so a
+// standby can take over without waiting for the TTL, and demotes the member.
 func (m *Membership) releaseLease(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, config.HeartbeatTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
@@ -289,7 +257,6 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 		return err //nolint:wrapcheck
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 
-	// Reflect the demotion in the single source of truth, preserving the term.
 	_, term := m.CurrentRole()
 	m.SetRole(RoleStandby, term)
 
@@ -300,9 +267,7 @@ func (m *Membership) leaseColl() *mongo.Collection {
 	return m.target.Database(config.PCSMDatabase).Collection(config.LeaseCollection)
 }
 
-// DeleteLease clears the lease collection. Used by reset. It removes all
-// documents (not just the current LeaseID) so a lease written under a previous
-// _id scheme is also cleared.
+// DeleteLease clears the lease collection. Used by reset.
 func DeleteLease(ctx context.Context, target *mongo.Client) error {
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := target.Database(config.PCSMDatabase).

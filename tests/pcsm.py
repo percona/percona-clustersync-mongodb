@@ -42,13 +42,9 @@ class PCSM:
         self.uri = uri
 
     def status(self):
-        """Get the current status of the PCSM service.
-
-        Strict: raises on a non-2xx status (e.g. a STANDBY returns 409) or when
-        the payload reports failure. Callers that expect to talk to the ACTIVE
-        instance use this. HA callers that poll mixed-role instances use
-        raw_status instead.
-        """
+        """Get the current status. Strict: raises on non-2xx (a STANDBY returns
+        409) or a failed payload. HA callers polling mixed-role instances use
+        raw_status instead."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
@@ -59,12 +55,8 @@ class PCSM:
         return payload
 
     def raw_status(self):
-        """Get /status without raising on HTTP status.
-
-        Returns (status_code, body). A STANDBY responds 409 with a not_active
-        envelope; the body still carries role and the group member list, so HA
-        callers can read role regardless of the status code.
-        """
+        """Get /status as (status_code, body) without raising. A STANDBY's 409
+        body still carries role and the group member list."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         return res.status_code, res.json()
 
@@ -73,11 +65,8 @@ class PCSM:
         return self.status().get("role")
 
     def start_expect_conflict(self):
-        """Attempt /start and return (status_code, body) without raising.
-
-        Used to assert that a STANDBY rejects write commands with HTTP 409 and a
-        not_active body. On an ACTIVE instance this would return 200.
-        """
+        """Attempt /start and return (status_code, body) without raising, to
+        assert a STANDBY rejects writes with 409."""
         res = requests.post(f"{self.uri}/start", json={}, timeout=DFL_REQ_TIMEOUT)
         return res.status_code, res.json()
 

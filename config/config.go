@@ -25,10 +25,8 @@ type Config struct {
 	Source     string `mapstructure:"source"`
 	Target     string `mapstructure:"target"`
 
-	// GroupName is the logical name of the active-standby HA group this instance
-	// joins. All instances that should coordinate (compete for one lease on the
-	// same target) share the same value. Advisory: recorded and advertised for
-	// observability.
+	// GroupName is the active-standby HA group this instance joins. Advisory:
+	// recorded and advertised for observability.
 	GroupName string `mapstructure:"group-name"`
 
 	Log LogConfig `mapstructure:",squash"`

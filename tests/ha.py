@@ -1,12 +1,8 @@
 # pylint: disable=missing-docstring,redefined-outer-name
-"""Harness for multi-instance HA E2E tests.
+"""Harness for the multi-instance HA E2E tests in test_ha.py.
 
-Spawns several PCSM server processes (as OS subprocesses) that point at the same
-source/target clusters and compete for a single lease: one becomes ACTIVE, the
-rest STANDBY. Provides helpers to find the ACTIVE, hard-kill it (SIGKILL, i.e. a
-crash), and wait for a new single ACTIVE to settle.
-
-Used only by the slow-marked tests in test_ha.py, run in isolation.
+Spawns several PCSM server subprocesses competing for one lease, with helpers
+to find the ACTIVE, hard-kill it, and wait for a new single ACTIVE to settle.
 """
 
 import os
@@ -39,11 +35,7 @@ class PCSMInstance:
         self._log = None
 
     def start(self):
-        """Start the server process (without resetting shared target state).
-
-        Output goes to a per-port log file under LOG_DIR so a failed test can be
-        diagnosed after the fact.
-        """
+        """Start the server process, logging to LOG_DIR for post-mortem."""
         os.makedirs(LOG_DIR, exist_ok=True)
         self._log = open(  # noqa: SIM115 - closed in _close_log
             os.path.join(LOG_DIR, f"pcsm-{self.port}.log"), "a", encoding="utf-8"
@@ -88,11 +80,8 @@ class PCSMInstance:
         return self.proc is not None and self.proc.poll() is None
 
     def try_status(self):
-        """Return the /status body, or None if unreachable/not ready.
-
-        Uses raw_status so a STANDBY's 409 response is still read: the body
-        carries role and the group member list regardless of the status code.
-        """
+        """Return the /status body (even a STANDBY's 409 body, which carries
+        role and members), or None if unreachable/not ready."""
         try:
             _, body = self.client.raw_status()
         except Exception:  # noqa: BLE001 - any failure during startup is retryable
@@ -128,13 +117,9 @@ class PCSMCluster:
         return self
 
     def _verify_ha_ready(self, timeout: float = 15.0):
-        """Fail fast if instances never come up or the binary lacks HA support.
-
-        Each instance must answer /status with a `role` field within `timeout`.
-        A missing `role` means a pre-HA binary (check TEST_PCSM_BIN version);
-        a never-answering instance means it died on startup (see its log under
-        LOG_DIR).
-        """
+        """Fail fast unless every instance answers /status with a `role` field:
+        no `role` means a pre-HA TEST_PCSM_BIN; no answer means the instance
+        died on startup (see LOG_DIR)."""
         deadline = time.monotonic() + timeout
         pending = list(self.instances)
         while pending and time.monotonic() < deadline:

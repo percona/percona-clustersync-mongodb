@@ -26,9 +26,8 @@ func cleanLease(t *testing.T, ctx context.Context, client *mongo.Client) {
 	require.NoError(t, leaseCollection(client).Drop(ctx))
 }
 
-// newLeaseMemberForTest joins membership for instanceID and returns the member,
-// mirroring production wiring (Membership owns role/term and the lease loop).
-// The membership refresh loop is stopped on test cleanup.
+// newLeaseMemberForTest joins membership for instanceID, mirroring production
+// wiring. The refresh loop is stopped on test cleanup.
 func newLeaseMemberForTest(t *testing.T, ctx context.Context, client *mongo.Client, instanceID string) *Membership {
 	t.Helper()
 
@@ -39,9 +38,8 @@ func newLeaseMemberForTest(t *testing.T, ctx context.Context, client *mongo.Clie
 	return m
 }
 
-// forceExpireLease rewrites the lease document so expiresAt is well in the past,
-// making the lease immediately acquirable by any instance. This keeps failover
-// tests deterministic without sleeping for the full LeaseTTL.
+// forceExpireLease moves expiresAt into the past so the lease is immediately
+// acquirable, keeping failover tests deterministic without sleeping a full TTL.
 func forceExpireLease(t *testing.T, ctx context.Context, client *mongo.Client) {
 	t.Helper()
 
@@ -206,8 +204,7 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-run")
 
-	// FirstLeaseTick settles the role synchronously (production wiring), then
-	// RunLease keeps renewing.
+	// FirstLeaseTick settles the role synchronously, as at startup.
 	m.FirstLeaseTick(ctx)
 
 	select {

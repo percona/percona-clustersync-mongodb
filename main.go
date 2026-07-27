@@ -536,9 +536,8 @@ func resetState(ctx context.Context, cfg *config.Config) error {
 		return errors.Wrap(err, "delete members")
 	}
 
-	// Drop the pre-HA heartbeat collection as part of the 0.9.0 -> 0.10.0
-	// migration (see docs). Startup separately refuses to run against a live
-	// 0.9 instance via checkNoLegacyInstance.
+	// Part of the 0.9.0 -> 0.10.0 migration; startup separately refuses to run
+	// against a live 0.9 instance via checkNoLegacyInstance.
 	err = dropLegacyHeartbeat(ctx, target)
 	if err != nil {
 		return errors.Wrap(err, "drop legacy heartbeat")
@@ -557,8 +556,8 @@ var errLegacyInstance = errors.New(
 		"stop it and run 'pcsm reset' before upgrading",
 )
 
-// checkNoLegacyInstance checks for a live pre-0.10.0 (<= 0.9.0) PCSM instance on
-// the target cluster. 0.9 checkpoints carry no term and bypass 0.10's fence.
+// checkNoLegacyInstance detects a live pre-0.10.0 PCSM instance on the target.
+// 0.9 checkpoints carry no term and would bypass 0.10's fence.
 func checkNoLegacyInstance(ctx context.Context, target *mongo.Client) error {
 	var doc struct {
 		Time int64 `bson:"time"`
@@ -585,8 +584,7 @@ func checkNoLegacyInstance(ctx context.Context, target *mongo.Client) error {
 	}
 }
 
-// dropLegacyHeartbeat removes the pre-HA (<= 0.9.0) singleton heartbeat
-// collection.
+// dropLegacyHeartbeat removes the pre-0.10.0 heartbeat collection.
 func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
 	err := target.Database(config.PCSMDatabase).
 		Collection(config.LegacyHeartbeatCollection).
@@ -605,9 +603,8 @@ func runServer(cfg *config.Config) error {
 		return errors.Wrap(err, "new server")
 	}
 
-	// Auto-start (--start) is deferred to promotion: replication may only begin
-	// while ACTIVE. A single instance becomes ACTIVE immediately, so this fires
-	// as soon as the lease is acquired; a STANDBY starts once promoted.
+	// Auto-start (--start) is deferred to promotion: replication may only
+	// begin while ACTIVE.
 	if cfg.Start {
 		startOpts, err := resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
@@ -673,28 +670,23 @@ type server struct {
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
 
-	// mu guards cpCancel and autoStartOpts, the server-local lifecycle state
-	// driven by lease role transitions. The authoritative (role, term) lives in
-	// membership; read it via membership.CurrentRole().
+	// mu guards checkpointCancel and autoStartOpts. The authoritative
+	// (role, term) lives in membership; read it via membership.CurrentRole().
 	mu sync.Mutex
-	// checkpointCancel stops the checkpointing loop started while ACTIVE. It is nil when
-	// this instance is STANDBY (no checkpointing).
+	// checkpointCancel stops the checkpointing loop started while ACTIVE;
+	// nil while STANDBY.
 	checkpointCancel context.CancelFunc
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
-	// to ACTIVE (the deferred effect of the --start flag).
+	// (the deferred effect of the --start flag).
 	autoStartOpts *pcsm.StartOptions
 }
 
 // createServer creates a new server with the given options.
 //
-// Source and target connections are established eagerly here, at process
-// startup, before the HA role is known. Every instance — including one that
-// stays STANDBY for its whole life — therefore holds an idle source connection.
-// This is intentional: connecting up front fail-fasts an unreachable source or
-// an incompatible source/target version at boot rather than on the failover
-// critical path, and keeps promotion latency low (no connect + topology
-// discovery when a STANDBY is promoted). A STANDBY performs no reads on the
-// source; the connection only carries the driver's own monitoring traffic.
+// Source and target connections are established eagerly, before the HA role is
+// known, so an unreachable source or incompatible version fails at boot rather
+// than on the failover path, and promotion stays low-latency. A STANDBY's idle
+// source connection carries only driver monitoring traffic.
 func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
@@ -791,9 +783,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	}
 
 	pcs.SetOnStateChanged(func(newState pcsm.State) {
-		// State-change checkpoints are fenced by the current lease term. Only an
-		// ACTIVE instance can persist; a STANDBY (term unchanged, lease held by
-		// another) is rejected by the fence and that is expected.
+		// State-change checkpoints are fenced by the current lease term; a
+		// STANDBY's write being rejected by the fence is expected.
 		_, term := membership.CurrentRole()
 
 		lg := log.New("http:checkpointing")
@@ -803,20 +794,16 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		case err == nil:
 			lg.Debugf("Checkpoint saved on %q", newState)
 		case errors.Is(err, errCheckpointFenced):
-			// A STANDBY (or a just-deposed active) is expected to be fenced on a
-			// state-change checkpoint; this is normal, not an error.
+			// Normal for a STANDBY or a just-deposed active, not an error.
 			lg.Debug("Checkpoint fenced by a newer term")
 		default:
 			lg.Error(err, "checkpoint")
 		}
 	})
 
-	// Settle the initial role synchronously, before the HTTP server serves any
-	// request. A single instance becomes ACTIVE immediately; a contender that
-	// loses stays STANDBY. This closes the window in which a freshly started
-	// instance would still report the STANDBY default and spuriously reject
-	// writes. The transition is buffered on the (coalescing) role-change channel
-	// and consumed by watchRoleChanges below.
+	// Settle the initial role before the HTTP server serves any request, so a
+	// fresh instance does not briefly report STANDBY and spuriously reject
+	// writes. The transition is consumed by watchRoleChanges below.
 	s.membership.FirstLeaseTick(ctx)
 
 	s.logInitialRole()
@@ -828,11 +815,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	return s, nil
 }
 
-// logInitialRole logs the role this instance settled into at startup. A STANDBY
-// also reports where the ACTIVE instance is, so an operator reading standby logs
-// knows which node to talk to. This complements the transition logs in
-// onPromote/onDemote, which do not fire for an instance that starts (and stays)
-// STANDBY.
+// logInitialRole logs the role settled at startup. onPromote/onDemote only log
+// transitions, which never fire for an instance that starts and stays STANDBY.
 func (s *server) logInitialRole() {
 	role, term := s.membership.CurrentRole()
 	lg := log.New("ha:role").With(log.Int64("term", term))
@@ -857,10 +841,9 @@ func (s *server) Close(ctx context.Context) error {
 	return errors.Join(err0, err1, err2, err3)
 }
 
-// watchRoleChanges consumes lease role transitions and drives the replication
-// lifecycle: promotion to ACTIVE recovers state and starts checkpointing;
-// demotion to STANDBY stops checkpointing and halts the pipeline so a STANDBY
-// performs no writes. It returns when ctx is canceled.
+// watchRoleChanges consumes role transitions and drives the replication
+// lifecycle: promotion recovers state and starts checkpointing; demotion stops
+// checkpointing and halts the pipeline. Returns when ctx is canceled.
 func (s *server) watchRoleChanges(ctx context.Context) {
 	for {
 		select {
@@ -878,18 +861,16 @@ func (s *server) watchRoleChanges(ctx context.Context) {
 	}
 }
 
-// onPromote handles a STANDBY->ACTIVE transition. It re-reads any persisted
+// onPromote handles a STANDBY->ACTIVE transition: it re-reads the persisted
 // checkpoint so this instance resumes from the latest committed state, then
 // starts the checkpointing loop for this ACTIVE epoch.
 func (s *server) onPromote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
 	lg.Info("Instance role: ACTIVE (promoted)")
 
-	// Recover persisted state before doing anything else. If this fails, this
-	// instance cannot safely act as ACTIVE (it would resume from unknown state),
-	// so relinquish the lease and let another instance try. It keeps competing
-	// (the lease loop is not stopped), so a transient error does not bench it
-	// until restart. Term fencing still protects the target in the meantime.
+	// If recovery fails this instance cannot safely act as ACTIVE, so
+	// relinquish the lease and let another instance try. It keeps competing,
+	// so a transient error does not bench it until restart.
 	err := Restore(ctx, s.targetCluster, s.pcsm)
 	if err != nil {
 		lg.Error(err, "restore on promotion; relinquishing lease")
@@ -903,10 +884,9 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 	}
 
 	s.mu.Lock()
-	// Start a checkpointing loop scoped to this ACTIVE epoch, fenced by term.
-	// If a write is fenced by a newer term, this instance has been deposed:
-	// onFenced halts the pipeline immediately rather than waiting for the lease
-	// loop to notice on its next tick.
+	// Checkpointing loop scoped to this ACTIVE epoch, fenced by term. A fenced
+	// write means this instance was deposed: onFenced halts the pipeline
+	// immediately instead of waiting for the next lease tick.
 	if s.checkpointCancel == nil {
 		cpCtx, cancel := context.WithCancel(ctx)
 		s.checkpointCancel = cancel
@@ -933,16 +913,14 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 	s.mu.Unlock()
 }
 
-// onDemote handles an ACTIVE->STANDBY transition for a given term. It stops the
-// checkpointing loop and pauses the pipeline so the demoted instance performs no
-// further writes. Pause is best-effort: term fencing on checkpoint writes is the
-// hard guarantee that a demoted active cannot corrupt the target.
+// onDemote handles an ACTIVE->STANDBY transition for the given term: it stops
+// checkpointing and pauses the pipeline. Pause is best-effort; term fencing on
+// checkpoint writes is the hard guarantee against a demoted active corrupting
+// the target.
 //
-// term identifies the ACTIVE epoch being demoted. onDemote can be invoked
-// out-of-band by the checkpointing fence callback (onFenced), which may race a
-// subsequent re-promotion into a newer term. If this instance has already moved
-// past term, the demotion is stale and ignored so it does not tear down the
-// newer epoch's checkpointing/pipeline.
+// The fence callback (onFenced) can invoke onDemote out-of-band, racing a
+// re-promotion into a newer term; a demotion for an older term is stale and
+// ignored so it does not tear down the newer epoch.
 func (s *server) onDemote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
 
@@ -965,8 +943,7 @@ func (s *server) onDemote(ctx context.Context, term int64) {
 
 	err := s.pcsm.Pause(ctx)
 	if err != nil {
-		// Pause fails when the pipeline is not running (e.g. idle); that is a
-		// benign no-op for a demotion, so only log at debug.
+		// Pause fails when the pipeline is not running (e.g. idle): benign.
 		lg.Debug("pause on demotion: " + err.Error())
 	}
 }
@@ -1429,7 +1406,7 @@ type meInfo struct {
 }
 
 // groupMember is one instance in the HA group, as advertised in the members
-// collection and surfaced in every API response.
+// collection.
 type groupMember struct {
 	InstanceID string  `json:"instanceId"`
 	Host       string  `json:"host,omitempty"`
@@ -1444,14 +1421,13 @@ type groupInfo struct {
 	Members []groupMember `json:"members"`
 }
 
-// ResponseEnvelope is embedded in every API response (success and error). It
-// advertises the responding instance's identity and role plus the HA group
-// view, so an operator hitting any node can see who is ACTIVE and where.
+// ResponseEnvelope is embedded in every API response. It advertises the
+// responding instance's identity and role plus the HA group view, so an
+// operator hitting any node can see who is ACTIVE and where.
 //
-// It is embedded as a pointer so a single-instance deployment (nil envelope)
-// omits these fields entirely. The type must be exported: encoding/json cannot
-// decode into an embedded pointer to an unexported struct, which the CLI client
-// relies on when unmarshaling responses that carry the envelope.
+// Embedded as a pointer so a single-instance deployment (nil envelope) omits
+// the fields entirely. Must stay exported: encoding/json cannot decode into an
+// embedded pointer to an unexported struct, which the CLI client relies on.
 type ResponseEnvelope struct {
 	Me    meInfo    `json:"me"`
 	Role  ha.Role   `json:"role"`
@@ -1459,15 +1435,11 @@ type ResponseEnvelope struct {
 }
 
 // buildEnvelope assembles the response envelope from membership state and the
-// live member list, or returns nil when this instance is running standalone.
-//
-// The envelope is included only when the instance currently observes other
-// group members (more than one live member). A single-instance deployment — the
-// common case — thus returns responses byte-identical to the pre-HA API, with
-// no me/role/group fields. This is pessimistic by design: a member-read error
-// (e.g. target connectivity lost, which is a far bigger problem) or a degraded
-// group momentarily down to one live node also omits the envelope. HA consumers
-// must treat the envelope as optional.
+// live member list. It returns nil unless more than one live member is
+// observed, so a single-instance deployment keeps responses byte-identical to
+// the pre-HA API. Pessimistic by design: a member-read error or a group
+// momentarily degraded to one node also omits the envelope, so HA consumers
+// must treat it as optional.
 func (s *server) buildEnvelope(ctx context.Context) *ResponseEnvelope {
 	members, err := ha.Members(ctx, s.targetCluster)
 	if err != nil {
@@ -1504,9 +1476,8 @@ func (s *server) buildEnvelope(ctx context.Context) *ResponseEnvelope {
 	return env
 }
 
-// activeMemberAddr returns the "host:port" of the ACTIVE member from the member
-// list, or "" if the envelope is nil or no ACTIVE is currently known. Used to
-// point a rejected client at the instance that can serve its write.
+// activeMemberAddr returns the ACTIVE member's "host:port", or "" when the
+// envelope is nil or no ACTIVE is known.
 func activeMemberAddr(env *ResponseEnvelope) string {
 	if env == nil {
 		return ""
@@ -1521,9 +1492,8 @@ func activeMemberAddr(env *ResponseEnvelope) string {
 	return ""
 }
 
-// notActiveResponse is the HTTP 409 body returned when a write command is sent
-// to a STANDBY instance. It carries the full envelope so the caller can locate
-// the ACTIVE instance.
+// notActiveResponse is the HTTP 409 body returned by a non-ACTIVE instance. It
+// carries the envelope so the caller can locate the ACTIVE instance.
 type notActiveResponse struct {
 	Ok      bool   `json:"ok"`
 	Err     string `json:"error"`
@@ -1533,9 +1503,9 @@ type notActiveResponse struct {
 	*ResponseEnvelope
 }
 
-// requireActive rejects write commands on a non-ACTIVE instance with HTTP 409.
-// It returns true when the caller may proceed (this instance is ACTIVE) and
-// false when it has already written the 409 response.
+// requireActive rejects requests on a non-ACTIVE instance with HTTP 409. It
+// returns true when the caller may proceed, false when it has already written
+// the 409 response.
 func (s *server) requireActive(ctx context.Context, w http.ResponseWriter) bool {
 	role, _ := s.membership.CurrentRole()
 	if role == ha.RoleActive {
@@ -1921,11 +1891,9 @@ func doClientRequest[T clientResponse](ctx context.Context, port int, method, pa
 		return errors.Wrap(err, "read response")
 	}
 
-	// A STANDBY rejects write commands with 409 and a not_active body carrying
-	// the full cluster envelope plus a human-readable message pointing at the
-	// ACTIVE instance. Print the whole envelope (like the success path) so the
-	// operator can see the members and locate the active, then return the
-	// message as the error for a non-zero exit.
+	// A STANDBY rejects commands with 409 and a not_active envelope. Print the
+	// envelope so the operator can locate the ACTIVE, then return the message
+	// as the error for a non-zero exit.
 	if res.StatusCode == http.StatusConflict {
 		var na notActiveResponse
 		if json.Unmarshal(data, &na) == nil && na.Message != "" {
@@ -1978,8 +1946,8 @@ func doStatusRequest(ctx context.Context, port int) error {
 		return errors.Wrap(err, "read response")
 	}
 
-	// A STANDBY rejects /status with 409 and a not_active envelope pointing at
-	// the active. Print the whole envelope, then return the message as the error.
+	// A STANDBY rejects /status with 409 and a not_active envelope. Print it,
+	// then return the message as the error.
 	if res.StatusCode == http.StatusConflict {
 		var na notActiveResponse
 		if json.Unmarshal(data, &na) == nil && na.Message != "" {

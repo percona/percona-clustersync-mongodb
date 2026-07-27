@@ -14,10 +14,9 @@ import (
 
 var (
 	errNoRecoveryData = errors.New("no recovery data")
-	// errCheckpointFenced is returned when a checkpoint write is rejected because
-	// a newer term owns the lease. A demoted active that keeps trying to write
-	// hits this; it is the hard guarantee that a stale active cannot corrupt the
-	// target checkpoint.
+	// errCheckpointFenced is returned when a checkpoint write is rejected
+	// because a newer term owns the checkpoint. It is the hard guarantee that a
+	// deposed active cannot corrupt the target checkpoint.
 	errCheckpointFenced = errors.New("checkpoint fenced by newer term")
 )
 
@@ -32,14 +31,11 @@ type checkpoint struct {
 	ID   string    `bson:"_id"`
 	TS   time.Time `bson:"_ts"`
 	Data bson.Raw  `bson:"data"`
-	// Term is the lease term of the active instance that wrote this checkpoint.
-	// It is the fencing token: a write is only accepted when its term is greater
-	// than or equal to the stored term. A missing field decodes as 0, which is
-	// the pre-HA baseline.
+	// Term is the fencing token: a write is accepted only when its term is >=
+	// the stored term. A missing field decodes as 0 (the pre-HA baseline).
 	Term int64 `bson:"term,omitempty"`
-	// InstanceID identifies the instance that wrote this checkpoint. It is purely
-	// informational (the join key for deeper lookups in the members and lease
-	// documents); the fencing decision is made solely on Term.
+	// InstanceID identifies the writer. Informational only; fencing is decided
+	// solely on Term.
 	InstanceID string `bson:"instanceId,omitempty"`
 }
 
@@ -77,11 +73,9 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 }
 
 // RunCheckpointing periodically persists the checkpoint until ctx is canceled.
-// It is scoped to a single ACTIVE epoch identified by term; every write is
-// fenced against that term. If a write is fenced by a newer term (this instance
-// has been deposed), onFenced is invoked once and the loop returns, so the
-// demoted active stops writing. The loop is ctx-aware: cancellation stops it
-// within one interval rather than after a full sleep.
+// It is scoped to one ACTIVE epoch: every write is fenced against term. A write
+// fenced by a newer term means this instance was deposed; onFenced is invoked
+// once and the loop returns.
 func RunCheckpointing(
 	ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string, onFenced func(),
 ) {
@@ -123,9 +117,8 @@ func RunCheckpointing(
 }
 
 // DoCheckpoint persists the current checkpoint, stamped with term. The write is
-// fenced: it is accepted only when no checkpoint exists yet or the stored term
-// is not newer than term. A newer stored term means this instance has been
-// deposed and the write is rejected with errCheckpointFenced.
+// fenced: a stored term newer than term means this instance was deposed and the
+// write is rejected with errCheckpointFenced.
 func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string) error {
 	data, err := rec.Checkpoint(ctx)
 	if err != nil {
@@ -137,16 +130,14 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 
 	coll := m.Database(config.PCSMDatabase).Collection(config.RecoveryCollection)
 
-	// Term-gated update without upsert: take the document only when our term is
-	// at least the stored term (a missing term decodes as 0). A newer stored
-	// term excludes the document, so FindOneAndUpdate returns ErrNoDocuments,
-	// which we surface as a fence. MongoDB forbids $expr in an upsert predicate,
-	// so bootstrap (first write) is a separate insert below.
+	// Term-gated update: matches only when our term >= the stored term (missing
+	// decodes as 0). MongoDB forbids $expr in an upsert predicate, so the first
+	// write is a separate bootstrap insert below.
 	filter := bson.D{{"_id", recoveryID}, {"$expr", bson.D{
 		{"$lte", bson.A{bson.D{{"$ifNull", bson.A{"$term", int64(0)}}}, term}},
 	}}}
-	// data is already-marshaled BSON; store it as bson.Raw so it lands as an
-	// embedded document (inspectable in the shell) rather than BSON Binary.
+	// Store data as bson.Raw so it lands as an embedded document (inspectable
+	// in the shell) rather than BSON Binary.
 	update := bson.D{{"$set", bson.D{
 		{"_ts", time.Now()},
 		{"term", term},
@@ -160,8 +151,8 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 		return nil
 
 	case errors.Is(err, mongo.ErrNoDocuments):
-		// Either the document does not exist yet (bootstrap) or a newer term
-		// owns it (fence). Disambiguate with a bootstrap insert.
+		// The document is absent (bootstrap) or a newer term owns it (fence).
+		// The bootstrap insert disambiguates.
 		return doCheckpointBootstrap(ctx, coll, data, term, instanceID)
 
 	default:
@@ -170,8 +161,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 }
 
 // doCheckpointBootstrap inserts the first checkpoint document. A duplicate-key
-// collision means the document already exists with a newer term (the fence
-// filter excluded it), so the write is fenced.
+// collision means a newer term already owns it: the write is fenced.
 func doCheckpointBootstrap(
 	ctx context.Context, coll *mongo.Collection, data bson.Raw, term int64, instanceID string,
 ) error {

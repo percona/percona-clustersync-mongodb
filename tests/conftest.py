@@ -166,13 +166,9 @@ _MANAGED_SUSPENDED = False
 
 @pytest.fixture
 def suspend_managed_pcsm(request: pytest.FixtureRequest, pcsm_bin: str):
-    """Stop the session-managed PCSM for the duration of the requesting scope.
-
-    Tests that run their own PCSM instances against the same target (e.g. the HA
-    group) use this so the singleton managed instance does not compete for the
-    lease. The managed instance is restarted on teardown. While suspended,
-    restart_pcsm_on_failure is inhibited so a failing test does not resurrect it.
-    """
+    """Stop the session-managed PCSM so tests running their own instances (the
+    HA group) don't compete for the lease. Restarted on teardown; while
+    suspended, restart_pcsm_on_failure must not resurrect it."""
     global PCSM_PROC, _MANAGED_SUSPENDED  # pylint: disable=W0603
 
     if not pcsm_bin:

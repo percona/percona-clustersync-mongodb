@@ -5,6 +5,7 @@ package ha //nolint:testpackage
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -20,63 +21,55 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 )
 
+const mongodStartupTimeout = 60 * time.Second
+
 var mongoURI string
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	mongoVersion := os.Getenv("MONGO_VERSION")
-	if mongoVersion == "" {
-		mongoVersion = "8.0"
+	version := os.Getenv("MONGO_VERSION")
+	if version == "" {
+		version = "8.0"
 	}
-	image := "percona/percona-server-mongodb:" + mongoVersion
 
 	mongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        image,
+			Image:        "percona/percona-server-mongodb:" + version,
 			ExposedPorts: []string{"27017/tcp"},
 			Cmd: []string{
 				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
-				"--wiredTigerCacheSizeGB", "0.5",
-				"--port", "27017",
+				"--wiredTigerCacheSizeGB", "0.5", "--port", "27017",
 			},
-			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(mongodStartupTimeout),
 		},
 		Started: true,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start mongod: %v\n", err)
-		os.Exit(1)
-	}
-
-	cleanup := func() {
-		if mongod != nil {
-			_ = mongod.Terminate(ctx)
-		}
-	}
-
-	exitWithError := func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
-		cleanup()
+		fmt.Fprintf(os.Stderr, "start mongod container: %v\n", err)
 		os.Exit(1)
 	}
 
 	host, err := mongod.Host(ctx)
 	if err != nil {
-		exitWithError("Failed to get host: %v", err)
+		fmt.Fprintf(os.Stderr, "container host: %v\n", err)
+		_ = mongod.Terminate(ctx)
+		os.Exit(1)
 	}
 
-	mappedPort, err := mongod.MappedPort(ctx, "27017/tcp")
+	port, err := mongod.MappedPort(ctx, "27017/tcp")
 	if err != nil {
-		exitWithError("Failed to get port: %v", err)
+		fmt.Fprintf(os.Stderr, "container mapped port: %v\n", err)
+		_ = mongod.Terminate(ctx)
+		os.Exit(1)
 	}
 
-	mongoURI = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, mappedPort.Port())
+	mongoURI = "mongodb://" + net.JoinHostPort(host, port.Port()) + "/?directConnection=true"
 
-	exitCode := m.Run()
+	code := m.Run()
 
-	cleanup()
-	os.Exit(exitCode)
+	_ = mongod.Terminate(ctx)
+	os.Exit(code)
 }
 
 func connectToMongoDB(t *testing.T) *mongo.Client {
