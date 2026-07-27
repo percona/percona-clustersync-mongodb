@@ -46,6 +46,9 @@ def test_idle_index_build_is_reported_incomplete(t: Testing):
     if hello.get("msg") == "isdbgrid":
         pytest.skip("requires replica-set failpoint support")
 
+    if t.source.admin.command("buildInfo")["versionArray"][0] < 7:
+        pytest.skip("createIndexes returnOnStart requires MongoDB 7.0+ on the source")
+
     primary_host = hello.get("primary")
     assert primary_host, f"source hello did not identify a primary: {hello}"
 
