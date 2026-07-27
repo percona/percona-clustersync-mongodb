@@ -13,6 +13,8 @@ services:
       - PERCONA_TELEMETRY_DISABLE=1
     ports: ["30000:30000"]
     volumes: ["rs00:/data/db", "./mongo/:/cfg:ro"]
+    # Test harness only: PCSM-322 needs failpoints on source RS members.
+    # Deliberately excluded from target RS members and sharded topology.
     command:
       [
         "-f",
