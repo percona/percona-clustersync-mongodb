@@ -782,23 +782,12 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		promRegistry:  promRegistry,
 	}
 
-	pcs.SetOnStateChanged(func(newState pcsm.State) {
+	pcs.SetOnStateChanged(func(_ pcsm.State) {
 		// State-change checkpoints are fenced by the current lease term; a
-		// STANDBY's write being rejected by the fence is expected.
+		// STANDBY's write being rejected by the fence is expected. Outcomes
+		// are logged by DoCheckpoint.
 		_, term := membership.CurrentRole()
-
-		lg := log.New("http:checkpointing")
-
-		err := DoCheckpoint(ctx, target, pcs, term, membership.InstanceID())
-		switch {
-		case err == nil:
-			lg.Debugf("Checkpoint saved on %q", newState)
-		case errors.Is(err, errCheckpointFenced):
-			// Normal for a STANDBY or a just-deposed active, not an error.
-			lg.Debug("Checkpoint fenced by a newer term")
-		default:
-			lg.Error(err, "checkpoint")
-		}
+		_ = DoCheckpoint(ctx, target, pcs, term, membership.InstanceID())
 	})
 
 	// Settle the initial role before the HTTP server serves any request; see

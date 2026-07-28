@@ -92,25 +92,16 @@ func RunCheckpointing(
 		case <-ticker.C:
 			err := DoCheckpoint(ctx, m, rec, term, instanceID)
 			switch {
-			case err == nil:
-				lg.Debug("Checkpoint saved")
-
 			case errors.Is(err, context.Canceled):
 				return
 
 			case errors.Is(err, errCheckpointFenced):
-				lg.Warn("Checkpoint fenced by a newer term; stopping checkpointing")
+				lg.Warn("Stopping checkpointing")
 				if onFenced != nil {
 					onFenced()
 				}
 
 				return
-
-			case errors.Is(err, errNoRecoveryData):
-				// Nothing to persist yet.
-
-			default:
-				lg.Error(err, "Failed to save a checkpoint")
 			}
 		}
 	}
@@ -119,7 +110,31 @@ func RunCheckpointing(
 // DoCheckpoint persists the current checkpoint, stamped with term. The write is
 // fenced: a stored term newer than term means this instance was deposed and the
 // write is rejected with errCheckpointFenced.
+//
+// Outcomes are logged here; callers only handle control flow.
 func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string) error {
+	err := doCheckpoint(ctx, m, rec, term, instanceID)
+
+	lg := log.New("checkpointing").With(log.Int64("term", term))
+	switch {
+	case err == nil:
+		lg.Debug("Checkpoint saved")
+
+	case errors.Is(err, errCheckpointFenced):
+		// Expected on a STANDBY or a just-deposed active, not a failure.
+		lg.Debug("Checkpoint fenced by a newer term")
+
+	case errors.Is(err, errNoRecoveryData), errors.Is(err, context.Canceled):
+		// Nothing to persist yet, or shutting down.
+
+	default:
+		lg.Error(err, "Failed to save a checkpoint")
+	}
+
+	return err
+}
+
+func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string) error {
 	data, err := rec.Checkpoint(ctx)
 	if err != nil {
 		return errors.Wrap(err, "checkpoint")
