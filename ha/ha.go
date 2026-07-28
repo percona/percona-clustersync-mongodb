@@ -12,6 +12,10 @@ import (
 // Role is the HA role of a PCSM instance within a set.
 type Role string
 
+// Term is the monotonic lease term. It grows across acquisitions and doubles as
+// the fencing token stamped into checkpoint writes.
+type Term int64
+
 const (
 	// RoleActive indicates the instance currently holds the lease and performs replication.
 	RoleActive Role = "ACTIVE"
@@ -55,7 +59,7 @@ type Member struct {
 	Host          string    `bson:"host"`
 	Port          int       `bson:"port"`
 	Role          Role      `bson:"role"`
-	Term          int64     `bson:"term"`
+	Term          Term      `bson:"term"`
 	PCSMVersion   string    `bson:"pcsmVersion"`
 	StartedAt     time.Time `bson:"startedAt"`
 	LastHeartbeat time.Time `bson:"lastHeartbeat"`
@@ -67,7 +71,7 @@ type Member struct {
 type Lease struct {
 	ID           string    `bson:"_id"`
 	Group        string    `bson:"group"`
-	Term         int64     `bson:"term"`
+	Term         Term      `bson:"term"`
 	InstanceID   string    `bson:"instanceId"`
 	ElectionDate time.Time `bson:"electionDate"`
 	ExpiresAt    time.Time `bson:"expiresAt"`

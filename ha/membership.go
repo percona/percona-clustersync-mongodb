@@ -53,7 +53,7 @@ type Membership struct {
 	leaseCancel context.CancelFunc
 	// role and term change together on a role transition.
 	role Role
-	term int64
+	term Term
 
 	// beatNow signals the refresh loop to write an immediate heartbeat so a
 	// role change lands in the member document without waiting for the next tick.
@@ -123,7 +123,7 @@ func (m *Membership) Group() string { return m.group }
 // next tick. It returns true when the role actually transitioned. Membership is
 // the single source of truth for (role, term); the election layer drives all
 // transitions through here.
-func (m *Membership) SetRole(role Role, term int64) bool {
+func (m *Membership) SetRole(role Role, term Term) bool {
 	m.mu.Lock()
 	transitioned := m.role != role
 	m.role = role
@@ -140,7 +140,7 @@ func (m *Membership) SetRole(role Role, term int64) bool {
 }
 
 // CurrentRole returns the role and term this instance currently advertises.
-func (m *Membership) CurrentRole() (Role, int64) {
+func (m *Membership) CurrentRole() (Role, Term) {
 	return m.currentRole()
 }
 
@@ -203,7 +203,7 @@ func (m *Membership) emitRoleChange(rc RoleChange) {
 	}
 }
 
-func (m *Membership) currentRole() (Role, int64) {
+func (m *Membership) currentRole() (Role, Term) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

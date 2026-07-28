@@ -36,7 +36,7 @@ func TestMembershipDefaultRole(t *testing.T) {
 
 	role, term := m.currentRole()
 	assert.Equal(t, RoleStandby, role, "default role should be STANDBY")
-	assert.Equal(t, int64(0), term, "default term should be 0")
+	assert.Equal(t, Term(0), term, "default term should be 0")
 }
 
 func TestSetRoleRoundTrip(t *testing.T) {
@@ -47,13 +47,13 @@ func TestSetRoleRoundTrip(t *testing.T) {
 	m.SetRole(RoleActive, 7)
 	role, term := m.currentRole()
 	assert.Equal(t, RoleActive, role)
-	assert.Equal(t, int64(7), term)
+	assert.Equal(t, Term(7), term)
 
 	// A subsequent transition overwrites the previous one.
 	m.SetRole(RoleStandby, 8)
 	role, term = m.currentRole()
 	assert.Equal(t, RoleStandby, role)
-	assert.Equal(t, int64(8), term)
+	assert.Equal(t, Term(8), term)
 }
 
 func TestSetRoleSignalsBeatNow(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSetRoleNudgeCoalesces(t *testing.T) {
 
 	role, term := m.currentRole()
 	assert.Equal(t, RoleActive, role)
-	assert.Equal(t, int64(2), term, "latest SetRole state must win even when the nudge is coalesced")
+	assert.Equal(t, Term(2), term, "latest SetRole state must win even when the nudge is coalesced")
 
 	// Exactly one token should be buffered (coalesced).
 	<-m.beatNow
@@ -119,7 +119,7 @@ func TestSetRoleConcurrent(t *testing.T) {
 
 	for i := range n {
 		wg.Go(func() {
-			m.SetRole(RoleActive, int64(i))
+			m.SetRole(RoleActive, Term(i))
 		})
 	}
 

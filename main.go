@@ -787,7 +787,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		// STANDBY's write being rejected by the fence is expected. Outcomes
 		// are logged by DoCheckpoint.
 		_, term := membership.CurrentRole()
-		_ = DoCheckpoint(ctx, target, pcs, term, membership.InstanceID())
+		_ = DoCheckpoint(ctx, target, pcs, int64(term), membership.InstanceID())
 	})
 
 	// Settle the initial role before the HTTP server serves any request; see
@@ -807,7 +807,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 // transitions, which never fire for an instance that starts and stays STANDBY.
 func (s *server) logInitialRole() {
 	role, term := s.membership.CurrentRole()
-	lg := log.New("ha:role").With(log.Int64("term", term))
+	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 
 	if role == ha.RoleActive {
 		lg.Info("Instance role: ACTIVE")
@@ -852,8 +852,8 @@ func (s *server) watchRoleChanges(ctx context.Context) {
 // onPromote handles a STANDBY->ACTIVE transition: it re-reads the persisted
 // checkpoint so this instance resumes from the latest committed state, then
 // starts the checkpointing loop for this ACTIVE epoch.
-func (s *server) onPromote(ctx context.Context, term int64) {
-	lg := log.New("ha:role").With(log.Int64("term", term))
+func (s *server) onPromote(ctx context.Context, term ha.Term) {
+	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 	lg.Info("Instance role: ACTIVE (promoted)")
 
 	// If recovery fails this instance cannot safely act as ACTIVE, so
@@ -878,7 +878,7 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 	if s.checkpointCancel == nil {
 		cpCtx, cancel := context.WithCancel(ctx)
 		s.checkpointCancel = cancel
-		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, term, s.membership.InstanceID(), func() {
+		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, int64(term), s.membership.InstanceID(), func() {
 			s.onDemote(ctx, term)
 		})
 	}
@@ -925,12 +925,12 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 // below drops such a call once membership has advanced past term; if it has not
 // advanced yet the demotion still stands, because a newer active genuinely
 // exists. A demotion is therefore never applied to a strictly newer epoch.
-func (s *server) onDemote(ctx context.Context, term int64) {
-	lg := log.New("ha:role").With(log.Int64("term", term))
+func (s *server) onDemote(ctx context.Context, term ha.Term) {
+	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 
 	_, currentTerm := s.membership.CurrentRole()
 	if currentTerm > term {
-		lg.With(log.Int64("currentTerm", currentTerm)).
+		lg.With(log.Int64("currentTerm", int64(currentTerm))).
 			Debug("Ignoring stale demotion for an older term")
 
 		return
@@ -1421,7 +1421,7 @@ type groupMember struct {
 // groupInfo describes the HA group this instance belongs to.
 type groupInfo struct {
 	Name    string        `json:"name,omitempty"`
-	Term    int64         `json:"term"`
+	Term    ha.Term       `json:"term"`
 	Members []groupMember `json:"members"`
 }
 

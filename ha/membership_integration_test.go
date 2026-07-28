@@ -124,7 +124,7 @@ func TestJoinMembershipWritesMemberDoc(t *testing.T) {
 	assert.Equal(t, 2242, doc.Port)
 	assert.Equal(t, "v-test", doc.PCSMVersion)
 	assert.Equal(t, RoleStandby, doc.Role, "default advertised role is STANDBY")
-	assert.Equal(t, int64(0), doc.Term)
+	assert.Equal(t, Term(0), doc.Term)
 	assert.False(t, doc.LastHeartbeat.IsZero(), "lastHeartbeat should be stamped by the server")
 }
 

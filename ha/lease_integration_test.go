@@ -76,12 +76,12 @@ func TestLeaseSingleAcquirer(t *testing.T) {
 	att, err := m.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
 	assert.True(t, att.Acquired, "the only instance should win the lease")
-	assert.Equal(t, int64(1), att.Term, "first acquisition should be term 1")
+	assert.Equal(t, Term(1), att.Term, "first acquisition should be term 1")
 
 	lease := readLease(t, ctx, client)
 	assert.Equal(t, "pcsm-solo", lease.InstanceID)
 	assert.Equal(t, "group-a", lease.Group)
-	assert.Equal(t, int64(1), lease.Term)
+	assert.Equal(t, Term(1), lease.Term)
 	assert.False(t, lease.ExpiresAt.IsZero(), "expiresAt should be stamped by the server")
 }
 
@@ -97,7 +97,7 @@ func TestLeaseRenewKeepsTerm(t *testing.T) {
 	att, err := m.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
 	require.True(t, att.Acquired)
-	require.Equal(t, int64(1), att.Term)
+	require.Equal(t, Term(1), att.Term)
 
 	first := readLease(t, ctx, client)
 
@@ -105,7 +105,7 @@ func TestLeaseRenewKeepsTerm(t *testing.T) {
 		att, err = m.tryAcquireOrRenew(ctx)
 		require.NoError(t, err)
 		assert.True(t, att.Acquired, "owner should keep renewing")
-		assert.Equal(t, int64(1), att.Term, "renewal must not bump the term")
+		assert.Equal(t, Term(1), att.Term, "renewal must not bump the term")
 	}
 
 	latest := readLease(t, ctx, client)
@@ -136,7 +136,7 @@ func TestLeaseContentionExactlyOneActive(t *testing.T) {
 	assert.Equal(t, 1, winners, "exactly one contender should hold the lease")
 
 	lease := readLease(t, ctx, client)
-	assert.Equal(t, int64(1), lease.Term, "a single contested acquisition is term 1")
+	assert.Equal(t, Term(1), lease.Term, "a single contested acquisition is term 1")
 }
 
 func TestLeaseFailoverBumpsTerm(t *testing.T) {
@@ -152,7 +152,7 @@ func TestLeaseFailoverBumpsTerm(t *testing.T) {
 	att, err := active.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
 	require.True(t, att.Acquired)
-	require.Equal(t, int64(1), att.Term)
+	require.Equal(t, Term(1), att.Term)
 
 	// While the active's lease is valid, the standby cannot take over.
 	att, err = standby.tryAcquireOrRenew(ctx)
@@ -166,7 +166,7 @@ func TestLeaseFailoverBumpsTerm(t *testing.T) {
 	att, err = standby.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
 	assert.True(t, att.Acquired, "standby should win after the lease expires")
-	assert.Equal(t, int64(2), att.Term, "failover must bump the term")
+	assert.Equal(t, Term(2), att.Term, "failover must bump the term")
 
 	lease := readLease(t, ctx, client)
 	assert.Equal(t, "pcsm-standby", lease.InstanceID)
@@ -192,7 +192,7 @@ func TestLeaseReleaseFreesPromptly(t *testing.T) {
 	att, err = standby.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
 	assert.True(t, att.Acquired, "standby should win immediately after the active releases")
-	assert.Equal(t, int64(2), att.Term, "the post-release acquisition is a fresh win")
+	assert.Equal(t, Term(2), att.Term, "the post-release acquisition is a fresh win")
 }
 
 func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
@@ -241,7 +241,7 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 	select {
 	case rc := <-m.RoleChanges():
 		assert.Equal(t, RoleActive, rc.Role, "the sole instance should become ACTIVE")
-		assert.Equal(t, int64(1), rc.Term)
+		assert.Equal(t, Term(1), rc.Term)
 	case <-time.After(5 * time.Second):
 		t.Fatal("expected a RoleChange to ACTIVE within timeout")
 	}

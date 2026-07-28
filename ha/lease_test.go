@@ -31,7 +31,7 @@ func TestMemberDefaultRole(t *testing.T) {
 
 	role, term := m.CurrentRole()
 	assert.Equal(t, RoleStandby, role, "default role should be STANDBY")
-	assert.Equal(t, int64(0), term, "default term should be 0")
+	assert.Equal(t, Term(0), term, "default term should be 0")
 }
 
 func TestReconcileEmitsOnRoleChange(t *testing.T) {
@@ -43,7 +43,7 @@ func TestReconcileEmitsOnRoleChange(t *testing.T) {
 
 	role, term := m.CurrentRole()
 	assert.Equal(t, RoleActive, role)
-	assert.Equal(t, int64(1), term)
+	assert.Equal(t, Term(1), term)
 
 	select {
 	case rc := <-m.roleChangeCh:
@@ -84,7 +84,7 @@ func TestReconcileNoEmitOnTermOnlyChangeWhileActive(t *testing.T) {
 	m.reconcileRole(RoleActive, 2, testLogger())
 
 	_, term := m.CurrentRole()
-	assert.Equal(t, int64(2), term, "term should still be updated")
+	assert.Equal(t, Term(2), term, "term should still be updated")
 
 	select {
 	case rc := <-m.roleChangeCh:
@@ -143,7 +143,7 @@ func TestReconcileConcurrent(t *testing.T) {
 			if i%2 == 0 {
 				role = RoleStandby
 			}
-			m.reconcileRole(role, int64(i), testLogger())
+			m.reconcileRole(role, Term(i), testLogger())
 		})
 	}
 

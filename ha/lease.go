@@ -18,7 +18,7 @@ import (
 // at the transition; it grows monotonically and doubles as the fencing token.
 type RoleChange struct {
 	Role Role
-	Term int64
+	Term Term
 }
 
 // runLease tries to acquire or renew the lease on every tick and reconciles the
@@ -57,7 +57,7 @@ func (m *Membership) FirstLeaseTick(ctx context.Context) {
 // meaningful only when Acquired is true.
 type leaseAttempt struct {
 	Acquired bool
-	Term     int64
+	Term     Term
 }
 
 // leaseTick performs one acquire/renew attempt and reconciles the resulting role.
@@ -88,12 +88,12 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 
 // reconcileRole records the role/term on the member and emits a RoleChange when
 // the role actually transitions. Same-role renewals do not emit.
-func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
+func (m *Membership) reconcileRole(role Role, term Term, lg log.Logger) {
 	if !m.SetRole(role, term) {
 		return
 	}
 
-	lg.With(log.String("role", string(role)), log.Int64("term", term)).
+	lg.With(log.String("role", string(role)), log.Int64("term", int64(term))).
 		Info("Role transition")
 
 	m.emitRoleChange(RoleChange{Role: role, Term: term})
