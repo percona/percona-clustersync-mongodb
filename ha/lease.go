@@ -132,10 +132,8 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (leaseAttempt, error
 		return leaseAttempt{}, errors.Wrap(err, "bootstrap lease")
 	}
 
-	// The insert stamped timestamps with the client clock ($$NOW is invalid in
-	// an insert); re-renew to re-stamp them with the server clock and read the
-	// authoritative post-image. A non-match means another instance took the
-	// lease between our insert and this renew, so we do not hold it.
+	// Re-renew the freshly bootstrapped lease to finalize it with server-clock
+	// timestamps; not acquiring means another instance took it in the meantime.
 	att, matched, err = m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
 		return leaseAttempt{}, err
