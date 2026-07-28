@@ -1003,7 +1003,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Status is a read on the active pipeline. A STANDBY has no meaningful
 	// repl state.
-	if !s.requireActive(ctx, w) {
+	if !s.isActive(ctx, w) {
 		return
 	}
 
@@ -1216,7 +1216,7 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireActive(ctx, w) {
+	if !s.isActive(ctx, w) {
 		return
 	}
 
@@ -1280,7 +1280,7 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireActive(ctx, w) {
+	if !s.isActive(ctx, w) {
 		return
 	}
 
@@ -1315,7 +1315,7 @@ func (s *server) HandlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireActive(ctx, w) {
+	if !s.isActive(ctx, w) {
 		return
 	}
 
@@ -1350,7 +1350,7 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.requireActive(ctx, w) {
+	if !s.isActive(ctx, w) {
 		return
 	}
 
@@ -1507,10 +1507,10 @@ type notActiveResponse struct {
 	*ResponseEnvelope
 }
 
-// requireActive rejects requests on a non-ACTIVE instance with HTTP 409. It
+// isActive rejects requests on a non-ACTIVE instance with HTTP 409. It
 // returns true when the caller may proceed, false when it has already written
 // the 409 response.
-func (s *server) requireActive(ctx context.Context, w http.ResponseWriter) bool {
+func (s *server) isActive(ctx context.Context, w http.ResponseWriter) bool {
 	role, _ := s.membership.CurrentRole()
 	if role == ha.RoleActive {
 		return true
