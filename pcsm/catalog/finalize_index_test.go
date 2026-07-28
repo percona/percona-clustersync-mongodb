@@ -42,7 +42,7 @@ func TestDecideFinalizeUnsuccessfulIndex(t *testing.T) {
 				originalType: IndexIncomplete,
 				inProgress:   true,
 			},
-			want: finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonStillIncomplete},
+			want: finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonSourceIndexBuilding},
 		},
 		{
 			name: "reports inconsistent index still inconsistent on source",
@@ -51,7 +51,7 @@ func TestDecideFinalizeUnsuccessfulIndex(t *testing.T) {
 				originalType: IndexInconsistent,
 				inconsistent: true,
 			},
-			want: finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonStillInconsistent},
+			want: finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonSourceIndexInconsistent},
 		},
 		{
 			name: "reports incomplete index that became inconsistent on source",
@@ -60,7 +60,7 @@ func TestDecideFinalizeUnsuccessfulIndex(t *testing.T) {
 				originalType: IndexIncomplete,
 				inconsistent: true,
 			},
-			want: finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonBecameInconsistent},
+			want: finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonSourceIndexInconsistent},
 		},
 		{
 			name: "reports inconsistent index now building on source",
@@ -69,7 +69,7 @@ func TestDecideFinalizeUnsuccessfulIndex(t *testing.T) {
 				originalType: IndexInconsistent,
 				inProgress:   true,
 			},
-			want: finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonStillBuilding},
+			want: finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonSourceIndexBuilding},
 		},
 		{
 			name: "reports dropped incomplete unique index as no longer present",

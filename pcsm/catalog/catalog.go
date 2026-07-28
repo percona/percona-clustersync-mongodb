@@ -190,15 +190,6 @@ const (
 	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
 )
 
-const (
-	finalizeReasonBecameInconsistent = "became inconsistent at finalize"
-	finalizeReasonNoLongerPresent    = "no longer present on source"
-	finalizeReasonSourceSpecChanged  = "source spec changed"
-	finalizeReasonStillBuilding      = "index became an in-progress build on one or more source shards at finalize"
-	finalizeReasonStillIncomplete    = "index is still building on one or more source shards"
-	finalizeReasonStillInconsistent  = "index is missing on one or more source shards"
-)
-
 // UnsuccessfulIndex describes an index that did not complete cleanly during replication
 // and was not recovered during finalize.
 type UnsuccessfulIndex struct {
@@ -230,117 +221,12 @@ type finalizeSourceIndexInput struct {
 	originalType IndexUnsuccessfulType
 }
 
-func decideFinalizeUnsuccessfulIndex(input finalizeIndexDecisionInput) finalizeIndexDecision {
-	if input.originalType == IndexFailed {
-		return finalizeIndexDecision{recreate: true}
-	}
-
-	if input.sourceCheckErr != nil {
-		return finalizeIndexDecision{
-			reportType: input.originalType,
-			reason:     input.sourceCheckErr.Error(),
-		}
-	}
-
-	switch input.originalType { //nolint:exhaustive // IndexFailed handled by the guard above
-	case IndexIncomplete:
-		if input.inProgress {
-			return finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonStillIncomplete}
-		}
-
-		if input.inconsistent {
-			return finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonBecameInconsistent}
-		}
-
-	case IndexInconsistent:
-		if input.inconsistent {
-			return finalizeIndexDecision{reportType: IndexInconsistent, reason: finalizeReasonStillInconsistent}
-		}
-
-		if input.inProgress {
-			return finalizeIndexDecision{reportType: IndexIncomplete, reason: finalizeReasonStillBuilding}
-		}
-	}
-
-	if input.sourceSpec == nil {
-		return finalizeIndexDecision{reportType: input.originalType, reason: finalizeReasonNoLongerPresent}
-	}
-
-	if !indexCreateSpecsEqual(input.storedSpec, input.sourceSpec) {
-		return finalizeIndexDecision{reportType: input.originalType, reason: finalizeReasonSourceSpecChanged}
-	}
-
-	return finalizeIndexDecision{recreate: true}
-}
-
-func indexCreateSpecsEqual(stored, source *mdb.IndexSpecification) bool {
-	if stored == nil || source == nil {
-		return stored == nil && source == nil
-	}
-
-	// Compare only createIndexes-relevant fields. Ignore server-managed or
-	// non-create metadata: v, ns, and clustered. Clustered is a collection
-	// property surfaced on IndexSpecification, not an index recreated through
-	// createIndexes during finalize.
-	return bytes.Equal(stored.KeysDocument, source.KeysDocument) &&
-		ptrEqual(stored.Unique, source.Unique) &&
-		ptrEqual(stored.PrepareUnique, source.PrepareUnique) &&
-		ptrEqual(stored.Sparse, source.Sparse) &&
-		ptrEqual(stored.Hidden, source.Hidden) &&
-		ptrEqual(stored.ExpireAfterSeconds, source.ExpireAfterSeconds) &&
-		bytes.Equal(stored.Collation, source.Collation) &&
-		bytes.Equal(stored.StorageEngine, source.StorageEngine) &&
-		indexOptionValueEqual(stored.Weights, source.Weights) &&
-		ptrEqual(stored.DefaultLanguage, source.DefaultLanguage) &&
-		ptrEqual(stored.LanguageOverride, source.LanguageOverride) &&
-		ptrEqual(stored.TextVersion, source.TextVersion) &&
-		indexOptionValueEqual(stored.WildcardProjection, source.WildcardProjection) &&
-		indexOptionValueEqual(stored.PartialFilterExpression, source.PartialFilterExpression) &&
-		ptrEqual(stored.Bits, source.Bits) &&
-		ptrEqual(stored.Min, source.Min) &&
-		ptrEqual(stored.Max, source.Max) &&
-		ptrEqual(stored.GeoIdxVer, source.GeoIdxVer)
-}
-
-func ptrEqual[T comparable](left, right *T) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-
-	return *left == *right
-}
-
-// indexOptionValueEqual compares option sub-documents by marshaled BSON
-// (field-order sensitive; relies on stable same-source key order).
-func indexOptionValueEqual(left, right any) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-
-	leftRaw, leftOK := marshalIndexOptionValue(left)
-	rightRaw, rightOK := marshalIndexOptionValue(right)
-	if leftOK && rightOK && bytes.Equal(leftRaw, rightRaw) {
-		return true
-	}
-
-	return reflect.DeepEqual(left, right)
-}
-
-func marshalIndexOptionValue(value any) (bson.Raw, bool) {
-	switch v := value.(type) {
-	case bson.Raw:
-		return v, true
-	case []byte:
-		return bson.Raw(v), true
-	}
-
-	raw, err := bson.Marshal(value)
-	if err != nil {
-		return nil, false
-	}
-
-	return raw, true
-}
+const (
+	finalizeReasonNoLongerPresent         = "no longer present on source"
+	finalizeReasonSourceIndexBuilding     = "index is still building on one or more source shards"
+	finalizeReasonSourceIndexInconsistent = "index is missing on one or more source shards"
+	finalizeReasonSourceSpecChanged       = "source spec changed"
+)
 
 // NewCatalog creates a new Catalog.
 func NewCatalog(source, target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
@@ -1101,13 +987,17 @@ func (c *Catalog) UUIDMap() UUIDMap {
 //  1. Modify-option failures during the per-index pass (e.g. a collMod call
 //     that did not succeed) — surfaced as Type=IndexFailed with the wrapped
 //     error as the reason.
+//
 //  2. Recreate failures and unrecoverable leftovers from
-//     [finalizeUnsuccessfulIndexes]. Failed entries are recreated
-//     unconditionally; Incomplete and Inconsistent entries are rechecked
-//     against the source and recreated only when still valid there. Entries
-//     that cannot be recreated (retry error, still building or inconsistent on
-//     source, no longer present, or a changed spec) are reported with the
-//     corresponding reason.
+//     finalizeUnsuccessfulIndexes.
+//
+//     - Existing catalog entries marked Failed
+//     after target index-creation failures are recreated unconditionally.
+//     - Incomplete and Inconsistent entries are rechecked against the source.
+//     They are recreated only when the source index is neither building nor
+//     inconsistent and still exists with the specification recorded during
+//     cloning. Source-check failures, unresolved, missing, or changed indexes,
+//     and target recreation failures are reported with the corresponding reason.
 func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 
@@ -1342,8 +1232,6 @@ func (c *Catalog) decideFinalizeSourceIndex(
 	ctx context.Context,
 	params finalizeSourceIndexInput,
 ) finalizeIndexDecision {
-	db := params.namespace.Database
-	coll := params.namespace.Collection
 	index := params.index
 	originalType := params.originalType
 
@@ -1407,7 +1295,12 @@ func (c *Catalog) decideFinalizeSourceIndex(
 		}
 	}
 
-	indexes, err := mdb.ListIndexes(ctx, c.source, db, coll)
+	indexes, err := mdb.ListIndexes(
+		ctx,
+		c.source,
+		params.namespace.Database,
+		params.namespace.Collection,
+	)
 	if err != nil {
 		input.sourceCheckErr = err
 
@@ -1446,6 +1339,128 @@ func findIndexByName(indexes []*mdb.IndexSpecification, name string) *mdb.IndexS
 	}
 
 	return indexes[idx]
+}
+
+func decideFinalizeUnsuccessfulIndex(input finalizeIndexDecisionInput) finalizeIndexDecision {
+	if input.originalType == IndexFailed {
+		return finalizeIndexDecision{recreate: true}
+	}
+
+	if input.sourceCheckErr != nil {
+		return finalizeIndexDecision{
+			reportType: input.originalType,
+			reason:     input.sourceCheckErr.Error(),
+		}
+	}
+
+	switch input.originalType { //nolint:exhaustive // IndexFailed handled by the guard above
+	case IndexIncomplete:
+		if input.inProgress {
+			return finalizeIndexDecision{
+				reportType: IndexIncomplete,
+				reason:     finalizeReasonSourceIndexBuilding,
+			}
+		}
+
+		if input.inconsistent {
+			return finalizeIndexDecision{
+				reportType: IndexInconsistent,
+				reason:     finalizeReasonSourceIndexInconsistent,
+			}
+		}
+
+	case IndexInconsistent:
+		if input.inconsistent {
+			return finalizeIndexDecision{
+				reportType: IndexInconsistent,
+				reason:     finalizeReasonSourceIndexInconsistent,
+			}
+		}
+
+		if input.inProgress {
+			return finalizeIndexDecision{
+				reportType: IndexIncomplete,
+				reason:     finalizeReasonSourceIndexBuilding,
+			}
+		}
+	}
+
+	if input.sourceSpec == nil {
+		return finalizeIndexDecision{
+			reportType: input.originalType,
+			reason:     finalizeReasonNoLongerPresent,
+		}
+	}
+
+	if !indexCreateSpecsEqual(input.storedSpec, input.sourceSpec) {
+		return finalizeIndexDecision{
+			reportType: input.originalType,
+			reason:     finalizeReasonSourceSpecChanged,
+		}
+	}
+
+	return finalizeIndexDecision{recreate: true}
+}
+
+func indexCreateSpecsEqual(stored, source *mdb.IndexSpecification) bool {
+	if stored == nil || source == nil {
+		return stored == nil && source == nil
+	}
+
+	// Compare only createIndexes-relevant fields. Ignore server-managed or
+	// non-create metadata: v, ns, and clustered. Clustered is a collection
+	// property surfaced on IndexSpecification, not an index recreated through
+	// createIndexes during finalize.
+	return bytes.Equal(stored.KeysDocument, source.KeysDocument) &&
+		ptrEqual(stored.Unique, source.Unique) &&
+		ptrEqual(stored.PrepareUnique, source.PrepareUnique) &&
+		ptrEqual(stored.Sparse, source.Sparse) &&
+		ptrEqual(stored.Hidden, source.Hidden) &&
+		ptrEqual(stored.ExpireAfterSeconds, source.ExpireAfterSeconds) &&
+		bytes.Equal(stored.Collation, source.Collation) &&
+		bytes.Equal(stored.StorageEngine, source.StorageEngine) &&
+		indexOptionValueEqual(stored.Weights, source.Weights) &&
+		ptrEqual(stored.DefaultLanguage, source.DefaultLanguage) &&
+		ptrEqual(stored.LanguageOverride, source.LanguageOverride) &&
+		ptrEqual(stored.TextVersion, source.TextVersion) &&
+		indexOptionValueEqual(stored.WildcardProjection, source.WildcardProjection) &&
+		indexOptionValueEqual(stored.PartialFilterExpression, source.PartialFilterExpression) &&
+		ptrEqual(stored.Bits, source.Bits) &&
+		ptrEqual(stored.Min, source.Min) &&
+		ptrEqual(stored.Max, source.Max) &&
+		ptrEqual(stored.GeoIdxVer, source.GeoIdxVer)
+}
+
+// indexOptionValueEqual compares option sub-documents by marshaled BSON
+// (field-order sensitive; relies on stable same-source key order).
+func indexOptionValueEqual(left, right any) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+
+	leftRaw, leftOK := marshalIndexOptionValue(left)
+	rightRaw, rightOK := marshalIndexOptionValue(right)
+	if leftOK && rightOK && bytes.Equal(leftRaw, rightRaw) {
+		return true
+	}
+
+	return reflect.DeepEqual(left, right)
+}
+
+func marshalIndexOptionValue(value any) (bson.Raw, bool) {
+	switch v := value.(type) {
+	case bson.Raw:
+		return v, true
+	case []byte:
+		return bson.Raw(v), true
+	}
+
+	raw, err := bson.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+
+	return raw, true
 }
 
 // doModifyIndexOption modifies an index property in the target MongoDB.
@@ -1794,4 +1809,12 @@ func runWithRetry(
 	fn func(context.Context) error,
 ) error {
 	return mdb.RunWithRetry(ctx, fn, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries) //nolint:wrapcheck
+}
+
+func ptrEqual[T comparable](left, right *T) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+
+	return *left == *right
 }
