@@ -99,8 +99,8 @@ func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 	m.emitRoleChange(RoleChange{Role: role, Term: term})
 }
 
-// tryAcquireOrRenew atomically acquires or renews the lease. Losing to another
-// instance's unexpired lease is reported as held=false with a nil error.
+// tryAcquireOrRenew acquires or renews the lease. Losing to another instance's
+// unexpired lease is a non-acquired attempt with a nil error.
 //
 // Two steps, because MongoDB forbids $expr in an upsert predicate:
 //  1. Take/renew an existing lease with a non-upsert update whose server-clock
@@ -108,10 +108,6 @@ func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 //  2. If nothing matched, bootstrap with an insert. Insert (not upsert) is
 //     deliberate: a duplicate-key error is how a losing contender is detected,
 //     without overwriting the current owner's lease.
-//
-// $$NOW is invalid in an insert, so the bootstrap stamps client-clock times; a
-// successful bootstrap immediately re-renews to replace them with server-clock
-// stamps.
 func (m *Membership) tryAcquireOrRenew(ctx context.Context) (leaseAttempt, error) {
 	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
@@ -136,6 +132,10 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (leaseAttempt, error
 		return leaseAttempt{}, errors.Wrap(err, "bootstrap lease")
 	}
 
+	// The insert stamped timestamps with the client clock ($$NOW is invalid in
+	// an insert); re-renew to re-stamp them with the server clock and read the
+	// authoritative post-image. A non-match means another instance took the
+	// lease between our insert and this renew, so we do not hold it.
 	att, matched, err = m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
 		return leaseAttempt{}, err
@@ -149,9 +149,8 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (leaseAttempt, error
 
 // tryInsertLease creates the lease document at term 1. A duplicate-key error
 // (returned unwrapped) means another instance owns the lease: a loss. The
-// client-clock timestamps are provisional; the caller re-renews immediately so
-// they are re-stamped with the server clock, which is also where the
-// authoritative ownership/term is read.
+// client-clock timestamps are provisional; the caller re-renews immediately to
+// re-stamp them with the server clock.
 func (m *Membership) tryInsertLease(ctx context.Context) error {
 	now := time.Now().UTC()
 
@@ -173,11 +172,9 @@ func (m *Membership) tryInsertLease(ctx context.Context) error {
 }
 
 // tryTakeOrRenewExisting updates an existing lease when this instance owns it
-// or it has expired (per the server clock). The matched return reports whether
-// the filter matched a document: false means the lease is absent or held by
-// another instance and the caller must disambiguate. On a match the post-image
-// is always owned by this instance (the pipeline sets instanceId
-// unconditionally), so a match is always an acquisition.
+// or it has expired (per the server clock). matched=false means the lease is
+// absent or held by another instance; the caller disambiguates. A match is
+// always an acquisition: the pipeline sets instanceId unconditionally.
 func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, bool, error) {
 	ttlMS := config.LeaseTTL.Milliseconds()
 

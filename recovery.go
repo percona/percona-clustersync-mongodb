@@ -161,7 +161,7 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 }
 
 // doCheckpointBootstrap inserts the first checkpoint document. A duplicate-key
-// collision means a newer term already owns it: the write is fenced.
+// collision means another writer created it first; treated as fenced.
 func doCheckpointBootstrap(
 	ctx context.Context, coll *mongo.Collection, data bson.Raw, term int64, instanceID string,
 ) error {

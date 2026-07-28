@@ -801,9 +801,8 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		}
 	})
 
-	// Settle the initial role before the HTTP server serves any request, so a
-	// fresh instance does not briefly report STANDBY and spuriously reject
-	// writes. The transition is consumed by watchRoleChanges below.
+	// Settle the initial role before the HTTP server serves any request; see
+	// FirstLeaseTick. The transition is consumed by watchRoleChanges below.
 	s.membership.FirstLeaseTick(ctx)
 
 	s.logInitialRole()
@@ -901,14 +900,13 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 		return
 	}
 
-	// Apply a deferred --start now that this instance is ACTIVE. It only makes
-	// sense from idle: on a re-promotion after failover the pipeline resumed
-	// from the restored checkpoint and must not be restarted, so skip (and say
-	// so) rather than silently dropping the flag.
+	// Apply the deferred --start now that this instance is ACTIVE. Only valid
+	// from idle: on re-promotion the pipeline resumed from the restored
+	// checkpoint and must not be restarted.
 	state := s.pcsm.Status(ctx).State
 	if state != pcsm.StateIdle {
 		lg.With(log.String("state", string(state))).
-			Info("Skipping deferred --start: pipeline is not idle")
+			Info("Skipping --start on promotion: replication already in progress")
 
 		return
 	}
