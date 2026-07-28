@@ -1302,7 +1302,7 @@ func (c *Catalog) decideFinalizeSourceIndex(
 		params.namespace.Collection,
 	)
 	if err != nil {
-		input.sourceCheckErr = err
+		input.sourceCheckErr = errors.Wrap(err, "source")
 
 		return decideFinalizeUnsuccessfulIndex(input)
 	}
