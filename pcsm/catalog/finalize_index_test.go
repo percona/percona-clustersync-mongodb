@@ -190,6 +190,12 @@ func TestIndexCreateSpecsEqual(t *testing.T) {
 			},
 		},
 		{
+			name: "detects wildcard projection removal",
+			mutate: func(spec *mdb.IndexSpecification) {
+				spec.WildcardProjection = nil
+			},
+		},
+		{
 			name: "detects geo option change",
 			mutate: func(spec *mdb.IndexSpecification) {
 				spec.Max = new(200.0)
