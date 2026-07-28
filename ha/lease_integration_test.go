@@ -195,6 +195,37 @@ func TestLeaseReleaseFreesPromptly(t *testing.T) {
 	assert.Equal(t, int64(2), term, "the post-release acquisition is a fresh win")
 }
 
+func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
+	ctx := t.Context()
+	client := connectToMongoDB(t)
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	cleanLease(t, ctx, client)
+
+	// Another instance owns an unexpired lease.
+	owner := newLeaseMemberForTest(t, ctx, client, "pcsm-owner")
+	held, _, err := owner.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	require.True(t, held)
+
+	// A contender that reached the re-renew step sees no match: the lease is
+	// held by another instance and unexpired.
+	contender := newLeaseMemberForTest(t, ctx, client, "pcsm-contender")
+	gotHeld, _, matched, err := contender.tryTakeOrRenewExisting(ctx)
+	require.NoError(t, err)
+	assert.False(t, matched, "foreign unexpired lease must not match the take/renew filter")
+	assert.False(t, gotHeld, "not-matched must report not-held")
+
+	// End-to-end: the contender loses and reports not-held with no error.
+	gotHeld, _, err = contender.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	assert.False(t, gotHeld, "a losing contender must report not-held")
+
+	// The owner still holds the lease.
+	lease := readLease(t, ctx, client)
+	assert.Equal(t, "pcsm-owner", lease.InstanceID)
+}
+
 func TestLeaseRunEmitsActive(t *testing.T) {
 	ctx := t.Context()
 	client := connectToMongoDB(t)

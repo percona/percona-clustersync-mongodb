@@ -120,7 +120,7 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 
 	// Step 2: the lease is absent (bootstrap it) or held by another instance
 	// (duplicate key -> we lose).
-	won, term, err := m.tryInsertLease(ctx)
+	err = m.tryInsertLease(ctx)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return false, 0, nil
@@ -129,22 +129,23 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 		return false, 0, errors.Wrap(err, "bootstrap lease")
 	}
 
-	held, renewedTerm, matched, err := m.tryTakeOrRenewExisting(ctx)
+	held, term, matched, err = m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
 		return false, 0, err
 	}
-	if matched {
-		return held, renewedTerm, nil
+	if !matched {
+		return false, 0, nil
 	}
 
-	return won, term, nil
+	return held, term, nil
 }
 
 // tryInsertLease creates the lease document at term 1. A duplicate-key error
 // (returned unwrapped) means another instance owns the lease: a loss. The
 // client-clock timestamps are provisional; the caller re-renews immediately so
-// they are re-stamped with the server clock.
-func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
+// they are re-stamped with the server clock, which is also where the
+// authoritative ownership/term is read.
+func (m *Membership) tryInsertLease(ctx context.Context) error {
 	now := time.Now().UTC()
 
 	// A duplicate-key error is not transient: returned immediately, unwrapped.
@@ -160,16 +161,12 @@ func (m *Membership) tryInsertLease(ctx context.Context) (bool, int64, error) {
 
 		return err //nolint:wrapcheck
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
-	if err != nil {
-		return false, 0, err //nolint:wrapcheck // caller inspects for duplicate-key
-	}
 
-	return true, 1, nil
+	return err //nolint:wrapcheck // caller inspects for duplicate-key
 }
 
 // tryTakeOrRenewExisting updates an existing lease when this instance owns it
-// or it has expired (per the server clock). matched=false means the lease is
-// absent or held by another instance; the caller disambiguates.
+// or it has expired (per the server clock).
 func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, bool, error) {
 	ttlMS := config.LeaseTTL.Milliseconds()
 
@@ -204,8 +201,8 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 	}}}}}
 
 	var (
-		updated Lease
-		matched bool
+		updatedLease Lease
+		matched      bool
 	)
 
 	// ErrNoDocuments is the normal "filter did not match" outcome, not an error
@@ -214,7 +211,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		decodeErr := m.leaseColl().FindOneAndUpdate(
 			ctx, filter, pipeline,
 			options.FindOneAndUpdate().SetReturnDocument(options.After),
-		).Decode(&updated)
+		).Decode(&updatedLease)
 		if errors.Is(decodeErr, mongo.ErrNoDocuments) {
 			matched = false
 
@@ -236,7 +233,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		return false, 0, false, nil
 	}
 
-	return updated.InstanceID == m.instanceID, updated.Term, true, nil
+	return updatedLease.InstanceID == m.instanceID, updatedLease.Term, true, nil
 }
 
 // releaseLease expires the lease (only if this instance still owns it) so a
