@@ -73,10 +73,10 @@ func TestLeaseSingleAcquirer(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-solo")
 
-	held, term, err := m.tryAcquireOrRenew(ctx)
+	att, err := m.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	assert.True(t, held, "the only instance should win the lease")
-	assert.Equal(t, int64(1), term, "first acquisition should be term 1")
+	assert.True(t, att.Acquired, "the only instance should win the lease")
+	assert.Equal(t, int64(1), att.Term, "first acquisition should be term 1")
 
 	lease := readLease(t, ctx, client)
 	assert.Equal(t, "pcsm-solo", lease.InstanceID)
@@ -94,18 +94,18 @@ func TestLeaseRenewKeepsTerm(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-renew")
 
-	held, term, err := m.tryAcquireOrRenew(ctx)
+	att, err := m.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	require.True(t, held)
-	require.Equal(t, int64(1), term)
+	require.True(t, att.Acquired)
+	require.Equal(t, int64(1), att.Term)
 
 	first := readLease(t, ctx, client)
 
 	for range 3 {
-		held, term, err = m.tryAcquireOrRenew(ctx)
+		att, err = m.tryAcquireOrRenew(ctx)
 		require.NoError(t, err)
-		assert.True(t, held, "owner should keep renewing")
-		assert.Equal(t, int64(1), term, "renewal must not bump the term")
+		assert.True(t, att.Acquired, "owner should keep renewing")
+		assert.Equal(t, int64(1), att.Term, "renewal must not bump the term")
 	}
 
 	latest := readLease(t, ctx, client)
@@ -126,9 +126,9 @@ func TestLeaseContentionExactlyOneActive(t *testing.T) {
 	for i := range n {
 		m := newLeaseMemberForTest(t, ctx, client, "pcsm-contender-"+string(rune('a'+i)))
 
-		held, _, err := m.tryAcquireOrRenew(ctx)
+		att, err := m.tryAcquireOrRenew(ctx)
 		require.NoError(t, err)
-		if held {
+		if att.Acquired {
 			winners++
 		}
 	}
@@ -149,24 +149,24 @@ func TestLeaseFailoverBumpsTerm(t *testing.T) {
 	active := newLeaseMemberForTest(t, ctx, client, "pcsm-active")
 	standby := newLeaseMemberForTest(t, ctx, client, "pcsm-standby")
 
-	held, term, err := active.tryAcquireOrRenew(ctx)
+	att, err := active.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	require.True(t, held)
-	require.Equal(t, int64(1), term)
+	require.True(t, att.Acquired)
+	require.Equal(t, int64(1), att.Term)
 
 	// While the active's lease is valid, the standby cannot take over.
-	held, _, err = standby.tryAcquireOrRenew(ctx)
+	att, err = standby.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	require.False(t, held, "standby must not win while the lease is valid")
+	require.False(t, att.Acquired, "standby must not win while the lease is valid")
 
 	// Simulate the active dying: force the lease to expire, then the standby
 	// wins with an incremented term.
 	forceExpireLease(t, ctx, client)
 
-	held, term, err = standby.tryAcquireOrRenew(ctx)
+	att, err = standby.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	assert.True(t, held, "standby should win after the lease expires")
-	assert.Equal(t, int64(2), term, "failover must bump the term")
+	assert.True(t, att.Acquired, "standby should win after the lease expires")
+	assert.Equal(t, int64(2), att.Term, "failover must bump the term")
 
 	lease := readLease(t, ctx, client)
 	assert.Equal(t, "pcsm-standby", lease.InstanceID)
@@ -182,17 +182,17 @@ func TestLeaseReleaseFreesPromptly(t *testing.T) {
 	active := newLeaseMemberForTest(t, ctx, client, "pcsm-active")
 	standby := newLeaseMemberForTest(t, ctx, client, "pcsm-standby")
 
-	held, _, err := active.tryAcquireOrRenew(ctx)
+	att, err := active.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	require.True(t, held)
+	require.True(t, att.Acquired)
 
 	require.NoError(t, active.Release(ctx))
 
 	// After release the lease is immediately acquirable without waiting TTL.
-	held, term, err := standby.tryAcquireOrRenew(ctx)
+	att, err = standby.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	assert.True(t, held, "standby should win immediately after the active releases")
-	assert.Equal(t, int64(2), term, "the post-release acquisition is a fresh win")
+	assert.True(t, att.Acquired, "standby should win immediately after the active releases")
+	assert.Equal(t, int64(2), att.Term, "the post-release acquisition is a fresh win")
 }
 
 func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
@@ -204,22 +204,22 @@ func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
 
 	// Another instance owns an unexpired lease.
 	owner := newLeaseMemberForTest(t, ctx, client, "pcsm-owner")
-	held, _, err := owner.tryAcquireOrRenew(ctx)
+	att, err := owner.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	require.True(t, held)
+	require.True(t, att.Acquired)
 
 	// A contender that reached the re-renew step sees no match: the lease is
 	// held by another instance and unexpired.
 	contender := newLeaseMemberForTest(t, ctx, client, "pcsm-contender")
-	gotHeld, _, matched, err := contender.tryTakeOrRenewExisting(ctx)
+	att, matched, err := contender.tryTakeOrRenewExisting(ctx)
 	require.NoError(t, err)
 	assert.False(t, matched, "foreign unexpired lease must not match the take/renew filter")
-	assert.False(t, gotHeld, "not-matched must report not-held")
+	assert.False(t, att.Acquired, "not-matched must report not-acquired")
 
-	// End-to-end: the contender loses and reports not-held with no error.
-	gotHeld, _, err = contender.tryAcquireOrRenew(ctx)
+	// End-to-end: the contender loses and reports not-acquired with no error.
+	att, err = contender.tryAcquireOrRenew(ctx)
 	require.NoError(t, err)
-	assert.False(t, gotHeld, "a losing contender must report not-held")
+	assert.False(t, att.Acquired, "a losing contender must report not-acquired")
 
 	// The owner still holds the lease.
 	lease := readLease(t, ctx, client)

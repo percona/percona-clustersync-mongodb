@@ -53,9 +53,16 @@ func (m *Membership) FirstLeaseTick(ctx context.Context) {
 	m.leaseTick(ctx, lg)
 }
 
+// leaseAttempt is the outcome of a single acquire/renew attempt. Term is
+// meaningful only when Acquired is true.
+type leaseAttempt struct {
+	Acquired bool
+	Term     int64
+}
+
 // leaseTick performs one acquire/renew attempt and reconciles the resulting role.
 func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
-	held, term, err := m.tryAcquireOrRenew(ctx)
+	att, err := m.tryAcquireOrRenew(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -70,13 +77,13 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 		return
 	}
 
-	if held {
-		m.reconcileRole(RoleActive, term, lg)
+	if att.Acquired {
+		m.reconcileRole(RoleActive, att.Term, lg)
 
 		return
 	}
 
-	m.reconcileRole(RoleStandby, term, lg)
+	m.reconcileRole(RoleStandby, att.Term, lg)
 }
 
 // reconcileRole records the role/term on the member and emits a RoleChange when
@@ -105,17 +112,17 @@ func (m *Membership) reconcileRole(role Role, term int64, lg log.Logger) {
 // $$NOW is invalid in an insert, so the bootstrap stamps client-clock times; a
 // successful bootstrap immediately re-renews to replace them with server-clock
 // stamps.
-func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error) {
+func (m *Membership) tryAcquireOrRenew(ctx context.Context) (leaseAttempt, error) {
 	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
 
 	// Step 1 (common path): take or renew an existing lease.
-	held, term, matched, err := m.tryTakeOrRenewExisting(ctx)
+	att, matched, err := m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
-		return false, 0, err
+		return leaseAttempt{}, err
 	}
 	if matched {
-		return held, term, nil
+		return att, nil
 	}
 
 	// Step 2: the lease is absent (bootstrap it) or held by another instance
@@ -123,21 +130,21 @@ func (m *Membership) tryAcquireOrRenew(ctx context.Context) (bool, int64, error)
 	err = m.tryInsertLease(ctx)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return false, 0, nil
+			return leaseAttempt{}, nil
 		}
 
-		return false, 0, errors.Wrap(err, "bootstrap lease")
+		return leaseAttempt{}, errors.Wrap(err, "bootstrap lease")
 	}
 
-	held, term, matched, err = m.tryTakeOrRenewExisting(ctx)
+	att, matched, err = m.tryTakeOrRenewExisting(ctx)
 	if err != nil {
-		return false, 0, err
+		return leaseAttempt{}, err
 	}
 	if !matched {
-		return false, 0, nil
+		return leaseAttempt{}, nil
 	}
 
-	return held, term, nil
+	return att, nil
 }
 
 // tryInsertLease creates the lease document at term 1. A duplicate-key error
@@ -166,8 +173,12 @@ func (m *Membership) tryInsertLease(ctx context.Context) error {
 }
 
 // tryTakeOrRenewExisting updates an existing lease when this instance owns it
-// or it has expired (per the server clock).
-func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, bool, error) {
+// or it has expired (per the server clock). The matched return reports whether
+// the filter matched a document: false means the lease is absent or held by
+// another instance and the caller must disambiguate. On a match the post-image
+// is always owned by this instance (the pipeline sets instanceId
+// unconditionally), so a match is always an acquisition.
+func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, bool, error) {
 	ttlMS := config.LeaseTTL.Milliseconds()
 
 	// isRenew is true when this instance already owns the lease in the pre-image.
@@ -226,14 +237,14 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (bool, int64, b
 		return nil
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
-		return false, 0, false, errors.Wrap(err, "take or renew lease")
+		return leaseAttempt{}, false, errors.Wrap(err, "take or renew lease")
 	}
 
 	if !matched {
-		return false, 0, false, nil
+		return leaseAttempt{}, false, nil
 	}
 
-	return updatedLease.InstanceID == m.instanceID, updatedLease.Term, true, nil
+	return leaseAttempt{Acquired: true, Term: updatedLease.Term}, true, nil
 }
 
 // releaseLease expires the lease (only if this instance still owns it) so a
