@@ -26,18 +26,13 @@ const (
 // LeaseID is the fixed _id of the single lease document in the lease collection.
 const LeaseID = "lease"
 
-// BSON field names of the lease and member documents.
+// BSON field names referenced queries.
 const (
 	fieldGroup         = "group"
 	fieldInstanceID    = "instanceId"
 	fieldTerm          = "term"
 	fieldExpiresAt     = "expiresAt"
 	fieldElectionDate  = "electionDate"
-	fieldHost          = "host"
-	fieldPort          = "port"
-	fieldRole          = "role"
-	fieldPCSMVersion   = "pcsmVersion"
-	fieldStartedAt     = "startedAt"
 	fieldLastHeartbeat = "lastHeartbeat"
 )
 

@@ -250,12 +250,12 @@ func (m *Membership) beat(ctx context.Context) error {
 	update := mongo.Pipeline{
 		{{"$set", bson.D{
 			{fieldGroup, m.group},
-			{fieldHost, m.host},
-			{fieldPort, m.port},
-			{fieldRole, role},
+			{"host", m.host},
+			{"port", m.port},
+			{"role", role},
 			{fieldTerm, term},
-			{fieldPCSMVersion, m.version},
-			{fieldStartedAt, m.startedAt},
+			{"pcsmVersion", m.version},
+			{"startedAt", m.startedAt},
 			{fieldLastHeartbeat, aggNow},
 		}}},
 	}
