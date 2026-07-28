@@ -897,12 +897,25 @@ func (s *server) onPromote(ctx context.Context, term int64) {
 	autoStartOpts := s.autoStartOpts
 	s.mu.Unlock()
 
-	// Apply a deferred --start now that this instance is ACTIVE.
-	if autoStartOpts != nil && s.pcsm.Status(ctx).State == pcsm.StateIdle {
-		err := s.pcsm.Start(ctx, autoStartOpts)
-		if err != nil {
-			lg.Error(err, "auto-start on promotion")
-		}
+	if autoStartOpts == nil {
+		return
+	}
+
+	// Apply a deferred --start now that this instance is ACTIVE. It only makes
+	// sense from idle: on a re-promotion after failover the pipeline resumed
+	// from the restored checkpoint and must not be restarted, so skip (and say
+	// so) rather than silently dropping the flag.
+	state := s.pcsm.Status(ctx).State
+	if state != pcsm.StateIdle {
+		lg.With(log.String("state", string(state))).
+			Info("Skipping deferred --start: pipeline is not idle")
+
+		return
+	}
+
+	err = s.pcsm.Start(ctx, autoStartOpts)
+	if err != nil {
+		lg.Error(err, "auto-start on promotion")
 	}
 }
 
