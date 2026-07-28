@@ -710,6 +710,10 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "source version")
 	}
+	srcHello, err := mdb.SayHello(ctx, source)
+	if err != nil {
+		return nil, errors.Wrap(err, "source hello")
+	}
 
 	cs, _ := connstring.Parse(cfg.Source)
 	lg.Infof("Connected to source cluster [%s]: %s://%s",
@@ -771,7 +775,11 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
-	pcs := pcsm.New(ctx, source, target, sourceVersion)
+	if srcHello == nil {
+		return nil, errors.New("source hello response is nil")
+	}
+
+	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos())
 
 	s := &server{
 		cfg:           cfg,

@@ -28,3 +28,10 @@ func TestCollStats_DecodeFromFloat64(t *testing.T) {
 	assert.Equal(t, int64(73179136), stats.Size)
 	assert.Equal(t, int64(0), stats.AvgObjSize)
 }
+
+func TestShardingInfo_IsSharded(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, ShardingInfo{}.IsSharded())
+	assert.True(t, ShardingInfo{ShardKey: bson.D{{Key: "tenant", Value: 1}}}.IsSharded())
+}
