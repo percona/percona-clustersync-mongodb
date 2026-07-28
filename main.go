@@ -931,9 +931,13 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 // checkpoint writes is the hard guarantee against a demoted active corrupting
 // the target.
 //
-// The fence callback (onFenced) can invoke onDemote out-of-band, racing a
-// re-promotion into a newer term; a demotion for an older term is stale and
-// ignored so it does not tear down the newer epoch.
+// Concurrency: watchRoleChanges is the only in-band caller and processes role
+// changes one at a time, so onPromote and a role-driven onDemote never overlap.
+// The one out-of-band caller is the checkpointing fence callback (onFenced),
+// which fires only when a newer term already owns the checkpoint. The guard
+// below drops such a call once membership has advanced past term; if it has not
+// advanced yet the demotion still stands, because a newer active genuinely
+// exists. A demotion is therefore never applied to a strictly newer epoch.
 func (s *server) onDemote(ctx context.Context, term int64) {
 	lg := log.New("ha:role").With(log.Int64("term", term))
 
