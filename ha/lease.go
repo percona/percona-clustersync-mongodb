@@ -159,7 +159,7 @@ func (m *Membership) tryInsertLease(ctx context.Context) error {
 			{fieldGroup, m.group},
 			{fieldInstanceID, m.instanceID},
 			{fieldTerm, int64(1)},
-			{"electionDate", now},
+			{fieldElectionDate, now},
 			{fieldExpiresAt, now.Add(config.LeaseTTL)},
 		})
 
@@ -177,23 +177,23 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, 
 	ttlMS := config.LeaseTTL.Milliseconds()
 
 	// isRenew is true when this instance already owns the lease in the pre-image.
-	isRenew := bson.D{{"$eq", bson.A{"$instanceId", m.instanceID}}}
+	isRenew := bson.D{{"$eq", bson.A{"$" + fieldInstanceID, m.instanceID}}}
 
 	pipeline := mongo.Pipeline{
 		{{"$set", bson.D{
 			{fieldGroup, m.group},
 			{fieldInstanceID, m.instanceID},
 			{fieldExpiresAt, bson.D{{aggAdd, bson.A{aggNow, ttlMS}}}},
-			{"electionDate", bson.D{{"$cond", bson.D{
+			{fieldElectionDate, bson.D{{"$cond", bson.D{
 				{"if", isRenew},
-				{"then", bson.D{{aggIfNull, bson.A{"$electionDate", aggNow}}}},
+				{"then", bson.D{{aggIfNull, bson.A{"$" + fieldElectionDate, aggNow}}}},
 				{"else", aggNow},
 			}}}},
 			{fieldTerm, bson.D{{"$cond", bson.D{
 				{"if", isRenew},
-				{"then", bson.D{{aggIfNull, bson.A{"$term", int64(0)}}}},
+				{"then", bson.D{{aggIfNull, bson.A{"$" + fieldTerm, int64(0)}}}},
 				{"else", bson.D{{aggAdd, bson.A{
-					bson.D{{aggIfNull, bson.A{"$term", int64(0)}}},
+					bson.D{{aggIfNull, bson.A{"$" + fieldTerm, int64(0)}}},
 					int64(1),
 				}}}},
 			}}}},
@@ -202,8 +202,8 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, 
 
 	// Filter without upsert may use $expr/$$NOW: take when we own it or it expired.
 	filter := bson.D{{"_id", LeaseID}, {"$expr", bson.D{{"$or", bson.A{
-		bson.D{{"$eq", bson.A{"$instanceId", m.instanceID}}},
-		bson.D{{"$lte", bson.A{"$expiresAt", aggNow}}},
+		bson.D{{"$eq", bson.A{"$" + fieldInstanceID, m.instanceID}}},
+		bson.D{{"$lte", bson.A{"$" + fieldExpiresAt, aggNow}}},
 	}}}}}
 
 	var (

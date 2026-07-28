@@ -250,13 +250,13 @@ func (m *Membership) beat(ctx context.Context) error {
 	update := mongo.Pipeline{
 		{{"$set", bson.D{
 			{fieldGroup, m.group},
-			{"host", m.host},
-			{"port", m.port},
-			{"role", role},
+			{fieldHost, m.host},
+			{fieldPort, m.port},
+			{fieldRole, role},
 			{fieldTerm, term},
-			{"pcsmVersion", m.version},
-			{"startedAt", m.startedAt},
-			{"lastHeartbeat", aggNow},
+			{fieldPCSMVersion, m.version},
+			{fieldStartedAt, m.startedAt},
+			{fieldLastHeartbeat, aggNow},
 		}}},
 	}
 
@@ -296,7 +296,7 @@ func Members(ctx context.Context, target *mongo.Client) ([]Member, error) {
 		{{"$match", bson.D{
 			{"$expr", bson.D{
 				{"$gte", bson.A{
-					"$lastHeartbeat",
+					"$" + fieldLastHeartbeat,
 					bson.D{{"$subtract", bson.A{aggNow, config.StaleMemberDuration.Milliseconds()}}},
 				}},
 			}},
