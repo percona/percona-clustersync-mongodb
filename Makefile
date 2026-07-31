@@ -31,8 +31,7 @@ test:
 	go test -race ./...
 
 test-integration:
-	go test -v -tags integration -count=1 -timeout 5m ./pcsm/catalog/... ./pcsm/clone/... ./mdb/... ./ha/...
-
+	go test -v -tags integration -count=1 -timeout 5m ./pcsm/catalog/... ./pcsm/clone/... ./pcsm/repl/... ./mdb/... ./ha/...
 
 pytest:
 	poetry run pytest
