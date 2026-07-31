@@ -591,9 +591,9 @@ func (r *Repl) watchChangeEvents(
 	}()
 
 	var invalidateErr *changeStreamInvalidateError
+	var pendingTick bson.Timestamp
 
 	for {
-		lastEventTS := bson.Timestamp{}
 		hasEvents := false
 
 		for cur.TryNext(ctx) {
@@ -611,7 +611,10 @@ func (r *Repl) watchChangeEvents(
 
 			ts := change.ClusterTime
 			changeCh <- change
-			lastEventTS = ts
+
+			if !pendingTick.IsZero() && !pendingTick.After(ts) {
+				pendingTick = bson.Timestamp{}
+			}
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
@@ -624,6 +627,17 @@ func (r *Repl) watchChangeEvents(
 		err = isChangeStreamTerminationError(invalidateErr, cur.Err(), cur.ID())
 		if err != nil {
 			return err
+		}
+
+		// Let one cursor drain observe writes committed before the append note.
+		if !pendingTick.IsZero() {
+			changeCh <- &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType: advanceTimePseudoEvent,
+					ClusterTime:   pendingTick,
+				},
+			}
+			pendingTick = bson.Timestamp{}
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -639,14 +653,7 @@ func (r *Repl) watchChangeEvents(
 				log.New("watch").Error(err, "Unable to advance the source cluster time")
 			}
 
-			if sourceTS.After(lastEventTS) {
-				changeCh <- &ChangeEvent{
-					EventHeader: EventHeader{
-						OperationType: advanceTimePseudoEvent,
-						ClusterTime:   sourceTS,
-					},
-				}
-			}
+			pendingTick = sourceTS
 		}
 	}
 }
