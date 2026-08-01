@@ -155,7 +155,7 @@ type Status struct {
 	PauseTime time.Time
 	Pausing   bool // a pause is in progress (requested, not yet paused)
 
-	LastReplicatedOpTime bson.Timestamp // Last applied operation time
+	LastReplicatedOpTime bson.Timestamp // Reported replication frontier, initialized to the run start
 	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
 	EventsRead           int64          // Number of events read from the source
 	EventsApplied        int64          // Number of events applied
@@ -398,6 +398,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
+	r.lastReplicatedOpTime = startAt
 	r.checkpointOpTime = startAt
 	// Scope the movePrimary-invalidate expectation to this run; clear any stale
 	// arming left over from a prior failed or paused run.
