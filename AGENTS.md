@@ -504,6 +504,21 @@ poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 
 `make metrics-up` brings up the bundled Prometheus + Grafana stack against the local PCSM `/metrics` endpoint. `make metrics-down` stops it.
 
+The bundled Prometheus scrapes all three HA hack ports (`2242`–`2244`); down targets for single-instance runs are harmless. Because `/metrics` is served on every role but only the ACTIVE instance drives replication, the Grafana board scopes gauge panels to the ACTIVE instance (`<metric> and on(instance) (percona_clustersync_mongodb_ha_active == 1)`) so a demoted ex-ACTIVE's frozen gauges don't render, and aggregates counter-rate panels with `sum(...)` (a demoted instance's `rate()` is 0).
+
+### HA Metrics
+
+Every instance exports these on `/metrics` (all roles):
+
+| Metric | Type | Description |
+| ------ | ---- | ----------- |
+| `percona_clustersync_mongodb_ha_active` | Gauge | `1` = ACTIVE, `0` = STANDBY |
+| `percona_clustersync_mongodb_ha_term` | Gauge | Current HA lease term |
+| `percona_clustersync_mongodb_ha_role_transitions_total` | Counter | Role transitions on this instance (flap detection) |
+| `percona_clustersync_mongodb_ha_info` | Gauge | Constant `1` with `instance_id` and `group` labels |
+
+Role/term gauges and the transitions counter are updated in `Membership.SetRole` ([ha/membership.go](ha/membership.go)); `ha_info` is published once at startup in [main.go](main.go). The Grafana board's "High Availability" row shows: **Instance Roles** (state timeline of `ha_active` per instance — one row per live scrape target, so it doubles as the group roster and shows which instance is ACTIVE and since when), **Lease Term** (stat scoped to the ACTIVE instance so a STANDBY's term-0 doesn't show), and **Role Transitions** (per-instance stat over the dashboard time range: 0 = stable, ≥3 = flapping).
+
 ## CI
 
 ### GitHub Actions

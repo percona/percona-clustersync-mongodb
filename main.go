@@ -775,6 +775,12 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
 
+	// Publish HA identity and seed the role gauges so a STANDBY exports its
+	// state from the first scrape, before FirstLeaseTick settles the role.
+	metrics.SetHAInfo(membership.InstanceID(), membership.Group())
+	initialRole, initialTerm := membership.CurrentRole()
+	metrics.SetHARoleAndTerm(initialRole == ha.RoleActive, int64(initialTerm))
+
 	if srcHello == nil {
 		return nil, errors.New("source hello response is nil")
 	}

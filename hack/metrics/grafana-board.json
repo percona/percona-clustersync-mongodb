@@ -22,6 +22,257 @@
   "links": [],
   "panels": [
     {
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 200,
+      "panels": [],
+      "title": "High Availability",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "description": "HA role of every scraped instance over time. 1 = ACTIVE (green), 0 = STANDBY (blue). Exactly one instance should be ACTIVE. One row per live scrape target; a killed instance's row gaps out.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "insertNulls": false,
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "STANDBY",
+                  "color": "blue",
+                  "index": 0
+                },
+                "1": {
+                  "text": "ACTIVE",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "id": 201,
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "left",
+        "rowHeight": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "percona_clustersync_mongodb_ha_active",
+          "instant": false,
+          "legendFormat": "{{instance}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Instance Roles (ACTIVE / STANDBY)",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "description": "Current HA lease term (the ACTIVE instance's term). Increments on every takeover. Holds the last known value during a brief failover window.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 203,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(percona_clustersync_mongodb_ha_term and on(instance) (percona_clustersync_mongodb_ha_active == 1))",
+          "instant": false,
+          "legendFormat": "Term",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Lease Term",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "description": "Role transitions per instance within the selected time range. 0 = stable, 1 = involved in one failover, >=3 = flapping. Uses $__range so it reflects the dashboard time picker.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 204,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pcsm-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(percona_clustersync_mongodb_ha_role_transitions_total[$__range])",
+          "instant": true,
+          "legendFormat": "{{instance}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Role Transitions (range)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pcsm-prometheus"
+      },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 210,
+      "panels": [],
+      "title": "Overview",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "pcsm-prometheus"
@@ -88,7 +339,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 10
       },
       "id": 3,
       "options": {
@@ -113,11 +364,11 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_clustersync_mongodb_events_read_total[10s])",
+          "expr": "rate(percona_clustersync_mongodb_events_read_total[10s]) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Events Read",
+          "legendFormat": "Events Read — {{instance}}",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -129,11 +380,11 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_clustersync_mongodb_events_applied_total[10s])",
+          "expr": "rate(percona_clustersync_mongodb_events_applied_total[10s]) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Events Applied",
+          "legendFormat": "Events Applied — {{instance}}",
           "range": true,
           "refId": "B",
           "useBackend": false
@@ -209,7 +460,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 10
       },
       "id": 5,
       "options": {
@@ -233,9 +484,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_lag_time_seconds",
+          "expr": "(percona_clustersync_mongodb_lag_time_seconds) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Lag Time",
+          "legendFormat": "Lag Time — {{instance}}",
           "range": true,
           "refId": "A"
         },
@@ -245,9 +496,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_initial_sync_lag_time_seconds",
+          "expr": "(percona_clustersync_mongodb_initial_sync_lag_time_seconds) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Initial Sync Lag Time",
+          "legendFormat": "Initial Sync Lag Time — {{instance}}",
           "range": true,
           "refId": "B"
         }
@@ -261,7 +512,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 18
       },
       "id": 15,
       "panels": [],
@@ -335,7 +586,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 9
+        "y": 19
       },
       "id": 16,
       "options": {
@@ -359,9 +610,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_repl_event_queue_size",
+          "expr": "(percona_clustersync_mongodb_repl_event_queue_size) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Event Queue",
+          "legendFormat": "Event Queue — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -436,7 +687,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 9
+        "y": 19
       },
       "id": 17,
       "options": {
@@ -460,9 +711,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_repl_worker_event_queue_size",
+          "expr": "(percona_clustersync_mongodb_repl_worker_event_queue_size) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Worker {{worker}}",
+          "legendFormat": "Worker {{worker}} — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -537,7 +788,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 17
+        "y": 27
       },
       "id": 18,
       "options": {
@@ -561,9 +812,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "rate(percona_clustersync_mongodb_repl_worker_events_applied_total[10s])",
+          "expr": "rate(percona_clustersync_mongodb_repl_worker_events_applied_total[10s]) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Worker {{worker}}",
+          "legendFormat": "Worker {{worker}} — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -638,7 +889,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 17
+        "y": 27
       },
       "id": 27,
       "options": {
@@ -662,9 +913,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_repl_worker_bulk_queue_size",
+          "expr": "(percona_clustersync_mongodb_repl_worker_bulk_queue_size) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "instant": false,
-          "legendFormat": "Worker {{worker}}",
+          "legendFormat": "Worker {{worker}} — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -739,7 +990,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 25
+        "y": 35
       },
       "id": 20,
       "options": {
@@ -765,9 +1016,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, rate(percona_clustersync_mongodb_repl_worker_flush_duration_seconds_bucket[1m]))",
+          "expr": "histogram_quantile(0.99, rate(percona_clustersync_mongodb_repl_worker_flush_duration_seconds_bucket[1m]) and on(instance) (percona_clustersync_mongodb_ha_active == 1))",
           "instant": false,
-          "legendFormat": "Worker {{worker}}",
+          "legendFormat": "Worker {{worker}} — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -842,7 +1093,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 25
+        "y": 35
       },
       "id": 19,
       "options": {
@@ -868,9 +1119,9 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, rate(percona_clustersync_mongodb_repl_worker_flush_batch_size_bucket[1m]))",
+          "expr": "histogram_quantile(0.99, rate(percona_clustersync_mongodb_repl_worker_flush_batch_size_bucket[1m]) and on(instance) (percona_clustersync_mongodb_ha_active == 1))",
           "instant": false,
-          "legendFormat": "Worker {{worker}}",
+          "legendFormat": "Worker {{worker}} — {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -884,7 +1135,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 43
       },
       "id": 4,
       "panels": [],
@@ -958,7 +1209,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 44
       },
       "id": 2,
       "options": {
@@ -983,11 +1234,11 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_copy_insert_size_bytes_total / 1024 / 1024",
+          "expr": "(percona_clustersync_mongodb_copy_insert_size_bytes_total / 1024 / 1024) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Copied Size",
+          "legendFormat": "Copied Size — {{instance}}",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -998,10 +1249,10 @@
             "uid": "pcsm-prometheus"
           },
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_estimated_total_size_bytes / 1024 / 1024",
+          "expr": "(percona_clustersync_mongodb_estimated_total_size_bytes / 1024 / 1024) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "hide": false,
           "instant": false,
-          "legendFormat": "Estimated Total Size",
+          "legendFormat": "Estimated Total Size — {{instance}}",
           "range": true,
           "refId": "B"
         }
@@ -1076,7 +1327,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 44
       },
       "id": 12,
       "options": {
@@ -1103,12 +1354,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_clustersync_mongodb_copy_insert_size_bytes_total[10s]) / (1024 * 1024)",
+          "expr": "(rate(percona_clustersync_mongodb_copy_insert_size_bytes_total[10s]) / (1024 * 1024)) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Insert",
+          "legendFormat": "Insert — {{instance}}",
           "range": true,
           "refId": "Insert documents",
           "useBackend": false
@@ -1120,12 +1371,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(percona_clustersync_mongodb_copy_read_size_bytes_total[10s]) / (1024 * 1024)",
+          "expr": "(rate(percona_clustersync_mongodb_copy_read_size_bytes_total[10s]) / (1024 * 1024)) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Read",
+          "legendFormat": "Read — {{instance}}",
           "range": true,
           "refId": "Read documents",
           "useBackend": false
@@ -1202,7 +1453,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 52
       },
       "id": 13,
       "options": {
@@ -1229,12 +1480,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_copy_insert_document_total",
+          "expr": "(percona_clustersync_mongodb_copy_insert_document_total) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Inserted Documents",
+          "legendFormat": "Inserted Documents — {{instance}}",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -1246,12 +1497,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_copy_read_document_total",
+          "expr": "(percona_clustersync_mongodb_copy_read_document_total) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Read Documents",
+          "legendFormat": "Read Documents — {{instance}}",
           "range": true,
           "refId": "B",
           "useBackend": false
@@ -1327,7 +1578,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 52
       },
       "id": 14,
       "options": {
@@ -1354,12 +1605,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_copy_read_batch_duration_seconds",
+          "expr": "(percona_clustersync_mongodb_copy_read_batch_duration_seconds) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Read Batch Duration",
+          "legendFormat": "Read Batch Duration — {{instance}}",
           "range": true,
           "refId": "A",
           "useBackend": false
@@ -1371,12 +1622,12 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "percona_clustersync_mongodb_copy_insert_batch_duration_seconds",
+          "expr": "(percona_clustersync_mongodb_copy_insert_batch_duration_seconds) and on(instance) (percona_clustersync_mongodb_ha_active == 1)",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
           "instant": false,
-          "legendFormat": "Insert Batch Duration",
+          "legendFormat": "Insert Batch Duration — {{instance}}",
           "range": true,
           "refId": "B",
           "useBackend": false
@@ -1391,7 +1642,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 60
       },
       "id": 7,
       "panels": [],
@@ -1465,7 +1716,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 51
+        "y": 61
       },
       "id": 8,
       "options": {
@@ -1492,7 +1743,7 @@
           "exemplar": false,
           "expr": "go_goroutines",
           "instant": false,
-          "legendFormat": "Goroutines",
+          "legendFormat": "Goroutines {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -1567,7 +1818,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 51
+        "y": 61
       },
       "id": 9,
       "options": {
@@ -1594,7 +1845,7 @@
           "exemplar": false,
           "expr": "go_threads",
           "instant": false,
-          "legendFormat": "Threads",
+          "legendFormat": "Threads {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -1670,7 +1921,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 51
+        "y": 61
       },
       "id": 10,
       "options": {
@@ -1697,7 +1948,7 @@
           "exemplar": false,
           "expr": "go_memstats_alloc_bytes / 1024 / 1024",
           "instant": false,
-          "legendFormat": "Allocated Memory",
+          "legendFormat": "Allocated Memory {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -1771,7 +2022,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 59
+        "y": 69
       },
       "id": 22,
       "options": {
@@ -1797,7 +2048,7 @@
           "editorMode": "code",
           "expr": "rate(percona_clustersync_mongodb_process_cpu_seconds_total[1m])",
           "instant": false,
-          "legendFormat": "CPU Usage",
+          "legendFormat": "CPU Usage {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -1871,7 +2122,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 59
+        "y": 69
       },
       "id": 23,
       "options": {
@@ -1897,7 +2148,7 @@
           "editorMode": "code",
           "expr": "percona_clustersync_mongodb_process_resident_memory_bytes / 1024 / 1024",
           "instant": false,
-          "legendFormat": "Resident Memory",
+          "legendFormat": "Resident Memory {{instance}}",
           "range": true,
           "refId": "A"
         }
@@ -1971,7 +2222,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 59
+        "y": 69
       },
       "id": 24,
       "options": {
@@ -1997,7 +2248,7 @@
           "editorMode": "code",
           "expr": "percona_clustersync_mongodb_process_open_fds",
           "instant": false,
-          "legendFormat": "Open FDs",
+          "legendFormat": "Open FDs {{instance}}",
           "range": true,
           "refId": "A"
         },
@@ -2009,7 +2260,7 @@
           "editorMode": "code",
           "expr": "percona_clustersync_mongodb_process_max_fds",
           "instant": false,
-          "legendFormat": "Max FDs",
+          "legendFormat": "Max FDs {{instance}}",
           "range": true,
           "refId": "B"
         }
@@ -2082,7 +2333,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 77
       },
       "id": 25,
       "options": {
@@ -2110,7 +2361,7 @@
           "editorMode": "code",
           "expr": "go_gc_duration_seconds{quantile=\"0.5\"}",
           "instant": false,
-          "legendFormat": "p50",
+          "legendFormat": "p50 {{instance}}",
           "range": true,
           "refId": "A"
         },
@@ -2122,7 +2373,7 @@
           "editorMode": "code",
           "expr": "go_gc_duration_seconds{quantile=\"1\"}",
           "instant": false,
-          "legendFormat": "max",
+          "legendFormat": "max {{instance}}",
           "range": true,
           "refId": "B"
         }
@@ -2196,7 +2447,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 77
       },
       "id": 26,
       "options": {
@@ -2224,7 +2475,7 @@
           "editorMode": "code",
           "expr": "go_memstats_heap_inuse_bytes",
           "instant": false,
-          "legendFormat": "Heap In Use",
+          "legendFormat": "Heap In Use {{instance}}",
           "range": true,
           "refId": "A"
         },
@@ -2236,7 +2487,7 @@
           "editorMode": "code",
           "expr": "go_memstats_heap_idle_bytes",
           "instant": false,
-          "legendFormat": "Heap Idle",
+          "legendFormat": "Heap Idle {{instance}}",
           "range": true,
           "refId": "B"
         },
@@ -2248,7 +2499,7 @@
           "editorMode": "code",
           "expr": "go_memstats_sys_bytes",
           "instant": false,
-          "legendFormat": "Total from OS",
+          "legendFormat": "Total from OS {{instance}}",
           "range": true,
           "refId": "C"
         }

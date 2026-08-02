@@ -15,6 +15,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
+	"github.com/percona/percona-clustersync-mongodb/metrics"
 )
 
 // MembershipOptions configures this instance's participation in the set.
@@ -129,6 +130,11 @@ func (m *Membership) SetRole(role Role, term Term) bool {
 	m.role = role
 	m.term = term
 	m.mu.Unlock()
+
+	metrics.SetHARoleAndTerm(role == RoleActive, int64(term))
+	if transitioned {
+		metrics.IncHARoleTransitions()
+	}
 
 	// Non-blocking nudge; if a beat is already pending, this is a no-op.
 	select {
