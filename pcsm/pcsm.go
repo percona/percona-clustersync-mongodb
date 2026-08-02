@@ -462,7 +462,7 @@ func (p *PCSM) run(ctx context.Context) {
 	if !cloneStatus.IsFinished() {
 		err := p.clone.Start(ctx)
 		if err != nil {
-			p.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
+			p.setFailed(errors.Wrap(err, "start clone"))
 
 			return
 		}
