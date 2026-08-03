@@ -39,9 +39,10 @@ type Config struct {
 	Clone CloneConfig `mapstructure:",squash"`
 
 	// hidden startup flags
-	Start              bool `mapstructure:"start"`
-	ResetState         bool `mapstructure:"reset-state"`
-	PauseOnInitialSync bool `mapstructure:"pause-on-initial-sync"`
+	Start                      bool          `mapstructure:"start"`
+	ResetState                 bool          `mapstructure:"reset-state"`
+	PauseOnInitialSync         bool          `mapstructure:"pause-on-initial-sync"`
+	RecoveryCheckpointInterval time.Duration `mapstructure:"recovery-checkpoint-interval"`
 }
 
 // LogConfig holds logging configuration.
@@ -179,6 +180,8 @@ func bindEnvVars() {
 		"PCSM_MONGODB_OPERATION_TIMEOUT",
 		"PLM_MONGODB_CLI_OPERATION_TIMEOUT", // deprecated
 	)
+
+	_ = viper.BindEnv("recovery-checkpoint-interval", "PCSM_RECOVERY_CHECKPOINT_INTERVAL")
 
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 

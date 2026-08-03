@@ -63,6 +63,7 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 	tests := []struct {
 		name          string
 		initialState  State
+		setupClone    func() *clone.Clone
 		errorContains string
 	}{
 		{
@@ -76,8 +77,12 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 			errorContains: "paused",
 		},
 		{
-			name:          "fails from failed state",
+			// A failure after the clone finished is a repl-phase failure:
+			// recovered with resume --from-failure, not a full restart, so
+			// Start still rejects it.
+			name:          "fails from failed state after clone finished",
 			initialState:  StateFailed,
+			setupClone:    finishedClone,
 			errorContains: "already running",
 		},
 		{
@@ -95,6 +100,9 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 				state:          tt.initialState,
 				onStateChanged: func(State) {},
 			}
+			if tt.setupClone != nil {
+				p.clone = tt.setupClone()
+			}
 
 			err := p.Start(context.Background(), nil)
 
@@ -103,6 +111,23 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 			assert.Equal(t, tt.initialState, p.state)
 		})
 	}
+}
+
+// finishedClone returns a Clone whose Status reports IsFinished() == true,
+// emulating a run that failed in the replication phase (after the initial
+// clone completed).
+func finishedClone() *clone.Clone {
+	c := clone.NewClone(nil, nil, nil, nil, &clone.Options{})
+
+	err := c.Recover(&clone.Checkpoint{
+		StartTime:  time.Now().Add(-time.Minute),
+		FinishTime: time.Now(),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return c
 }
 
 func TestPause_Success(t *testing.T) {

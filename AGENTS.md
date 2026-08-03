@@ -57,6 +57,7 @@ Common runtime knobs. Every flag has a matching `PCSM_*` env var.
 | `PCSM_LOG_LEVEL`                 | `--log-level`                 |
 | `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
 | `PCSM_CLONE_SEGMENT_SIZE`        | `--clone-segment-size`        |
+| `PCSM_RECOVERY_CHECKPOINT_INTERVAL` | `--recovery-checkpoint-interval` (hidden; `0`/unset = 15s) |
 
 Full list lives in [config/config.go](config/config.go).
 

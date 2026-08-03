@@ -77,11 +77,21 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 // fenced by a newer term means this instance was deposed; onFenced is invoked
 // once and the loop returns.
 func RunCheckpointing(
-	ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string, onFenced func(),
+	ctx context.Context,
+	m *mongo.Client,
+	rec Recoverable,
+	term int64,
+	instanceID string,
+	interval time.Duration,
+	onFenced func(),
 ) {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
 
-	ticker := time.NewTicker(config.RecoveryCheckpointingInternal)
+	if interval <= 0 {
+		interval = config.RecoveryCheckpointingInternal
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

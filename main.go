@@ -162,6 +162,10 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().Bool("pause-on-initial-sync", false, "")
 	rootCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
+	// Recovery checkpoint interval: hidden, mainly for tests. 0 means default.
+	rootCmd.Flags().Duration("recovery-checkpoint-interval", 0, "")
+	rootCmd.Flags().MarkHidden("recovery-checkpoint-interval") //nolint:errcheck
+
 	rootCmd.AddCommand(
 		newVersionCmd(),
 		newStatusCmd(cfg),
@@ -892,9 +896,10 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	if s.checkpointCancel == nil {
 		cpCtx, cancel := context.WithCancel(ctx)
 		s.checkpointCancel = cancel
-		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, int64(term), s.membership.InstanceID(), func() {
-			s.onDemote(ctx, term)
-		})
+		go RunCheckpointing(cpCtx, s.targetCluster, s.pcsm, int64(term), s.membership.InstanceID(),
+			s.cfg.RecoveryCheckpointInterval, func() {
+				s.onDemote(ctx, term)
+			})
 	}
 	autoStartOpts := s.autoStartOpts
 	s.mu.Unlock()

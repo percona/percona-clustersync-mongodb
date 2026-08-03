@@ -292,6 +292,47 @@ func TestRecover(t *testing.T) {
 		assert.Equal(t, "previous error", p.err.Error())
 	})
 
+	t.Run("fails an interrupted clone instead of resuming", func(t *testing.T) {
+		t.Parallel()
+
+		// A StateRunning checkpoint whose clone was started but never finished
+		// represents a clone interrupted by failover. Clone is not resumable,
+		// so Recover must land in StateFailed with an explicit error rather
+		// than spawning run() (which would trip Clone.Start's "already started"
+		// guard and fail opaquely).
+		cp := checkpoint{
+			State: StateRunning,
+			Clone: &clone.Checkpoint{
+				TotalSize:  1000,
+				CopiedSize: 250,
+				StartTime:  time.Now().Add(-time.Minute),
+				// FinishTime zero: started but not finished.
+			},
+		}
+		data, err := bson.Marshal(cp)
+		require.NoError(t, err)
+
+		stateCh := make(chan State, 1)
+		p := &PCSM{
+			state:          StateIdle,
+			onStateChanged: func(s State) { stateCh <- s },
+		}
+
+		err = p.Recover(context.Background(), data)
+		require.NoError(t, err)
+
+		assert.Equal(t, State(StateFailed), p.state)
+		require.Error(t, p.err)
+		assert.Contains(t, p.err.Error(), "not resumable")
+
+		select {
+		case s := <-stateCh:
+			assert.Equal(t, State(StateFailed), s)
+		case <-time.After(time.Second):
+			t.Fatal("onStateChanged was not called with StateFailed")
+		}
+	})
+
 	t.Run("restores finalization status on StateFinalized", func(t *testing.T) {
 		t.Parallel()
 
