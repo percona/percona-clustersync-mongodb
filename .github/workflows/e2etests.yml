@@ -77,6 +77,14 @@ jobs:
 
           poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py tests/test_idle_index_build.py
 
+      - name: Run PCSM restart regression (pytest)
+        run: |
+          export TEST_SOURCE_URI=mongodb://rs00:30000
+          export TEST_TARGET_URI=mongodb://rs10:30100
+          export TEST_PCSM_URL=http://127.0.0.1:2242
+
+          poetry run pytest tests/test_pcsm_338_restart.py
+
       - name: Teardown Docker Compose
         if: always()
         run: docker compose -f hack/rs/compose.yml down

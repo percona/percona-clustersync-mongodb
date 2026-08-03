@@ -12,6 +12,8 @@ from bson.timestamp import Timestamp
 from pymongo import ReplaceOne
 from testing import Testing
 
+pytestmark = pytest.mark.self_managed_pcsm
+
 SOURCE_URI, TARGET_URI = "mongodb://rs00:30000", "mongodb://rs10:30100"
 DATABASE, COLLECTION = "pcsm_338", "documents"
 WRITE_PAYLOAD: Final = "w" * 4096
@@ -211,10 +213,12 @@ def test_documents_match_after_graceful_restart(t: Testing) -> None:
                     (
                         "recovered running state",
                         90,
-                        lambda status, checkpoint: status["state"] == "running"
-                        and checkpoint is not None
-                        and checkpoint.checkpoint_op_time
-                        > checkpoint_before_restart.checkpoint_op_time,
+                        lambda status, checkpoint: (
+                            status["state"] == "running"
+                            and checkpoint is not None
+                            and checkpoint.checkpoint_op_time
+                            > checkpoint_before_restart.checkpoint_op_time
+                        ),
                     ),
                 )
                 assert process.poll() is None, f"recovered PCSM exited with {process.returncode}"
@@ -236,9 +240,11 @@ def test_documents_match_after_graceful_restart(t: Testing) -> None:
             (
                 "final marker",
                 45,
-                lambda status, _checkpoint: status.get("initialSync", {}).get("completed") is True
-                and target.find_one({"_id": -2})
-                == {"_id": -2, "revision": 2, "value": 676, "payload": WRITE_PAYLOAD},
+                lambda status, _checkpoint: (
+                    status.get("initialSync", {}).get("completed") is True
+                    and target.find_one({"_id": -2})
+                    == {"_id": -2, "revision": 2, "value": 676, "payload": WRITE_PAYLOAD}
+                ),
             ),
         )
         t.pcsm.finalize()
