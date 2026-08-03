@@ -77,9 +77,7 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 			errorContains: "paused",
 		},
 		{
-			// A failure after the clone finished is a repl-phase failure:
-			// recovered with resume --from-failure, not a full restart, so
-			// Start still rejects it.
+			// Clone finished: a repl-phase failure, so Start still rejects it.
 			name:          "fails from failed state after clone finished",
 			initialState:  StateFailed,
 			setupClone:    finishedClone,
@@ -113,9 +111,7 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 	}
 }
 
-// finishedClone returns a Clone whose Status reports IsFinished() == true,
-// emulating a run that failed in the replication phase (after the initial
-// clone completed).
+// finishedClone returns a Clone whose Status reports IsFinished() == true.
 func finishedClone() *clone.Clone {
 	c := clone.NewClone(nil, nil, nil, nil, &clone.Options{})
 

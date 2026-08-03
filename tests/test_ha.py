@@ -192,9 +192,8 @@ def _wait_initial_sync(inst, timeout=60):
 
 
 def _seed_clone_dataset(source, db, colls, docs_per_coll=100_000, payload_bytes=2_048):
-    """Insert enough data that the throttled clone runs well past the periodic
-    checkpoint interval (~15s), giving the test a wide, reliable window to
-    checkpoint the in-flight clone and then kill the ACTIVE mid-clone."""
+    """Insert enough data that the clone stays in flight long enough to be
+    checkpointed and then killed mid-clone."""
     payload = random.randbytes(payload_bytes)
     for coll in colls:
         source[db][coll].insert_many(
@@ -225,14 +224,10 @@ def _wait_mid_clone(active, timeout=60):
 
 
 def _wait_clone_checkpointed(target, timeout=45):
-    """Poll the persisted checkpoint on the target until it provably captures an
-    in-flight clone: `data.clone.startTime` present, `finishTime` absent.
-
-    The idle->running state change persists a checkpoint immediately, but at that
-    instant the clone has not set startTime yet, so `data.clone` is absent; only
-    the periodic checkpoint (~15s) captures clone progress. Killing before that
-    lands on the narrow-window path (fresh re-clone), not the interrupted-clone
-    path this test targets. This gate makes the kill deterministic."""
+    """Wait until the persisted checkpoint captures an in-flight clone
+    (startTime set, finishTime unset). Killing before this happens would land
+    on the pre-clone window (fresh re-clone) instead of the interrupted-clone
+    path this test targets."""
     coll = target["percona_clustersync_mongodb"]["checkpoints"]
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -282,9 +277,8 @@ def test_failover_during_clone(ha_cluster: PCSMCluster, source_conn, target_conn
     )
 
     _wait_mid_clone(active)
-    # Ensure the in-flight clone is captured in a persisted checkpoint before
-    # killing, so the promoted instance restores an interrupted clone rather
-    # than the narrow pre-clone window (which would just re-clone from scratch).
+    # Capture the in-flight clone in a checkpoint before killing, so the
+    # promoted instance restores an interrupted clone.
     _wait_clone_checkpointed(target_conn)
 
     # Crash the ACTIVE mid-clone (SIGKILL: no lease release, no graceful stop).
@@ -295,8 +289,7 @@ def test_failover_during_clone(ha_cluster: PCSMCluster, source_conn, target_conn
     # silently resuming an unresumable clone.
     promoted = ha_cluster.active()
     status = _wait_state(promoted, PCSM.State.FAILED)
-    # The failure reason is carried in `error` (ok=false); `info` is only the
-    # static "Failed" label.
+    # The reason is in `error`; `info` is only the static "Failed" label.
     error = status.get("error") or ""
     assert error.strip(), f"promoted ACTIVE failed with an empty error: {status}"
     assert "clone" in error.lower(), f"unexpected failure reason: {error}"

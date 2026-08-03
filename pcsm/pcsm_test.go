@@ -295,11 +295,9 @@ func TestRecover(t *testing.T) {
 	t.Run("fails an interrupted clone instead of resuming", func(t *testing.T) {
 		t.Parallel()
 
-		// A StateRunning checkpoint whose clone was started but never finished
-		// represents a clone interrupted by failover. Clone is not resumable,
-		// so Recover must land in StateFailed with an explicit error rather
-		// than spawning run() (which would trip Clone.Start's "already started"
-		// guard and fail opaquely).
+		// A running checkpoint with a started-but-unfinished clone means the
+		// clone was interrupted by failover. Recover must fail instead of
+		// resuming.
 		cp := checkpoint{
 			State: StateRunning,
 			Clone: &clone.Checkpoint{

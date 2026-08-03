@@ -280,12 +280,9 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.State == StateRunning {
-		// The initial clone is not resumable: it keeps no per-collection or
-		// per-segment progress, so a clone interrupted mid-flight (started but
-		// not finished when the previous ACTIVE died) cannot continue. Fail
-		// with an explicit reason instead of spawning run(), which would trip
-		// Clone.Start's "already started" guard and fail with an opaque error.
-		// Recovery is a fresh /start, which re-clones from scratch.
+		// The initial clone is not resumable. If it was interrupted mid-flight
+		// (started but not finished), fail with a clear reason. Recovery is a
+		// fresh /start, which re-clones from scratch.
 		cloneStatus := cln.Status()
 		if cloneStatus.IsRunning() {
 			err := errors.New(
@@ -430,11 +427,9 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 		return err
 
 	case StateFailed:
-		// A failure before the initial clone completed leaves a void run: the
-		// clone is not resumable, so a fresh /start (re-clone from scratch) is
-		// the recovery path. A failure after the clone finished is a repl-phase
-		// failure; that is recovered with resume --from-failure, not a full
-		// restart, so it is still rejected here.
+		// Allow a fresh /start (re-clone from scratch) only if the clone never
+		// finished. A failure after the clone completed is a repl-phase failure,
+		// recovered with resume --from-failure, so it is still rejected here.
 		if p.clone != nil {
 			cloneStatus := p.clone.Status()
 			if cloneStatus.IsFinished() {

@@ -40,10 +40,8 @@ class PCSMInstance:
         self._log = open(  # noqa: SIM115 - closed in _close_log
             os.path.join(LOG_DIR, f"pcsm-{self.port}.log"), "a", encoding="utf-8"
         )
-        # Checkpoint frequently so an in-flight clone is captured in a persisted
-        # checkpoint quickly. The default 15s interval is longer than a fast
-        # local clone, which would otherwise never persist a mid-clone
-        # checkpoint (failover would only ever see the pre-clone window).
+        # Checkpoint often so an in-flight clone is captured quickly; the
+        # default 15s is longer than a fast local clone.
         env = {**os.environ, "PCSM_RECOVERY_CHECKPOINT_INTERVAL": "1s"}
         self.proc = subprocess.Popen(
             [
