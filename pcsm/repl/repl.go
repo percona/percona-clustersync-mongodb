@@ -152,6 +152,7 @@ type Repl struct {
 type Status struct {
 	StartTime time.Time
 	PauseTime time.Time
+	Pausing   bool // a pause is in progress (requested, not yet paused)
 
 	LastReplicatedOpTime bson.Timestamp // Last applied operation time
 	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
@@ -344,6 +345,7 @@ func (r *Repl) Status() Status {
 
 		StartTime: r.startTime,
 		PauseTime: r.pauseTime,
+		Pausing:   r.pausing,
 
 		Err: r.err,
 	}

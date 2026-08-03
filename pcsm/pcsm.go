@@ -287,7 +287,8 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		if cloneStatus.IsRunning() {
 			err := errors.New(
 				"initial clone interrupted by failover and is not resumable; " +
-					"start a new run to re-clone from scratch")
+					"start a new run to re-clone from scratch",
+			)
 			p.state = StateFailed
 			p.err = err
 
@@ -761,23 +762,29 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	lg := log.New("finalize")
 	lg.Info("Starting Finalization")
 
-	if status.Repl.IsRunning() {
+	// Decide from the live repl status under the lock, not the pre-lock
+	// snapshot above. With PauseOnInitialSync, monitorInitialSync can pause
+	// repl concurrently; a stale "running" snapshot would make us call Pause
+	// on an already-pausing/paused repl and fail. Only pause when repl is
+	// running and no pause is already in flight; either way, wait for Done.
+	replStatus := p.repl.Status()
+	if replStatus.IsRunning() && !replStatus.Pausing {
 		lg.Info("Pausing Change Replication")
 
 		err := p.repl.Pause(ctx)
 		if err != nil {
 			return errors.Wrap(err, "pause change replication")
 		}
+	}
 
-		<-p.repl.Done()
-		lg.Info("Change Replication is paused")
+	<-p.repl.Done()
+	lg.Info("Change Replication is paused")
 
-		err = p.repl.Status().Err
-		if err != nil {
-			// no need to set the PCSM failed status here.
-			// [PCSM.setFailed] is called in [PCSM.run].
-			return errors.Wrap(err, "post-pause change replication")
-		}
+	err := p.repl.Status().Err
+	if err != nil {
+		// no need to set the PCSM failed status here.
+		// [PCSM.setFailed] is called in [PCSM.run].
+		return errors.Wrap(err, "post-pause change replication")
 	}
 
 	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
