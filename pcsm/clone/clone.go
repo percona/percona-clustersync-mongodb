@@ -59,8 +59,6 @@ type Clone struct {
 	nsFilter sel.NSFilter  // Namespace filter
 	options  *Options      // Clone options
 
-	targetIsMongos bool // Whether the target is a sharded cluster (mongos)
-
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
@@ -112,16 +110,14 @@ func NewClone(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
-	targetIsMongos bool,
 ) *Clone {
 	return &Clone{
-		source:         source,
-		target:         target,
-		catalog:        cat,
-		nsFilter:       nsFilter,
-		options:        opts,
-		targetIsMongos: targetIsMongos,
-		doneCh:         make(chan struct{}),
+		source:   source,
+		target:   target,
+		catalog:  cat,
+		nsFilter: nsFilter,
+		options:  opts,
+		doneCh:   make(chan struct{}),
 	}
 }
 
@@ -492,6 +488,11 @@ func (c *Clone) doCollectionClone(
 		}
 
 		lg.Infof("Collection %q sharded", ns.String())
+
+		err = c.presplit(ctx, ns, shInfo)
+		if err != nil {
+			return errors.Wrap(err, "presplit chunks")
+		}
 	}
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
@@ -540,7 +541,8 @@ func (c *Clone) doCollectionClone(
 				updateLog := lg.With(
 					log.Size(progressUpdate.SizeBytes),
 					log.Count(int64(progressUpdate.Count)),
-					log.Elapsed(time.Since(lastLogAt)))
+					log.Elapsed(time.Since(lastLogAt)),
+				)
 
 				if errors.Is(err, context.Canceled) {
 					updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)

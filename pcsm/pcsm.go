@@ -126,7 +126,6 @@ type PCSM struct {
 
 	sourceVer      mdb.ServerVersion
 	sourceIsMongos bool
-	targetIsMongos bool
 
 	nsInclude []string
 	nsExclude []string
@@ -156,7 +155,6 @@ func New(
 	source, target *mongo.Client,
 	sourceVer mdb.ServerVersion,
 	sourceIsMongos bool,
-	targetIsMongos bool,
 ) *PCSM {
 	return &PCSM{
 		lifecycleCtx:   lifecycleCtx,
@@ -164,7 +162,6 @@ func New(
 		target:         target,
 		sourceVer:      sourceVer,
 		sourceIsMongos: sourceIsMongos,
-		targetIsMongos: targetIsMongos,
 		state:          StateIdle,
 		onStateChanged: func(State) {},
 	}
@@ -234,7 +231,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	cat := catalog.NewCatalog(p.target, p.sourceVer)
 	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{}, p.targetIsMongos)
+	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{})
 	rpl := repl.NewRepl(p.source, p.target, cat, nsFilter, &repl.Options{}, p.sourceVer, p.sourceIsMongos)
 
 	if cp.Catalog != nil {
@@ -423,7 +420,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
 	p.pauseOnInitialSync = options.PauseOnInitialSync
 	p.catalog = catalog.NewCatalog(p.target, p.sourceVer)
-	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone, p.targetIsMongos)
+	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone)
 	p.repl = repl.NewRepl(p.source, p.target, p.catalog, p.nsFilter, &options.Repl, p.sourceVer, p.sourceIsMongos)
 	p.finalizeStatus = nil
 	p.state = StateRunning
