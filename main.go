@@ -630,6 +630,10 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "target version")
 	}
+	tgtHello, err := mdb.SayHello(ctx, target)
+	if err != nil {
+		return nil, errors.Wrap(err, "target hello")
+	}
 
 	cs, _ = connstring.Parse(cfg.Target)
 	lg.Infof("Connected to target cluster [%s]: %s://%s",
@@ -655,8 +659,11 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	if srcHello == nil {
 		return nil, errors.New("source hello response is nil")
 	}
+	if tgtHello == nil {
+		return nil, errors.New("target hello response is nil")
+	}
 
-	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos())
+	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos(), tgtHello.IsMongos())
 
 	err = Restore(ctx, target, pcs)
 	if err != nil {

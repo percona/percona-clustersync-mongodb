@@ -59,6 +59,8 @@ type Clone struct {
 	nsFilter sel.NSFilter  // Namespace filter
 	options  *Options      // Clone options
 
+	targetIsMongos bool // Whether the target is a sharded cluster (mongos)
+
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
@@ -110,14 +112,16 @@ func NewClone(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
+	targetIsMongos bool,
 ) *Clone {
 	return &Clone{
-		source:   source,
-		target:   target,
-		catalog:  cat,
-		nsFilter: nsFilter,
-		options:  opts,
-		doneCh:   make(chan struct{}),
+		source:         source,
+		target:         target,
+		catalog:        cat,
+		nsFilter:       nsFilter,
+		options:        opts,
+		targetIsMongos: targetIsMongos,
+		doneCh:         make(chan struct{}),
 	}
 }
 
