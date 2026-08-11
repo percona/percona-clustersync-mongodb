@@ -25,6 +25,10 @@ type Config struct {
 	Source     string `mapstructure:"source"`
 	Target     string `mapstructure:"target"`
 
+	// GroupName is the active-standby HA group this instance joins. Advisory:
+	// recorded and advertised for observability.
+	GroupName string `mapstructure:"group-name"`
+
 	Log LogConfig `mapstructure:",squash"`
 
 	MongoDB MongoDBConfig `mapstructure:",squash"`
@@ -35,9 +39,10 @@ type Config struct {
 	Clone CloneConfig `mapstructure:",squash"`
 
 	// hidden startup flags
-	Start              bool `mapstructure:"start"`
-	ResetState         bool `mapstructure:"reset-state"`
-	PauseOnInitialSync bool `mapstructure:"pause-on-initial-sync"`
+	Start                      bool          `mapstructure:"start"`
+	ResetState                 bool          `mapstructure:"reset-state"`
+	PauseOnInitialSync         bool          `mapstructure:"pause-on-initial-sync"`
+	RecoveryCheckpointInterval time.Duration `mapstructure:"recovery-checkpoint-interval"`
 }
 
 // LogConfig holds logging configuration.
@@ -160,17 +165,23 @@ func bindEnvVars() {
 	_ = viper.BindEnv("source", "PCSM_SOURCE_URI")
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
 
+	_ = viper.BindEnv("group-name", "PCSM_GROUP_NAME")
+
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")
-	_ = viper.BindEnv("log-no-color",
+	_ = viper.BindEnv(
+		"log-no-color",
 		"PCSM_LOG_NO_COLOR",
 		"PCSM_NO_COLOR", // deprecated
 	)
 
-	_ = viper.BindEnv("mongodb-operation-timeout",
+	_ = viper.BindEnv(
+		"mongodb-operation-timeout",
 		"PCSM_MONGODB_OPERATION_TIMEOUT",
 		"PLM_MONGODB_CLI_OPERATION_TIMEOUT", // deprecated
 	)
+
+	_ = viper.BindEnv("recovery-checkpoint-interval", "PCSM_RECOVERY_CHECKPOINT_INTERVAL")
 
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
 
