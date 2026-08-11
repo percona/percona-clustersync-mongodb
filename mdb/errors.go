@@ -69,6 +69,18 @@ func IsDatabaseDropPending(err error) bool {
 	return isMongoCommandError(err, "DatabaseDropPending")
 }
 
+// IsSplitPointAlreadyChunkBoundary reports whether a split failed because the point
+// is already a chunk boundary. MongoDB returns this uncoded, so it is matched
+// on the message.
+func IsSplitPointAlreadyChunkBoundary(err error) bool {
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		return strings.Contains(cmdErr.Message, "is a boundary key of existing chunk")
+	}
+
+	return false
+}
+
 // isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	var cmdErr mongo.CommandError

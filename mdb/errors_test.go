@@ -34,6 +34,36 @@ func TestIsDatabaseDropPending(t *testing.T) {
 	}
 }
 
+func TestIsSplitPointAlreadyBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name: "boundary key message",
+			err: mongo.CommandError{
+				Message: "new split key { _id: 500 } is a boundary key of existing chunk " +
+					"[{ _id: 500 },{ _id: MaxKey })",
+			},
+			expected: true,
+		},
+		{"other command error", mongo.CommandError{Name: "NamespaceNotFound", Message: "ns not found"}, false},
+		{"nil error", nil, false},
+		{"non-command error", errors.New("is a boundary key of existing chunk"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsSplitPointAlreadyChunkBoundary(tt.err))
+		})
+	}
+}
+
 // labeledError is a minimal mongo.LabeledError implementation used to verify
 // that IsTransient detects retryable write labels through error wrapping.
 type labeledError struct {

@@ -71,7 +71,46 @@ func TestPresplitDispatchNoop(t *testing.T) {
 
 			ns := catalog.Namespace{Database: "db", Collection: "coll"}
 
-			require.NoError(t, presplit(t.Context(), nil, ns, tt.shInfo))
+			// These branches never touch the source/target clients, so nil is safe.
+			require.NoError(t, presplit(t.Context(), nil, nil, ns, tt.shInfo))
+		})
+	}
+}
+
+func TestPairShards(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  []string
+		tgt  []string
+		want map[string]string
+	}{
+		{
+			name: "already sorted",
+			src:  []string{"srcA", "srcB"},
+			tgt:  []string{"tgtA", "tgtB"},
+			want: map[string]string{"srcA": "tgtA", "srcB": "tgtB"},
+		},
+		{
+			name: "unsorted inputs are sorted first",
+			src:  []string{"rs1", "rs0", "config"},
+			tgt:  []string{"shardC", "shardA", "shardB"},
+			want: map[string]string{"config": "shardA", "rs0": "shardB", "rs1": "shardC"},
+		},
+		{
+			name: "single shard",
+			src:  []string{"only"},
+			tgt:  []string{"dst"},
+			want: map[string]string{"only": "dst"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, pairShards(tt.src, tt.tgt))
 		})
 	}
 }

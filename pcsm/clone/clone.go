@@ -489,7 +489,7 @@ func (c *Clone) doCollectionClone(
 
 		lg.Infof("Collection %q sharded", ns.String())
 
-		err = presplit(ctx, c.target, ns, shInfo)
+		err = presplit(ctx, c.source, c.target, ns, shInfo)
 		if err != nil {
 			return errors.Wrap(err, "presplit chunks")
 		}

@@ -48,10 +48,18 @@ func ListShards(ctx context.Context, m *mongo.Client) ([]string, error) {
 // Metadata-only. Must be run against a mongos.
 func SplitChunkAt(ctx context.Context, m *mongo.Client, ns string, middle bson.D) error {
 	err := RunWithRetry(ctx, func(ctx context.Context) error {
-		return m.Database("admin").RunCommand(ctx, bson.D{
+		cmdErr := m.Database("admin").RunCommand(ctx, bson.D{
 			{Key: "split", Value: ns},
 			{Key: "middle", Value: middle},
-		}).Err() //nolint:wrapcheck
+		}).Err()
+
+		// Already a boundary means the split is effectively done (retry after an
+		// ambiguous failure, or a re-run after resume): treat as success.
+		if cmdErr != nil && IsSplitPointAlreadyChunkBoundary(cmdErr) {
+			return nil
+		}
+
+		return cmdErr //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return errors.Wrapf(err, "split %s", ns)
