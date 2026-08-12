@@ -57,6 +57,7 @@ Common runtime knobs. Every flag has a matching `PCSM_*` env var.
 | `PCSM_LOG_LEVEL`                 | `--log-level`                 |
 | `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
 | `PCSM_CLONE_SEGMENT_SIZE`        | `--clone-segment-size`        |
+| `PCSM_RECOVERY_CHECKPOINT_INTERVAL` | `--recovery-checkpoint-interval` (hidden; `0`/unset = 15s) |
 
 Full list lives in [config/config.go](config/config.go).
 
@@ -139,9 +140,10 @@ Single test invocations:
 Cleanup test environments:
 
 ```bash
-./hack/cleanup.sh       # Clean rs, sh, and sh-ha if present
-./hack/cleanup.sh rs    # RS only
-./hack/cleanup.sh sh    # Sharded only
+./hack/cleanup.sh          # Clean pcsm-ha, rs, sh, and sh-ha if present
+./hack/cleanup.sh rs       # RS only
+./hack/cleanup.sh sh       # Sharded only
+./hack/cleanup.sh pcsm-ha  # PCSM HA instance group only
 ```
 
 Always run `./hack/cleanup.sh` (no arguments) before switching between RS and sharded topologies. Both topologies bind overlapping ports (e.g. 30000), so leftover containers cause "port already allocated" errors. If cleanup doesn't resolve port conflicts, check for orphans with `docker ps -a`.
@@ -252,13 +254,25 @@ PCSM is a single binary with two operating modes plus a few direct commands.
 3. Starts HTTP server on `localhost:<port>` (default `2242`)
 4. Exposes operational endpoints `/status`, `/start`, `/pause`, `/resume`, `/finalize`, metrics at `/metrics`, and Go pprof under `/debug/pprof/`
 
+### High Availability (active-standby)
+
+Multiple PCSM instances can point at the same source/target. They coordinate through a MongoDB-backed lease on the target (`percona_clustersync_mongodb.lease`): exactly one instance holds the lease and is **ACTIVE** (runs replication), the rest stay **STANDBY** and take over on failover. Each instance also maintains a per-instance liveness document in `percona_clustersync_mongodb.members`. HA is always on — a single instance simply wins the lease immediately and behaves as before.
+
+Design notes:
+
+- **Standbys hold an idle source connection.** Every instance connects to source and target at startup (before its role is known) so an unreachable source or incompatible version fails fast at boot rather than on the failover path, and promotion stays low-latency. A STANDBY performs no source reads; the connection only carries driver monitoring traffic.
+- **Term-based fencing.** The lease term is a monotonic fencing token stamped into every checkpoint write. A deposed ACTIVE cannot overwrite a newer ACTIVE's checkpoint; its write is rejected and it self-demotes.
+- **Active-only operational endpoints.** All HTTP endpoints except `/metrics` (`/status`, `/start`, `/pause`, `/resume`, `/finalize`) return HTTP 409 `not_active` on a STANDBY; the 409 body is the cluster envelope, so it still carries the responder's role and the group member list pointing at the ACTIVE. `/status` is included: a STANDBY has no meaningful pipeline state. Use `/metrics` (always served) as the target for HTTP liveness/readiness probes.
+- **Envelope only when a group is observed.** The `me`/`role`/`group` envelope is added to API responses only when the instance currently sees more than one live member. A lone instance — the common single-instance deployment — returns responses byte-identical to the pre-HA API (no envelope). This is intentionally pessimistic: a member-list read error, or a group momentarily degraded to one live node, also omits the envelope. HA consumers must treat it as optional. Group identity is advisory and set with `--group-name` (env `PCSM_GROUP_NAME`).
+- **0.9.0 → 0.10.0 migration.** Replication state from 0.9.0 is not compatible. Run `pcsm reset` against the target before starting replication with 0.10.0.
+
 ### Client subcommands
 
 `status`, `start`, `pause`, `resume`, and `finalize` act as HTTP clients against an already-running server.
 
 ### Direct commands
 
-- `pcsm reset`, `pcsm reset recovery`, `pcsm reset heartbeat` connect directly to the target cluster and clear persisted state. Do not run while a server is up.
+- `pcsm reset`, `pcsm reset recovery`, `pcsm reset members` connect directly to the target cluster and clear persisted state. Do not run while a server is up.
 - `pcsm version` prints local build metadata.
 
 ## Manual Testing
@@ -333,17 +347,50 @@ Sharded topology shown as primary. RS variants use the URIs from the Connection 
      ./hack/cleanup.sh
      ```
 
+### HA Multi-Instance Testing
+
+`hack/ha/` runs a 3-node PCSM HA group (`pcsm0`/`pcsm1`/`pcsm2`) in Docker against already-running clusters, for manual failover testing. The instances join the cluster's Docker network and reach it via the same hostnames the host uses; API ports `2242`/`2243`/`2244` are published to the host.
+
+```bash
+# 1. Start clusters first (RS shown; use hack/sh/run.sh for sharded)
+./hack/rs/run.sh
+
+# 2. Start the HA group (builds pcsm:dev image). --reset clears target state.
+./hack/ha/run.sh rs --reset        # or: ./hack/ha/run.sh sh --reset
+
+# 3. Inspect roles: one ACTIVE, two STANDBY
+./hack/ha/status-group.sh
+
+# 4. Trigger replication on the ACTIVE (writes to a STANDBY return HTTP 409)
+curl -s -X POST http://localhost:2242/start -H 'Content-Type: application/json' -d '{}'
+
+# 5. Failover drill: hard-kill the ACTIVE; it restarts after ~5s and rejoins
+./hack/ha/kill-active.sh            # or: kill-active.sh 15 / kill-active.sh --no-restart
+./hack/ha/status-group.sh           # PORT | INSTANCE_ID | HOST | ROLE | STATE | TERM
+
+# 6. Full status of the current ACTIVE instance
+./hack/ha/status-active.sh
+
+# 7. Logs / stop
+docker logs -f pcsm0
+./hack/ha/stop.sh
+```
+
+Client commands work from the host against any instance's published port, e.g. `./bin/pcsm status --port 2243`. Cleanup: `./hack/cleanup.sh pcsm-ha` (or `./hack/cleanup.sh` cleans everything, PCSM group first).
+
 ### HTTP API
 
-| Endpoint          | Method | Purpose                |
-| ----------------- | ------ | ---------------------- |
-| `/status`         | GET    | Get replication status |
-| `/start`          | POST   | Start replication      |
-| `/pause`          | POST   | Pause replication      |
-| `/resume`         | POST   | Resume replication     |
-| `/finalize`       | POST   | Finalize replication   |
-| `/metrics`        | GET    | Prometheus metrics     |
-| `/debug/pprof/*`  | GET    | Go pprof endpoints     |
+| Endpoint          | Method | Purpose                | Standby (STANDBY) |
+| ----------------- | ------ | ---------------------- | ----------------- |
+| `/status`         | GET    | Get replication status | 409 `not_active`  |
+| `/start`          | POST   | Start replication      | 409 `not_active`  |
+| `/pause`          | POST   | Pause replication      | 409 `not_active`  |
+| `/resume`         | POST   | Resume replication     | 409 `not_active`  |
+| `/finalize`       | POST   | Finalize replication   | 409 `not_active`  |
+| `/metrics`        | GET    | Prometheus metrics     | served            |
+| `/debug/pprof/*`  | GET    | Go pprof endpoints     | served            |
+
+On a STANDBY, every operational endpoint returns HTTP 409 with the cluster envelope (`error: "not_active"`, plus `role` and `group.members[]` locating the ACTIVE). Only `/metrics` (and pprof) are served on all roles; use `/metrics` for HTTP liveness/readiness probes.
 
 `/start` accepts an optional JSON body with namespace include/exclude lists, clone tuning, repl tuning, and a bulk-write override. See `startRequest` in [main.go](main.go) and the matching CLI flags.
 
@@ -457,6 +504,21 @@ poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ### Metrics Stack
 
 `make metrics-up` brings up the bundled Prometheus + Grafana stack against the local PCSM `/metrics` endpoint. `make metrics-down` stops it.
+
+The bundled Prometheus scrapes all three HA hack ports (`2242`–`2244`); down targets for single-instance runs are harmless. Because `/metrics` is served on every role but only the ACTIVE instance drives replication, the Grafana board scopes gauge panels to the ACTIVE instance (`<metric> and on(instance) (percona_clustersync_mongodb_ha_active == 1)`) so a demoted ex-ACTIVE's frozen gauges don't render, and aggregates counter-rate panels with `sum(...)` (a demoted instance's `rate()` is 0).
+
+### HA Metrics
+
+Every instance exports these on `/metrics` (all roles):
+
+| Metric | Type | Description |
+| ------ | ---- | ----------- |
+| `percona_clustersync_mongodb_ha_active` | Gauge | `1` = ACTIVE, `0` = STANDBY |
+| `percona_clustersync_mongodb_ha_term` | Gauge | Current HA lease term |
+| `percona_clustersync_mongodb_ha_role_transitions_total` | Counter | Role transitions on this instance (flap detection) |
+| `percona_clustersync_mongodb_ha_info` | Gauge | Constant `1` with `instance_id` and `group` labels |
+
+Role/term gauges and the transitions counter are updated in `Membership.SetRole` ([ha/membership.go](ha/membership.go)); `ha_info` is published once at startup in [main.go](main.go). The Grafana board's "High Availability" row shows: **Instance Roles** (state timeline of `ha_active` per instance — one row per live scrape target, so it doubles as the group roster and shows which instance is ACTIVE and since when), **Lease Term** (stat scoped to the ACTIVE instance so a STANDBY's term-0 doesn't show), and **Role Transitions** (per-instance stat over the dashboard time range: 0 = stable, ≥3 = flapping).
 
 ## CI
 

@@ -31,7 +31,7 @@ tgt = pymongo.MongoClient(TGT_URI)
 def list_databases(client: MongoClient):
     """List all databases in the given MongoClient."""
     for name in client.list_database_names():
-        if name not in ("admin", "config", "local", "percona_mongolink"):
+        if name not in ("admin", "config", "local", "percona_clustersync_mongodb"):
             yield name
 
 
