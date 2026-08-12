@@ -73,6 +73,9 @@ type Clone struct {
 
 	startTime  time.Time
 	finishTime time.Time
+
+	// targetShardSizes tracks cumulative estimated bytes assigned to each target shard by pre-split.
+	targetShardSizes *shardSizes
 }
 
 // Status represents the status of the cloning process.
@@ -112,12 +115,13 @@ func NewClone(
 	opts *Options,
 ) *Clone {
 	return &Clone{
-		source:   source,
-		target:   target,
-		catalog:  cat,
-		nsFilter: nsFilter,
-		options:  opts,
-		doneCh:   make(chan struct{}),
+		source:           source,
+		target:           target,
+		catalog:          cat,
+		nsFilter:         nsFilter,
+		options:          opts,
+		doneCh:           make(chan struct{}),
+		targetShardSizes: newShardSizes(),
 	}
 }
 
@@ -489,7 +493,7 @@ func (c *Clone) doCollectionClone(
 
 		lg.Infof("Collection %q sharded", ns.String())
 
-		err = presplit(ctx, c.source, c.target, ns, shInfo)
+		err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
 		if err != nil {
 			return errors.Wrap(err, "presplit chunks")
 		}

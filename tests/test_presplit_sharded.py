@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import pytest
 from bson.max_key import MaxKey
 from bson.min_key import MinKey
 from pymongo import MongoClient
@@ -96,6 +97,9 @@ def test_ranged_mirror_layout(t: Testing):
     """Ranged collections with equal source/target shard counts mirror the
     source chunk layout: same boundaries, and ownership paired by sorted shard
     ID (source[i] -> target[i])."""
+    if shard_count(t.source) != shard_count(t.target):
+        pytest.skip("mirroring requires equal shard counts (SRC_SHARDS == TGT_SHARDS)")
+
     ns = "db_1.coll_1"
 
     src_shards = sorted_shards(t.source)
@@ -152,5 +156,87 @@ def test_ranged_mirror_layout(t: Testing):
                 f"chunk {bounds}: target on {tgt_owner[bounds]}, "
                 f"expected {pairing[s_shard]} (source {s_shard})"
             )
+
+    t.compare_all_sharded()
+
+
+def test_ranged_weighted_layout(t: Testing):
+    """Ranged collections with unequal source/target shard counts are packed by
+    estimated size so per-shard data volume stays even. Runs only on an unequal
+    topology (e.g. SRC_SHARDS=3 TGT_SHARDS=2)."""
+    n_src = shard_count(t.source)
+    n_tgt = shard_count(t.target)
+    if n_src == n_tgt:
+        pytest.skip("weighted placement requires unequal shard counts (SRC_SHARDS != TGT_SHARDS)")
+
+    ns = "db_1.coll_1"
+    src_shards = sorted_shards(t.source)
+
+    t.source["db_1"].create_collection("coll_1")
+    t.source.admin.command("shardCollection", ns, key={"_id": 1})
+    t.source["config"]["collections"].update_one({"_id": ns}, {"$set": {"noBalance": True}})
+
+    # 6 chunks at [., 0, 100, 200, 300, 400, .). Insert skewed doc counts so
+    # chunk sizes differ, then scatter chunks across all source shards.
+    for point in (0, 100, 200, 300, 400):
+        t.source.admin.command("split", ns, middle={"_id": point})
+
+    # Heavy chunk around _id 0..100, lighter elsewhere.
+    heavy = [{"_id": i} for i in range(0, 100)]
+    light = (
+        [{"_id": i} for i in range(-40, 0)]
+        + [{"_id": i} for i in range(100, 130)]
+        + [{"_id": i} for i in range(200, 230)]
+        + [{"_id": i} for i in range(300, 330)]
+        + [{"_id": i} for i in range(400, 430)]
+    )
+    t.source["db_1"]["coll_1"].insert_many(heavy + light)
+
+    # Scatter one range onto each non-primary source shard.
+    primary = target_chunks(t.source, ns)[0]["shard"]
+    non_primary = [s for s in src_shards if s != primary]
+    for i, shard in enumerate(non_primary):
+        t.source.admin.command("moveChunk", ns, find={"_id": 150 + i * 100}, to=shard)
+
+    src_owners = {c["shard"] for c in target_chunks(t.source, ns)}
+    assert len(src_owners) == n_src, f"source layout not spread across all shards: {src_owners}"
+
+    with t.run(phase=Runner.Phase.MANUAL) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+        src_chunks = target_chunks(t.source, ns)
+        tgt_chunks = target_chunks(t.target, ns)
+
+        # 1. boundaries replayed: same chunk count.
+        assert len(tgt_chunks) == len(src_chunks), (
+            f"target chunk count {len(tgt_chunks)} != source {len(src_chunks)}"
+        )
+
+        # 2. every target shard owns at least one chunk.
+        tgt_owners = {c["shard"] for c in tgt_chunks}
+        assert len(tgt_owners) == n_tgt, f"target does not use all shards: {tgt_owners}"
+
+        # 3. Per-shard document counts are roughly even. Largest-first placement
+        # bounds the spread by one chunk, so allow the heaviest chunk's share slack.
+        docs_per_shard: dict[str, int] = {}
+        for c in tgt_chunks:
+            lo = c["min"]["_id"]
+            hi = c["max"]["_id"]
+            cnt = t.target["db_1"]["coll_1"].count_documents(
+                {"_id": {"$gte": lo, "$lt": hi}}
+                if not isinstance(hi, MaxKey)
+                else {"_id": {"$gte": lo}}
+                if not isinstance(lo, MinKey)
+                else {}
+            )
+            docs_per_shard[c["shard"]] = docs_per_shard.get(c["shard"], 0) + cnt
+
+        total = sum(docs_per_shard.values())
+        ideal = total / n_tgt
+        # Heaviest chunk is the 100-doc range; allow that as placement slack.
+        assert max(docs_per_shard.values()) <= ideal + 100, (
+            f"uneven data distribution: {docs_per_shard} (ideal {ideal:.0f})"
+        )
 
     t.compare_all_sharded()

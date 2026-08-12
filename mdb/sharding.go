@@ -91,3 +91,35 @@ func MoveChunk(
 
 	return nil
 }
+
+// EstimateChunkSize returns the estimated size in bytes of the chunk
+// [minBound, maxBound) of ns, using the dataSize command with estimate:true
+// (avgObjSize * key count — cheap and index-only). Must be run against a mongos.
+func EstimateChunkSize(
+	ctx context.Context,
+	m *mongo.Client,
+	ns string,
+	keyPattern, minBound, maxBound bson.D,
+) (int64, error) {
+	type dataSizeResult struct {
+		Size int64 `bson:"size"`
+	}
+
+	res, err := RunWithRetryVal(ctx, func(ctx context.Context) (*dataSizeResult, error) {
+		out := &dataSizeResult{}
+		err := m.Database("admin").RunCommand(ctx, bson.D{
+			{Key: "dataSize", Value: ns},
+			{Key: "keyPattern", Value: keyPattern},
+			{Key: "min", Value: minBound},
+			{Key: "max", Value: maxBound},
+			{Key: "estimate", Value: true},
+		}).Decode(out)
+
+		return out, err //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		return 0, errors.Wrapf(err, "dataSize %s", ns)
+	}
+
+	return res.Size, nil
+}
