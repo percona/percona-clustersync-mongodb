@@ -9,7 +9,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-const TimeFieldFormat = "2006-01-02 15:04:05.000"
+const TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // InitGlobals initializes the logger with the specified level and settings.
 //   - level: the log level (e.g., debug, info, warn, error).
