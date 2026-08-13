@@ -349,7 +349,7 @@ func GetCollectionShardingInfo(
 		info := &ShardingInfo{}
 		err := m.Database("config").
 			Collection("collections").
-			FindOne(ctx, bson.M{"_id": collNS}).
+			FindOne(ctx, bson.M{"_id": collNS, "dropped": bson.M{"$ne": true}}).
 			Decode(info)
 
 		return info, err //nolint:wrapcheck
@@ -406,6 +406,7 @@ func GetCollectionShardingInfo(
 			return nil, errors.Wrap(err, "read chunks")
 		}
 	}
+	info.Chunks = chunks
 
 	return info, nil
 }

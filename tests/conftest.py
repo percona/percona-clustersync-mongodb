@@ -47,6 +47,18 @@ def target_uri(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(scope="session")
+def source_uri_str(request: pytest.FixtureRequest):
+    """Provide the source MongoDB URI as a fixture."""
+    return source_uri(request)
+
+
+@pytest.fixture(scope="session")
+def target_uri_str(request: pytest.FixtureRequest):
+    """Provide the target MongoDB URI as a fixture."""
+    return target_uri(request)
+
+
+@pytest.fixture(scope="session")
 def source_conn(request: pytest.FixtureRequest):
     """Provide a MongoClient connection to the source MongoDB."""
     with MongoClient(source_uri(request)) as conn:
@@ -147,6 +159,36 @@ def manage_pcsm_process(request: pytest.FixtureRequest, pcsm_bin: str):
     yield PCSM_PROC
 
 
+# When True, the session-managed PCSM is intentionally stopped (see
+# suspend_managed_pcsm) and restart_pcsm_on_failure must not resurrect it.
+_MANAGED_SUSPENDED = False
+
+
+@pytest.fixture
+def suspend_managed_pcsm(request: pytest.FixtureRequest, pcsm_bin: str):
+    """Stop the session-managed PCSM so tests running their own instances (the
+    HA group) don't compete for the lease. Restarted on teardown; while
+    suspended, restart_pcsm_on_failure must not resurrect it."""
+    global PCSM_PROC, _MANAGED_SUSPENDED  # pylint: disable=W0603
+
+    if not pcsm_bin:
+        yield
+        return
+
+    proc = PCSM_PROC
+    if proc is not None:
+        stop_pcsm(proc)
+        PCSM_PROC = None
+
+    _MANAGED_SUSPENDED = True
+    try:
+        yield
+    finally:
+        _MANAGED_SUSPENDED = False
+        if proc is not None:
+            PCSM_PROC = start_pcsm(pcsm_bin, request)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
     """Attach test results to each test item for later inspection."""
@@ -158,6 +200,11 @@ def pytest_runtest_makereport(item, call):  # pylint: disable=W0613
 @pytest.fixture(autouse=True)
 def restart_pcsm_on_failure(request: pytest.FixtureRequest, pcsm_bin: str):
     yield
+
+    if _MANAGED_SUSPENDED:
+        # The managed instance is intentionally down (e.g. HA tests); do not
+        # restart it between tests.
+        return
 
     if hasattr(request.node, "rep_call") and request.node.rep_call.failed:
         # the test failed. restart pcsm process with a new state

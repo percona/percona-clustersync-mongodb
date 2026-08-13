@@ -273,9 +273,13 @@ func (c *Clone) run(ctx context.Context) error {
 	lg := log.New("clone")
 	ctx = lg.WithContext(ctx)
 
-	startTS, err := mdb.ClusterTime(ctx, c.source)
+	// Use appendOplogNote, not ping: it waits until all in-flight writes are
+	// durable so startTS anchors to a real oplog event. ping would return before
+	// those writes commit, so an earlier write could be missed by both the clone
+	// scan and the change stream that starts at startTS. See PCSM-241.
+	startTS, err := mdb.AdvanceClusterTime(ctx, c.source)
 	if err != nil {
-		return errors.Wrap(err, "startTS: get source cluster time")
+		return errors.Wrap(err, "startTS: advance source cluster time")
 	}
 
 	c.lock.Lock()
