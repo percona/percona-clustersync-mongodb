@@ -1,4 +1,4 @@
-//nolint:testpackage // tests unexported isHashedPrefix/presplit dispatch
+//nolint:testpackage // tests unexported hasHashedField/presplit dispatch
 package clone
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-func TestIsHashedPrefix(t *testing.T) {
+func TestHasHashedField(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -22,8 +22,9 @@ func TestIsHashedPrefix(t *testing.T) {
 	}{
 		{"single hashed", bson.D{{Key: "_id", Value: "hashed"}}, true},
 		{"compound hashed prefix", bson.D{{Key: "x", Value: "hashed"}, {Key: "region", Value: int32(1)}}, true},
-		{"compound non-hashed prefix", bson.D{{Key: "region", Value: int32(1)}, {Key: "x", Value: "hashed"}}, false},
+		{"compound hashed suffix", bson.D{{Key: "region", Value: int32(1)}, {Key: "x", Value: "hashed"}}, true},
 		{"single ranged", bson.D{{Key: "_id", Value: int32(1)}}, false},
+		{"compound ranged", bson.D{{Key: "region", Value: int32(1)}, {Key: "x", Value: int32(1)}}, false},
 		{"empty key", bson.D{}, false},
 		{"nil key", nil, false},
 	}
@@ -32,7 +33,7 @@ func TestIsHashedPrefix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, isHashedPrefix(tt.shardKey))
+			assert.Equal(t, tt.want, hasHashedField(tt.shardKey))
 		})
 	}
 }
@@ -40,10 +41,10 @@ func TestIsHashedPrefix(t *testing.T) {
 func TestPresplitDispatchNoop(t *testing.T) {
 	t.Parallel()
 
-	// Every current branch is a no-op: hashed relies on the balanced native
-	// shardCollection layout, and ranged with <=1 chunk has nothing to replay.
-	// None of them touch the target client, so a nil client is safe. Ranged
-	// multi-chunk placement is covered by E2E.
+	// Every current branch is a no-op: any hashed component relies on the
+	// balanced native shardCollection layout, and ranged with <=1 chunk has
+	// nothing to replay. None of them touch the target client, so a nil client
+	// is safe. Ranged multi-chunk placement is covered by E2E.
 	tests := []struct {
 		name   string
 		shInfo *mdb.ShardingInfo
@@ -51,6 +52,13 @@ func TestPresplitDispatchNoop(t *testing.T) {
 		{
 			name:   "hashed prefix",
 			shInfo: &mdb.ShardingInfo{ShardKey: bson.D{{Key: "_id", Value: "hashed"}}},
+		},
+		{
+			name: "hashed suffix with multiple chunks",
+			shInfo: &mdb.ShardingInfo{
+				ShardKey: bson.D{{Key: "region", Value: int32(1)}, {Key: "x", Value: "hashed"}},
+				Chunks:   []mdb.ChunkInfo{{Shard: "a"}, {Shard: "b"}},
+			},
 		},
 		{
 			name: "ranged single chunk",

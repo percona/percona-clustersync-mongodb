@@ -33,15 +33,18 @@ func newShardSizes() *shardSizes {
 	return &shardSizes{sizes: make(map[string]int64)}
 }
 
-// isHashedPrefix reports whether the shard key's leading field is hashed.
-func isHashedPrefix(shardKey bson.D) bool {
-	if len(shardKey) == 0 {
-		return false
+// hasHashedField reports whether any field of the shard key is hashed.
+// MongoDB forbids splitting a hashed shard key with `middle` (the mechanism
+// this presplit uses), so a hashed component anywhere disqualifies the whole
+// key from ranged presplitting.
+func hasHashedField(shardKey bson.D) bool {
+	for _, e := range shardKey {
+		if v, ok := e.Value.(string); ok && v == hashedKeyType {
+			return true
+		}
 	}
 
-	v, ok := shardKey[0].Value.(string)
-
-	return ok && v == hashedKeyType
+	return false
 }
 
 // presplit recreates a balanced chunk layout on the empty target collection so
@@ -55,9 +58,10 @@ func presplit(
 	targetShardSizes *shardSizes,
 ) error {
 	switch {
-	case isHashedPrefix(shInfo.ShardKey):
-		// shardCollection already spreads hashed chunks evenly across shards,
-		// so the default layout needs no pre-split.
+	case hasHashedField(shInfo.ShardKey):
+		// For a hashed prefix, shardCollection already spreads chunks evenly across shards;
+		// for a non-hashed prefix, it creates a single initial chunk. Either
+		// way the native layout is kept and no pre-split is performed.
 		return nil
 
 	case len(shInfo.Chunks) <= 1:
