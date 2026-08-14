@@ -141,6 +141,37 @@ var (
 	})
 )
 
+// HA (high availability) metrics.
+var (
+	//nolint:gochecknoglobals
+	haActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "ha_active",
+		Help:      "Whether this instance currently holds the ACTIVE role (1) or is STANDBY (0).",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	haTerm = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:      "ha_term",
+		Help:      "Current HA lease term this instance advertises.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	haRoleTransitionsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:      "ha_role_transitions_total",
+		Help:      "Total number of HA role transitions on this instance.",
+		Namespace: metricNamespace,
+	})
+
+	//nolint:gochecknoglobals
+	haInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:      "ha_info",
+		Help:      "HA instance identity metadata; constant 1 with instance_id and group labels.",
+		Namespace: metricNamespace,
+	}, []string{"instance_id", "group"})
+)
+
 // Init initializes and registers the metrics.
 func Init(reg prometheus.Registerer) {
 	reg.MustRegister(collectors.NewGoCollector())
@@ -168,6 +199,11 @@ func Init(reg prometheus.Registerer) {
 		replWorkerFlushBatchSize,
 		replWorkerFlushDurationSeconds,
 		replWorkerBulkQueueSize,
+
+		haActive,
+		haTerm,
+		haRoleTransitionsTotal,
+		haInfo,
 	)
 }
 
@@ -256,4 +292,25 @@ func ObserveReplWorkerFlushDuration(worker string, d time.Duration) {
 // SetReplWorkerBulkQueueSize sets the current depth of a worker's pending bulk queue.
 func SetReplWorkerBulkQueueSize(worker string, v int) {
 	replWorkerBulkQueueSize.WithLabelValues(worker).Set(float64(v))
+}
+
+// SetHARoleAndTerm sets the HA role and term gauges for this instance.
+func SetHARoleAndTerm(active bool, term int64) {
+	if active {
+		haActive.Set(1)
+	} else {
+		haActive.Set(0)
+	}
+
+	haTerm.Set(float64(term))
+}
+
+// IncHARoleTransitions increments the HA role transitions counter.
+func IncHARoleTransitions() {
+	haRoleTransitionsTotal.Inc()
+}
+
+// SetHAInfo publishes this instance's HA identity metadata.
+func SetHAInfo(instanceID, group string) {
+	haInfo.WithLabelValues(instanceID, group).Set(1)
 }

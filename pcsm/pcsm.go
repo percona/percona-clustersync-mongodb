@@ -280,7 +280,30 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	if cp.State == StateRunning {
-		return p.doResume(ctx, false)
+		// The initial clone is not resumable. If it was interrupted mid-flight
+		// (started but not finished), fail with a clear reason. Recovery is a
+		// fresh /start, which re-clones from scratch.
+		cloneStatus := cln.Status()
+		if cloneStatus.IsRunning() {
+			err := errors.New(
+				"initial clone interrupted by failover and is not resumable; " +
+					"start a new run to re-clone from scratch",
+			)
+			p.state = StateFailed
+			p.err = err
+
+			log.New("pcsm").Error(err, "Cluster Replication has failed")
+
+			go p.onStateChanged(StateFailed)
+
+			return nil
+		}
+
+		// run(), not doResume: it handles both a checkpoint persisted at /start
+		// time (repl not yet started) and one persisted after. doResume would
+		// reject the not-yet-started case.
+		go p.run(p.lifecycleCtx)
+		go p.onStateChanged(StateRunning)
 	}
 
 	return nil
@@ -398,11 +421,25 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	defer p.lock.Unlock()
 
 	switch p.state {
-	case StateRunning, StateFinalizing, StateFailed:
+	case StateRunning, StateFinalizing:
 		err := errors.New("already running")
 		log.New("pcsm:start").Error(err, "")
 
 		return err
+
+	case StateFailed:
+		// Allow a fresh /start (re-clone from scratch) only if the clone never
+		// finished. A failure after the clone completed is a repl-phase failure,
+		// recovered with resume --from-failure, so it is still rejected here.
+		if p.clone != nil {
+			cloneStatus := p.clone.Status()
+			if cloneStatus.IsFinished() {
+				err := errors.New("already running")
+				log.New("pcsm:start").Error(err, "")
+
+				return err
+			}
+		}
 
 	case StatePaused:
 		err := errors.New("paused")
@@ -415,6 +452,8 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 		options = &StartOptions{}
 	}
 
+	p.err = nil
+
 	p.nsInclude = options.IncludeNamespaces
 	p.nsExclude = options.ExcludeNamespaces
 	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
@@ -426,6 +465,10 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.state = StateRunning
 
 	go p.run(p.lifecycleCtx)
+
+	// Persist idle->running immediately: a crash before the first periodic
+	// checkpoint would otherwise leave no recovery data to resume from.
+	go p.onStateChanged(StateRunning)
 
 	return nil
 }
@@ -454,7 +497,7 @@ func (p *PCSM) run(ctx context.Context) {
 	if !cloneStatus.IsFinished() {
 		err := p.clone.Start(ctx)
 		if err != nil {
-			p.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
+			p.setFailed(errors.Wrap(err, "start clone"))
 
 			return
 		}
@@ -719,23 +762,29 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	lg := log.New("finalize")
 	lg.Info("Starting Finalization")
 
-	if status.Repl.IsRunning() {
+	// Decide from the live repl status under the lock, not the pre-lock
+	// snapshot above. With PauseOnInitialSync, monitorInitialSync can pause
+	// repl concurrently; a stale "running" snapshot would make us call Pause
+	// on an already-pausing/paused repl and fail. Only pause when repl is
+	// running and no pause is already in flight; either way, wait for Done.
+	replStatus := p.repl.Status()
+	if replStatus.IsRunning() && !replStatus.Pausing {
 		lg.Info("Pausing Change Replication")
 
 		err := p.repl.Pause(ctx)
 		if err != nil {
 			return errors.Wrap(err, "pause change replication")
 		}
+	}
 
-		<-p.repl.Done()
-		lg.Info("Change Replication is paused")
+	<-p.repl.Done()
+	lg.Info("Change Replication is paused")
 
-		err = p.repl.Status().Err
-		if err != nil {
-			// no need to set the PCSM failed status here.
-			// [PCSM.setFailed] is called in [PCSM.run].
-			return errors.Wrap(err, "post-pause change replication")
-		}
+	err := p.repl.Status().Err
+	if err != nil {
+		// no need to set the PCSM failed status here.
+		// [PCSM.setFailed] is called in [PCSM.run].
+		return errors.Wrap(err, "post-pause change replication")
 	}
 
 	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}

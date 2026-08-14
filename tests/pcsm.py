@@ -42,7 +42,9 @@ class PCSM:
         self.uri = uri
 
     def status(self):
-        """Get the current status of the PCSM service."""
+        """Get the current status. Strict: raises on non-2xx (a STANDBY returns
+        409) or a failed payload. HA callers polling mixed-role instances use
+        raw_status instead."""
         res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
 
@@ -52,6 +54,22 @@ class PCSM:
 
         return payload
 
+    def raw_status(self):
+        """Get /status as (status_code, body) without raising. A STANDBY's 409
+        body still carries role and the group member list."""
+        res = requests.get(f"{self.uri}/status", timeout=DFL_REQ_TIMEOUT)
+        return res.status_code, res.json()
+
+    def role(self):
+        """Return the HA role advertised in the /status envelope (ACTIVE/STANDBY)."""
+        return self.status().get("role")
+
+    def start_expect_conflict(self):
+        """Attempt /start and return (status_code, body) without raising, to
+        assert a STANDBY rejects writes with 409."""
+        res = requests.post(f"{self.uri}/start", json={}, timeout=DFL_REQ_TIMEOUT)
+        return res.status_code, res.json()
+
     def start(
         self,
         include_namespaces=None,
@@ -59,6 +77,8 @@ class PCSM:
         pause_on_initial_sync=False,
         clone_segment_size=None,
         clone_num_read_workers=None,
+        clone_num_parallel_collections=None,
+        clone_num_insert_workers=None,
     ):
         """Start the PCSM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
@@ -70,6 +90,10 @@ class PCSM:
             options["cloneSegmentSize"] = clone_segment_size
         if clone_num_read_workers is not None:
             options["cloneNumReadWorkers"] = clone_num_read_workers
+        if clone_num_parallel_collections is not None:
+            options["cloneNumParallelCollections"] = clone_num_parallel_collections
+        if clone_num_insert_workers is not None:
+            options["cloneNumInsertWorkers"] = clone_num_insert_workers
 
         res = requests.post(f"{self.uri}/start", json=options, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()
