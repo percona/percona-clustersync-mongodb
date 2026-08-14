@@ -81,6 +81,8 @@ type mockCatalog struct {
 
 	uuidMaps     []catalog.UUIDMap
 	uuidMapCalls int
+
+	shardCollectionCalled bool
 }
 
 type mockPool struct {
@@ -136,6 +138,8 @@ func (m *mockCatalog) CreateIndexes(_ context.Context, _, _ string, _ []*mdb.Ind
 }
 
 func (m *mockCatalog) ShardCollection(_ context.Context, _, _ string, _ bson.D, _ bool) error {
+	m.shardCollectionCalled = true
+
 	return nil
 }
 
@@ -197,11 +201,11 @@ func newInvalidateTestRepl(sourceIsMongos bool, sourceVer mdb.ServerVersion) *Re
 	close(doneCh)
 
 	return &Repl{
-		catalog:        &mockCatalog{},
-		sourceIsMongos: sourceIsMongos,
-		sourceVer:      sourceVer,
-		pauseCh:        make(chan struct{}, 1),
-		doneCh:         doneCh,
+		catalog:         &mockCatalog{},
+		sourceIsSharded: sourceIsMongos,
+		sourceVer:       sourceVer,
+		pauseCh:         make(chan struct{}, 1),
+		doneCh:          doneCh,
 	}
 }
 
@@ -395,7 +399,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 				collectionUUIDExists: tt.catalogUUIDExists,
 			}
 			r := &Repl{catalog: cat}
-			r.sourceIsMongos = tt.sourceIsMongos
+			r.sourceIsSharded = tt.sourceIsMongos
 			r.sourceVer = tt.sourceVer
 
 			change := &ChangeEvent{
@@ -668,7 +672,7 @@ func TestShouldSkipReplay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			r := &Repl{sourceIsMongos: tt.sourceIsMongos, checkpointOpTime: tt.checkpoint}
+			r := &Repl{sourceIsSharded: tt.sourceIsMongos, checkpointOpTime: tt.checkpoint}
 			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
 
 			assert.Equal(t, tt.want, r.shouldSkipReplay(change))
@@ -739,7 +743,7 @@ func TestSourceIsPre8AndMongos(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := &Repl{sourceIsMongos: tt.mongos, sourceVer: tt.ver}
+			r := &Repl{sourceIsSharded: tt.mongos, sourceVer: tt.ver}
 			assert.Equal(t, tt.want, r.sourceIsPre8AndMongos())
 		})
 	}
@@ -758,4 +762,45 @@ func TestParseChangeEvent_Invalidate(t *testing.T) {
 	assert.Equal(t, Invalidate, change.OperationType)
 	_, ok := change.Event.(InvalidateEvent)
 	assert.True(t, ok)
+}
+
+func TestApplyDDLChange_ShardCollection_SkipsOnRSTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		targetIsMongos bool
+		wantCalled     bool
+	}{
+		{name: "sharded target replays", targetIsMongos: true, wantCalled: true},
+		{name: "RS target skips", targetIsMongos: false, wantCalled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := &mockCatalog{}
+			r := &Repl{
+				catalog:         cat,
+				targetIsSharded: tt.targetIsMongos,
+			}
+
+			change := &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType: ShardCollection,
+					Namespace:     catalog.Namespace{Database: "db", Collection: "coll"},
+				},
+				Event: ShardCollectionEvent{
+					OperationDescription: shardCollectionOpDesc{
+						ShardKey: bson.D{{Key: "x", Value: 1}},
+					},
+				},
+			}
+
+			err := r.applyDDLChange(t.Context(), change)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantCalled, cat.shardCollectionCalled)
+		})
+	}
 }
