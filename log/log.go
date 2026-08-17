@@ -9,7 +9,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-const TimeFieldFormat = "2006-01-02 15:04:05.000"
+const TimeFieldFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // InitGlobals initializes the logger with the specified level and settings.
 //   - level: the log level (e.g., debug, info, warn, error).
@@ -18,6 +18,7 @@ const TimeFieldFormat = "2006-01-02 15:04:05.000"
 //   - output: the output writer (os.Stdout for server, os.Stderr for client commands).
 func InitGlobals(level zerolog.Level, json, noColor bool, output io.Writer) *zerolog.Logger {
 	zerolog.TimeFieldFormat = TimeFieldFormat
+	zerolog.TimestampFunc = func() time.Time { return time.Now().UTC() }
 	zerolog.DurationFieldUnit = time.Second
 	zerolog.DurationFieldInteger = false
 
@@ -27,6 +28,7 @@ func InitGlobals(level zerolog.Level, json, noColor bool, output io.Writer) *zer
 			w.Out = output
 			w.NoColor = noColor
 			w.TimeFormat = TimeFieldFormat
+			w.TimeLocation = time.UTC
 		})
 	}
 
