@@ -421,6 +421,36 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	return err //nolint:wrapcheck
 }
 
+// shardCollection replicates the source's sharding for ns onto the target:
+// it shards the target collection with the same key and, for ranged keys,
+// pre-splits the empty collection.
+func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error {
+	lg := log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection))
+
+	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+		return errors.Wrap(err, "get sharding info")
+	}
+
+	if shInfo == nil || !shInfo.IsSharded() {
+		return nil // source collection is unsharded — nothing to replicate
+	}
+
+	err = c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+	if err != nil {
+		return errors.Wrap(err, "shard collection")
+	}
+
+	lg.Infof("Collection %q sharded", ns.String())
+
+	err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
+	if err != nil {
+		return errors.Wrap(err, "presplit chunks")
+	}
+
+	return nil
+}
+
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
@@ -484,21 +514,10 @@ func (c *Clone) doCollectionClone(
 
 	lg.Infof("Collection %q created", ns.String())
 
-	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
-		return errors.Wrap(err, "get sharding info")
-	}
-
-	if c.targetIsSharded && shInfo != nil && shInfo.IsSharded() {
-		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+	if c.targetIsSharded {
+		err = c.shardCollection(ctx, ns)
 		if err != nil {
-			return errors.Wrap(err, "shard collection")
-		}
-
-		lg.Infof("Collection %q sharded", ns.String())
-		err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
-		if err != nil {
-			return errors.Wrap(err, "presplit chunks")
+			return err
 		}
 	}
 
