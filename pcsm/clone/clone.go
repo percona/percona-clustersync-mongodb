@@ -59,6 +59,8 @@ type Clone struct {
 	nsFilter sel.NSFilter  // Namespace filter
 	options  *Options      // Clone options
 
+	targetIsSharded bool
+
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
@@ -73,6 +75,9 @@ type Clone struct {
 
 	startTime  time.Time
 	finishTime time.Time
+
+	// targetShardSizes tracks cumulative estimated bytes assigned to each target shard by pre-split.
+	targetShardSizes *shardSizes
 }
 
 // Status represents the status of the cloning process.
@@ -110,14 +115,17 @@ func NewClone(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
+	targetIsSharded bool,
 ) *Clone {
 	return &Clone{
-		source:   source,
-		target:   target,
-		catalog:  cat,
-		nsFilter: nsFilter,
-		options:  opts,
-		doneCh:   make(chan struct{}),
+		source:           source,
+		target:           target,
+		catalog:          cat,
+		nsFilter:         nsFilter,
+		options:          opts,
+		doneCh:           make(chan struct{}),
+		targetIsSharded:  targetIsSharded,
+		targetShardSizes: newShardSizes(),
 	}
 }
 
@@ -413,6 +421,36 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	return err //nolint:wrapcheck
 }
 
+// shardCollection replicates the source's sharding for ns onto the target:
+// it shards the target collection with the same key and, for ranged keys,
+// pre-splits the empty collection.
+func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error {
+	lg := log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection))
+
+	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
+	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+		return errors.Wrap(err, "get sharding info")
+	}
+
+	if shInfo == nil || !shInfo.IsSharded() {
+		return nil // source collection is unsharded — nothing to replicate
+	}
+
+	err = c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+	if err != nil {
+		return errors.Wrap(err, "shard collection")
+	}
+
+	lg.Infof("Collection %q sharded", ns.String())
+
+	err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
+	if err != nil {
+		return errors.Wrap(err, "presplit chunks")
+	}
+
+	return nil
+}
+
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
@@ -476,18 +514,11 @@ func (c *Clone) doCollectionClone(
 
 	lg.Infof("Collection %q created", ns.String())
 
-	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
-		return errors.Wrap(err, "get sharding info")
-	}
-
-	if shInfo != nil && shInfo.IsSharded() {
-		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+	if c.targetIsSharded {
+		err = c.shardCollection(ctx, ns)
 		if err != nil {
-			return errors.Wrap(err, "shard collection")
+			return err
 		}
-
-		lg.Infof("Collection %q sharded", ns.String())
 	}
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
@@ -536,7 +567,8 @@ func (c *Clone) doCollectionClone(
 				updateLog := lg.With(
 					log.Size(progressUpdate.SizeBytes),
 					log.Count(int64(progressUpdate.Count)),
-					log.Elapsed(time.Since(lastLogAt)))
+					log.Elapsed(time.Since(lastLogAt)),
+				)
 
 				if errors.Is(err, context.Canceled) {
 					updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)

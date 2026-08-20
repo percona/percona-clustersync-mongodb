@@ -325,8 +325,10 @@ func ListInconsistentIndexes(
 
 type ChunkInfo struct {
 	Shard string `bson:"shard"`
-	Min   bson.M `bson:"min"`
-	Max   bson.M `bson:"max"`
+	// Min and Max are the chunk's shard-key range bounds. They are bson.D
+	// (ordered) so compound shard-key field order is preserved.
+	Min bson.D `bson:"min"`
+	Max bson.D `bson:"max"`
 }
 
 type ShardingInfo struct {
@@ -371,6 +373,22 @@ func GetCollectionShardingInfo(
 		return info, nil
 	}
 
+	chunks, err := GetChunks(ctx, m, info.UUID)
+	if err != nil {
+		return nil, errors.Wrapf(err, "get chunks for %s", collNS)
+	}
+	info.Chunks = chunks
+
+	return info, nil
+}
+
+// GetChunks reads the chunk layout for a collection from config.chunks,
+// ordered by the shard-key lower bound.
+func GetChunks(ctx context.Context, m *mongo.Client, uuid *bson.Binary) ([]ChunkInfo, error) {
+	if uuid == nil {
+		return nil, errors.New("collection uuid is required to read chunks")
+	}
+
 	chunksColl := m.Database("config").Collection("chunks")
 
 	var chunks []ChunkInfo
@@ -382,10 +400,14 @@ func GetCollectionShardingInfo(
 	)
 
 	chunksStage := chunksFindStage
-	err = RunWithRetry(ctx, func(ctx context.Context) error {
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
 		chunksStage = chunksFindStage
 
-		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+		cur, err := chunksColl.Find(
+			ctx,
+			bson.D{{Key: "uuid", Value: uuid}},
+			options.Find().SetSort(bson.D{{Key: "min", Value: 1}}),
+		)
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
@@ -404,14 +426,13 @@ func GetCollectionShardingInfo(
 	if err != nil {
 		switch chunksStage {
 		case chunksFindStage:
-			return nil, errors.Wrapf(err, "find chunks for %s", collNS)
+			return nil, errors.Wrap(err, "find chunks")
 		case chunksErrorStage:
 			return nil, errors.Wrap(err, "iterate chunks")
 		default:
 			return nil, errors.Wrap(err, "read chunks")
 		}
 	}
-	info.Chunks = chunks
 
-	return info, nil
+	return chunks, nil
 }
