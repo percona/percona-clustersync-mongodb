@@ -22,7 +22,10 @@ import (
 
 const testDB = "pcsm_test_catalog"
 
-var mongoURI string
+var (
+	mongoURI       string
+	targetMongoURI string
+)
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -40,6 +43,7 @@ func TestMain(m *testing.M) {
 			Cmd: []string{
 				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
 				"--wiredTigerCacheSizeGB", "0.5",
+				"--setParameter", "enableTestCommands=1",
 				"--replSet", "rs0", "--port", "27017",
 			},
 			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
@@ -51,9 +55,30 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	targetMongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"27017/tcp"},
+			Cmd: []string{
+				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
+				"--wiredTigerCacheSizeGB", "0.5", "--port", "27017",
+			},
+			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		_ = mongod.Terminate(ctx)
+		fmt.Fprintf(os.Stderr, "Failed to start target mongod: %v\n", err)
+		os.Exit(1)
+	}
+
 	cleanup := func() {
 		if mongod != nil {
 			_ = mongod.Terminate(ctx)
+		}
+		if targetMongod != nil {
+			_ = targetMongod.Terminate(ctx)
 		}
 	}
 
@@ -85,6 +110,16 @@ func TestMain(m *testing.M) {
 	}
 	mongoURI = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, mappedPort.Port())
 
+	targetHost, err := targetMongod.Host(ctx)
+	if err != nil {
+		exitWithError("Failed to get target host: %v", err)
+	}
+	targetMappedPort, err := targetMongod.MappedPort(ctx, "27017/tcp")
+	if err != nil {
+		exitWithError("Failed to get target port: %v", err)
+	}
+	targetMongoURI = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", targetHost, targetMappedPort.Port())
+
 	exitCode = m.Run()
 
 	cleanup()
@@ -113,12 +148,20 @@ func waitForPrimary(ctx context.Context, container testcontainers.Container) err
 }
 
 func connectToMongoDB(t *testing.T) *mongo.Client {
+	return connectToMongoDBURI(t, mongoURI)
+}
+
+func connectToTargetMongoDB(t *testing.T) *mongo.Client {
+	return connectToMongoDBURI(t, targetMongoURI)
+}
+
+func connectToMongoDBURI(t *testing.T, uri string) *mongo.Client {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI).SetServerSelectionTimeout(5 * time.Second))
+	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetServerSelectionTimeout(5 * time.Second))
 	require.NoError(t, err, "MongoDB connection should succeed")
 
 	err = client.Ping(ctx, nil)

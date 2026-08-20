@@ -3,6 +3,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,24 +11,183 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
-// seedFailedIndex appends a failed unsuccessful-index entry to the catalog.
-// It mirrors seedIndex but marks the entry Failed so that
-// finalizeUnsuccessfulIndexes takes the unconditional-recreate path (which
-// skips the source recheck and only touches the target).
-func seedFailedIndex(cat *Catalog, db, coll string, spec *mdb.IndexSpecification) {
-	dbCat, ok := cat.Databases[db]
-	if !ok {
-		dbCat = databaseCatalog{Collections: make(map[string]collectionCatalog)}
-		cat.Databases[db] = dbCat
+func TestFinalizeUnsuccessfulIndexes_RecreatesCurrentSourceSpec(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		originalType IndexUnsuccessfulType
+	}{
+		{name: "incomplete", originalType: IndexIncomplete},
+		{name: "inconsistent", originalType: IndexInconsistent},
 	}
 
-	collCat := dbCat.Collections[coll]
-	collCat.Indexes = append(collCat.Indexes, indexCatalogEntry{IndexSpecification: spec, Failed: true})
-	dbCat.Collections[coll] = collCat
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			source := connectToMongoDB(t)
+			defer func() { _ = source.Disconnect(ctx) }()
+			target := connectToTargetMongoDB(t)
+			defer func() { _ = target.Disconnect(ctx) }()
+
+			db := testDB + "_finalize_live_" + tt.name
+			coll := "users"
+			indexName := "email_active"
+			defer func() { _ = source.Database(db).Drop(ctx) }()
+			defer func() { _ = target.Database(db).Drop(ctx) }()
+
+			_, err := source.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"email", "a@example.com"}, {"active", true}})
+			require.NoError(t, err)
+			_, err = source.Database(db).Collection(coll).Indexes().CreateOne(ctx, mongo.IndexModel{
+				Keys: bson.D{{"email", 1}},
+				Options: options.Index().
+					SetName(indexName).
+					SetPartialFilterExpression(bson.D{{"active", true}}),
+			})
+			require.NoError(t, err)
+			_, err = target.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"seed", true}})
+			require.NoError(t, err)
+
+			stored := &mdb.IndexSpecification{
+				Name:                    indexName,
+				KeysDocument:            mustMarshal(t, bson.D{{"email", 1}}),
+				Version:                 2,
+				PartialFilterExpression: bson.D{{"legacy", true}},
+			}
+			entry := indexCatalogEntry{IndexSpecification: stored}
+			switch tt.originalType {
+			case IndexIncomplete:
+				entry.Incomplete = true
+			case IndexInconsistent:
+				entry.Inconsistent = true
+			}
+			cat := NewCatalog(source, target, mdb.ServerVersion{})
+			seedUnsuccessfulIndex(cat, db, coll, entry)
+
+			require.Nil(t, listedIndexByName(t, ctx, target, db, coll, indexName))
+
+			report := cat.finalizeUnsuccessfulIndexes(ctx)
+
+			require.Empty(t, report)
+			assertPartialFilter(t, listedIndexByName(t, ctx, target, db, coll, indexName), "active")
+			catalogEntry := catalogIndexByName(t, cat, db, coll, indexName)
+			require.False(t, catalogEntry.Unsuccessful())
+			assertPartialFilter(t, catalogEntry.IndexSpecification, "active")
+		})
+	}
+}
+
+func TestFinalizeUnsuccessfulIndexes_ReportsMissingSourceIndex(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	source := connectToMongoDB(t)
+	defer func() { _ = source.Disconnect(ctx) }()
+	target := connectToTargetMongoDB(t)
+	defer func() { _ = target.Disconnect(ctx) }()
+
+	db := testDB + "_finalize_missing"
+	coll := "users"
+	indexName := "missing_email"
+	defer func() { _ = source.Database(db).Drop(ctx) }()
+	defer func() { _ = target.Database(db).Drop(ctx) }()
+
+	_, err := source.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"seed", true}})
+	require.NoError(t, err)
+	_, err = target.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"seed", true}})
+	require.NoError(t, err)
+
+	cat := NewCatalog(source, target, mdb.ServerVersion{})
+	seedUnsuccessfulIndex(cat, db, coll, indexCatalogEntry{
+		IndexSpecification: &mdb.IndexSpecification{
+			Name:         indexName,
+			KeysDocument: mustMarshal(t, bson.D{{"email", 1}}),
+			Version:      2,
+		},
+		Inconsistent: true,
+	})
+
+	report := cat.finalizeUnsuccessfulIndexes(ctx)
+
+	require.Equal(t, []UnsuccessfulIndex{{
+		Namespace: db + "." + coll,
+		Name:      indexName,
+		Keys:      mustMarshal(t, bson.D{{"email", 1}}),
+		Type:      IndexInconsistent,
+		Reason:    finalizeReasonNoLongerPresent,
+	}}, report)
+	require.Nil(t, listedIndexByName(t, ctx, target, db, coll, indexName))
+}
+
+func TestFinalizeUnsuccessfulIndexes_ContinuesAfterSourceProbeFailure(t *testing.T) {
+	ctx := t.Context()
+	source := connectToMongoDB(t)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = source.Disconnect(cleanupCtx)
+	})
+	target := connectToTargetMongoDB(t)
+	defer func() { _ = target.Disconnect(ctx) }()
+
+	db := testDB + "_finalize_probe_error"
+	coll := "users"
+	defer func() { _ = source.Database(db).Drop(ctx) }()
+	defer func() { _ = target.Database(db).Drop(ctx) }()
+
+	_, err := source.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"seed", true}})
+	require.NoError(t, err)
+	_, err = target.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"seed", true}})
+	require.NoError(t, err)
+
+	cat := NewCatalog(source, target, mdb.ServerVersion{})
+	probeIndex := &mdb.IndexSpecification{
+		Name:         "source_probe_error",
+		KeysDocument: mustMarshal(t, bson.D{{"probe", 1}}),
+		Version:      2,
+	}
+	seedUnsuccessfulIndex(cat, db, coll, indexCatalogEntry{
+		IndexSpecification: probeIndex,
+		Incomplete:         true,
+	})
+	failedIndex := &mdb.IndexSpecification{
+		Name:         "failed_retry",
+		KeysDocument: mustMarshal(t, bson.D{{"retry", 1}}),
+		Version:      2,
+	}
+	seedFailedIndex(cat, db, coll, failedIndex)
+
+	require.NoError(t, source.Database("admin").RunCommand(ctx, bson.D{
+		{"configureFailPoint", "failCommand"},
+		{"mode", bson.D{{"times", 1}}},
+		{"data", bson.D{{"failCommands", bson.A{"aggregate"}}, {"errorCode", 2}}},
+	}).Err())
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = source.Database("admin").RunCommand(cleanupCtx, bson.D{
+			{"configureFailPoint", "failCommand"},
+			{"mode", "off"},
+		}).Err()
+	})
+
+	report := cat.finalizeUnsuccessfulIndexes(ctx)
+
+	require.Len(t, report, 1)
+	require.Equal(t, IndexIncomplete, report[0].Type)
+	require.Equal(t, probeIndex.Name, report[0].Name)
+	require.Contains(t, report[0].Reason, "list source in-progress index builds")
+	require.NotNil(t, listedIndexByName(t, ctx, target, db, coll, failedIndex.Name))
 }
 
 // TestFinalizeUnsuccessfulIndexes_CheckpointRace exercises the data race
