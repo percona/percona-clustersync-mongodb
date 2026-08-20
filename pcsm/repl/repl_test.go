@@ -196,13 +196,13 @@ func (m *mockCatalog) ModifyValidation(
 	return nil
 }
 
-func newInvalidateTestRepl(sourceIsMongos bool, sourceVer mdb.ServerVersion) *Repl {
+func newInvalidateTestRepl(sourceIsSharded bool, sourceVer mdb.ServerVersion) *Repl {
 	doneCh := make(chan struct{})
 	close(doneCh)
 
 	return &Repl{
 		catalog:         &mockCatalog{},
-		sourceIsSharded: sourceIsMongos,
+		sourceIsSharded: sourceIsSharded,
 		sourceVer:       sourceVer,
 		pauseCh:         make(chan struct{}, 1),
 		doneCh:          doneCh,
@@ -221,7 +221,7 @@ func TestDispatch_Invalidate(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		sourceIsMongos    bool
+		sourceIsSharded   bool
 		sourceVer         mdb.ServerVersion
 		expectInvalidate  bool
 		expectFailed      bool
@@ -230,29 +230,29 @@ func TestDispatch_Invalidate(t *testing.T) {
 	}{
 		{
 			name:              "skip_on_expected_movePrimary_invalidate_pre8_mongos",
-			sourceIsMongos:    true,
+			sourceIsSharded:   true,
 			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
 			expectInvalidate:  true,
 			expectCheckpoint:  true,
 			expectEventsApply: 1,
 		},
 		{
-			name:           "fail_closed_no_expected_movePrimary_invalidate_pre8_mongos",
-			sourceIsMongos: true,
-			sourceVer:      mdb.ServerVersion{7, 0, 0, 0},
-			expectFailed:   true,
+			name:            "fail_closed_no_expected_movePrimary_invalidate_pre8_mongos",
+			sourceIsSharded: true,
+			sourceVer:       mdb.ServerVersion{7, 0, 0, 0},
+			expectFailed:    true,
 		},
 		{
 			name:             "recoverable_8x_with_expected_movePrimary_invalidate_mongos",
-			sourceIsMongos:   true,
+			sourceIsSharded:  true,
 			sourceVer:        mdb.ServerVersion{8, 0, 0, 0},
 			expectInvalidate: true,
 		},
 		{
-			name:           "fail_closed_no_expected_movePrimary_invalidate_8x_mongos",
-			sourceIsMongos: true,
-			sourceVer:      mdb.ServerVersion{8, 0, 0, 0},
-			expectFailed:   true,
+			name:            "fail_closed_no_expected_movePrimary_invalidate_8x_mongos",
+			sourceIsSharded: true,
+			sourceVer:       mdb.ServerVersion{8, 0, 0, 0},
+			expectFailed:    true,
 		},
 		{
 			name:             "fail_closed_rs_source",
@@ -267,7 +267,7 @@ func TestDispatch_Invalidate(t *testing.T) {
 			t.Parallel()
 
 			pool := &mockPool{}
-			r := newInvalidateTestRepl(tt.sourceIsMongos, tt.sourceVer)
+			r := newInvalidateTestRepl(tt.sourceIsSharded, tt.sourceVer)
 			if tt.expectInvalidate {
 				r.armExpectedMovePrimaryInvalidate()
 			}
@@ -333,7 +333,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 		expectDrop        bool
 		expectCreate      bool
 		expectSetUUID     bool
-		sourceIsMongos    bool
+		sourceIsSharded   bool
 		sourceVer         mdb.ServerVersion
 		expectInvalidate  bool
 	}{
@@ -342,7 +342,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			catalogUUID:       eventUUID,
 			catalogUUIDExists: true,
 			eventUUID:         eventUUID,
-			sourceIsMongos:    true,
+			sourceIsSharded:   true,
 			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
 			expectInvalidate:  true,
 		},
@@ -352,7 +352,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			catalogUUIDExists: true,
 			eventUUID:         eventUUID,
 			expectSetUUID:     true,
-			sourceIsMongos:    true,
+			sourceIsSharded:   true,
 			sourceVer:         mdb.ServerVersion{7, 0, 0, 0},
 			expectInvalidate:  true,
 		},
@@ -399,7 +399,7 @@ func TestApplyCreateDDLChange(t *testing.T) {
 				collectionUUIDExists: tt.catalogUUIDExists,
 			}
 			r := &Repl{catalog: cat}
-			r.sourceIsSharded = tt.sourceIsMongos
+			r.sourceIsSharded = tt.sourceIsSharded
 			r.sourceVer = tt.sourceVer
 
 			change := &ChangeEvent{
@@ -657,11 +657,11 @@ func TestShouldSkipReplay(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		sourceIsMongos bool
-		checkpoint     bson.Timestamp
-		changeTime     bson.Timestamp
-		want           bool
+		name            string
+		sourceIsSharded bool
+		checkpoint      bson.Timestamp
+		changeTime      bson.Timestamp
+		want            bool
 	}{
 		{"replica set source skips nothing", false, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, false},
 		{"mongos source skips old event", true, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, true},
@@ -672,7 +672,7 @@ func TestShouldSkipReplay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			r := &Repl{sourceIsSharded: tt.sourceIsMongos, checkpointOpTime: tt.checkpoint}
+			r := &Repl{sourceIsSharded: tt.sourceIsSharded, checkpointOpTime: tt.checkpoint}
 			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
 
 			assert.Equal(t, tt.want, r.shouldSkipReplay(change))
@@ -768,12 +768,12 @@ func TestApplyDDLChange_ShardCollection_SkipsOnRSTarget(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		targetIsMongos bool
-		wantCalled     bool
+		name            string
+		targetIsSharded bool
+		wantCalled      bool
 	}{
-		{name: "sharded target replays", targetIsMongos: true, wantCalled: true},
-		{name: "RS target skips", targetIsMongos: false, wantCalled: false},
+		{name: "sharded target replays", targetIsSharded: true, wantCalled: true},
+		{name: "RS target skips", targetIsSharded: false, wantCalled: false},
 	}
 
 	for _, tt := range tests {
@@ -783,7 +783,7 @@ func TestApplyDDLChange_ShardCollection_SkipsOnRSTarget(t *testing.T) {
 			cat := &mockCatalog{}
 			r := &Repl{
 				catalog:         cat,
-				targetIsSharded: tt.targetIsMongos,
+				targetIsSharded: tt.targetIsSharded,
 			}
 
 			change := &ChangeEvent{

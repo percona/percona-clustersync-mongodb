@@ -155,16 +155,16 @@ func New(
 	lifecycleCtx context.Context,
 	source, target *mongo.Client,
 	sourceVer mdb.ServerVersion,
-	sourceIsMongos bool,
-	targetIsMongos bool,
+	sourceIsSharded bool,
+	targetIsSharded bool,
 ) *PCSM {
 	return &PCSM{
 		lifecycleCtx:    lifecycleCtx,
 		source:          source,
 		target:          target,
 		sourceVer:       sourceVer,
-		sourceIsSharded: sourceIsMongos,
-		targetIsSharded: targetIsMongos,
+		sourceIsSharded: sourceIsSharded,
+		targetIsSharded: targetIsSharded,
 		state:           StateIdle,
 		onStateChanged:  func(State) {},
 	}
