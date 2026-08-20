@@ -59,6 +59,8 @@ type Clone struct {
 	nsFilter sel.NSFilter  // Namespace filter
 	options  *Options      // Clone options
 
+	targetIsSharded bool
+
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
@@ -113,6 +115,7 @@ func NewClone(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
+	targetIsSharded bool,
 ) *Clone {
 	return &Clone{
 		source:           source,
@@ -121,6 +124,7 @@ func NewClone(
 		nsFilter:         nsFilter,
 		options:          opts,
 		doneCh:           make(chan struct{}),
+		targetIsSharded:  targetIsSharded,
 		targetShardSizes: newShardSizes(),
 	}
 }
@@ -485,14 +489,13 @@ func (c *Clone) doCollectionClone(
 		return errors.Wrap(err, "get sharding info")
 	}
 
-	if shInfo != nil && shInfo.IsSharded() {
+	if c.targetIsSharded && shInfo != nil && shInfo.IsSharded() {
 		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
 		if err != nil {
 			return errors.Wrap(err, "shard collection")
 		}
 
 		lg.Infof("Collection %q sharded", ns.String())
-
 		err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
 		if err != nil {
 			return errors.Wrap(err, "presplit chunks")

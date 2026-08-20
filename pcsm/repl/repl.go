@@ -142,7 +142,8 @@ type Repl struct {
 	pool *workerPool
 
 	expectMovePrimaryInvalidate bool
-	sourceIsMongos              bool
+	sourceIsSharded             bool
+	targetIsSharded             bool
 
 	useCollectionBulk  bool
 	useSimpleCollation bool
@@ -184,7 +185,8 @@ func NewRepl(
 	nsFilter sel.NSFilter,
 	opts *Options,
 	sourceVer mdb.ServerVersion,
-	sourceIsMongos bool,
+	sourceIsSharded bool,
+	targetIsSharded bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -199,15 +201,16 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		source:         source,
-		target:         target,
-		sourceVer:      sourceVer,
-		nsFilter:       nsFilter,
-		catalog:        cat,
-		options:        opts,
-		pauseCh:        make(chan struct{}),
-		doneCh:         make(chan struct{}),
-		sourceIsMongos: sourceIsMongos,
+		source:          source,
+		target:          target,
+		sourceVer:       sourceVer,
+		nsFilter:        nsFilter,
+		catalog:         cat,
+		options:         opts,
+		pauseCh:         make(chan struct{}),
+		doneCh:          make(chan struct{}),
+		sourceIsSharded: sourceIsSharded,
+		targetIsSharded: targetIsSharded,
 	}
 }
 
@@ -215,7 +218,7 @@ func NewRepl(
 // runs MongoDB 6.x or 7.x (pre-8). Used to gate invalidate-stream handling for
 // movePrimary on older sharded topologies.
 func (r *Repl) sourceIsPre8AndMongos() bool {
-	return r.sourceIsMongos && r.sourceVer.Major() < 8
+	return r.sourceIsSharded && r.sourceVer.Major() < 8
 }
 
 // armExpectedMovePrimaryInvalidate signals that a movePrimary is in flight, so
@@ -517,7 +520,7 @@ func (r *Repl) watchWithRetry(
 			}
 
 			var invalidateErr changeStreamInvalidateError
-			if r.sourceIsMongos && errors.As(err, &invalidateErr) && len(invalidateErr.invalidEventID) > 0 {
+			if r.sourceIsSharded && errors.As(err, &invalidateErr) && len(invalidateErr.invalidEventID) > 0 {
 				startAfter = append(bson.Raw(nil), invalidateErr.invalidEventID...)
 				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
 				log.New("repl:watch").With(
@@ -882,7 +885,7 @@ func (r *Repl) handleInvalidate(change *ChangeEvent, bc barrierController) error
 		return nil
 	}
 
-	if r.sourceIsMongos && r.takeExpectedMovePrimaryInvalidate() {
+	if r.sourceIsSharded && r.takeExpectedMovePrimaryInvalidate() {
 		log.New("repl:invalidate").With(
 			log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 			log.NS(change.Namespace.Database, change.Namespace.Collection),
@@ -940,7 +943,7 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 //
 // A replica set resumes from its own token and never redelivers applied writes.
 func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
-	return r.sourceIsMongos && r.isReplay(change)
+	return r.sourceIsSharded && r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick
@@ -1147,6 +1150,12 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 			change.Namespace, event.OperationDescription.To)
 
 	case ShardCollection:
+		if !r.targetIsSharded {
+			lg.Infof("Skipping shard collection for %q: target is not a sharded cluster", change.Namespace)
+
+			return nil
+		}
+
 		event := change.Event.(ShardCollectionEvent) //nolint:forcetypeassert
 		err = r.catalog.ShardCollection(ctx,
 			change.Namespace.Database,
