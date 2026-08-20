@@ -258,7 +258,7 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 
 	cat := catalog.NewCatalog(target, sourceVer)
 	nsFilter := sel.MakeFilter([]string{dbName + ".*"}, nil)
-	c := clone.NewClone(source, target, cat, nsFilter, &clone.Options{})
+	c := clone.NewClone(source, target, cat, nsFilter, &clone.Options{}, false)
 
 	require.NoError(t, c.Start(ctx), "clone start")
 

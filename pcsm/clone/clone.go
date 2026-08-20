@@ -59,6 +59,8 @@ type Clone struct {
 	nsFilter sel.NSFilter  // Namespace filter
 	options  *Options      // Clone options
 
+	targetIsSharded bool
+
 	lock sync.Mutex
 	err  error // Error encountered during the cloning process
 
@@ -110,14 +112,16 @@ func NewClone(
 	cat Catalog,
 	nsFilter sel.NSFilter,
 	opts *Options,
+	targetIsSharded bool,
 ) *Clone {
 	return &Clone{
-		source:   source,
-		target:   target,
-		catalog:  cat,
-		nsFilter: nsFilter,
-		options:  opts,
-		doneCh:   make(chan struct{}),
+		source:          source,
+		target:          target,
+		catalog:         cat,
+		nsFilter:        nsFilter,
+		options:         opts,
+		targetIsSharded: targetIsSharded,
+		doneCh:          make(chan struct{}),
 	}
 }
 
@@ -476,18 +480,20 @@ func (c *Clone) doCollectionClone(
 
 	lg.Infof("Collection %q created", ns.String())
 
-	shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
-	if err != nil && !errors.Is(err, mdb.ErrNotFound) {
-		return errors.Wrap(err, "get sharding info")
-	}
-
-	if shInfo != nil && shInfo.IsSharded() {
-		err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
-		if err != nil {
-			return errors.Wrap(err, "shard collection")
+	if c.targetIsSharded {
+		shInfo, err := mdb.GetCollectionShardingInfo(ctx, c.source, ns.Database, ns.Collection)
+		if err != nil && !errors.Is(err, mdb.ErrNotFound) {
+			return errors.Wrap(err, "get sharding info")
 		}
 
-		lg.Infof("Collection %q sharded", ns.String())
+		if shInfo != nil && shInfo.IsSharded() {
+			err := c.catalog.ShardCollection(ctx, ns.Database, ns.Collection, shInfo.ShardKey, shInfo.Unique)
+			if err != nil {
+				return errors.Wrap(err, "shard collection")
+			}
+
+			lg.Infof("Collection %q sharded", ns.String())
+		}
 	}
 
 	c.catalog.SetCollectionTimestamp(ctx, ns.Database, ns.Collection, capturedAt)
@@ -536,7 +542,8 @@ func (c *Clone) doCollectionClone(
 				updateLog := lg.With(
 					log.Size(progressUpdate.SizeBytes),
 					log.Count(int64(progressUpdate.Count)),
-					log.Elapsed(time.Since(lastLogAt)))
+					log.Elapsed(time.Since(lastLogAt)),
+				)
 
 				if errors.Is(err, context.Canceled) {
 					updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)

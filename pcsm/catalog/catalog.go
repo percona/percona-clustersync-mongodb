@@ -1494,7 +1494,8 @@ func (c *Catalog) ShardCollection(
 	}
 
 	if unique {
-		cmd = append(cmd,
+		cmd = append(
+			cmd,
 			bson.E{Key: "unique", Value: true},
 			bson.E{Key: "enforceUniquenessCheck", Value: false},
 		)
