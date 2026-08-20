@@ -102,7 +102,15 @@ func presplitRangedEven(
 
 	assignment := make([]string, len(shInfo.Chunks))
 	for i, chunk := range shInfo.Chunks {
-		assignment[i] = pairing[chunk.Shard]
+		dst, ok := pairing[chunk.Shard]
+		if !ok {
+			return errors.Errorf(
+				"presplit %s: source shard %q owning a chunk is missing from the source shard list",
+				ns.String(), chunk.Shard,
+			)
+		}
+
+		assignment[i] = dst
 	}
 
 	moves, err := replayAndPlace(ctx, target, ns, shInfo, assignment)

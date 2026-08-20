@@ -85,6 +85,33 @@ func TestPresplitDispatchNoop(t *testing.T) {
 	}
 }
 
+func TestPresplitRangedEvenMissingSourceShard(t *testing.T) {
+	t.Parallel()
+
+	ns := catalog.Namespace{Database: "db", Collection: "coll"}
+
+	// A chunk is owned by "srcC", but the source shard list only has A and B
+	// (e.g. srcC was removed between the chunk snapshot and ListShards). The
+	// pairing lookup misses, so presplit must fail before any target call — a
+	// nil target client would panic otherwise.
+	shInfo := &mdb.ShardingInfo{
+		ShardKey: bson.D{{Key: "_id", Value: int32(1)}},
+		Chunks: []mdb.ChunkInfo{
+			{Shard: "srcA"},
+			{Shard: "srcC"},
+		},
+	}
+
+	err := presplitRangedEven(
+		t.Context(), nil, ns, shInfo,
+		[]string{"srcA", "srcB"}, []string{"tgtA", "tgtB"},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "srcC")
+	assert.Contains(t, err.Error(), ns.String())
+}
+
 func TestPairShards(t *testing.T) {
 	t.Parallel()
 

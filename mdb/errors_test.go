@@ -64,6 +64,39 @@ func TestIsSplitPointAlreadyBoundary(t *testing.T) {
 	}
 }
 
+// TestIsTransient_ConflictingOperationInProgress locks in that a shard's
+// ConflictingOperationInProgress (117) — returned while another chunk migration
+// or DDL is in flight — is treated as transient so chunk splits/moves retry.
+func TestIsTransient_ConflictingOperationInProgress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			"ConflictingOperationInProgress error",
+			mongo.CommandError{Name: "ConflictingOperationInProgress", Code: 117},
+			true,
+		},
+		{
+			"wrapped ConflictingOperationInProgress",
+			errors.Wrap(mongo.CommandError{Name: "ConflictingOperationInProgress", Code: 117}, "move chunk"),
+			true,
+		},
+		{"other command error", mongo.CommandError{Name: "NamespaceNotFound", Code: 26}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
 // labeledError is a minimal mongo.LabeledError implementation used to verify
 // that IsTransient detects retryable write labels through error wrapping.
 type labeledError struct {
