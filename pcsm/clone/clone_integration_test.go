@@ -256,7 +256,7 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 	sourceVer, err := mdb.Version(ctx, source)
 	require.NoError(t, err, "source server version")
 
-	cat := catalog.NewCatalog(target, sourceVer)
+	cat := catalog.NewCatalog(source, target, sourceVer)
 	nsFilter := sel.MakeFilter([]string{dbName + ".*"}, nil)
 	c := clone.NewClone(source, target, cat, nsFilter, &clone.Options{})
 
