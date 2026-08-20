@@ -17,6 +17,65 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
+// seedFailedIndex appends a failed unsuccessful-index entry to the catalog.
+// It mirrors seedIndex but marks the entry Failed so that
+// finalizeUnsuccessfulIndexes takes the unconditional-recreate path (which
+// skips the source recheck and only touches the target).
+func seedFailedIndex(cat *Catalog, db, coll string, spec *mdb.IndexSpecification) {
+	seedUnsuccessfulIndex(cat, db, coll, indexCatalogEntry{IndexSpecification: spec, Failed: true})
+}
+
+func seedUnsuccessfulIndex(cat *Catalog, db, coll string, entry indexCatalogEntry) {
+	dbCat, ok := cat.Databases[db]
+	if !ok {
+		dbCat = databaseCatalog{Collections: make(map[string]collectionCatalog)}
+		cat.Databases[db] = dbCat
+	}
+
+	collCat := dbCat.Collections[coll]
+	collCat.Indexes = append(collCat.Indexes, entry)
+	dbCat.Collections[coll] = collCat
+}
+
+func listedIndexByName(
+	t *testing.T,
+	ctx context.Context,
+	client *mongo.Client,
+	db, coll, name string,
+) *mdb.IndexSpecification {
+	t.Helper()
+
+	indexes, err := mdb.ListIndexes(ctx, client, db, coll)
+	require.NoError(t, err)
+
+	return findIndexByName(indexes, name)
+}
+
+func catalogIndexByName(t *testing.T, cat *Catalog, db, coll, name string) indexCatalogEntry {
+	t.Helper()
+
+	for _, index := range cat.Databases[db].Collections[coll].Indexes {
+		if index.Name == name {
+			return index
+		}
+	}
+
+	t.Fatalf("index %q missing from catalog", name)
+
+	return indexCatalogEntry{}
+}
+
+func assertPartialFilter(t *testing.T, spec *mdb.IndexSpecification, field string) {
+	t.Helper()
+	require.NotNil(t, spec)
+
+	raw, err := bson.Marshal(spec.PartialFilterExpression)
+	require.NoError(t, err)
+	value := bson.Raw(raw).Lookup(field)
+	require.Equal(t, bson.TypeBoolean, value.Type)
+	require.True(t, value.Boolean())
+}
+
 func TestFinalizeUnsuccessfulIndexes_RecreatesCurrentSourceSpec(t *testing.T) {
 	t.Parallel()
 
@@ -289,4 +348,101 @@ func TestFinalizeUnsuccessfulIndexes_CheckpointRace(t *testing.T) {
 	for i := range numIndexes {
 		require.True(t, names[fmt.Sprintf("idx_%d", i)], "index idx_%d missing on target", i)
 	}
+}
+
+func TestFinalizeUnsuccessfulIndexes_ReportsAttemptedSourceKeysOnRecreateFailure(t *testing.T) {
+	ctx := t.Context()
+	source := connectToMongoDB(t)
+	defer func() { _ = source.Disconnect(ctx) }()
+	target := connectToTargetMongoDB(t)
+	defer func() { _ = target.Disconnect(ctx) }()
+
+	db := testDB + "_finalize_recreate_error"
+	coll := "users"
+	indexName := "current_source_keys"
+	defer func() { _ = source.Database(db).Drop(ctx) }()
+	defer func() { _ = target.Database(db).Drop(ctx) }()
+
+	_, err := source.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"current", 1}})
+	require.NoError(t, err)
+	_, err = source.Database(db).Collection(coll).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{"current", 1}},
+		Options: options.Index().SetName(indexName),
+	})
+	require.NoError(t, err)
+	_, err = target.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"blocker", 1}})
+	require.NoError(t, err)
+	_, err = target.Database(db).Collection(coll).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{"blocker", 1}},
+		Options: options.Index().SetName(indexName),
+	})
+	require.NoError(t, err)
+
+	cat := NewCatalog(source, target, mdb.ServerVersion{})
+	seedUnsuccessfulIndex(cat, db, coll, indexCatalogEntry{
+		IndexSpecification: &mdb.IndexSpecification{
+			Name:         indexName,
+			KeysDocument: mustMarshal(t, bson.D{{"legacy", 1}}),
+			Version:      2,
+		},
+		Incomplete: true,
+	})
+
+	report := cat.finalizeUnsuccessfulIndexes(ctx)
+
+	require.Len(t, report, 1)
+	require.Equal(t, IndexIncomplete, report[0].Type)
+	require.Equal(t, mustMarshal(t, bson.D{{"current", 1}}), report[0].Keys)
+}
+
+func TestFinalizeUnsuccessfulIndexes_FailedIndexRetriesStoredSpecWithoutSourceProbe(t *testing.T) {
+	ctx := t.Context()
+	source := connectToMongoDB(t)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = source.Disconnect(cleanupCtx)
+	})
+	target := connectToTargetMongoDB(t)
+	defer func() { _ = target.Disconnect(ctx) }()
+
+	db := testDB + "_finalize_failed_no_probe"
+	coll := "users"
+	indexName := "failed_stored_spec"
+	defer func() { _ = target.Database(db).Drop(ctx) }()
+
+	_, err := target.Database(db).Collection(coll).InsertOne(ctx, bson.D{{"email", "a@example.com"}})
+	require.NoError(t, err)
+
+	stored := &mdb.IndexSpecification{
+		Name:                    indexName,
+		KeysDocument:            mustMarshal(t, bson.D{{"email", 1}}),
+		Version:                 2,
+		PartialFilterExpression: bson.D{{"stored", true}},
+	}
+	cat := NewCatalog(source, target, mdb.ServerVersion{})
+	seedFailedIndex(cat, db, coll, stored)
+
+	require.NoError(t, source.Database("admin").RunCommand(ctx, bson.D{
+		{"configureFailPoint", "failCommand"},
+		{"mode", "alwaysOn"},
+		{"data", bson.D{{"failCommands", bson.A{"aggregate"}}, {"errorCode", 2}}},
+	}).Err())
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = source.Database("admin").RunCommand(cleanupCtx, bson.D{
+			{"configureFailPoint", "failCommand"},
+			{"mode", "off"},
+		}).Err()
+	})
+
+	report := cat.finalizeUnsuccessfulIndexes(ctx)
+
+	require.Empty(t, report)
+	targetIndex := listedIndexByName(t, ctx, target, db, coll, indexName)
+	assertPartialFilter(t, targetIndex, "stored")
+	require.False(t, catalogIndexByName(t, cat, db, coll, indexName).Unsuccessful())
 }
