@@ -217,6 +217,9 @@ func (c *Catalog) sourceIndexInProgress(ctx context.Context, namespace Namespace
 
 func (c *Catalog) sourceIndexInconsistent(ctx context.Context, namespace Namespace, name string) (bool, error) {
 	inconsistent, err := mdb.ListInconsistentIndexes(ctx, c.source, namespace.Database, namespace.Collection)
+	if mdb.IsNamespaceNotFound(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, errors.Wrap(err, "list source inconsistent indexes")
 	}
