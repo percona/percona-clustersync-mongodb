@@ -1,6 +1,6 @@
 //go:build integration
 
-package repl
+package repl //nolint:testpackage
 
 import (
 	"context"
@@ -24,6 +24,7 @@ type monitoredWriteOutcome[T any] struct {
 	err    error
 }
 
+//nolint:paralleltest
 func TestWatchChangeEvents_EmitsMonotonicTimestampsWhenWritesCommitAroundAppendOplogNote(t *testing.T) {
 	// Given
 	setupCtx, cancelSetup := context.WithTimeout(t.Context(), 3*time.Minute)

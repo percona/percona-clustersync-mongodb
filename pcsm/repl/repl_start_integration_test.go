@@ -1,6 +1,6 @@
 //go:build integration
 
-package repl
+package repl //nolint:testpackage
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/sel"
 )
 
+//nolint:paralleltest
 func TestRepl_Start_exposesStartAtImmediately(t *testing.T) {
 	// Given
 	setupCtx, cancelSetup := context.WithTimeout(t.Context(), 3*time.Minute)

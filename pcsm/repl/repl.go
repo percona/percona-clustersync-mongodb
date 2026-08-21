@@ -297,6 +297,7 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 		return errors.New("cannot recovery: already used")
 	}
 
+	interrupted := cp.PauseTime.IsZero()
 	pauseTime := cp.PauseTime
 	if pauseTime.IsZero() {
 		pauseTime = time.Now()
@@ -313,6 +314,9 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	// resume frontier, so using it here preserves prior behavior on upgrade.
 	if r.checkpointOpTime.IsZero() {
 		r.checkpointOpTime = r.lastReplicatedOpTime
+	}
+	if interrupted {
+		r.lastReplicatedOpTime = r.checkpointOpTime
 	}
 
 	targetVer, err := mdb.Version(ctx, r.target)

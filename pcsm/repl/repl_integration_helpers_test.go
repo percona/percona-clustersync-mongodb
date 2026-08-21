@@ -1,6 +1,6 @@
 //go:build integration
 
-package repl
+package repl //nolint:testpackage
 
 import (
 	"context"
