@@ -166,6 +166,9 @@ func ListIndexes(
 	return indexes, nil
 }
 
+// ListInProgressIndexBuilds returns names from matching in-flight createIndexes
+// commands. It includes idle connections so it also sees builds waiting for
+// commit quorum.
 func ListInProgressIndexBuilds(
 	ctx context.Context,
 	m *mongo.Client,

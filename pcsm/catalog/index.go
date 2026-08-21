@@ -183,6 +183,9 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []Unsuccessfu
 
 				lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
 
+				// Replication is paused and finalize is the sole catalog writer here;
+				// checkpoint callers may hold the catalog read lock while marshaling.
+				// MongoDB I/O above remains outside this write lock.
 				c.lock.Lock()
 				c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: selectedSpec}})
 				c.lock.Unlock()
