@@ -342,20 +342,12 @@ func TestFinalizeUnsuccessfulIndexes_ContinuesAfterSourceProbeFailure(t *testing
 	require.NotNil(t, listedIndexByName(t, ctx, target, db, coll, failedIndex.Name))
 }
 
-// TestFinalizeUnsuccessfulIndexes_CheckpointRace exercises the data race
-// between the recovery checkpoint path and finalize's catalog write.
+// TestFinalizeUnsuccessfulIndexes_CheckpointRace exercises synchronization
+// between checkpoint readers and finalize's catalog mutation.
 //
-// PCSM.Checkpoint holds the catalog read lock (Catalog.LockWrite) while it
-// marshals the checkpoint, which traverses the live catalog map. Concurrently,
-// finalizeUnsuccessfulIndexes writes recreated indexes back into that same map
-// via addIndexesToCatalog. Before commit 413a5a9 that write was unsynchronized,
-// so the two paths raced. The fix wraps the write in c.lock.Lock(); this test
-// reproduces the interleaving and must be run under `go test -race`:
-//
-//	go test -race -tags integration \
-//	    -run TestFinalizeUnsuccessfulIndexes_CheckpointRace ./pcsm/catalog
-//
-// It fails (race detected) against the pre-fix code and passes clean afterwards.
+// Checkpoint callers hold the catalog read lock while marshaling the live
+// catalog map. Successful finalize mutations use the catalog write lock, so
+// this test reproduces concurrent readers and a writer under `go test -race`:
 func TestFinalizeUnsuccessfulIndexes_CheckpointRace(t *testing.T) {
 	t.Parallel()
 
@@ -387,7 +379,7 @@ func TestFinalizeUnsuccessfulIndexes_CheckpointRace(t *testing.T) {
 	}
 
 	// Reader goroutines mirror PCSM.Checkpoint: hold the read lock while
-	// marshalling the checkpoint, which walks the live catalog map.
+	// marshaling the checkpoint, which walks the live catalog map.
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -415,7 +407,7 @@ func TestFinalizeUnsuccessfulIndexes_CheckpointRace(t *testing.T) {
 
 	// Writer: recreate the failed indexes on the target. Each successful
 	// recreate writes the spec back into the catalog map via addIndexesToCatalog
-	// under c.lock.Lock() (commit 413a5a9), serializing against the readers.
+	// under the catalog write lock, serializing against the readers.
 	report := cat.finalizeUnsuccessfulIndexes(ctx)
 
 	close(stop)
