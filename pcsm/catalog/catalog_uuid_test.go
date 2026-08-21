@@ -79,7 +79,7 @@ func TestCatalog_CollectionUUID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cat := NewCatalog(nil, mdb.ServerVersion{})
+			cat := NewCatalog(nil, nil, mdb.ServerVersion{})
 			cat.Databases = tt.databases
 
 			uuid, ok := cat.CollectionUUID(tt.db, tt.coll)

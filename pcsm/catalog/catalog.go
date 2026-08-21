@@ -144,6 +144,7 @@ var _ BaseCatalog = (*Catalog)(nil)
 // Catalog manages the MongoDB catalog.
 type Catalog struct {
 	lock      sync.RWMutex
+	source    *mongo.Client
 	target    *mongo.Client
 	sourceVer mdb.ServerVersion
 	Databases map[string]databaseCatalog
@@ -174,33 +175,10 @@ func (i indexCatalogEntry) Unsuccessful() bool {
 	return i.Failed || i.Incomplete || i.Inconsistent
 }
 
-// IndexUnsuccessfulType describes why an index ended up unsuccessful at finalize time.
-type IndexUnsuccessfulType string
-
-const (
-	// IndexFailed means the index failed to create on the target cluster.
-	IndexFailed IndexUnsuccessfulType = "failed"
-	// IndexIncomplete means the index was being built on the source when replication observed it.
-	IndexIncomplete IndexUnsuccessfulType = "incomplete"
-	// IndexInconsistent means the index was inconsistent across shards on the source cluster.
-	IndexInconsistent IndexUnsuccessfulType = "inconsistent"
-)
-
-const inconsistentIndexReason = "index is missing on one or more source shards"
-
-// UnsuccessfulIndex describes an index that did not complete cleanly during replication
-// and was not recovered during finalize.
-type UnsuccessfulIndex struct {
-	Namespace string
-	Name      string
-	Keys      bson.Raw
-	Type      IndexUnsuccessfulType
-	Reason    string
-}
-
 // NewCatalog creates a new Catalog.
-func NewCatalog(target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
+func NewCatalog(source, target *mongo.Client, sourceVer mdb.ServerVersion) *Catalog {
 	return &Catalog{
+		source:    source,
 		target:    target,
 		sourceVer: sourceVer,
 		Databases: make(map[string]databaseCatalog),
@@ -956,11 +934,17 @@ func (c *Catalog) UUIDMap() UUIDMap {
 //  1. Modify-option failures during the per-index pass (e.g. a collMod call
 //     that did not succeed) — surfaced as Type=IndexFailed with the wrapped
 //     error as the reason.
-//  2. Recreate failures and inconsistent leftovers from
-//     [finalizeUnsuccessfulIndexes] — Failed/Incomplete entries whose retry
-//     did not succeed (reason is the retry error) and Inconsistent entries
-//     which are never retried (reason is the static inconsistent-source
-//     description).
+//
+//  2. Recreate failures and unrecoverable leftovers from
+//     finalizeUnsuccessfulIndexes.
+//
+//     - Existing catalog entries marked Failed
+//     after target index-creation failures are recreated unconditionally.
+//     - Incomplete and Inconsistent entries are rechecked against the source.
+//     They are recreated only when the source index is neither building nor
+//     inconsistent and still exists, using its current source specification.
+//     Source-check failures, unresolved or missing indexes, and target
+//     recreation failures are reported with the corresponding reason.
 func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 	lg := log.Ctx(ctx)
 
@@ -1092,93 +1076,6 @@ func (c *Catalog) Finalize(ctx context.Context) []UnsuccessfulIndex {
 
 		return report[i].Name < report[j].Name
 	})
-
-	return report
-}
-
-// finalizeUnsuccessfulIndexes finalizes indexes that were unsuccessful
-// during replication: failed, incomplete, or inconsistent.
-//
-// For Failed/Incomplete entries it attempts to recreate the index on the target
-// and clears the flag on success. For Inconsistent entries it does not attempt
-// a recreate (the source itself is inconsistent across shards) and reports the
-// index as-is with a static reason.
-//
-// Returns the indexes that did not recover cleanly, each annotated with the
-// reason: the recreate error for Failed/Incomplete retry failures, or the
-// inconsistent-source reason for Inconsistent entries.
-func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []UnsuccessfulIndex {
-	lg := log.Ctx(ctx)
-	lg.Info("Finalizing unsuccessful indexes")
-
-	var report []UnsuccessfulIndex
-
-	for db, colls := range c.Databases {
-		for coll, collEntry := range colls.Collections {
-			for _, index := range collEntry.Indexes {
-				if !index.Unsuccessful() {
-					continue // skip successful indexes
-				}
-
-				if index.Inconsistent {
-					lg.Warnf("Index %s on %s.%s was inconsistent across shards on source, skipping",
-						index.Name, db, coll)
-
-					report = append(report, UnsuccessfulIndex{
-						Namespace: db + "." + coll,
-						Name:      index.Name,
-						Keys:      index.KeysDocument,
-						Type:      IndexInconsistent,
-						Reason:    inconsistentIndexReason,
-					})
-
-					continue // don't try to recreate inconsistent indexes
-				}
-
-				if index.Incomplete {
-					lg.Infof("Index %s on %s.%s was incomplete during replication, trying to create it",
-						index.Name, db, coll)
-				}
-
-				if index.Failed {
-					lg.Infof("Index %s on %s.%s failed to create during replication, trying to recreate it",
-						index.Name, db, coll)
-				}
-
-				err := runWithRetry(ctx, func(ctx context.Context) error {
-					err := c.target.Database(db).RunCommand(ctx, bson.D{
-						{"createIndexes", coll},
-						{"indexes", bson.A{index.IndexSpecification}},
-					}).Err()
-
-					return errors.Wrapf(err, "recreate index %s.%s.%s", db, coll, index.Name)
-				})
-				if err != nil {
-					lg.Warnf("Failed to recreate unsuccessful index %s on %s.%s: %v",
-						index.Name, db, coll, err)
-
-					typ := IndexIncomplete
-					if index.Failed {
-						typ = IndexFailed
-					}
-
-					report = append(report, UnsuccessfulIndex{
-						Namespace: db + "." + coll,
-						Name:      index.Name,
-						Keys:      index.KeysDocument,
-						Type:      typ,
-						Reason:    err.Error(),
-					})
-
-					continue
-				}
-
-				lg.Infof("Recreated index %s on %s.%s", index.Name, db, coll)
-
-				c.addIndexesToCatalog(ctx, db, coll, []indexCatalogEntry{{IndexSpecification: index.IndexSpecification}})
-			}
-		}
-	}
 
 	return report
 }

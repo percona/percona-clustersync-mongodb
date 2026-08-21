@@ -75,7 +75,7 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py
+          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py tests/test_idle_index_build.py
 
       - name: Teardown Docker Compose
         if: always()
