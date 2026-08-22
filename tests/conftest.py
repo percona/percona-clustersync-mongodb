@@ -21,9 +21,6 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: mark test as slow")
-    config.addinivalue_line(
-        "markers", "self_managed_pcsm: mark test as managing its own PCSM process"
-    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -37,14 +34,6 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "slow" in item.keywords:
                 item.add_marker(skip_slow)
-
-    if config.getoption("--pcsm-bin") or os.getenv("TEST_PCSM_BIN"):
-        skip_self_managed_pcsm = pytest.mark.skip(
-            reason="self-managed PCSM test requires no suite-owned PCSM process"
-        )
-        for item in items:
-            if "self_managed_pcsm" in item.keywords:
-                item.add_marker(skip_self_managed_pcsm)
 
 
 def source_uri(request: pytest.FixtureRequest):
