@@ -46,6 +46,8 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
+const mongoDBOperationTimeoutHelp = "Timeout for MongoDB operations (e.g., 30s, 5m)"
+
 var (
 	Version   = "v0.9.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
@@ -133,14 +135,12 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.PersistentFlags().Int("port", config.DefaultServerPort, "Port number")
 
-	// MongoDB client timeout (visible: commonly needed for debugging)
-	rootCmd.PersistentFlags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
-		"Timeout for MongoDB operations (e.g., 30s, 5m)")
-
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
+	rootCmd.Flags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
+		mongoDBOperationTimeoutHelp)
 
 	rootCmd.Flags().String("group-name", config.DefaultGroup,
 		"HA group name, recorded and advertised for observability "+
@@ -411,6 +411,8 @@ func newResetCmd(cfg *config.Config) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().String("target", "", "MongoDB connection string for the target")
+	cmd.PersistentFlags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
+		mongoDBOperationTimeoutHelp)
 
 	cmd.AddCommand(
 		newResetRecoveryCmd(cfg),

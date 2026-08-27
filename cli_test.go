@@ -150,6 +150,74 @@ func runPCSM(t *testing.T, args []string, env map[string]string) (string, string
 	return stdout.String(), stderr.String(), err
 }
 
+func TestMongoDBOperationTimeoutFlagRejectedByHTTPClientCommands(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"status", "start", "pause", "resume", "finalize"} {
+		for _, args := range [][]string{
+			{"--mongodb-operation-timeout=1s", command},
+			{command, "--mongodb-operation-timeout=1s"},
+		} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				t.Parallel()
+
+				_, stderr, err := runPCSM(t, args, nil)
+
+				require.Error(t, err)
+				assert.Contains(t, stderr, "unknown flag: --mongodb-operation-timeout")
+			})
+		}
+	}
+}
+
+func TestMongoDBOperationTimeoutFlagAcceptedByMongoDBCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		args          []string
+		expectedError string
+	}{
+		{
+			name:          "server",
+			args:          []string{"--mongodb-operation-timeout=1s"},
+			expectedError: "source URI and target URI are empty",
+		},
+		{
+			name:          "reset",
+			args:          []string{"reset", "--mongodb-operation-timeout=1s"},
+			expectedError: "required flag --target not set",
+		},
+		{
+			name:          "reset recovery",
+			args:          []string{"reset", "recovery", "--mongodb-operation-timeout=1s"},
+			expectedError: "required flag --target not set",
+		},
+		{
+			name:          "reset members",
+			args:          []string{"reset", "members", "--mongodb-operation-timeout=1s"},
+			expectedError: "required flag --target not set",
+		},
+		{
+			name:          "reset lease",
+			args:          []string{"reset", "lease", "--mongodb-operation-timeout=1s"},
+			expectedError: "required flag --target not set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, stderr, err := runPCSM(t, tt.args, nil)
+
+			require.Error(t, err)
+			assert.NotContains(t, stderr, "unknown flag")
+			assert.Contains(t, stderr, tt.expectedError)
+		})
+	}
+}
+
 type commandTestCase struct {
 	name         string
 	args         []string
