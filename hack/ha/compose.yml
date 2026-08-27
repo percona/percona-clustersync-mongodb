@@ -11,11 +11,13 @@
 #   PCSM_TARGET_URI  target cluster URI
 #
 # PCSM APIs have no authentication; publish them on loopback only.
+# Prometheus reaches each instance over the shared pcsm-metrics network.
 
 x-pcsm-common: &pcsm-common
   image: pcsm:dev
   networks:
     - clusters
+    - metrics
   environment:
     PCSM_SOURCE_URI: ${PCSM_SOURCE_URI}
     PCSM_TARGET_URI: ${PCSM_TARGET_URI}
@@ -52,3 +54,6 @@ networks:
   clusters:
     external: true
     name: ${PCSM_HA_NETWORK}
+  metrics:
+    external: true
+    name: pcsm-metrics

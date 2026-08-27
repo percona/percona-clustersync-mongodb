@@ -10,7 +10,7 @@
 #
 # The instances join the cluster's Docker network and reach it via the same
 # hostnames the host uses (rs00, src-mongos, ...). API ports 2242-2244 are
-# published to the host, so `pcsm <cmd> --port 2242` and curl work from the host.
+# published on host loopback, while Prometheus scrapes them over pcsm-metrics.
 
 set -euo pipefail
 
@@ -52,6 +52,12 @@ if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
     exit 1
 fi
 
+METRICS_NETWORK="pcsm-metrics"
+if ! docker network inspect "$METRICS_NETWORK" >/dev/null 2>&1; then
+    echo "Creating shared metrics network '$METRICS_NETWORK'..."
+    docker network create "$METRICS_NETWORK" >/dev/null
+fi
+
 export PCSM_HA_NETWORK="$NETWORK"
 export PCSM_SOURCE_URI="$SOURCE_URI"
 export PCSM_TARGET_URI="$TARGET_URI"
@@ -69,7 +75,7 @@ if [[ "$RESET" == "true" ]]; then
     docker run --rm --network "$NETWORK" pcsm:dev reset --target "$TARGET_URI"
 fi
 
-echo "Starting HA group (source=$SOURCE_URI target=$TARGET_URI network=$NETWORK)..."
+echo "Starting HA group (source=$SOURCE_URI target=$TARGET_URI network=$NETWORK metrics=$METRICS_NETWORK)..."
 docker compose -f "$COMPOSE" up -d
 
 echo
