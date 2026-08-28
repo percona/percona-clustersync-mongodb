@@ -44,7 +44,6 @@ Environment variables:
 import argparse
 import os
 import random
-import signal
 import sys
 import threading
 import time
@@ -123,7 +122,12 @@ Environment variables:
         default=os.environ.get("TARGET_LABEL", "TARGET"),
         help="Label shown for the target cluster (default: $TARGET_LABEL or TARGET)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.rate <= 0:
+        parser.error("--rate must be greater than 0")
+    if args.doc_size < BASE_DOC_SIZE:
+        parser.error(f"--doc-size must be at least {BASE_DOC_SIZE} bytes")
+    return args
 
 
 def resolve_cluster_uri(name: str, *env_vars: str) -> str:
@@ -161,6 +165,7 @@ class DemoWriter:
 
         self.seq = 0
         self.ids = deque(maxlen=ID_BUFFER_SIZE)
+        self.last_ack_at = None
         self.t0 = None
         self.t1 = None
 
@@ -235,15 +240,17 @@ class DemoWriter:
         while not self._stop:
             if self._pause:
                 if not self._paused_signal.is_set():
-                    self.t0 = time.monotonic()
+                    self.t0 = self.last_ack_at if self.last_ack_at is not None else time.monotonic()
                     self._paused_signal.set()
                 time.sleep(0.02)
                 continue
 
             acked = self._do_op()
-            if acked and self._await_resume and not self._resumed_signal.is_set():
-                self.t1 = time.monotonic()
-                self._resumed_signal.set()
+            if acked:
+                self.last_ack_at = time.monotonic()
+                if self._await_resume and not self._resumed_signal.is_set():
+                    self.t1 = self.last_ack_at
+                    self._resumed_signal.set()
 
             time.sleep(self.interval)
 
@@ -382,8 +389,6 @@ def main():
 
     writer = DemoWriter(source, target, args)
     ticker = PauseTicker()
-
-    signal.signal(signal.SIGINT, lambda signum, frame: writer.stop())
 
     print("PCSM Demo Writer")
     print(f"  source:     {args.source_label}")

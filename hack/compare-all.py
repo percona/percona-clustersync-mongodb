@@ -78,7 +78,7 @@ def compare_namespace(
     if source_options != target_options:
         mismatches.append(f"MISMATCH {ns}: options {source_options} vs {target_options}")
 
-    if "viewOn" not in source_options:
+    if "viewOn" not in source_options and "viewOn" not in target_options:
         source_indexes = source[db][coll].index_information()
         target_indexes = target[db][coll].index_information()
         if source_indexes != target_indexes:

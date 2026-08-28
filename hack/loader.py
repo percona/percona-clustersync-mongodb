@@ -309,6 +309,22 @@ def main():
     # Calculate parameters
     params = calculate_parameters(args.size, args.databases, args.collections_per_db)
 
+    # Print configuration before any destructive or long-running work
+    print()
+    print("PCSM Source Loader")
+    print("=" * 45)
+    print(f"Target size:        {args.size} GB")
+    print(f"URI:                {redact_uri(args.uri)}")
+    print(f"Databases:          {params['num_databases']}")
+    print(f"Collections per DB: {params['collections_per_db']}")
+    print(f"Total collections:  {params['total_collections']}")
+    print(f"Total docs:         {params['total_docs']:,}")
+    print(f"Doc size:           {DOC_SIZE_BYTES:,} bytes")
+    print(f"Workers:            {args.workers}")
+    print(f"Batch size:         {args.batch_size}")
+    print(f"Sharded:            {args.sharded}")
+    print()
+
     # Connect to MongoDB
     try:
         client = pymongo.MongoClient(args.uri, serverSelectionTimeoutMS=5000)
@@ -374,21 +390,6 @@ def main():
         for f in failures:
             print(f"  {f['full_name']}: {f['error']}")
         sys.exit(1)
-
-    # Print configuration
-    print()
-    print("PCSM Source Loader")
-    print("=" * 45)
-    print(f"Target size:        {args.size} GB")
-    print(f"URI:                {redact_uri(args.uri)}")
-    print(f"Databases:          {params['num_databases']}")
-    print(f"Collections per DB: {params['collections_per_db']}")
-    print(f"Total collections:  {params['total_collections']}")
-    print(f"Total docs:         {params['total_docs']:,}")
-    print(f"Doc size:           {DOC_SIZE_BYTES:,} bytes")
-    print(f"Workers:            {args.workers}")
-    print(f"Batch size:         {args.batch_size}")
-    print(f"Sharded:            {args.sharded}")
 
     # Verification
     print()
