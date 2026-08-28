@@ -6,11 +6,12 @@ Monitors write operations per second on MongoDB cluster.
 Works with both replica sets and sharded clusters (mongos).
 
 Usage:
-    python hack/monitor_writes.py -u "mongodb://localhost:27017"
-    python hack/monitor_writes.py -u "mongodb://user:pass@mongos:27017" --interval 5
+    export MONGO_URI="mongodb://localhost:27017"
+    hack/monitor_writes.py
+    hack/monitor_writes.py --interval 5
 
 Options:
-    -u, --uri       MongoDB connection string (required)
+    -u, --uri       MongoDB connection string (default: $MONGO_URI)
     --interval      Sampling interval in seconds (default: 1)
 """
 
@@ -19,6 +20,7 @@ import sys
 import time
 
 import pymongo
+from mongo_uri import redact_uri, resolve_uri
 
 
 def parse_args():
@@ -27,11 +29,17 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python hack/monitor_writes.py -u "mongodb://localhost:27017"
-    python hack/monitor_writes.py -u "mongodb://user:pass@mongos:27017" --interval 5
+    MONGO_URI="mongodb://localhost:27017" hack/monitor_writes.py
+    MONGO_URI="mongodb://mongos:27017" hack/monitor_writes.py --interval 5
         """,
     )
-    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
+    parser.add_argument(
+        "-u",
+        "--uri",
+        type=str,
+        default=None,
+        help="MongoDB connection string (default: $MONGO_URI)",
+    )
     parser.add_argument(
         "--interval",
         type=int,
@@ -43,15 +51,16 @@ Examples:
 
 def main():
     args = parse_args()
+    uri = resolve_uri(args.uri)
 
     try:
-        client = pymongo.MongoClient(args.uri, serverSelectionTimeoutMS=5000)
+        client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
     except Exception as e:
         print(f"ERROR: Failed to connect to MongoDB: {e}")
         sys.exit(1)
 
-    print(f"Monitoring writes on {args.uri} (Ctrl+C to stop)")
+    print(f"Monitoring writes on {redact_uri(uri)} (Ctrl+C to stop)")
     print()
 
     prev = client.admin.command("serverStatus")["opcounters"]
