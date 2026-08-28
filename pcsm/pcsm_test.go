@@ -19,7 +19,7 @@ import (
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false)
+	p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
 
 	assert.Equal(t, State(StateIdle), p.state, "initial state should be StateIdle")
 	assert.Nil(t, p.source, "source should be nil when passed nil")
@@ -55,7 +55,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
+			catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -80,7 +80,7 @@ func TestCheckpoint(t *testing.T) {
 			onStateChanged: func(State) {},
 			nsInclude:      []string{"db1.*", "db2.coll"},
 			nsExclude:      []string{"db1.excluded"},
-			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
+			catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -103,7 +103,7 @@ func TestCheckpoint(t *testing.T) {
 			state:          StateFailed,
 			onStateChanged: func(State) {},
 			err:            errors.New("test error"),
-			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
+			catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -129,7 +129,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
+			catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{}), checkpoint: cloneCP},
 			repl:           &mockReplicator{doneCh: make(chan struct{})},
 		}
@@ -157,7 +157,7 @@ func TestCheckpoint(t *testing.T) {
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
-			catalog:        catalog.NewCatalog(nil, mdb.ServerVersion{}),
+			catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 			clone:          &mockCloner{doneCh: make(chan struct{})},
 			repl:           &mockReplicator{doneCh: make(chan struct{}), checkpoint: replCP},
 		}
@@ -337,7 +337,7 @@ func TestRecover(t *testing.T) {
 		keys, err := bson.Marshal(bson.D{{"email", 1}})
 		require.NoError(t, err)
 
-		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
+		cat := catalog.NewCatalog(nil, nil, mdb.ServerVersion{})
 		cat.AddFailedIndexes(context.Background(), "mydb", "users",
 			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}})
 
@@ -375,7 +375,7 @@ func TestRecover(t *testing.T) {
 		keys, err := bson.Marshal(bson.D{{"email", 1}})
 		require.NoError(t, err)
 
-		cat := catalog.NewCatalog(nil, mdb.ServerVersion{})
+		cat := catalog.NewCatalog(nil, nil, mdb.ServerVersion{})
 		cat.AddFailedIndexes(context.Background(), "mydb", "users",
 			[]*mdb.IndexSpecification{{Name: "email_idx", KeysDocument: keys}})
 

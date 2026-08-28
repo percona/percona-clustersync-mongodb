@@ -22,11 +22,7 @@ The MongoDB containers use hostnames that must resolve on the host. Add these en
 - Go 1.25.0+
 - Python 3.13+ and [Poetry](https://python-poetry.org/) (for E2E tests and monitoring scripts)
 
-Install Python dependencies:
-
-```bash
-poetry install
-```
+Follow the [Python E2E test requirements](CONTRIBUTING.md#python-e2e-tests) to install dependencies and activate the project environment before running `hack/*.py` with `python`.
 
 If `poetry run` fails with a "bad interpreter" error (e.g. after a Python version change), use the virtualenv directly: `.venv/bin/pytest` instead of `poetry run pytest`.
 
@@ -349,7 +345,7 @@ Sharded topology shown as primary. RS variants use the URIs from the Connection 
 
 ### HA Multi-Instance Testing
 
-`hack/ha/` runs a 3-node PCSM HA group (`pcsm0`/`pcsm1`/`pcsm2`) in Docker against already-running clusters, for manual failover testing. The instances join the cluster's Docker network and reach it via the same hostnames the host uses; API ports `2242`/`2243`/`2244` are published to the host.
+`hack/ha/` runs a 3-node PCSM HA group (`pcsm0`/`pcsm1`/`pcsm2`) in Docker against already-running clusters, for manual failover testing. The instances join the cluster's Docker network and reach it via the same hostnames the host uses; API ports `2242`/`2243`/`2244` are published on host loopback. Prometheus reaches the instances over the shared `pcsm-metrics` Docker network.
 
 ```bash
 # 1. Start clusters first (RS shown; use hack/sh/run.sh for sharded)
@@ -490,22 +486,22 @@ Note: local `make pytest` and the GitHub Actions matrix do not cover identical s
 ### Change Stream Watcher
 
 ```bash
-poetry run python hack/change_stream.py -u "mongodb://src-mongos:27017"
-poetry run python hack/change_stream.py -u "mongodb://tgt-mongos:29017" --show-checkpoints
-poetry run python hack/change_stream.py -u "mongodb://rs00:30000"
+hack/change_stream.py -u "mongodb://src-mongos:27017"
+hack/change_stream.py -u "mongodb://tgt-mongos:29017" --show-checkpoints
+hack/change_stream.py -u "mongodb://rs00:30000"
 ```
 
 ### Write Operations Monitor
 
 ```bash
-poetry run python hack/monitor_writes.py -u "mongodb://src-mongos:27017"
+hack/monitor_writes.py -u "mongodb://src-mongos:27017"
 ```
 
 ### Metrics Stack
 
-`make metrics-up` brings up the bundled Prometheus + Grafana stack against the local PCSM `/metrics` endpoint. `make metrics-down` stops it.
+`make metrics-up` creates the shared `pcsm-metrics` Docker network and starts the bundled Prometheus + Grafana stack. `make metrics-down` stops the stack; the external network remains for startup-order independence.
 
-The bundled Prometheus scrapes all three HA hack ports (`2242`–`2244`); down targets for single-instance runs are harmless. Because `/metrics` is served on every role but only the ACTIVE instance drives replication, the Grafana board scopes gauge panels to the ACTIVE instance (`<metric> and on(instance) (percona_clustersync_mongodb_ha_active == 1)`) so a demoted ex-ACTIVE's frozen gauges don't render, and aggregates counter-rate panels with `sum(...)` (a demoted instance's `rate()` is 0).
+The bundled Prometheus scrapes `pcsm0`/`pcsm1`/`pcsm2` through Docker DNS; targets remain down until the HA group starts. A host-run PCSM is not scraped because its default loopback listener is unreachable from the Prometheus container. Because `/metrics` is served on every role but only the ACTIVE instance drives replication, the Grafana board scopes gauge panels to the ACTIVE instance (`<metric> and on(instance) (percona_clustersync_mongodb_ha_active == 1)`) so a demoted ex-ACTIVE's frozen gauges don't render, and aggregates counter-rate panels with `sum(...)` (a demoted instance's `rate()` is 0).
 
 ### HA Metrics
 

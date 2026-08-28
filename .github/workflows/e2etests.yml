@@ -75,14 +75,14 @@ jobs:
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py
+          poetry run pytest tests/test_collections.py tests/test_documents.py tests/test_indexes.py tests/test_selective.py tests/test_transactions.py tests/test_pipeline_updates.py tests/test_idle_index_build.py
 
       - name: Teardown Docker Compose
         if: always()
         run: docker compose -f hack/rs/compose.yml down
 
   sharded:
-    name: Sharded (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }})
+    name: Sharded (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }}${{ matrix.name_suffix }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -101,10 +101,20 @@ jobs:
             tgt_mongo_version: "8.0"
           - src_mongo_version: "7.0"
             tgt_mongo_version: "8.0"
+          # Unequal shard counts (3 source, 2 target) exercise the size-weighted
+          # chunk pre-split path. Scoped to the presplit suite to keep CI time down.
+          - src_mongo_version: "8.0"
+            tgt_mongo_version: "8.0"
+            src_shards: "3"
+            tgt_shards: "2"
+            name_suffix: " 3v2 shards"
+            pytest_args: "tests/test_presplit_sharded.py"
 
     env:
       SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
       TGT_MONGO_VERSION: ${{ matrix.tgt_mongo_version }}
+      SRC_SHARDS: ${{ matrix.src_shards }}
+      TGT_SHARDS: ${{ matrix.tgt_shards }}
       PYTEST_TIMEOUT: 60
 
     steps:
@@ -143,16 +153,24 @@ jobs:
           make test-build
 
       - name: Run tests (pytest)
+        env:
+          # Defaults to the full sharded suite; a matrix entry may scope it to a
+          # subset (e.g. the presplit-only run on an unequal topology).
+          PYTEST_ARGS: ${{ matrix.pytest_args }}
         run: |
           export TEST_SOURCE_URI=mongodb://src-mongos:27017
           export TEST_TARGET_URI=mongodb://tgt-mongos:29017
           export TEST_PCSM_URL=http://127.0.0.1:2242
           export TEST_PCSM_BIN=./bin/pcsm_test
 
-          # test_clone_auto_segment_size_not_byte_count is RS-only; the bug it
-          # guards is topology-agnostic and the profiler helpers in tests/testing.py
-          # only support replica sets. See the test's docstring for details.
-          poetry run pytest --deselect tests/test_documents.py::test_clone_auto_segment_size_not_byte_count
+          if [ -n "$PYTEST_ARGS" ]; then
+            poetry run pytest $PYTEST_ARGS
+          else
+            # test_clone_auto_segment_size_not_byte_count is RS-only; the bug it
+            # guards is topology-agnostic and the profiler helpers in tests/testing.py
+            # only support replica sets. See the test's docstring for details.
+            poetry run pytest --deselect tests/test_documents.py::test_clone_auto_segment_size_not_byte_count
+          fi
 
       - name: Teardown Docker Compose
         if: always()

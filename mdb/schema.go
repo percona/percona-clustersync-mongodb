@@ -166,6 +166,9 @@ func ListIndexes(
 	return indexes, nil
 }
 
+// ListInProgressIndexBuilds returns names from matching in-flight createIndexes
+// commands. It includes idle connections so it also sees builds waiting for
+// commit quorum.
 func ListInProgressIndexBuilds(
 	ctx context.Context,
 	m *mongo.Client,
@@ -189,7 +192,7 @@ func ListInProgressIndexBuilds(
 		indexBuildsStage = currentOpStage
 
 		cur, err := m.Database("admin", opts).Aggregate(ctx, mongo.Pipeline{
-			{{currentOpStage, bson.D{{"allUsers", true}}}},
+			{{currentOpStage, bson.D{{"allUsers", true}, {"idleConnections", true}}}},
 			{{"$match", bson.D{
 				{"op", "command"},
 				{"command.createIndexes", coll},
@@ -228,6 +231,11 @@ func ListInProgressIndexBuilds(
 // index, so callers receive the canonical [IndexSpecification] even when
 // mongos `listIndexes` filters partial coverage.
 // For non-sharded collections or replica sets, this returns an empty list.
+//
+// Limitation: only missing-shard inconsistency is detected. An index present on
+// every shard but with differing keys or options is not reported here; callers
+// relying on this as a correctness gate (e.g. finalize) will not catch that
+// form of divergence.
 //
 // An inconsistent index is only returned when at least one shard's $indexStats
 // row carries a non-nil spec; if every row for a name lacks a spec (e.g. older
@@ -320,8 +328,10 @@ func ListInconsistentIndexes(
 
 type ChunkInfo struct {
 	Shard string `bson:"shard"`
-	Min   bson.M `bson:"min"`
-	Max   bson.M `bson:"max"`
+	// Min and Max are the chunk's shard-key range bounds. They are bson.D
+	// (ordered) so compound shard-key field order is preserved.
+	Min bson.D `bson:"min"`
+	Max bson.D `bson:"max"`
 }
 
 type ShardingInfo struct {
@@ -366,6 +376,22 @@ func GetCollectionShardingInfo(
 		return info, nil
 	}
 
+	chunks, err := GetChunks(ctx, m, info.UUID)
+	if err != nil {
+		return nil, errors.Wrapf(err, "get chunks for %s", collNS)
+	}
+	info.Chunks = chunks
+
+	return info, nil
+}
+
+// GetChunks reads the chunk layout for a collection from config.chunks,
+// ordered by the shard-key lower bound.
+func GetChunks(ctx context.Context, m *mongo.Client, uuid *bson.Binary) ([]ChunkInfo, error) {
+	if uuid == nil {
+		return nil, errors.New("collection uuid is required to read chunks")
+	}
+
 	chunksColl := m.Database("config").Collection("chunks")
 
 	var chunks []ChunkInfo
@@ -377,10 +403,14 @@ func GetCollectionShardingInfo(
 	)
 
 	chunksStage := chunksFindStage
-	err = RunWithRetry(ctx, func(ctx context.Context) error {
+	err := RunWithRetry(ctx, func(ctx context.Context) error {
 		chunksStage = chunksFindStage
 
-		cur, err := chunksColl.Find(ctx, bson.M{"ns": collNS})
+		cur, err := chunksColl.Find(
+			ctx,
+			bson.D{{Key: "uuid", Value: uuid}},
+			options.Find().SetSort(bson.D{{Key: "min", Value: 1}}),
+		)
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
@@ -399,14 +429,13 @@ func GetCollectionShardingInfo(
 	if err != nil {
 		switch chunksStage {
 		case chunksFindStage:
-			return nil, errors.Wrapf(err, "find chunks for %s", collNS)
+			return nil, errors.Wrap(err, "find chunks")
 		case chunksErrorStage:
 			return nil, errors.Wrap(err, "iterate chunks")
 		default:
 			return nil, errors.Wrap(err, "read chunks")
 		}
 	}
-	info.Chunks = chunks
 
-	return info, nil
+	return chunks, nil
 }

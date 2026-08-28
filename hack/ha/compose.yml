@@ -9,11 +9,15 @@
 #   PCSM_HA_NETWORK  external docker network of the running clusters
 #   PCSM_SOURCE_URI  source cluster URI
 #   PCSM_TARGET_URI  target cluster URI
+#
+# PCSM APIs have no authentication; publish them on loopback only.
+# Prometheus reaches each instance over the shared pcsm-metrics network.
 
 x-pcsm-common: &pcsm-common
   image: pcsm:dev
   networks:
     - clusters
+    - metrics
   environment:
     PCSM_SOURCE_URI: ${PCSM_SOURCE_URI}
     PCSM_TARGET_URI: ${PCSM_TARGET_URI}
@@ -28,7 +32,7 @@ services:
     hostname: pcsm0
     command: ["--port", "2242"]
     ports:
-      - "2242:2242"
+      - "127.0.0.1:2242:2242"
 
   pcsm1:
     <<: *pcsm-common
@@ -36,7 +40,7 @@ services:
     hostname: pcsm1
     command: ["--port", "2243"]
     ports:
-      - "2243:2243"
+      - "127.0.0.1:2243:2243"
 
   pcsm2:
     <<: *pcsm-common
@@ -44,9 +48,12 @@ services:
     hostname: pcsm2
     command: ["--port", "2244"]
     ports:
-      - "2244:2244"
+      - "127.0.0.1:2244:2244"
 
 networks:
   clusters:
     external: true
     name: ${PCSM_HA_NETWORK}
+  metrics:
+    external: true
+    name: pcsm-metrics

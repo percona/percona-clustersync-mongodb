@@ -1,3 +1,4 @@
+# Local test clusters run without authentication; publish ports on loopback only.
 services:
   rs00:
     image: "percona/percona-server-mongodb:${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}"
@@ -11,14 +12,17 @@ services:
       # Overrides image's glibc.pthread.rseq=0 — that tunable alone does NOT fix this.
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30000:30000"]
+    ports: ["127.0.0.1:30000:30000"]
     volumes: ["rs00:/data/db", "./mongo/:/cfg:ro"]
+    # Test harness only: PCSM-322 needs failpoints on source RS members.
+    # Deliberately excluded from target RS members and sharded topology.
     command:
       [
         "-f",
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30000",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs01:
@@ -30,7 +34,7 @@ services:
     environment:
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30001:30001"]
+    ports: ["127.0.0.1:30001:30001"]
     volumes: ["rs01:/data/db", "./mongo/:/cfg:ro"]
     command:
       [
@@ -38,6 +42,7 @@ services:
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30001",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs02:
@@ -49,7 +54,7 @@ services:
     environment:
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30002:30002"]
+    ports: ["127.0.0.1:30002:30002"]
     volumes: ["rs02:/data/db", "./mongo/:/cfg:ro"]
     command:
       [
@@ -57,6 +62,7 @@ services:
         "/cfg/mongod.conf",
         "--replSet=rs0",
         "--port=30002",
+        "--setParameter=enableTestCommands=1",
       ]
 
   rs10:
@@ -68,7 +74,7 @@ services:
     environment:
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30100:30100"]
+    ports: ["127.0.0.1:30100:30100"]
     volumes: ["rs10:/data/db", "./mongo/:/cfg:ro"]
     command:
       [
@@ -87,7 +93,7 @@ services:
     environment:
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30101:30101"]
+    ports: ["127.0.0.1:30101:30101"]
     volumes: ["rs11:/data/db", "./mongo/:/cfg:ro"]
     command:
       [
@@ -106,7 +112,7 @@ services:
     environment:
       - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - PERCONA_TELEMETRY_DISABLE=1
-    ports: ["30102:30102"]
+    ports: ["127.0.0.1:30102:30102"]
     volumes: ["rs12:/data/db", "./mongo/:/cfg:ro"]
     command:
       [

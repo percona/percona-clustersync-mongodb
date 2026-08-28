@@ -113,7 +113,7 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 
 // finishedClone returns a Clone whose Status reports IsFinished() == true.
 func finishedClone() *clone.Clone {
-	c := clone.NewClone(nil, nil, nil, nil, &clone.Options{})
+	c := clone.NewClone(nil, nil, nil, nil, &clone.Options{}, false)
 
 	err := c.Recover(&clone.Checkpoint{
 		StartTime:  time.Now().Add(-time.Minute),
