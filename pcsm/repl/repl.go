@@ -155,7 +155,7 @@ type Status struct {
 	PauseTime time.Time
 	Pausing   bool // a pause is in progress (requested, not yet paused)
 
-	LastReplicatedOpTime bson.Timestamp // Last applied operation time
+	LastReplicatedOpTime bson.Timestamp // Reported replication frontier, initialized to the run start
 	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
 	EventsRead           int64          // Number of events read from the source
 	EventsApplied        int64          // Number of events applied
@@ -297,6 +297,7 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 		return errors.New("cannot recovery: already used")
 	}
 
+	interrupted := cp.PauseTime.IsZero()
 	pauseTime := cp.PauseTime
 	if pauseTime.IsZero() {
 		pauseTime = time.Now()
@@ -313,6 +314,9 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	// resume frontier, so using it here preserves prior behavior on upgrade.
 	if r.checkpointOpTime.IsZero() {
 		r.checkpointOpTime = r.lastReplicatedOpTime
+	}
+	if interrupted {
+		r.lastReplicatedOpTime = r.checkpointOpTime
 	}
 
 	targetVer, err := mdb.Version(ctx, r.target)
@@ -398,6 +402,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
+	r.lastReplicatedOpTime = startAt
 	r.checkpointOpTime = startAt
 	// Scope the movePrimary-invalidate expectation to this run; clear any stale
 	// arming left over from a prior failed or paused run.
@@ -591,9 +596,9 @@ func (r *Repl) watchChangeEvents(
 	}()
 
 	var invalidateErr *changeStreamInvalidateError
+	var pendingTick bson.Timestamp
 
 	for {
-		lastEventTS := bson.Timestamp{}
 		hasEvents := false
 
 		for cur.TryNext(ctx) {
@@ -611,7 +616,10 @@ func (r *Repl) watchChangeEvents(
 
 			ts := change.ClusterTime
 			changeCh <- change
-			lastEventTS = ts
+
+			if !pendingTick.IsZero() && !pendingTick.After(ts) {
+				pendingTick = bson.Timestamp{}
+			}
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
@@ -624,6 +632,17 @@ func (r *Repl) watchChangeEvents(
 		err = isChangeStreamTerminationError(invalidateErr, cur.Err(), cur.ID())
 		if err != nil {
 			return err
+		}
+
+		// Let one cursor drain observe writes committed before the append note.
+		if !pendingTick.IsZero() {
+			changeCh <- &ChangeEvent{
+				EventHeader: EventHeader{
+					OperationType: advanceTimePseudoEvent,
+					ClusterTime:   pendingTick,
+				},
+			}
+			pendingTick = bson.Timestamp{}
 		}
 
 		// Only advance cluster time when the cursor had no events (truly idle).
@@ -639,14 +658,7 @@ func (r *Repl) watchChangeEvents(
 				log.New("watch").Error(err, "Unable to advance the source cluster time")
 			}
 
-			if sourceTS.After(lastEventTS) {
-				changeCh <- &ChangeEvent{
-					EventHeader: EventHeader{
-						OperationType: advanceTimePseudoEvent,
-						ClusterTime:   sourceTS,
-					},
-				}
-			}
+			pendingTick = sourceTS
 		}
 	}
 }
