@@ -34,5 +34,5 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+          # Reuse the Trivy binary installed by the SBOM generation step.
           skip-setup-trivy: true
-          version: v0.72.0

@@ -6,7 +6,7 @@
 .idea/
 
 .dev
-.env
+*.env
 
 /bin/
 /tmp/

@@ -5,11 +5,10 @@ global:
 scrape_configs:
   - job_name: "pcsm"
     static_configs:
-      # All PCSM HA instances are scraped. Every instance serves /metrics on all
-      # roles; the ACTIVE one drives replication metrics, STANDBYs export their
-      # HA state (ha_active=0). Extra targets that are down (single-instance
-      # deployments) simply show as "down" in Prometheus and are harmless.
+      # HA instances share the pcsm-metrics network with Prometheus and are
+      # reached through Docker DNS because their published API ports are
+      # loopback-only. Targets show as down until the HA group starts.
       - targets:
-          - "host.docker.internal:2242" # default pcsm port (hack/ha pcsm0)
-          - "host.docker.internal:2243" # hack/ha pcsm1
-          - "host.docker.internal:2244" # hack/ha pcsm2
+          - "pcsm0:2242"
+          - "pcsm1:2243"
+          - "pcsm2:2244"

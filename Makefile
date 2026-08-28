@@ -60,6 +60,7 @@ clean:
 
 # Start Prometheus + Grafana metrics stack (Grafana: http://localhost:3000, Prometheus: http://localhost:9090)
 metrics-up:
+	docker network inspect pcsm-metrics >/dev/null 2>&1 || docker network create pcsm-metrics
 	docker compose -f hack/metrics/docker-compose.yml up -d
 
 # Stop metrics stack

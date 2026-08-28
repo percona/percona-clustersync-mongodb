@@ -1,3 +1,4 @@
+# Grafana grants anonymous Admin access; publish monitoring ports on loopback only.
 services:
   prometheus:
     image: prom/prometheus:latest
@@ -5,9 +6,10 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:9090:9090"
+    networks:
+      - default
+      - metrics
 
   grafana:
     image: grafana/grafana:latest
@@ -21,6 +23,11 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
+
+networks:
+  metrics:
+    external: true
+    name: pcsm-metrics
