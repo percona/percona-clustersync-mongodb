@@ -6,13 +6,14 @@ Loads a specified amount of data into MongoDB with deterministic,
 reproducible document generation. Docker-friendly with throttled inserts.
 
 Usage:
-    python hack/loader.py --size 10 --uri "mongodb://localhost:27017"
-    python hack/loader.py -s 5 -u "mongodb://localhost:27017" --drop
-    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded
+    export MONGO_URI="mongodb://localhost:27017"
+    hack/loader.py --size 10
+    hack/loader.py -s 5 --drop
+    MONGO_URI="mongodb://mongos:27017" hack/loader.py -s 5 --sharded
 
 Options:
     -s, --size              Size in GB to load (required)
-    -u, --uri               MongoDB connection string (required)
+    -u, --uri               MongoDB connection string (default: $MONGO_URI)
     --databases             Number of databases (default: 1)
     --collections-per-db    Collections per database (default: 1)
     --workers               Number of parallel workers (default: 4)
@@ -31,6 +32,7 @@ from datetime import UTC, datetime
 import pymongo
 import pymongo.errors
 from bson import ObjectId
+from mongo_uri import redact_uri, resolve_uri
 
 # Constants for deterministic generation
 SEED = 42
@@ -46,13 +48,19 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python hack/loader.py --size 10 --uri "mongodb://src-mongos:27017"
-    python hack/loader.py -s 5 -u "mongodb://src-mongos:27017" --drop
-    python hack/loader.py -s 5 -u "mongodb://mongos:27017" --sharded
+    MONGO_URI="mongodb://src-mongos:27017" hack/loader.py --size 10
+    MONGO_URI="mongodb://src-mongos:27017" hack/loader.py -s 5 --drop
+    MONGO_URI="mongodb://mongos:27017" hack/loader.py -s 5 --sharded
         """,
     )
     parser.add_argument("-s", "--size", type=float, required=True, help="Size in GB to load")
-    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
+    parser.add_argument(
+        "-u",
+        "--uri",
+        type=str,
+        default=None,
+        help="MongoDB connection string (default: $MONGO_URI)",
+    )
     parser.add_argument(
         "--databases",
         type=int,
@@ -293,28 +301,13 @@ def format_bytes(size_bytes: float) -> str:
 
 def main():
     args = parse_args()
+    args.uri = resolve_uri(args.uri)
 
     # Set global seed for reproducibility
     random.seed(SEED)
 
     # Calculate parameters
     params = calculate_parameters(args.size, args.databases, args.collections_per_db)
-
-    # Print configuration
-    print()
-    print("PCSM Source Loader")
-    print("=" * 45)
-    print(f"Target size:        {args.size} GB")
-    print(f"URI:                {args.uri}")
-    print(f"Databases:          {params['num_databases']}")
-    print(f"Collections per DB: {params['collections_per_db']}")
-    print(f"Total collections:  {params['total_collections']}")
-    print(f"Total docs:         {params['total_docs']:,}")
-    print(f"Doc size:           {DOC_SIZE_BYTES:,} bytes")
-    print(f"Workers:            {args.workers}")
-    print(f"Batch size:         {args.batch_size}")
-    print(f"Sharded:            {args.sharded}")
-    print()
 
     # Connect to MongoDB
     try:
@@ -381,6 +374,21 @@ def main():
         for f in failures:
             print(f"  {f['full_name']}: {f['error']}")
         sys.exit(1)
+
+    # Print configuration
+    print()
+    print("PCSM Source Loader")
+    print("=" * 45)
+    print(f"Target size:        {args.size} GB")
+    print(f"URI:                {redact_uri(args.uri)}")
+    print(f"Databases:          {params['num_databases']}")
+    print(f"Collections per DB: {params['collections_per_db']}")
+    print(f"Total collections:  {params['total_collections']}")
+    print(f"Total docs:         {params['total_docs']:,}")
+    print(f"Doc size:           {DOC_SIZE_BYTES:,} bytes")
+    print(f"Workers:            {args.workers}")
+    print(f"Batch size:         {args.batch_size}")
+    print(f"Sharded:            {args.sharded}")
 
     # Verification
     print()
