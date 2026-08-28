@@ -157,10 +157,12 @@ Python E2E tests require MongoDB clusters to be running and PCSM to be available
 - Python 3.13 or above
 - [Poetry](https://python-poetry.org/docs/#installation) for dependency management
 
-Install the Python dependencies:
+Install the Python dependencies and activate the project environment before executing
+`hack/*.py` directly:
 
 ```sh
 poetry install
+eval "$(poetry env activate)"
 ```
 
 #### 1. Deploy MongoDB clusters and run PCSM

@@ -6,11 +6,12 @@ Watches MongoDB change stream and prints events in a compact JSON format.
 Useful for debugging and monitoring replication.
 
 Usage:
-    python hack/change_stream.py -u "mongodb://localhost:27017"
-    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+    export MONGO_URI="mongodb://localhost:27017"
+    hack/change_stream.py
+    MONGO_URI="mongodb://rs00:30000" hack/change_stream.py --show-checkpoints
 
 Options:
-    -u, --uri               MongoDB connection string (required)
+    -u, --uri               MongoDB connection string (default: $MONGO_URI)
     --show-checkpoints      Include PCSM checkpoint events (default: hidden)
 """
 
@@ -19,6 +20,7 @@ from signal import SIG_DFL, SIGINT, signal
 
 import bson.json_util as json
 import pymongo
+from mongo_uri import redact_uri, resolve_uri
 
 
 def parse_args():
@@ -27,11 +29,17 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python hack/change_stream.py -u "mongodb://localhost:27017"
-    python hack/change_stream.py --uri "mongodb://rs00:30000" --show-checkpoints
+    MONGO_URI="mongodb://localhost:27017" hack/change_stream.py
+    MONGO_URI="mongodb://rs00:30000" hack/change_stream.py --show-checkpoints
         """,
     )
-    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
+    parser.add_argument(
+        "-u",
+        "--uri",
+        type=str,
+        default=None,
+        help="MongoDB connection string (default: $MONGO_URI)",
+    )
     parser.add_argument(
         "--show-checkpoints",
         action="store_true",
@@ -44,15 +52,16 @@ if __name__ == "__main__":
     signal(SIGINT, SIG_DFL)
 
     args = parse_args()
+    uri = resolve_uri(args.uri)
 
     print()
     print("PCSM Change Stream Watcher")
     print("=" * 45)
-    print(f"URI:                {args.uri}")
+    print(f"URI:                {redact_uri(uri)}")
     print(f"Show checkpoints:   {args.show_checkpoints}")
     print()
 
-    m = pymongo.MongoClient(args.uri)
+    m = pymongo.MongoClient(uri)
     for change in m.watch(show_expanded_events=True):
         del change["_id"]
         del change["wallTime"]

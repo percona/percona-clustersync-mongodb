@@ -7,14 +7,15 @@ Deterministic and reproducible - same config produces identical operation sequen
 Useful for measuring PCSM replication performance.
 
 Usage:
-    python hack/generator.py -r 100 -u "mongodb://localhost:27017"
-    python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 120 --doc-size 10240
-    python hack/generator.py -r 1000 -u "mongodb://localhost:27017" --txn-percent 20 --txn-size 5
-    python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
+    export MONGO_URI="mongodb://localhost:27017"
+    hack/generator.py -r 100
+    hack/generator.py -r 500 -d 120 --doc-size 10240
+    hack/generator.py -r 1000 --txn-percent 20 --txn-size 5
+    MONGO_URI="mongodb://mongos:27017" hack/generator.py -r 1000 --sharded --drop
 
 Options:
     -r, --rate              Target inserts per second (required)
-    -u, --uri               MongoDB connection string (required)
+    -u, --uri               MongoDB connection string (default: $MONGO_URI)
     -d, --duration          Duration in seconds (default: 60)
     --doc-size              Target document size in bytes (default: 5120)
     --txn-percent           Percentage of operations within transactions (0-100, default: 0)
@@ -38,6 +39,7 @@ from datetime import UTC, datetime
 import pymongo
 import pymongo.errors
 from bson import ObjectId
+from mongo_uri import redact_uri, resolve_uri
 
 # Constants for deterministic generation
 DEFAULT_SEED = 42
@@ -66,13 +68,19 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python hack/generator.py --rate 100 --uri "mongodb://localhost:27017"
-    python hack/generator.py -r 500 -u "mongodb://localhost:27017" -d 60
-    python hack/generator.py -r 1000 -u "mongodb://mongos:27017" --sharded --drop
+    MONGO_URI="mongodb://localhost:27017" hack/generator.py --rate 100
+    MONGO_URI="mongodb://localhost:27017" hack/generator.py -r 500 -d 60
+    MONGO_URI="mongodb://mongos:27017" hack/generator.py -r 1000 --sharded --drop
         """,
     )
     parser.add_argument("-r", "--rate", type=int, required=True, help="Target inserts per second")
-    parser.add_argument("-u", "--uri", type=str, required=True, help="MongoDB connection string")
+    parser.add_argument(
+        "-u",
+        "--uri",
+        type=str,
+        default=None,
+        help="MongoDB connection string (default: $MONGO_URI)",
+    )
     parser.add_argument(
         "-d",
         "--duration",
@@ -451,6 +459,7 @@ def run_writer(
 
 def main():
     args = parse_args()
+    args.uri = resolve_uri(args.uri)
 
     # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
@@ -483,7 +492,7 @@ def main():
     print("PCSM Writer")
     print("=" * 45)
     print(f"Target rate:        {args.rate} ops/sec")
-    print(f"URI:                {args.uri}")
+    print(f"URI:                {redact_uri(args.uri)}")
     print(f"Duration:           {args.duration} seconds")
     print(f"Document size:      {args.doc_size} bytes")
     print(f"Txn percent:        {args.txn_percent}%")

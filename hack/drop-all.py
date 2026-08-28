@@ -5,10 +5,10 @@ Drop all user databases from MongoDB clusters.
 Drops all databases except system databases (admin, config, local, percona_mongolink).
 
 Usage:
-    python hack/drop-all.py           # Drop from both source and target
-    python hack/drop-all.py -s        # Drop from source only
-    python hack/drop-all.py -t        # Drop from target only
-    python hack/drop-all.py -s -t     # Drop from both source and target
+    hack/drop-all.py           # Drop from both source and target
+    hack/drop-all.py -s        # Drop from source only
+    hack/drop-all.py -t        # Drop from target only
+    hack/drop-all.py -s -t     # Drop from both source and target
 
 Environment variables:
     SRC_URI  MongoDB connection string for source (default: mongodb://src-mongos:27017)
