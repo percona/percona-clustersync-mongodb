@@ -97,7 +97,7 @@ def drop_all_database(source_conn: MongoClient, target_conn: MongoClient):
     testing.drop_all_database(target_conn)
 
 
-PCSM_PROC: subprocess.Popen = None
+PCSM_PROC: subprocess.Popen | None = None
 
 
 def _pcsm_url(request: pytest.FixtureRequest):
