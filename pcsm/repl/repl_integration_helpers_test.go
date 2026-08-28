@@ -1,6 +1,6 @@
 //go:build integration
 
-package repl //nolint:testpackage
+package repl //nolint:testpackage // Integration tests exercise unexported replication internals.
 
 import (
 	"context"
@@ -12,7 +12,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
+
+func runReplIntegrationTest(t *testing.T, fn func(context.Context)) {
+	t.Helper()
+
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 3*time.Minute, func(ctx context.Context) error {
+		fn(ctx)
+
+		return nil
+	}))
+}
+
+func disconnectReplTestClient(t *testing.T, client *mongo.Client) {
+	t.Helper()
+
+	require.NoError(t, util.CtxWithTimeout(context.Background(), 10*time.Second, client.Disconnect))
+}
 
 func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	t.Helper()
@@ -37,9 +56,11 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, mongod.Terminate(cleanupCtx))
+		require.NoError(t, util.CtxWithTimeout(context.Background(), 10*time.Second,
+			func(cleanupCtx context.Context) error {
+				return mongod.Terminate(cleanupCtx)
+			},
+		))
 	})
 
 	exitCode, _, err := mongod.Exec(ctx, []string{
@@ -48,13 +69,6 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	})
 	require.NoError(t, err)
 	require.Zero(t, exitCode)
-	require.Eventually(t, func() bool {
-		exitCode, _, execErr := mongod.Exec(ctx, []string{
-			"mongosh", "--quiet", "--eval", "exit(db.hello().isWritablePrimary ? 0 : 1)",
-		})
-
-		return execErr == nil && exitCode == 0
-	}, 60*time.Second, 100*time.Millisecond, "replica set did not elect a writable primary")
 
 	host, err := mongod.Host(ctx)
 	require.NoError(t, err)
