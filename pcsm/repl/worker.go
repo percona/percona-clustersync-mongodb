@@ -3,7 +3,6 @@ package repl
 import (
 	"context"
 	"hash/fnv"
-	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -540,7 +539,9 @@ func (p *workerPool) ReleaseBarrier() {
 //     imposes no constraint and is skipped.
 //   - If the worker was routed events but has not committed any
 //     (lastCommittedTS == nil, e.g. its first bulk write failed), the safe
-//     resume floor is strictly before the first routed event.
+//     resume floor is the first routed event. startAtOperationTime is
+//     inclusive, so the event is replayed without requiring an older oplog
+//     timestamp.
 //   - Otherwise the worker's committed lastCommittedTS is used.
 //
 // The returned timestamp is the minimum of these per-worker effective values.
@@ -562,13 +563,13 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 
 		committed := w.lastCommittedTS.Load()
 		if committed == nil {
-			// Worker received events but never committed. Resume before its
-			// first event so every routed event is replayed.
+			// Worker received events but never committed. Resume at its first
+			// event so every routed event is replayed.
 			firstRouted := w.firstRoutedTS.Load()
 			if firstRouted == nil {
 				firstRouted = routed
 			}
-			effective = tsPredecessor(*firstRouted)
+			effective = *firstRouted
 		} else {
 			effective = *committed
 		}
@@ -580,21 +581,6 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 	}
 
 	return minTS
-}
-
-// tsPredecessor returns the largest bson.Timestamp strictly less than ts.
-// For (T, I) with I > 0 it returns (T, I-1); when I == 0 and T > 0 it
-// returns (T-1, math.MaxUint32). For the zero timestamp it returns the
-// zero timestamp (there is nothing smaller).
-func tsPredecessor(ts bson.Timestamp) bson.Timestamp {
-	switch {
-	case ts.I > 0:
-		return bson.Timestamp{T: ts.T, I: ts.I - 1}
-	case ts.T > 0:
-		return bson.Timestamp{T: ts.T - 1, I: math.MaxUint32}
-	default:
-		return bson.Timestamp{}
-	}
 }
 
 // Idle returns true when every worker that has been routed events has

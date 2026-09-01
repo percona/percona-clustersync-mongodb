@@ -1,7 +1,6 @@
 package repl //nolint
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -76,8 +75,8 @@ func TestCheckpoint_DoesNotAdvancePastFailedWorker(t *testing.T) {
 }
 
 // TestCheckpoint_DoesNotAdvancePastFirstUncommittedEvent verifies that a worker
-// with multiple routed events and no committed bulk resumes before the first
-// event, not immediately before the last routed event.
+// with multiple routed events and no committed bulk resumes at the first event,
+// not immediately before the last routed event.
 func TestCheckpoint_DoesNotAdvancePastFirstUncommittedEvent(t *testing.T) {
 	t.Parallel()
 
@@ -97,53 +96,6 @@ func TestCheckpoint_DoesNotAdvancePastFirstUncommittedEvent(t *testing.T) {
 	pool.Route(first.change, first.ns)
 	pool.Route(last.change, last.ns)
 
-	assert.Equal(t, tsPredecessor(firstTS), pool.Checkpoint(),
-		"checkpoint must resume before the first routed event when no event has committed")
-}
-
-// TestTsPredecessor verifies tsPredecessor returns the largest bson.Timestamp
-// strictly less than the input, with correct wrap-around from (T, 0) to
-// (T-1, math.MaxUint32) and saturation at the zero timestamp.
-func TestTsPredecessor(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   bson.Timestamp
-		want bson.Timestamp
-	}{
-		{
-			name: "decrements I when I > 0",
-			in:   bson.Timestamp{T: 100, I: 5},
-			want: bson.Timestamp{T: 100, I: 4},
-		},
-		{
-			name: "wraps to previous T when I == 0",
-			in:   bson.Timestamp{T: 100, I: 0},
-			want: bson.Timestamp{T: 99, I: math.MaxUint32},
-		},
-		{
-			name: "saturates at zero timestamp",
-			in:   bson.Timestamp{T: 0, I: 0},
-			want: bson.Timestamp{T: 0, I: 0},
-		},
-		{
-			name: "T == 1, I == 0 wraps to (0, MaxUint32)",
-			in:   bson.Timestamp{T: 1, I: 0},
-			want: bson.Timestamp{T: 0, I: math.MaxUint32},
-		},
-		{
-			name: "I == 1 decrements to (T, 0) without wrapping",
-			in:   bson.Timestamp{T: 42, I: 1},
-			want: bson.Timestamp{T: 42, I: 0},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tsPredecessor(tt.in)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+	assert.Equal(t, firstTS, pool.Checkpoint(),
+		"checkpoint must resume at the first routed event when no event has committed")
 }
