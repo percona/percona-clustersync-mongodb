@@ -55,7 +55,8 @@ If the bug hasn't been reported / addressed, or we've agreed on the enhancement 
 
 To build Percona ClusterSync for MongoDB from source code, you require the following:
 
-- Go 1.25 or above. See [Installing and setting up Go tools](https://golang.org/doc/install) for more information
+- Go 1.27.0. See
+  [Installing and setting up Go tools](https://golang.org/doc/install).
 - make
 
 To build the project, run the following commands:
@@ -89,13 +90,13 @@ To run PCSM locally for development and testing, follow these steps:
 Start the source and target sharded clusters using Docker Compose:
 
 ```sh
-MONGO_VERSION="8.0" ./hack/sh/run.sh
+MONGO_VERSION="8.0.29-13" ./hack/sh/run.sh
 ```
 
 For replica set clusters instead of sharded:
 
 ```sh
-MONGO_VERSION="8.0" ./hack/rs/run.sh
+MONGO_VERSION="8.0.29-13" ./hack/rs/run.sh
 ```
 
 ### 2. Update /etc/hosts
@@ -154,8 +155,8 @@ Python E2E tests require MongoDB clusters to be running and PCSM to be available
 
 #### Requirements
 
-- Python 3.13 or above
-- [Poetry](https://python-poetry.org/docs/#installation) for dependency management
+- Python 3.13.15
+- [Poetry 2.4.2](https://python-poetry.org/docs/#installation) for dependency management
 
 Install the Python dependencies and activate the project environment before executing
 `hack/*.py` directly:
