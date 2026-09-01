@@ -17,7 +17,7 @@ jobs:
     if: |
       (github.event.comment.body == '/jira' || startsWith(github.event.comment.body, '/jira ')) &&
       github.event.issue.pull_request == null
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write       # opencode action uses OIDC for app-token exchange
       contents: read
@@ -35,7 +35,7 @@ jobs:
     steps:
       # Checkout trusted default-branch contents to load the create prompt.
       - name: Checkout default branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -153,7 +153,7 @@ jobs:
       - name: OpenCode Jira create
         if: env.SKIP != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
+        uses: anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4 # github-v1.2.25
         # GH_TOKEN is intentionally not passed
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
