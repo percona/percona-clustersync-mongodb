@@ -31,6 +31,9 @@ jobs:
   test:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
+    permissions:
+      checks: write
+      contents: read
     timeout-minutes: 180
     strategy:
       fail-fast: false

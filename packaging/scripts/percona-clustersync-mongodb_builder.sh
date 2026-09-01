@@ -168,6 +168,10 @@ install_golang() {
     ln -s /usr/local/go${GO_VERSION} /usr/local/go
 }
 
+tool_version() {
+    "$1" version 2>/dev/null | awk '$1 == "Version:" { print $2; exit }'
+}
+
 install_sbom_tools() {
     # Install Syft (SBOM generator) and Grype (vulnerability scanner) on the
     # build host.
@@ -180,12 +184,20 @@ install_sbom_tools() {
             grype) version="0.118.0" ;;
         esac
         url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
-        for i in {1..3}; do
-            curl -fsSL "$url" | sh -s -- -b /usr/local/bin "v${version}" && break
-            sleep 10
-        done
-        command -v "$tool" >/dev/null \
-            || { echo "ERROR: ${tool} not installed after 3 attempts" >&2; exit 1; }
+        installed_version=$(tool_version "$tool")
+        if [ "$installed_version" != "$version" ]; then
+            for i in 1 2 3; do
+                curl -fsSL "$url" | sh -s -- -b /usr/local/bin "v${version}"
+                installed_version=$(tool_version "$tool")
+                [ "$installed_version" = "$version" ] && break
+                sleep 10
+            done
+        fi
+        installed_version=$(tool_version "$tool")
+        if [ "$installed_version" != "$version" ]; then
+            echo "ERROR: expected ${tool} ${version}, found ${installed_version:-missing}" >&2
+            exit 1
+        fi
     done
     syft version
     grype version

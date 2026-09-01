@@ -142,10 +142,19 @@ install_percona_clustersync_mongodb() {
 # Install Percona repository and Percona ClusterSync for MongoDB
 install_percona_clustersync_mongodb
 
-# Install Syft (if not already installed)
-if ! command -v syft &>/dev/null; then
+# Install the pinned Syft version when the current binary does not match.
+SYFT_VERSION=1.51.1
+installed_syft_version=$(syft version 2>/dev/null |
+  awk '$1 == "Version:" { print $2; exit }' || true)
+if [ "$installed_syft_version" != "$SYFT_VERSION" ]; then
   curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh |
-    sh -s -- -b /usr/local/bin v1.51.1
+    sh -s -- -b /usr/local/bin "v${SYFT_VERSION}"
+fi
+installed_syft_version=$(syft version 2>/dev/null |
+  awk '$1 == "Version:" { print $2; exit }' || true)
+if [ "$installed_syft_version" != "$SYFT_VERSION" ]; then
+  echo "ERROR: expected Syft ${SYFT_VERSION}, found ${installed_syft_version:-missing}" >&2
+  exit 1
 fi
 
 mkdir -p $CWD/pcsm_sbom
