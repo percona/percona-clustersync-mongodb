@@ -2,6 +2,7 @@ Source: percona-clustersync-mongodb
 Section: utils
 Priority: optional
 Maintainer: Percona LLC
+Build-Depends: debhelper-compat (= 13)
 Version: %{version}
 Homepage: https://percona.com
 

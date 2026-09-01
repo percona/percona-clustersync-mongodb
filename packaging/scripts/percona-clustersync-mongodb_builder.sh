@@ -153,9 +153,9 @@ install_golang() {
     elif [ x"$ARCH" = "xaarch64" ]; then
         GO_ARCH="arm64"
     fi
-    GO_VERSION="1.26.7"
+    GO_VERSION="1.27.0"
     GO_TAR="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
-    GO_URL="https://downloads.percona.com/downloads/packaging/go/${GO_TAR}"
+    GO_URL="https://go.dev/dl/${GO_TAR}"
     DL_PATH="/tmp/${GO_TAR}"
     for i in {1..3}; do
         wget -q "$GO_URL" -O "$DL_PATH" && break
@@ -174,11 +174,14 @@ install_sbom_tools() {
     #
     # Use the official Anchore installer scripts because they auto-detect the
     # host architecture (x86_64 -> amd64, aarch64 -> arm64) and OS.
-    # No pinned version yet.
     for tool in syft grype; do
+        case "$tool" in
+            syft) version="1.51.1" ;;
+            grype) version="0.118.0" ;;
+        esac
         url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
         for i in {1..3}; do
-            curl -fsSL "$url" | sh -s -- -b /usr/local/bin && break
+            curl -fsSL "$url" | sh -s -- -b /usr/local/bin "v${version}" && break
             sleep 10
         done
         command -v "$tool" >/dev/null \

@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 
 	version := os.Getenv("MONGO_VERSION")
 	if version == "" {
-		version = "8.0"
+		version = "8.0.29-13"
 	}
 	image := "percona/percona-server-mongodb:" + version
 

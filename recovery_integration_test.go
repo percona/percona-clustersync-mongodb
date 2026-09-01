@@ -48,7 +48,7 @@ func recoveryMongo(t *testing.T) string {
 func startRecoveryMongo(ctx context.Context) (string, error) {
 	version := os.Getenv("MONGO_VERSION")
 	if version == "" {
-		version = "8.0"
+		version = "8.0.29-13"
 	}
 
 	mongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

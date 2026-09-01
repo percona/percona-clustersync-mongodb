@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 
 	mongoVersion := os.Getenv("MONGO_VERSION")
 	if mongoVersion == "" {
-		mongoVersion = "8.0"
+		mongoVersion = "8.0.29-13"
 	}
 	image := "percona/percona-server-mongodb:" + mongoVersion
 
