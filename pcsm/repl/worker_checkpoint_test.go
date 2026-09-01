@@ -75,6 +75,32 @@ func TestCheckpoint_DoesNotAdvancePastFailedWorker(t *testing.T) {
 			"in (T_fail, cp) on resume.", cp, tsFail)
 }
 
+// TestCheckpoint_DoesNotAdvancePastFirstUncommittedEvent verifies that a worker
+// with multiple routed events and no committed bulk resumes before the first
+// event, not immediately before the last routed event.
+func TestCheckpoint_DoesNotAdvancePastFirstUncommittedEvent(t *testing.T) {
+	t.Parallel()
+
+	pool := &workerPool{
+		workers: []*worker{{
+			id:            "0",
+			routedEventCh: make(chan *routedEvent, 2),
+		}},
+		numWorkers: 1,
+	}
+
+	firstTS := bson.Timestamp{T: 100, I: 1}
+	lastTS := bson.Timestamp{T: 100, I: 10}
+	first := makeInsertEventWithTS("first-uncommitted", firstTS)
+	last := makeInsertEventWithTS("last-uncommitted", lastTS)
+
+	pool.Route(first.change, first.ns)
+	pool.Route(last.change, last.ns)
+
+	assert.Equal(t, tsPredecessor(firstTS), pool.Checkpoint(),
+		"checkpoint must resume before the first routed event when no event has committed")
+}
+
 // TestTsPredecessor verifies tsPredecessor returns the largest bson.Timestamp
 // strictly less than the input, with correct wrap-around from (T, 0) to
 // (T-1, math.MaxUint32) and saturation at the zero timestamp.
