@@ -393,8 +393,8 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 				prevNS := ns
 				ns = namespaceInfo{
-					Namespace: catalog.Namespace{Database: prevNS.Database, Collection: name},
-					UUID:      prevNS.UUID,
+					Database: prevNS.Database, Collection: name,
+					UUID: prevNS.UUID,
 				}
 
 				c.lock.Lock()

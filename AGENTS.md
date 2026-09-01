@@ -18,9 +18,10 @@ The MongoDB containers use hostnames that must resolve on the host. Add these en
 
 ### Tools
 
-- Docker and Docker Compose
-- Go 1.25.0+
-- Python 3.13+ and [Poetry](https://python-poetry.org/) (for E2E tests and monitoring scripts)
+- Docker Engine 29.7.2 and Docker Compose 5.5.0
+- Go 1.27.0
+- Python 3.13.15 and [Poetry 2.4.2](https://python-poetry.org/) for E2E tests
+  and monitoring scripts
 
 Follow the [Python E2E test requirements](CONTRIBUTING.md#python-e2e-tests) to install dependencies and activate the project environment before running `hack/*.py` with `python`.
 
@@ -28,15 +29,16 @@ If `poetry run` fails with a "bad interpreter" error (e.g. after a Python versio
 
 ### Test Cluster Environment Variables
 
-| Variable            | Default | Description                                        |
-| ------------------- | ------- | -------------------------------------------------- |
-| `MONGO_VERSION`     | `8.0`   | Fallback MongoDB image version for both clusters   |
-| `SRC_MONGO_VERSION` | unset   | Source MongoDB image version override              |
-| `TGT_MONGO_VERSION` | unset   | Target MongoDB image version override              |
-| `SRC_SHARDS`        | `2`     | Source shard count (sharded topology only, max 3)  |
-| `TGT_SHARDS`        | `2`     | Target shard count (sharded topology only, max 3)  |
+| Variable            | Default     | Description                                        |
+| ------------------- | ----------- | -------------------------------------------------- |
+| `MONGO_VERSION`     | `8.0.29-13` | Fallback MongoDB image version for both clusters   |
+| `SRC_MONGO_VERSION` | unset       | Source MongoDB image version override              |
+| `TGT_MONGO_VERSION` | unset       | Target MongoDB image version override              |
+| `SRC_SHARDS`        | `2`         | Source shard count (sharded topology only, max 3)  |
+| `TGT_SHARDS`        | `2`         | Target shard count (sharded topology only, max 3)  |
 
-Per-side precedence: `SRC_MONGO_VERSION` / `TGT_MONGO_VERSION` → `MONGO_VERSION` → `8.0`.
+Per-side precedence: `SRC_MONGO_VERSION` / `TGT_MONGO_VERSION` →
+`MONGO_VERSION` → `8.0.29-13`.
 
 `MONGO_VERSION` also selects the testcontainers image used by `make test-integration`.
 

@@ -18,7 +18,7 @@ export GITCOMMIT=$(shell egrep '^GITCOMMIT' VERSION | cut -f 2 -d '=')
 export COMPONENT_VERSION=$(shell egrep '^COMPONENT_VERSION' VERSION | cut -f 2 -d '=')
 
 %:
-	dh $@ --with-systemd
+	dh $@
 
 override_dh_auto_clean:
 	# Skip upstream make clean completely
@@ -74,7 +74,3 @@ override_dh_auto_install:
 	test "$$(jq '.components | length' $(TMP)/percona-clustersync-mongodb-$(VERSION).cdx.json)" -ge 10 \
 		|| { echo "ERROR: DEB SBOM has too few components" >&2; exit 1; }
 	ls -la $(TMP)
-
-override_dh_systemd_start:
-	dh_systemd_enable --name=pcsm pcsm.service
-	dh_systemd_start --restart-after-upgrade

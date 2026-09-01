@@ -44,8 +44,8 @@ func makeChangeEvent(docKey bson.D, ns catalog.Namespace) *ChangeEvent {
 	}
 
 	return &ChangeEvent{
-		EventHeader: EventHeader{Namespace: ns},
-		RawData:     bson.Raw(raw),
+		Namespace: ns,
+		RawData:   bson.Raw(raw),
 	}
 }
 
@@ -350,11 +350,9 @@ func makeInsertEvent(id string) *routedEvent {
 	return &routedEvent{
 		ns: ns,
 		change: &ChangeEvent{
-			EventHeader: EventHeader{
-				OperationType: Insert,
-				Namespace:     ns,
-			},
-			RawData: bson.Raw(raw),
+			OperationType: Insert,
+			Namespace:     ns,
+			RawData:       bson.Raw(raw),
 		},
 	}
 }

@@ -21,10 +21,10 @@ func TestFindNamespaceByUUIDFallsBackToEventNamespaceOnUUIDMiss(t *testing.T) {
 
 	eventNS := catalog.Namespace{Database: "db", Collection: "orders"}
 	nameMatchedCurrentNS := catalog.Namespace{Database: "db", Collection: "orders", Sharded: true}
-	change := &ChangeEvent{EventHeader: EventHeader{
+	change := &ChangeEvent{
 		Namespace:      eventNS,
 		CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("missing-uuid")},
-	}}
+	}
 
 	resolved := findNamespaceByUUID(catalog.UUIDMap{"other": nameMatchedCurrentNS}, change)
 
@@ -45,10 +45,10 @@ func TestDispatcherUUIDMapRefreshAfterDDLRestoresShardedMetadata(t *testing.T) {
 		{"old": staleNS},
 		{"6e65772d75756964": refreshedNS},
 	}}
-	change := &ChangeEvent{EventHeader: EventHeader{
+	change := &ChangeEvent{
 		Namespace:      staleNS,
 		CollectionUUID: &bson.Binary{Subtype: 4, Data: []byte("new-uuid")},
-	}}
+	}
 
 	uuidMap := cat.UUIDMap()
 	resolvedBeforeRefresh := findNamespaceByUUID(uuidMap, change)
@@ -213,10 +213,8 @@ func TestDispatch_Invalidate(t *testing.T) {
 	t.Parallel()
 
 	change := &ChangeEvent{
-		EventHeader: EventHeader{
-			OperationType: Invalidate,
-			ClusterTime:   bson.Timestamp{T: 123, I: 1},
-		},
+		OperationType: Invalidate,
+		ClusterTime:   bson.Timestamp{T: 123, I: 1},
 	}
 
 	tests := []struct {
@@ -305,10 +303,8 @@ func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
 	}
 
 	change := &ChangeEvent{
-		EventHeader: EventHeader{
-			OperationType: Invalidate,
-			ClusterTime:   bson.Timestamp{T: 123, I: 1},
-		},
+		OperationType: Invalidate,
+		ClusterTime:   bson.Timestamp{T: 123, I: 1},
 	}
 
 	_ = r.handleInvalidate(change, pool)
@@ -403,12 +399,10 @@ func TestApplyCreateDDLChange(t *testing.T) {
 			r.sourceVer = tt.sourceVer
 
 			change := &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType:  Create,
-					Namespace:      ns,
-					CollectionUUID: tt.eventUUID,
-				},
-				Event: tt.createEvent,
+				OperationType:  Create,
+				Namespace:      ns,
+				CollectionUUID: tt.eventUUID,
+				Event:          tt.createEvent,
 			}
 
 			err := r.applyDDLChange(context.Background(), change)
@@ -483,12 +477,10 @@ func TestApplyDropDDLChange(t *testing.T) {
 			r := &Repl{catalog: cat}
 
 			change := &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType:  Drop,
-					Namespace:      ns,
-					CollectionUUID: tt.eventUUID,
-				},
-				Event: DropEvent{},
+				OperationType:  Drop,
+				Namespace:      ns,
+				CollectionUUID: tt.eventUUID,
+				Event:          DropEvent{},
 			}
 
 			err := r.applyDDLChange(context.Background(), change)
@@ -646,7 +638,7 @@ func TestIsReplay(t *testing.T) {
 			t.Parallel()
 
 			r := &Repl{checkpointOpTime: tt.checkpoint}
-			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
+			change := &ChangeEvent{ClusterTime: tt.changeTime}
 
 			assert.Equal(t, tt.want, r.isReplay(change))
 		})
@@ -673,7 +665,7 @@ func TestShouldSkipReplay(t *testing.T) {
 			t.Parallel()
 
 			r := &Repl{sourceIsSharded: tt.sourceIsSharded, checkpointOpTime: tt.checkpoint}
-			change := &ChangeEvent{EventHeader: EventHeader{ClusterTime: tt.changeTime}}
+			change := &ChangeEvent{ClusterTime: tt.changeTime}
 
 			assert.Equal(t, tt.want, r.shouldSkipReplay(change))
 		})
@@ -787,10 +779,8 @@ func TestApplyDDLChange_ShardCollection_SkipsOnRSTarget(t *testing.T) {
 			}
 
 			change := &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType: ShardCollection,
-					Namespace:     catalog.Namespace{Database: "db", Collection: "coll"},
-				},
+				OperationType: ShardCollection,
+				Namespace:     catalog.Namespace{Database: "db", Collection: "coll"},
 				Event: ShardCollectionEvent{
 					OperationDescription: shardCollectionOpDesc{
 						ShardKey: bson.D{{Key: "x", Value: 1}},

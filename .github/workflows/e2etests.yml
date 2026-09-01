@@ -9,24 +9,24 @@ permissions:
 jobs:
   replset:
     name: ReplicaSet (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "6.0"
-          - src_mongo_version: "7.0"
-            tgt_mongo_version: "7.0"
-          - src_mongo_version: "8.0"
-            tgt_mongo_version: "8.0"
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "7.0"
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "8.0"
-          - src_mongo_version: "7.0"
-            tgt_mongo_version: "8.0"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "6.0.29-23"
+          - src_mongo_version: "7.0.40-22"
+            tgt_mongo_version: "7.0.40-22"
+          - src_mongo_version: "8.0.29-13"
+            tgt_mongo_version: "8.0.29-13"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "7.0.40-22"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "8.0.29-13"
+          - src_mongo_version: "7.0.40-22"
+            tgt_mongo_version: "8.0.29-13"
 
     env:
       SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
@@ -35,17 +35,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.13.15"
 
       - name: Install Poetry
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
+          curl -sSL https://install.python-poetry.org | POETRY_VERSION=2.4.2 python3 -
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+          poetry --version | grep -F "2.4.2"
 
       - name: Configure Poetry
         run: |
@@ -83,28 +84,28 @@ jobs:
 
   sharded:
     name: Sharded (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }}${{ matrix.name_suffix }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "6.0"
-          - src_mongo_version: "7.0"
-            tgt_mongo_version: "7.0"
-          - src_mongo_version: "8.0"
-            tgt_mongo_version: "8.0"
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "7.0"
-          - src_mongo_version: "6.0"
-            tgt_mongo_version: "8.0"
-          - src_mongo_version: "7.0"
-            tgt_mongo_version: "8.0"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "6.0.29-23"
+          - src_mongo_version: "7.0.40-22"
+            tgt_mongo_version: "7.0.40-22"
+          - src_mongo_version: "8.0.29-13"
+            tgt_mongo_version: "8.0.29-13"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "7.0.40-22"
+          - src_mongo_version: "6.0.29-23"
+            tgt_mongo_version: "8.0.29-13"
+          - src_mongo_version: "7.0.40-22"
+            tgt_mongo_version: "8.0.29-13"
           # Unequal shard counts (3 source, 2 target) exercise the size-weighted
           # chunk pre-split path. Scoped to the presplit suite to keep CI time down.
-          - src_mongo_version: "8.0"
-            tgt_mongo_version: "8.0"
+          - src_mongo_version: "8.0.29-13"
+            tgt_mongo_version: "8.0.29-13"
             src_shards: "3"
             tgt_shards: "2"
             name_suffix: " 3v2 shards"
@@ -119,17 +120,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.13.15"
 
       - name: Install Poetry
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
+          curl -sSL https://install.python-poetry.org | POETRY_VERSION=2.4.2 python3 -
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+          poetry --version | grep -F "2.4.2"
 
       - name: Configure Poetry
         run: |

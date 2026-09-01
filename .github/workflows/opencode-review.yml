@@ -23,7 +23,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request != null &&
         github.event.comment.body == '/review')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
@@ -54,7 +54,7 @@ jobs:
       # Checkout trusted default-branch contents to load the review prompt.
       - name: Checkout default branch
         if: steps.permission.outputs.skip != 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -97,7 +97,7 @@ jobs:
       - name: OpenCode Go review
         if: steps.permission.outputs.skip != 'true'
         timeout-minutes: 10
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a  # github-v1.2.19
+        uses: anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4 # github-v1.2.25
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO_FULL: ${{ env.REPO_FULL }}
@@ -144,7 +144,7 @@ jobs:
 
       - name: Upload review body
         if: steps.permission.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         env:
           NODE_OPTIONS: ""
         with:
@@ -156,7 +156,7 @@ jobs:
   post-review:
     needs: generate-review
     if: needs.generate-review.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -165,7 +165,7 @@ jobs:
       PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
     steps:
       - name: Download review body
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: opencode-review-${{ github.run_id }}
           path: ${{ runner.temp }}/review-output

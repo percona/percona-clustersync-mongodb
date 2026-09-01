@@ -112,16 +112,16 @@ install_percona_clustersync_mongodb() {
   case "$PLATFORM_ID" in
     ol|rhel|centos|oraclelinux|amzn)
       # Install Percona repo on RHEL/CentOS/OracleLinux
-      curl -sO https://repo.percona.com/yum/percona-release-latest.noarch.rpm
-      dnf install -y percona-release-latest.noarch.rpm
+      curl -sO https://repo.percona.com/yum/percona-release-1.0-34.noarch.rpm
+      dnf install -y percona-release-1.0-34.noarch.rpm
       percona-release enable pcsm ${REPO_TYPE}
       dnf install -y \
 	percona-clustersync-mongodb
       ;;
     ubuntu|debian)
       # Install Percona repo on Ubuntu/Debian
-      curl -sO https://repo.percona.com/apt/percona-release_latest.generic_all.deb
-      dpkg -i percona-release_latest.generic_all.deb
+      curl -sO https://repo.percona.com/apt/percona-release_1.0-34.generic_all.deb
+      dpkg -i percona-release_1.0-34.generic_all.deb
       apt --fix-broken install -y  # Fix broken dependencies
       apt update
 
@@ -142,9 +142,19 @@ install_percona_clustersync_mongodb() {
 # Install Percona repository and Percona ClusterSync for MongoDB
 install_percona_clustersync_mongodb
 
-# Install Syft (if not already installed)
-if ! command -v syft &>/dev/null; then
-  curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+# Install the pinned Syft version when the current binary does not match.
+SYFT_VERSION=1.51.1
+installed_syft_version=$(syft version 2>/dev/null |
+  awk '$1 == "Version:" { print $2; exit }' || true)
+if [ "$installed_syft_version" != "$SYFT_VERSION" ]; then
+  curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh |
+    sh -s -- -b /usr/local/bin "v${SYFT_VERSION}"
+fi
+installed_syft_version=$(syft version 2>/dev/null |
+  awk '$1 == "Version:" { print $2; exit }' || true)
+if [ "$installed_syft_version" != "$SYFT_VERSION" ]; then
+  echo "ERROR: expected Syft ${SYFT_VERSION}, found ${installed_syft_version:-missing}" >&2
+  exit 1
 fi
 
 mkdir -p $CWD/pcsm_sbom

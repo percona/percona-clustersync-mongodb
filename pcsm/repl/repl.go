@@ -637,10 +637,8 @@ func (r *Repl) watchChangeEvents(
 		// Let one cursor drain observe writes committed before the append note.
 		if !pendingTick.IsZero() {
 			changeCh <- &ChangeEvent{
-				EventHeader: EventHeader{
-					OperationType: advanceTimePseudoEvent,
-					ClusterTime:   pendingTick,
-				},
+				OperationType: advanceTimePseudoEvent,
+				ClusterTime:   pendingTick,
 			}
 			pendingTick = bson.Timestamp{}
 		}
