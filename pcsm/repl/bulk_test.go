@@ -1005,7 +1005,7 @@ func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 
 		bulkErr := mongo.BulkWriteException{
 			WriteErrors: []mongo.BulkWriteError{
-				{WriteError: mongo.WriteError{Index: 1, Code: errCodePathNotViable, Message: "..."}},
+				{Index: 1, Code: errCodePathNotViable, Message: "..."},
 			},
 		}
 
@@ -1019,7 +1019,7 @@ func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 
 		bulkErr := mongo.BulkWriteException{
 			WriteErrors: []mongo.BulkWriteError{
-				{WriteError: mongo.WriteError{Index: 1, Code: errCodeNonExistentPath, Message: "..."}},
+				{Index: 1, Code: errCodeNonExistentPath, Message: "..."},
 			},
 		}
 
@@ -1033,7 +1033,7 @@ func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 
 		bulkErr := mongo.BulkWriteException{
 			WriteErrors: []mongo.BulkWriteError{
-				{WriteError: mongo.WriteError{Index: 1, Code: 11000}},
+				{Index: 1, Code: 11000},
 			},
 		}
 
@@ -1047,7 +1047,7 @@ func TestExtractRecoverableUpdateTarget_CollectionBulk(t *testing.T) {
 
 		bulkErr := mongo.BulkWriteException{
 			WriteErrors: []mongo.BulkWriteError{
-				{WriteError: mongo.WriteError{Index: 0, Code: errCodePathNotViable}},
+				{Index: 0, Code: errCodePathNotViable},
 			},
 		}
 

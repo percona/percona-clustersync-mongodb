@@ -12,8 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -38,7 +42,7 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 
 	mongoVersion := os.Getenv("MONGO_VERSION")
 	if mongoVersion == "" {
-		mongoVersion = "8.0"
+		mongoVersion = "8.0.29-13"
 	}
 
 	mongod, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -75,5 +79,21 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	mappedPort, err := mongod.MappedPort(ctx, "27017/tcp")
 	require.NoError(t, err)
 
-	return "mongodb://" + net.JoinHostPort(host, mappedPort.Port()) + "/?directConnection=true"
+	uri := "mongodb://" + net.JoinHostPort(host, mappedPort.Port()) + "/?directConnection=true"
+	probe, err := mongo.Connect(
+		options.Client().
+			ApplyURI(uri).
+			SetServerSelectionTimeout(30 * time.Second),
+	)
+	require.NoError(t, err)
+	require.NoError(t, probe.Ping(ctx, readpref.Primary()))
+	_, err = probe.Database("pcsm_readiness").Collection("ready").
+		InsertOne(ctx, bson.D{{Key: "_id", Value: "primary"}})
+	require.NoError(t, err)
+	_, err = mdb.AdvanceClusterTime(ctx, probe)
+	require.NoError(t, err)
+	require.NoError(t, probe.Database("pcsm_readiness").Drop(ctx))
+	disconnectReplTestClient(t, probe)
+
+	return uri
 }
