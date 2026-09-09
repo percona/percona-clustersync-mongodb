@@ -4,7 +4,7 @@ PCSM Demo Writer
 
 Continuous application-style write load for a live migration demo. Writes a mix of
 inserts, updates and deletes into a single namespace, and can be paused, repointed
-from the source cluster to the target cluster, and resumed with a single command.
+from the source cluster to the target cluster, and resumed with a single keypress.
 
 The pause/repoint/resume sequence measures the application write gap during
 cutover: the stopwatch starts once the last write to the source is acknowledged
@@ -18,12 +18,12 @@ Usage:
     export TARGET_URI="mongodb://..."       # or TGT_URI
     hack/demo_writer.py --source-label atlas-m20 --target-label psmdb-rs
 
-Commands (type and press Enter):
-    pause      stop writing, start the stopwatch
-    repoint    switch to the target cluster (only while paused)
-    resume     start writing again, stop the stopwatch
-    status     print the current state
-    quit       stop the writer and exit
+Keys (no Enter):
+    p    pause: stop writing, start the stopwatch
+    t    target: repoint to the target cluster (only while paused)
+    r    resume: start writing again, stop the stopwatch
+    s    status: print the current state
+    q    quit: stop the writer and exit
 
 Options:
     -r, --rate          Operations per second (default: 2)
@@ -45,8 +45,10 @@ import argparse
 import os
 import random
 import sys
+import termios
 import threading
 import time
+import tty
 from collections import deque
 from datetime import UTC, datetime
 
@@ -63,6 +65,13 @@ OP_KINDS = ["insert", "update", "delete"]
 OP_WEIGHTS = [70, 20, 10]
 STATUSES = ["active", "pending", "archived"]
 ACK_TIMEOUT = 30
+COMMANDS = {
+    "p": "pause",
+    "t": "repoint",
+    "r": "resume",
+    "s": "status",
+    "q": "quit",
+}
 
 
 def parse_args():
@@ -308,7 +317,18 @@ class PauseTicker:
         self._stop.set()
 
 
-HELP = """Commands: pause | repoint | resume | status | quit"""
+HELP = """Keys: [p]ause | [t]arget/repoint | [r]esume | [s]tatus | [q]uit"""
+
+
+def read_key() -> str:
+    """Read one key immediately without echoing it or waiting for Enter."""
+    fd = sys.stdin.fileno()
+    settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        return sys.stdin.read(1).lower()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, settings)
 
 
 def handle_command(command: str, writer: DemoWriter, ticker: PauseTicker) -> bool:
@@ -402,8 +422,13 @@ def main():
 
     try:
         while True:
-            command = input().strip().lower()
-            if not command:
+            key = read_key()
+            if key.isspace():
+                continue
+            command = COMMANDS.get(key)
+            if command is None:
+                print(f"  unknown key: {key!r}")
+                print(f"  {HELP}")
                 continue
             if not handle_command(command, writer, ticker):
                 break
