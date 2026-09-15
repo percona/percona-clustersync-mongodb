@@ -33,16 +33,21 @@ def test_lag_reporting_during_resume_backlog(t: Testing):
                 assert op_time is not None, "acknowledged insert has no session operationTime"
                 batch_op_times.append(op_time)
 
-        # Fresh writes can legitimately have <= 1s lag. Observe the source's
-        # logical clock, not a fixed sleep, to age the entire backlog before
-        # testing lag. Three seconds also covers PCSM's +1s oplog-note rounding.
-        clock_deadline = time.monotonic() + 20
-        while time.monotonic() < clock_deadline:
-            cluster_time = t.source.admin.command("hello")["$clusterTime"]["clusterTime"]
-            if cluster_time.time >= batch_op_times[-1].time + 3:
-                break
-        else:
-            pytest.fail("source cluster clock did not advance 3s beyond the backlog within 20s")
+        # Fresh writes can legitimately have <= 1s lag, so the backlog must be
+        # at least 3s old on the source's logical clock before lag is asserted
+        # (3s also covers PCSM's +1s oplog-note rounding). The logical clock
+        # follows wall time but only ticks on writes: wait out the wall-clock
+        # gap, then append one oplog note to materialize the advance. Reads such
+        # as `hello` do not move the clock, so polling them would depend on the
+        # server's periodic no-op writer.
+        age_target = batch_op_times[-1].time + 3
+        remaining = age_target - time.time()
+        if remaining > 0:
+            time.sleep(remaining)
+        note = t.source.admin.command({"appendOplogNote": 1, "data": {"msg": "test:age_backlog"}})
+        assert note["$clusterTime"]["clusterTime"].time >= age_target, (
+            f"source clock {note['$clusterTime']['clusterTime']} did not reach {age_target}"
+        )
 
         before_resume = t.pcsm.status()
         assert before_resume["state"] == PCSM.State.PAUSED, before_resume

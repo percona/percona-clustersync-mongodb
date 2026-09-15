@@ -142,7 +142,7 @@ func TestWatchChangeEvents_EmitsMonotonicTimestampsWhenWritesCommitAroundAppendO
 				select {
 				case change := <-changeEvents:
 					events = append(events, change)
-					switch change.OperationType { //nolint:exhaustive
+					switch change.OperationType { //nolint:exhaustive // only the choreographed DML and ticks matter
 					case Delete:
 						sawDelete = true
 					case Insert:
