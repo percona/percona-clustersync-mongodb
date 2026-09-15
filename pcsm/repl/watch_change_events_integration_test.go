@@ -83,7 +83,7 @@ func TestWatchChangeEvents_EmitsMonotonicTimestampsWhenWritesCommitAroundAppendO
 				}
 
 				insertCalls.Add(1)
-				result, insertErr := collection.InsertOne(ctx, bson.D{{"_id", "overtakes-pending-tick"}})
+				result, insertErr := collection.InsertOne(ctx, bson.D{{"_id", "after-second-note"}})
 				insertDone <- monitoredWriteOutcome[*mongo.InsertOneResult]{result: result, err: insertErr}
 			},
 		}
@@ -136,11 +136,23 @@ func TestWatchChangeEvents_EmitsMonotonicTimestampsWhenWritesCommitAroundAppendO
 			})
 
 			// When
-			events := make([]*ChangeEvent, 0, 4)
-			for len(events) < cap(events) {
+			var events []*ChangeEvent
+			var sawDelete, sawInsert, tickAfterDelete, tickAfterInsert bool
+			for !tickAfterDelete || !tickAfterInsert {
 				select {
 				case change := <-changeEvents:
 					events = append(events, change)
+					switch change.OperationType { //nolint:exhaustive
+					case Delete:
+						sawDelete = true
+					case Insert:
+						require.True(t, sawDelete, "Delete must precede Insert")
+						sawInsert = true
+					case advanceTimePseudoEvent:
+						tickAfterDelete = sawDelete
+						tickAfterInsert = sawInsert
+					}
+
 				case <-watchCtx.Done():
 					require.FailNow(t, "watchChangeEvents did not emit the expected event sequence",
 						watchCtx.Err().Error())
@@ -173,10 +185,6 @@ func TestWatchChangeEvents_EmitsMonotonicTimestampsWhenWritesCommitAroundAppendO
 
 			require.EqualValues(t, 1, deleteCalls.Load())
 			require.EqualValues(t, 1, insertCalls.Load())
-			require.Equal(t, Delete, events[0].OperationType)
-			require.Equal(t, OperationType(advanceTimePseudoEvent), events[1].OperationType)
-			require.Equal(t, Insert, events[2].OperationType)
-			require.Equal(t, OperationType(advanceTimePseudoEvent), events[3].OperationType)
 			for i := 1; i < len(events); i++ {
 				require.Falsef(
 					t,
