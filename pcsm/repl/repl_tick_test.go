@@ -138,12 +138,98 @@ func TestApplyTick_ReportsProgressOnlyWhenPoolIdle(t *testing.T) {
 		"tick must not report routed-but-uncommitted events as replicated")
 	assert.Equal(t, start, r.Status().CheckpointOpTime)
 
-	// Model the writer's successful commit, without a timer or live MongoDB.
-	pool.workers[0].lastCommittedTS.Store(&routed)
+	// Commit through the real writer path, without a timer or live MongoDB.
+	commitRoutedEvent(t, pool.workers[0])
 	r.applyTick(tick, routed)
 	assert.Equal(t, tick, r.Status().LastReplicatedOpTime, "idle pool may apply the scanned frontier")
 	assert.Equal(t, start, r.Status().CheckpointOpTime, "ticks never advance the resume checkpoint")
 
 	r.applyTick(start, routed)
 	assert.Equal(t, tick, r.Status().LastReplicatedOpTime, "older ticks cannot regress reported progress")
+}
+
+// commitRoutedEvent drains one routed event into a bulk and runs the writer
+// to completion so the worker records the commit exactly as production does.
+func commitRoutedEvent(t *testing.T, w *worker) {
+	t.Helper()
+
+	w.currentBulkWrite = &mockBulkWriter{}
+	w.newBulkWriter = func() bulkWriter { return &mockBulkWriter{} }
+	w.pendingBulkCh = make(chan *pendingBulk, 1)
+	w.writerDone = make(chan struct{})
+
+	require.NoError(t, w.addToCurrentBulk(<-w.routedEventCh))
+
+	require.True(t, w.enqueueBulk())
+	close(w.pendingBulkCh)
+	w.runWriter(t.Context())
+}
+
+// Distinct change events can share a clusterTime (multi-document transactions,
+// applyOps). Idleness must be decided by exact event accounting, not by
+// comparing the committed and routed timestamps, or a tick and the
+// filtered-event checkpoint path both run ahead of a queued same-timestamp event.
+func TestPoolIdle_EqualTimestampEventStillQueued(t *testing.T) {
+	t.Parallel()
+
+	start := bson.Timestamp{T: 100, I: 1}
+	shared := bson.Timestamp{T: 101, I: 1}
+	tick := bson.Timestamp{T: 1000, I: 5}
+	pool := makeTestPool(1)
+	w := pool.workers[0]
+
+	first := makeInsertEventWithTS("txn-first", shared)
+	pool.Route(first.change, first.ns)
+	commitRoutedEvent(t, w)
+	require.Equal(t, shared, *w.lastCommittedTS.Load())
+
+	second := makeInsertEventWithTS("txn-second", shared)
+	pool.Route(second.change, second.ns)
+	require.Len(t, w.routedEventCh, 1)
+
+	assert.False(t, pool.Idle(), "a queued event sharing the committed timestamp is not idle")
+
+	r := &Repl{pool: pool, lastReplicatedOpTime: start, checkpointOpTime: start}
+	r.applyTick(tick, shared)
+	assert.Equal(t, start, r.Status().LastReplicatedOpTime,
+		"tick must not pass the unapplied second event sharing the committed timestamp")
+
+	// The same predicate guards the filtered-event checkpoint advance in run().
+	assert.False(t, r.poolIdle(shared), "checkpoint must not advance past the queued event")
+
+	commitRoutedEvent(t, w)
+	assert.True(t, pool.Idle())
+	r.applyTick(tick, shared)
+	assert.Equal(t, tick, r.Status().LastReplicatedOpTime, "both commits done: tick applies")
+	assert.Equal(t, start, r.Status().CheckpointOpTime, "ticks never advance the resume checkpoint")
+}
+
+func TestPoolIdle_WriterFailureNeverReportsIdle(t *testing.T) {
+	t.Parallel()
+
+	shared := bson.Timestamp{T: 101, I: 1}
+	pool := makeTestPool(1)
+	w := pool.workers[0]
+	w.errCh = make(chan error, 1)
+
+	first := makeInsertEventWithTS("txn-first", shared)
+	pool.Route(first.change, first.ns)
+	commitRoutedEvent(t, w)
+
+	second := makeInsertEventWithTS("txn-second", shared)
+	pool.Route(second.change, second.ns)
+
+	// The second event's bulk fails: it is routed, never committed.
+	w.currentBulkWrite = &mockBulkWriter{doErr: assert.AnError}
+	w.newBulkWriter = func() bulkWriter { return &mockBulkWriter{} }
+	w.pendingBulkCh = make(chan *pendingBulk, 1)
+	w.writerDone = make(chan struct{})
+	require.NoError(t, w.addToCurrentBulk(<-w.routedEventCh))
+	require.True(t, w.enqueueBulk())
+	close(w.pendingBulkCh)
+	w.runWriter(t.Context())
+	require.Error(t, w.writerErr)
+
+	assert.False(t, pool.Idle(), "a failed bulk leaves its events uncommitted")
+	assert.Equal(t, shared, *w.lastCommittedTS.Load(), "timestamp equality alone would have looked idle")
 }

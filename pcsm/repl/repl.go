@@ -884,8 +884,9 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	}
 }
 
-// applyTick reports the scanned frontier only after all preceding routed writes
-// have committed. Ticks never advance the applied-only resume checkpoint.
+// applyTick reports the scanned frontier only while the worker pool has
+// committed every event routed to it (exact event accounting, see
+// workerPool.Idle). Ticks never advance the applied-only resume checkpoint.
 func (r *Repl) applyTick(ts, lastRoutedTS bson.Timestamp) {
 	if !r.poolIdle(lastRoutedTS) {
 		log.New("repl").With(log.OpTime(ts.T, ts.I)).Trace("tick dropped: worker pool busy")
