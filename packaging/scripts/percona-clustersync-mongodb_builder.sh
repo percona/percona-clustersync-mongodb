@@ -153,7 +153,7 @@ install_golang() {
     elif [ x"$ARCH" = "xaarch64" ]; then
         GO_ARCH="arm64"
     fi
-    GO_VERSION="1.27.0"
+    GO_VERSION="1.27.1"
     GO_TAR="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
     GO_URL="https://go.dev/dl/${GO_TAR}"
     DL_PATH="/tmp/${GO_TAR}"
