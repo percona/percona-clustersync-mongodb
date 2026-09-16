@@ -124,7 +124,7 @@ type Repl struct {
 	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
-	checkpointOpTime     bson.Timestamp // applied-only optime, never tick-driven
+	checkpointOpTime     bson.Timestamp // inclusive resume floor: all events before it are applied; never tick-driven
 
 	lock sync.Mutex
 	err  error
@@ -156,9 +156,11 @@ type Status struct {
 	Pausing   bool // a pause is in progress (requested, not yet paused)
 
 	LastReplicatedOpTime bson.Timestamp // Reported replication frontier, initialized to the run start
-	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
-	EventsRead           int64          // Number of events read from the source
-	EventsApplied        int64          // Number of events applied
+	// CheckpointOpTime is the inclusive resume floor: every event strictly
+	// before it is applied, the event at it may need replay.
+	CheckpointOpTime bson.Timestamp
+	EventsRead       int64 // Number of events read from the source
+	EventsApplied    int64 // Number of events applied
 
 	Err error
 }
@@ -890,7 +892,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 // applyTick reports the scanned frontier only while the worker pool has
 // committed every event routed to it (exact event accounting, see
-// workerPool.Idle). Ticks never advance the applied-only resume checkpoint.
+// workerPool.Idle). Ticks never advance the resume checkpoint.
 func (r *Repl) applyTick(ts, lastRoutedTS bson.Timestamp) {
 	if !r.poolIdle(lastRoutedTS) {
 		log.New("repl").With(log.OpTime(ts.T, ts.I)).Trace("tick dropped: worker pool busy")
