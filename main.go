@@ -49,7 +49,7 @@ const (
 const mongoDBOperationTimeoutHelp = "Timeout for MongoDB operations (e.g., 30s, 5m)"
 
 var (
-	Version   = "v0.9.0" //nolint:gochecknoglobals
+	Version   = "v0.10.0" //nolint:gochecknoglobals
 	Platform  = ""       //nolint:gochecknoglobals
 	GitCommit = ""       //nolint:gochecknoglobals
 	GitBranch = ""       //nolint:gochecknoglobals
