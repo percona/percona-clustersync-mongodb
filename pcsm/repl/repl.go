@@ -660,7 +660,11 @@ func (r *Repl) drainChangeStream(
 		}
 
 		// An empty batch's postBatchResumeToken is the server's scanned
-		// frontier: no matching event before it remains undelivered.
+		// frontier: no matching event before it remains undelivered. The spec
+		// states only that the token marks the oplog position scanned so far;
+		// the "nothing undelivered before it" property is inferred from the
+		// token's documented purpose, resuming a stream without missing events.
+		// Re-check this inference first if ticks ever run ahead of applied data.
 		ts, err := mdb.ResumeTokenTimestamp(cur.ResumeToken())
 		if err != nil {
 			log.New("repl:watch").Debugf("Unable to decode change stream resume token: %v", err)
@@ -1017,9 +1021,9 @@ func (r *Repl) advanceCheckpoint(ts bson.Timestamp) {
 // poolIdle returns true when no events are pending in the worker pool.
 // A zero lastRoutedTS means no events have been routed since the last
 // barrier (which flushes everything), so the pool is trivially idle.
-// Otherwise, it checks each worker's committed timestamp against its
-// own last routed timestamp to determine if all dispatched events have
-// been flushed.
+// Otherwise it delegates to workerPool.Idle, which compares the number of
+// events routed to each worker with the number it has committed. Timestamps
+// are not used: distinct events can share a clusterTime.
 func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	if lastRoutedTS.IsZero() {
 		return true
