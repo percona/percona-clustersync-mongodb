@@ -97,6 +97,42 @@ func TestIsTransient_ConflictingOperationInProgress(t *testing.T) {
 	}
 }
 
+// TestIsTransient_ChunkMigrationFailures covers the errors a
+// client-issued moveChunk returns during chunk pre-split, taken
+// from codes migration path actually raises in server source.
+func TestIsTransient_ChunkMigrationFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []mongo.CommandError{
+		// _configsvrMoveRange rewrites InterruptedDueToReplStateChange into
+		// this code for remote callers, which is every moveChunk issued through
+		// mongos, and mongos passes the config server's status through
+		// unchanged.
+		{Name: "RetriableRemoteCommandFailure", Code: 91331},
+
+		// The donor shard failing to take its lock for the migration. The
+		// server expects it often enough to keep a counter for it
+		// (ShardingStatistics::countDonorMoveChunkLockTimeout).
+		{Name: "LockTimeout", Code: 24},
+
+		// Raised by MigrationSourceManager and MigrationDestinationManager
+		// while the migration is in flight.
+		{Name: "ExceededTimeLimit", Code: 262},
+		{Name: "Interrupted", Code: 11601},
+		{Name: "CallbackCanceled", Code: 90},
+	}
+
+	for _, cmdErr := range tests {
+		t.Run(cmdErr.Name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.True(t, mdb.IsTransient(cmdErr),
+				"code %d decides whether a pre-split move retries or fails the clone",
+				cmdErr.Code)
+		})
+	}
+}
+
 // labeledError is a minimal mongo.LabeledError implementation used to verify
 // that IsTransient detects retryable write labels through error wrapping.
 type labeledError struct {
