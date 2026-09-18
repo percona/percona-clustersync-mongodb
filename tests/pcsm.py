@@ -79,6 +79,7 @@ class PCSM:
         clone_num_read_workers=None,
         clone_num_parallel_collections=None,
         clone_num_insert_workers=None,
+        repl_num_workers=None,
     ):
         """Start the PCSM service with the given parameters."""
         options = {"pauseOnInitialSync": pause_on_initial_sync}
@@ -94,6 +95,8 @@ class PCSM:
             options["cloneNumParallelCollections"] = clone_num_parallel_collections
         if clone_num_insert_workers is not None:
             options["cloneNumInsertWorkers"] = clone_num_insert_workers
+        if repl_num_workers is not None:
+            options["replNumWorkers"] = repl_num_workers
 
         res = requests.post(f"{self.uri}/start", json=options, timeout=DFL_REQ_TIMEOUT)
         res.raise_for_status()

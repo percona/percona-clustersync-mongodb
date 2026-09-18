@@ -31,6 +31,7 @@ type routedEvent struct {
 type pendingBulk struct {
 	writer     bulkWriter     // filled bulk, ready to execute
 	checkpoint bson.Timestamp // pendingTS when this bulk was sealed
+	events     int64          // routed events folded into this bulk
 }
 
 // worker handles a subset of document writes in parallel.
@@ -52,6 +53,13 @@ type worker struct {
 	firstRoutedTS   atomic.Pointer[bson.Timestamp] // first timestamp dispatched to this worker
 	lastRoutedTS    atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
 	lastPendingTS   bson.Timestamp                 // timestamp of last event in current batch
+	pendingEvents   int64                          // events folded into the current batch
+
+	// Exact event accounting for Idle. Timestamps cannot tell two distinct
+	// events with the same clusterTime apart (transactions, applyOps), so
+	// idleness compares the number of events routed with the number committed.
+	eventsRouted    atomic.Int64
+	eventsCommitted atomic.Int64
 
 	tickerOffset  time.Duration // stagger delay before starting the flush ticker
 	flushInterval time.Duration // maximum interval between bulk write flushes
@@ -154,6 +162,7 @@ func (w *worker) runWriter(ctx context.Context) {
 
 			ts := pb.checkpoint
 			w.lastCommittedTS.Store(&ts)
+			w.eventsCommitted.Add(pb.events)
 
 			lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
 		}
@@ -344,6 +353,7 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 
 	// Track the timestamp of the last event in the batch
 	w.lastPendingTS = event.change.ClusterTime
+	w.pendingEvents++
 
 	return nil
 }
@@ -368,6 +378,7 @@ func (w *worker) enqueueBulk() bool {
 	pb := &pendingBulk{
 		writer:     w.currentBulkWrite,
 		checkpoint: w.lastPendingTS,
+		events:     w.pendingEvents,
 	}
 
 	select {
@@ -378,6 +389,7 @@ func (w *worker) enqueueBulk() bool {
 	}
 
 	w.currentBulkWrite = w.newBulkWriter()
+	w.pendingEvents = 0
 
 	return true
 }
@@ -478,6 +490,7 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	ts := change.ClusterTime
 	w.firstRoutedTS.CompareAndSwap(nil, &ts)
 	w.lastRoutedTS.Store(&ts)
+	w.eventsRouted.Add(1)
 
 	w.routedEventCh <- &routedEvent{
 		change: change,
@@ -583,23 +596,18 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 	return minTS
 }
 
-// Idle returns true when every worker that has been routed events has
-// committed (flushed) up to its last routed timestamp. Workers that were
-// never routed an event are skipped.
+// Idle returns true when every worker has committed (flushed) every event
+// routed to it.
 //
 // This differs from Checkpoint which returns the MIN committed timestamp
-// across all workers (useful for crash recovery). Idle checks each worker
-// against its own last routed timestamp, correctly handling the case where
-// workers receive events with different timestamp ranges.
+// across all workers (useful for crash recovery). Idle compares exact event
+// counts instead of timestamps: distinct events can share a clusterTime, so
+// a committed timestamp equal to the last routed one does not prove the
+// queue is empty. A worker whose bulk failed never converges, which keeps
+// the pool non-idle until the failure is handled.
 func (p *workerPool) Idle() bool {
 	for _, w := range p.workers {
-		routed := w.lastRoutedTS.Load()
-		if routed == nil {
-			continue
-		}
-
-		committed := w.lastCommittedTS.Load()
-		if committed == nil || committed.Before(*routed) {
+		if w.eventsCommitted.Load() != w.eventsRouted.Load() {
 			return false
 		}
 	}
