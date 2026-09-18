@@ -1,11 +1,16 @@
 package mdb_test
 
 import (
+	"crypto/x509"
+	"net"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
@@ -136,6 +141,75 @@ func TestIsTransient_RetryableWriteLabel(t *testing.T) {
 			errors.Wrap(labeledError{labels: []string{"SomeOtherLabel"}}, "insert batch"),
 			false,
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
+// TestIsTransient_HandshakeDialError covers the driver's handshake failure
+// shape seen when the target hostname stops resolving during a network
+// partition (Docker network disconnect): a topology.ConnectionError wrapping
+// a *net.OpError / *net.DNSError. The driver does not label it NetworkError,
+// so it must be recognized as a net.Error instead.
+func TestIsTransient_HandshakeDialError(t *testing.T) {
+	t.Parallel()
+
+	dnsErr := &net.DNSError{Err: "no such host", Name: "mongos2", Server: "127.0.0.11:53", IsNotFound: true}
+	opErr := &net.OpError{Op: "dial", Net: "tcp", Err: dnsErr}
+	connErr := topology.ConnectionError{ConnectionID: "mongos2:27017[-33]", Wrapped: opErr}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"dns not found under connection error", connErr, true},
+		{"wrapped by caller", errors.Wrap(connErr, "drop collection"), true},
+		{"connection refused", topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}, true},
+		// A handshake that fails above the dial (TLS trust) is not a dial
+		// error and must stay terminal.
+		{"tls unknown authority", topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
+// TestIsTransient_DDLWriteConcernError covers the DDL shape: for drop, create
+// and createIndexes the driver's wrapErrors leaves a writeConcernError as a raw
+// driver.WriteCommandError instead of converting it to mongo.WriteException.
+// A PrimarySteppedDown during a drop must still be retried.
+func TestIsTransient_DDLWriteConcernError(t *testing.T) {
+	t.Parallel()
+
+	wce := func(code int64, name string) driver.WriteCommandError {
+		return driver.WriteCommandError{
+			WriteConcernError: &driver.WriteConcernError{Name: name, Code: code, Message: name},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"primary stepped down", wce(189, "PrimarySteppedDown"), true},
+		{"wrapped by caller", errors.Wrap(wce(189, "PrimarySteppedDown"), "drop collection a.b"), true},
+		{"interrupted due to repl state change", wce(11602, "InterruptedDueToReplStateChange"), true},
+		{"not writable primary", wce(10107, "NotWritablePrimary"), true},
+		{"write error code", driver.WriteCommandError{WriteErrors: driver.WriteErrors{{Code: 189}}}, true},
+		{"unsatisfiable write concern", wce(100, "UnsatisfiableWriteConcern"), false},
 	}
 
 	for _, tt := range tests {

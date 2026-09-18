@@ -56,6 +56,12 @@ type Membership struct {
 	role Role
 	term Term
 
+	// leaseDeadline is a conservative, monotonic bound on lease ownership.
+	// Only the lease loop (and FirstLeaseTick before it starts) accesses it.
+	leaseDeadline time.Time
+	// acquire is set before the lease loop starts; tests inject an in-memory attempt.
+	acquire func(context.Context) (leaseAttempt, error)
+
 	// beatNow signals the refresh loop to write an immediate heartbeat so a
 	// role change lands in the member document without waiting for the next tick.
 	beatNow chan struct{}
@@ -97,6 +103,7 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 		beatNow:      make(chan struct{}, 1),
 		roleChangeCh: make(chan RoleChange, 1),
 	}
+	m.acquire = m.tryAcquireOrRenew
 
 	err := m.beat(ctx)
 	if err != nil {

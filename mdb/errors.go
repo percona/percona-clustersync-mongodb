@@ -2,9 +2,11 @@ package mdb
 
 import (
 	"context"
+	"net"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
@@ -104,6 +106,17 @@ func IsTransient(err error) bool {
 		return true
 	}
 
+	// A dial failure (DNS lookup, connection refused, unreachable) surfaces as
+	// a topology.ConnectionError wrapping a *net.OpError. The driver labels
+	// only in-flight I/O failures as NetworkError, so a host that stops
+	// resolving during a partition would otherwise be classified as terminal.
+	// A permanently wrong host is indistinguishable from a partition at this
+	// layer; callers bound the retries. TLS and auth failures are not OpErrors.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
 	var le mongo.LabeledError
 	if errors.As(err, &le) && le.HasErrorLabel("RetryableWriteError") {
 		return true
@@ -146,6 +159,26 @@ func IsTransient(err error) bool {
 	if errors.As(err, &cmdErr) {
 		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
 			return true
+		}
+	}
+
+	// DDL commands (drop, create, createIndexes, collMod) surface a
+	// writeConcernError as the raw driver.WriteCommandError: the driver's
+	// wrapErrors converts driver.Error to CommandError but leaves this type
+	// alone, so a PrimarySteppedDown during a drop never reaches the
+	// WriteException branch above.
+	var wcErr driver.WriteCommandError
+	if errors.As(err, &wcErr) {
+		for _, we := range wcErr.WriteErrors {
+			if _, ok := transientErrorCodes[int(we.Code)]; ok {
+				return true
+			}
+		}
+
+		if wcErr.WriteConcernError != nil {
+			if _, ok := transientErrorCodes[int(wcErr.WriteConcernError.Code)]; ok {
+				return true
+			}
 		}
 	}
 
