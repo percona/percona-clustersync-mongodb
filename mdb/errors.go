@@ -155,28 +155,19 @@ func IsTransient(err error) bool {
 	return false
 }
 
-// IsChunkMigrationTransient extends IsTransient with the cancellation codes the
-// chunk migration path raises while a move is in flight. They are scoped to
-// moveChunk retries only: globally, Interrupted is also what killOp returns, and
-// the replication bulk-write loop retries transient errors without bound.
+// IsChunkMigrationTransient extends IsTransient with Interrupted (11601), which
+// MigrationSourceManager returns for a move torn down before completion. It is
+// scoped to moveChunk retries only: globally, Interrupted is also what killOp
+// returns, and the replication bulk-write loop retries transient errors without
+// bound. CallbackCanceled (90) is deliberately absent: the destination manager
+// sets it only on its internal critical-section promise, after the sole waiter
+// has already returned, so it never reaches a moveChunk client.
 func IsChunkMigrationTransient(err error) bool {
 	if IsTransient(err) {
 		return true
 	}
 
-	migrationErrorCodes := map[int]struct{}{
-		11601: {}, // Interrupted (migration source manager)
-		90:    {}, // CallbackCanceled (migration destination manager)
-	}
-
-	var cmdErr mongo.CommandError
-	if errors.As(err, &cmdErr) {
-		if _, ok := migrationErrorCodes[int(cmdErr.Code)]; ok {
-			return true
-		}
-	}
-
-	return false
+	return isMongoCommandError(err, "Interrupted")
 }
 
 func isAuthKeyNotFound(err error) bool {

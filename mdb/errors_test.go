@@ -105,6 +105,9 @@ func TestIsTransient_ChunkMigrationFailures(t *testing.T) {
 
 	tests := []struct {
 		err mongo.CommandError
+		// migration is whether the moveChunk retry (IsChunkMigrationTransient)
+		// retries the code at all.
+		migration bool
 		// global is whether IsTransient (every RunWithRetry caller, including the
 		// unbounded replication bulk-write loop) retries the code, as opposed to
 		// only the moveChunk retry.
@@ -114,26 +117,30 @@ func TestIsTransient_ChunkMigrationFailures(t *testing.T) {
 		// this code for remote callers, which is every moveChunk issued through
 		// mongos, and mongos passes the config server's status through
 		// unchanged.
-		{mongo.CommandError{Name: "RetriableRemoteCommandFailure", Code: 91331}, true},
+		{mongo.CommandError{Name: "RetriableRemoteCommandFailure", Code: 91331}, true, true},
 
 		// The donor shard failing to take its lock for the migration. The
 		// server expects it often enough to keep a counter for it
 		// (ShardingStatistics::countDonorMoveChunkLockTimeout).
-		{mongo.CommandError{Name: "LockTimeout", Code: 24}, true},
+		{mongo.CommandError{Name: "LockTimeout", Code: 24}, true, true},
 
 		// Raised by MigrationSourceManager and MigrationDestinationManager
 		// while the migration is in flight. Interrupted is also what killOp
-		// returns, so the cancellation codes stay out of the global set.
-		{mongo.CommandError{Name: "ExceededTimeLimit", Code: 262}, true},
-		{mongo.CommandError{Name: "Interrupted", Code: 11601}, false},
-		{mongo.CommandError{Name: "CallbackCanceled", Code: 90}, false},
+		// returns, so it stays out of the global set.
+		{mongo.CommandError{Name: "ExceededTimeLimit", Code: 262}, true, true},
+		{mongo.CommandError{Name: "Interrupted", Code: 11601}, true, false},
+
+		// The destination manager sets CallbackCanceled only on an internal
+		// promise during teardown, after its sole waiter has returned. It never
+		// reaches the client, so retrying it would be a guess.
+		{mongo.CommandError{Name: "CallbackCanceled", Code: 90}, false, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.err.Name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.True(t, mdb.IsChunkMigrationTransient(tt.err),
+			assert.Equal(t, tt.migration, mdb.IsChunkMigrationTransient(tt.err),
 				"code %d decides whether a pre-split move retries or fails the clone",
 				tt.err.Code)
 			assert.Equal(t, tt.global, mdb.IsTransient(tt.err),
