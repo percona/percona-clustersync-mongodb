@@ -93,7 +93,7 @@ func isMongoCommandError(err error, name string) bool {
 
 // IsTransient checks if the error is a transient/retriable error that is
 // expected to clear on its own. It checks for specific MongoDB error codes that
-// indicate transient issues, including a retriable ConflictingOperationInProgress.
+// indicate transient issues, including retriable chunk-migration failures.
 // Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
 	if errors.Is(err, context.Canceled) {
@@ -123,6 +123,11 @@ func IsTransient(err error) bool {
 		91:    {}, // ShutdownInProgress
 		189:   {}, // PrimarySteppedDown
 		117:   {}, // ConflictingOperationInProgress (concurrent chunk migration/DDL)
+		91331: {}, // RetriableRemoteCommandFailure (config server remote moveRange)
+		24:    {}, // LockTimeout (donor migration lock)
+		262:   {}, // ExceededTimeLimit (chunk migration in flight)
+		11601: {}, // Interrupted (migration source manager)
+		90:    {}, // CallbackCanceled (migration destination manager)
 		10107: {}, // NotWritablePrimary
 		13435: {}, // NotPrimaryNoSecondaryOk
 	}
