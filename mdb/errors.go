@@ -2,6 +2,7 @@ package mdb
 
 import (
 	"context"
+	"net"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -101,6 +102,15 @@ func IsTransient(err error) bool {
 	}
 
 	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// A handshake failure (dial, DNS) surfaces as a topology.ConnectionError
+	// wrapping a *net.OpError. The driver labels only in-flight I/O failures
+	// as NetworkError, so a host that stops resolving or refuses connections
+	// during a partition would otherwise be classified as terminal.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
 		return true
 	}
 

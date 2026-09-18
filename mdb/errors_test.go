@@ -1,11 +1,14 @@
 package mdb_test
 
 import (
+	"net"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
@@ -143,6 +146,36 @@ func TestIsTransient_RetryableWriteLabel(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
+// TestIsTransient_HandshakeDialError covers the driver's handshake failure
+// shape seen when the target hostname stops resolving during a network
+// partition (Docker network disconnect): a topology.ConnectionError wrapping
+// a *net.OpError / *net.DNSError. The driver does not label it NetworkError,
+// so it must be recognized as a net.Error instead.
+func TestIsTransient_HandshakeDialError(t *testing.T) {
+	t.Parallel()
+
+	dnsErr := &net.DNSError{Err: "no such host", Name: "mongos2", Server: "127.0.0.11:53", IsNotFound: true}
+	opErr := &net.OpError{Op: "dial", Net: "tcp", Err: dnsErr}
+	connErr := topology.ConnectionError{ConnectionID: "mongos2:27017[-33]", Wrapped: opErr}
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"dns not found under connection error", connErr},
+		{"wrapped by caller", errors.Wrap(connErr, "drop collection")},
+		{"connection refused", topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.True(t, mdb.IsTransient(tt.err))
 		})
 	}
 }
