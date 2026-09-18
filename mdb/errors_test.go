@@ -103,32 +103,41 @@ func TestIsTransient_ConflictingOperationInProgress(t *testing.T) {
 func TestIsTransient_ChunkMigrationFailures(t *testing.T) {
 	t.Parallel()
 
-	tests := []mongo.CommandError{
+	tests := []struct {
+		err mongo.CommandError
+		// global is whether IsTransient (every RunWithRetry caller, including the
+		// unbounded replication bulk-write loop) retries the code, as opposed to
+		// only the moveChunk retry.
+		global bool
+	}{
 		// _configsvrMoveRange rewrites InterruptedDueToReplStateChange into
 		// this code for remote callers, which is every moveChunk issued through
 		// mongos, and mongos passes the config server's status through
 		// unchanged.
-		{Name: "RetriableRemoteCommandFailure", Code: 91331},
+		{mongo.CommandError{Name: "RetriableRemoteCommandFailure", Code: 91331}, true},
 
 		// The donor shard failing to take its lock for the migration. The
 		// server expects it often enough to keep a counter for it
 		// (ShardingStatistics::countDonorMoveChunkLockTimeout).
-		{Name: "LockTimeout", Code: 24},
+		{mongo.CommandError{Name: "LockTimeout", Code: 24}, true},
 
 		// Raised by MigrationSourceManager and MigrationDestinationManager
-		// while the migration is in flight.
-		{Name: "ExceededTimeLimit", Code: 262},
-		{Name: "Interrupted", Code: 11601},
-		{Name: "CallbackCanceled", Code: 90},
+		// while the migration is in flight. Interrupted is also what killOp
+		// returns, so the cancellation codes stay out of the global set.
+		{mongo.CommandError{Name: "ExceededTimeLimit", Code: 262}, true},
+		{mongo.CommandError{Name: "Interrupted", Code: 11601}, false},
+		{mongo.CommandError{Name: "CallbackCanceled", Code: 90}, false},
 	}
 
-	for _, cmdErr := range tests {
-		t.Run(cmdErr.Name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.err.Name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.True(t, mdb.IsTransient(cmdErr),
+			assert.True(t, mdb.IsChunkMigrationTransient(tt.err),
 				"code %d decides whether a pre-split move retries or fails the clone",
-				cmdErr.Code)
+				tt.err.Code)
+			assert.Equal(t, tt.global, mdb.IsTransient(tt.err),
+				"code %d global transient classification", tt.err.Code)
 		})
 	}
 }

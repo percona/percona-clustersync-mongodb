@@ -24,6 +24,18 @@ func RunWithRetry(
 	retryInterval time.Duration,
 	maxRetries int,
 ) error {
+	return runWithRetryIf(ctx, fn, IsTransient, retryInterval, maxRetries)
+}
+
+// runWithRetryIf is RunWithRetry with a caller-selected transient predicate,
+// for operations whose retriable error set is wider than the global one.
+func runWithRetryIf(
+	ctx context.Context,
+	fn func(context.Context) error,
+	isTransient func(error) bool,
+	retryInterval time.Duration,
+	maxRetries int,
+) error {
 	if retryInterval <= 0 || maxRetries <= 0 {
 		return errors.New("retryInterval and maxRetries must be greater than zero")
 	}
@@ -42,7 +54,7 @@ func RunWithRetry(
 			return err
 		}
 
-		if !IsTransient(err) {
+		if !isTransient(err) {
 			return err
 		}
 

@@ -179,8 +179,11 @@ def _wait_for_clone_without_failure(t: Testing, timeout: int) -> dict:
         time.sleep(0.5)
 
 
+# 24 LockTimeout is retried by every RunWithRetry caller, 11601 Interrupted only
+# by moveChunk (globally it is what killOp returns).
+@pytest.mark.parametrize("error_code", [24, 11601], ids=["LockTimeout", "Interrupted"])
 @pytest.mark.timeout(300)
-def test_presplit_retries_transient_move_chunk_error(t: Testing):
+def test_presplit_retries_transient_move_chunk_error(t: Testing, error_code: int):
     if not t.target.admin.command({"getParameter": 1, "enableTestCommands": 1})[
         "enableTestCommands"
     ]:
@@ -199,7 +202,7 @@ def test_presplit_retries_transient_move_chunk_error(t: Testing):
             {
                 "configureFailPoint": "failCommand",
                 "mode": {"times": 2},
-                "data": {"failCommands": ["moveChunk"], "errorCode": 24},
+                "data": {"failCommands": ["moveChunk"], "errorCode": error_code},
             }
         )
         with t.run(phase=Runner.Phase.MANUAL, wait_timeout=90) as r:

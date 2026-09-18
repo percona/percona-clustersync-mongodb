@@ -126,8 +126,6 @@ func IsTransient(err error) bool {
 		91331: {}, // RetriableRemoteCommandFailure (config server remote moveRange)
 		24:    {}, // LockTimeout (donor migration lock)
 		262:   {}, // ExceededTimeLimit (chunk migration in flight)
-		11601: {}, // Interrupted (migration source manager)
-		90:    {}, // CallbackCanceled (migration destination manager)
 		10107: {}, // NotWritablePrimary
 		13435: {}, // NotPrimaryNoSecondaryOk
 	}
@@ -150,6 +148,30 @@ func IsTransient(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
 		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// IsChunkMigrationTransient extends IsTransient with the cancellation codes the
+// chunk migration path raises while a move is in flight. They are scoped to
+// moveChunk retries only: globally, Interrupted is also what killOp returns, and
+// the replication bulk-write loop retries transient errors without bound.
+func IsChunkMigrationTransient(err error) bool {
+	if IsTransient(err) {
+		return true
+	}
+
+	migrationErrorCodes := map[int]struct{}{
+		11601: {}, // Interrupted (migration source manager)
+		90:    {}, // CallbackCanceled (migration destination manager)
+	}
+
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		if _, ok := migrationErrorCodes[int(cmdErr.Code)]; ok {
 			return true
 		}
 	}
