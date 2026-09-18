@@ -105,12 +105,14 @@ func IsTransient(err error) bool {
 		return true
 	}
 
-	// A handshake failure (dial, DNS) surfaces as a topology.ConnectionError
-	// wrapping a *net.OpError. The driver labels only in-flight I/O failures
-	// as NetworkError, so a host that stops resolving or refuses connections
-	// during a partition would otherwise be classified as terminal.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	// A dial failure (DNS lookup, connection refused, unreachable) surfaces as
+	// a topology.ConnectionError wrapping a *net.OpError. The driver labels
+	// only in-flight I/O failures as NetworkError, so a host that stops
+	// resolving during a partition would otherwise be classified as terminal.
+	// A permanently wrong host is indistinguishable from a partition at this
+	// layer; callers bound the retries. TLS and auth failures are not OpErrors.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
 		return true
 	}
 

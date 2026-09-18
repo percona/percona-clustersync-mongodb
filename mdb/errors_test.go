@@ -1,6 +1,7 @@
 package mdb_test
 
 import (
+	"crypto/x509"
 	"net"
 	"slices"
 	"syscall"
@@ -178,4 +179,9 @@ func TestIsTransient_HandshakeDialError(t *testing.T) {
 			assert.True(t, mdb.IsTransient(tt.err))
 		})
 	}
+
+	// A handshake that fails above the dial (TLS trust) is not a dial error
+	// and must stay terminal.
+	tlsErr := topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}
+	assert.False(t, mdb.IsTransient(tlsErr))
 }
