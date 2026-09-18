@@ -676,7 +676,8 @@ type server struct {
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
 
-	// mu guards checkpointCancel and autoStartOpts. The authoritative
+	// mu serializes promotion and demotion and guards checkpointCancel,
+	// autoStartOpts, activeTerm, and pausedOnDemote. The authoritative
 	// (role, term) lives in membership; read it via membership.CurrentRole().
 	mu sync.Mutex
 	// checkpointCancel stops the checkpointing loop started while ACTIVE;
@@ -685,6 +686,10 @@ type server struct {
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
 	// (the deferred effect of the --start flag).
 	autoStartOpts *pcsm.StartOptions
+	// activeTerm is the term of this process's most recent successful promotion.
+	activeTerm ha.Term
+	// pausedOnDemote records a successful demotion pause, not an operator pause.
+	pausedOnDemote bool
 }
 
 // createServer creates a new server with the given options.
@@ -811,10 +816,14 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	}
 
 	pcs.SetOnStateChanged(func(_ pcsm.State) {
-		// State-change checkpoints are fenced by the current lease term; a
-		// STANDBY's write being rejected by the fence is expected. Outcomes
-		// are logged by DoCheckpoint.
-		_, term := membership.CurrentRole()
+		// A STANDBY cannot publish pipeline state: in particular, a demotion
+		// pause must not be persisted as an operator-requested pause.
+		role, term := membership.CurrentRole()
+		if role != ha.RoleActive {
+			return
+		}
+
+		// Active writes remain term-fenced. Outcomes are logged by DoCheckpoint.
 		_ = DoCheckpoint(ctx, target, pcs, int64(term), membership.InstanceID())
 	})
 
@@ -858,7 +867,7 @@ func (s *server) Close(ctx context.Context) error {
 }
 
 // watchRoleChanges consumes role transitions and drives the replication
-// lifecycle: promotion recovers state and starts checkpointing; demotion stops
+// lifecycle: promotion restores or retains state and starts checkpointing; demotion stops
 // checkpointing and halts the pipeline. Returns when ctx is canceled.
 func (s *server) watchRoleChanges(ctx context.Context) {
 	for {
@@ -877,29 +886,87 @@ func (s *server) watchRoleChanges(ctx context.Context) {
 	}
 }
 
-// onPromote handles a STANDBY->ACTIVE transition: it re-reads the persisted
-// checkpoint so this instance resumes from the latest committed state, then
-// starts the checkpointing loop for this ACTIVE epoch.
+type promoteAction int
+
+const (
+	promoteRestore promoteAction = iota
+	promoteKeep
+	promoteResume
+	promoteWaitResume
+)
+
+// promotionPlan retains an authoritative same-term pipeline; only a pause
+// requested by demotion is automatically resumed.
+func promotionPlan(
+	state pcsm.State, replPausing bool, term, activeTerm ha.Term, pausedOnDemote bool,
+) promoteAction {
+	if state == pcsm.StateIdle || term != activeTerm {
+		return promoteRestore
+	}
+	if !pausedOnDemote {
+		return promoteKeep
+	}
+	if replPausing {
+		return promoteWaitResume
+	}
+
+	return promoteResume
+}
+
+// onPromote handles a STANDBY->ACTIVE transition: it retains the in-memory
+// pipeline in the same term, resuming a demotion pause after it settles, or
+// restores the persisted checkpoint for an idle or stale pipeline. It then
+// starts checkpointing for this ACTIVE epoch, even if resuming failed so the
+// operator can inspect and recover the pipeline without losing the lease.
+//
+// Concurrency: watchRoleChanges serializes role-driven transitions. mu also
+// serializes this method with the out-of-band checkpoint fencing callback;
+// it remains held while waiting for pause completion (bounded by ctx).
 func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 	lg.Info("Instance role: ACTIVE (promoted)")
 
-	// If recovery fails this instance cannot safely act as ACTIVE, so
-	// relinquish the lease and let another instance try. It keeps competing,
-	// so a transient error does not bench it until restart.
-	err := Restore(ctx, s.targetCluster, s.pcsm)
-	if err != nil {
-		lg.Error(err, "restore on promotion; relinquishing lease")
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-		rerr := s.membership.RelinquishLease(ctx)
-		if rerr != nil {
-			lg.Error(rerr, "relinquish lease after failed restore")
+	status := s.pcsm.Status(ctx)
+	action := promotionPlan(status.State, status.Repl.Pausing, term, s.activeTerm, s.pausedOnDemote)
+	switch action {
+	case promoteRestore:
+		err := Restore(ctx, s.targetCluster, s.pcsm)
+		if err != nil {
+			if status.State != pcsm.StateIdle {
+				lg.Error(err, "stale pipeline cannot be replaced; restart required; relinquishing lease")
+			} else {
+				lg.Error(err, "restore on promotion; relinquishing lease")
+			}
+
+			rerr := s.membership.RelinquishLease(ctx)
+			if rerr != nil {
+				lg.Error(rerr, "relinquish lease after failed restore")
+			}
+
+			return
 		}
 
-		return
+	case promoteResume, promoteWaitResume:
+		var err error
+		if action == promoteWaitResume {
+			err = s.waitForPause(ctx)
+		}
+		if err == nil {
+			err = s.pcsm.Resume(ctx, pcsm.ResumeOptions{})
+		}
+		if err != nil {
+			lg.Error(err, "resume on promotion; staying ACTIVE for operator recovery")
+		}
+
+	case promoteKeep:
+		// An operator pause or a failed demotion pause needs no automatic resume.
 	}
 
-	s.mu.Lock()
+	s.activeTerm = term
+	s.pausedOnDemote = false
 	// Checkpointing loop scoped to this ACTIVE epoch, fenced by term. A fenced
 	// write means this instance was deposed: onFenced halts the pipeline
 	// immediately instead of waiting for the next lease tick.
@@ -912,15 +979,13 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 			})
 	}
 	autoStartOpts := s.autoStartOpts
-	s.mu.Unlock()
 
 	if autoStartOpts == nil {
 		return
 	}
 
 	// Apply the deferred --start now that this instance is ACTIVE. Only valid
-	// from idle: on re-promotion the pipeline resumed from the restored
-	// checkpoint and must not be restarted.
+	// from idle: a retained or restored non-idle pipeline must not be restarted.
 	state := s.pcsm.Status(ctx).State
 	if state != pcsm.StateIdle {
 		lg.With(log.String("state", string(state))).
@@ -929,9 +994,34 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		return
 	}
 
-	err = s.pcsm.Start(ctx, autoStartOpts)
+	err := s.pcsm.Start(ctx, autoStartOpts)
 	if err != nil {
 		lg.Error(err, "auto-start on promotion")
+	}
+}
+
+// waitForPause polls because PCSM does not expose pause completion as a channel.
+// Pause is asynchronous; resuming before Repl.Pausing clears races with draining.
+func (s *server) waitForPause(ctx context.Context) error {
+	const pausePollInterval = 100 * time.Millisecond
+
+	ticker := time.NewTicker(pausePollInterval)
+	defer ticker.Stop()
+
+	for {
+		err := ctx.Err()
+		if err != nil {
+			return errors.Wrap(err, "wait for demotion pause")
+		}
+		if !s.pcsm.Status(ctx).Repl.Pausing {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx.Err(), "wait for demotion pause")
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -943,7 +1033,8 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 }
 
 // onDemote handles an ACTIVE->STANDBY transition for the given term: it stops
-// checkpointing and pauses the pipeline. Pause is best-effort; term fencing on
+// checkpointing and requests an asynchronous pause, recording success so a
+// same-term promotion can resume it. Pause is best-effort; term fencing on
 // checkpoint writes is the hard guarantee against a demoted active corrupting
 // the target.
 //
@@ -951,11 +1042,15 @@ func (s *server) setAutoStart(opts *pcsm.StartOptions) {
 // changes one at a time, so onPromote and a role-driven onDemote never overlap.
 // The one out-of-band caller is the checkpointing fence callback (onFenced),
 // which fires only when a newer term already owns the checkpoint. The guard
-// below drops such a call once membership has advanced past term; if it has not
-// advanced yet the demotion still stands, because a newer active genuinely
-// exists. A demotion is therefore never applied to a strictly newer epoch.
+// below runs under mu, serializing the pause and its flag with onPromote, and
+// drops a call once membership has advanced past term. Otherwise demotion still
+// stands, because a newer active genuinely exists. A delayed fencing callback
+// cannot pause a pipeline after onPromote has installed a strictly newer epoch.
 func (s *server) onDemote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, currentTerm := s.membership.CurrentRole()
 	if currentTerm > term {
@@ -967,18 +1062,20 @@ func (s *server) onDemote(ctx context.Context, term ha.Term) {
 
 	lg.Info("Instance role: STANDBY (demoted)")
 
-	s.mu.Lock()
 	if s.checkpointCancel != nil {
 		s.checkpointCancel()
 		s.checkpointCancel = nil
 	}
-	s.mu.Unlock()
 
 	err := s.pcsm.Pause(ctx)
 	if err != nil {
 		// Pause fails when the pipeline is not running (e.g. idle): benign.
 		lg.Debug("pause on demotion: " + err.Error())
+
+		return
 	}
+
+	s.pausedOnDemote = true
 }
 
 // Handler returns the HTTP handler for the server.

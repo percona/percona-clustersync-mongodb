@@ -216,8 +216,9 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	if p.state != StateIdle {
-		return errors.New("cannot recover: invalid PCSM state")
+	if p.state == StateRunning || p.state == StateFinalizing ||
+		(p.state == StatePaused && p.repl != nil && p.repl.Status().Pausing) {
+		return errors.Errorf("cannot recover: invalid PCSM state %s", p.state)
 	}
 
 	var cp checkpoint
@@ -280,6 +281,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	p.repl = rpl
 	p.finalizeStatus = finalizeStatus
 	p.state = cp.State
+	p.err = nil
 
 	if cp.Error != "" {
 		p.err = errors.New(cp.Error)
