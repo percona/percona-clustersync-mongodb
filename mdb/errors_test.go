@@ -164,24 +164,23 @@ func TestIsTransient_HandshakeDialError(t *testing.T) {
 	connErr := topology.ConnectionError{ConnectionID: "mongos2:27017[-33]", Wrapped: opErr}
 
 	tests := []struct {
-		name string
-		err  error
+		name     string
+		err      error
+		expected bool
 	}{
-		{"dns not found under connection error", connErr},
-		{"wrapped by caller", errors.Wrap(connErr, "drop collection")},
-		{"connection refused", topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}},
+		{"dns not found under connection error", connErr, true},
+		{"wrapped by caller", errors.Wrap(connErr, "drop collection"), true},
+		{"connection refused", topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}, true},
+		// A handshake that fails above the dial (TLS trust) is not a dial
+		// error and must stay terminal.
+		{"tls unknown authority", topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.True(t, mdb.IsTransient(tt.err))
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
 		})
 	}
-
-	// A handshake that fails above the dial (TLS trust) is not a dial error
-	// and must stay terminal.
-	tlsErr := topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}
-	assert.False(t, mdb.IsTransient(tlsErr))
 }
