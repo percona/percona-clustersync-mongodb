@@ -16,7 +16,6 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-// hashedKeyType is the shard-key field value that marks a hashed key.
 const hashedKeyType = "hashed"
 
 // presplitSizeWorkers bounds the parallel chunk dataSize estimates per collection.
@@ -65,7 +64,6 @@ func presplit(
 		return nil
 
 	case len(shInfo.Chunks) <= 1:
-		// Ranged with no interior boundaries to replay.
 		return nil
 
 	default:
@@ -165,9 +163,9 @@ func presplitRangedUneven(
 
 // replayAndPlace splits the target at every source boundary, then moves each
 // resulting chunk to its assigned shard (assignment is index-aligned with
-// shInfo.Chunks). It returns the shard each chunk is on when it returns,
-// index-aligned with assignment, and the number of moves performed. On an
-// error before the chunks exist the placement is nil.
+// shInfo.Chunks). It returns the last known owners in chunk order and the
+// number of successful moves. Placement is nil if splitting or reading and
+// validating the target layout fails.
 func replayAndPlace(
 	ctx context.Context,
 	target *mongo.Client,
@@ -177,8 +175,7 @@ func replayAndPlace(
 ) ([]string, int, error) {
 	nsStr := ns.String()
 
-	// Split at every source boundary. A chunk's lower bound is its boundary;
-	// the first chunk's is the collection minimum, not a split point.
+	// The first chunk's lower bound is the collection minimum, not a split point.
 	for _, chunk := range shInfo.Chunks[1:] {
 		err := mdb.SplitChunkAt(ctx, target, nsStr, chunk.Min)
 		if err != nil {

@@ -9,12 +9,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
 
-// IsIndexNotFound checks if an error is an index not found error.
 func IsIndexNotFound(err error) bool {
 	return isMongoCommandError(err, "IndexNotFound")
 }
 
-// IsIndexOptionsConflict checks if an error is an index options conflict error.
 func IsIndexOptionsConflict(err error) bool {
 	return isMongoCommandError(err, "IndexOptionsConflict")
 }
@@ -33,7 +31,6 @@ func IsNamespaceExists(err error) bool {
 	return isMongoCommandError(err, "NamespaceExists")
 }
 
-// IsCollectionDropped checks if the error is caused by a collection being dropped.
 func IsCollectionDropped(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
@@ -44,7 +41,6 @@ func IsCollectionDropped(err error) bool {
 	return false
 }
 
-// IsCollectionRenamed checks if the error is caused by a collection being renamed.
 func IsCollectionRenamed(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
@@ -81,7 +77,6 @@ func IsSplitPointAlreadyChunkBoundary(err error) bool {
 	return false
 }
 
-// isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
@@ -91,9 +86,7 @@ func isMongoCommandError(err error, name string) bool {
 	return false
 }
 
-// IsTransient checks if the error is a transient/retriable error that is
-// expected to clear on its own. It checks for specific MongoDB error codes that
-// indicate transient issues, including retriable chunk-migration failures.
+// IsTransient reports whether an error is expected to clear on retry.
 // Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
 	if errors.Is(err, context.Canceled) {
