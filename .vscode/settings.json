@@ -27,7 +27,7 @@
   "go.lintTool": "golangci-lint-v2",
   "go.useLanguageServer": true,
   "gopls": {
-    "analyses": {
+    "ui.diagnostic.analyses": {
       "composites": false,
       "ST1000": false,
       "wsl_v5": false
