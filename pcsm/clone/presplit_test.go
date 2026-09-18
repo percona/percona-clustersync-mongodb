@@ -212,6 +212,43 @@ func TestAssignLargestFirst(t *testing.T) {
 		assert.NotEqual(t, a1[0], a2[0], "second jumbo stacked on the first jumbo's shard")
 	})
 
+	t.Run("failed placement does not bias the next collection", func(t *testing.T) {
+		t.Parallel()
+
+		shards := []string{"s0", "s1"}
+
+		// Collection A reserves 1000 on the lightest shard, then its move fails
+		// before any chunk exists on the target (split failed): nil placement.
+		w := newShardSizes()
+		sizesA := []int64{1000}
+		assignA := w.assignLargestFirst(sizesA, shards)
+		w.reconcile(sizesA, assignA, nil)
+
+		// Collection B's chunk must land on the same shard A was meant for: the
+		// phantom 1000 is gone, both shards are equally light again.
+		assignB := w.assignLargestFirst([]int64{10}, shards)
+		assert.Equal(t, assignA[0], assignB[0], "released reservation still biased placement")
+	})
+
+	t.Run("partial placement charges the shard the chunk is really on", func(t *testing.T) {
+		t.Parallel()
+
+		shards := []string{"s0", "s1"}
+
+		// Two chunks assigned to different shards. The first move fails and the
+		// chunk stays on its current owner, which is the second chunk's shard.
+		w := newShardSizes()
+		sizes := []int64{600, 400}
+		assign := w.assignLargestFirst(sizes, shards)
+		require.NotEqual(t, assign[0], assign[1])
+
+		actual := []string{assign[1], assign[1]}
+		w.reconcile(sizes, assign, actual)
+
+		assert.Equal(t, int64(0), w.sizes[assign[0]], "unrealized reservation must be released")
+		assert.Equal(t, int64(1000), w.sizes[assign[1]], "real owner must carry the chunk")
+	})
+
 	t.Run("single shard takes everything", func(t *testing.T) {
 		t.Parallel()
 
