@@ -78,13 +78,13 @@ func MoveChunk(
 	minBound, maxBound bson.D,
 	toShard string,
 ) error {
-	err := runWithRetryIf(ctx, func(ctx context.Context) error {
+	err := runWithRetry(ctx, func(ctx context.Context) error {
 		return m.Database("admin").RunCommand(ctx, bson.D{
 			{Key: "moveChunk", Value: ns},
 			{Key: "bounds", Value: bson.A{minBound, maxBound}},
 			{Key: "to", Value: toShard},
 		}).Err() //nolint:wrapcheck
-	}, IsChunkMigrationTransient, DefaultRetryInterval, DefaultMaxRetries)
+	}, DefaultRetryInterval, DefaultMaxRetries, IsChunkMigrationTransient)
 	if err != nil {
 		return errors.Wrapf(err, "moveChunk %s to %s", ns, toShard)
 	}
