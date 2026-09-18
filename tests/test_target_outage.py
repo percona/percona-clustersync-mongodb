@@ -79,12 +79,21 @@ def _member(host: str) -> MongoClient:
     return MongoClient(f"mongodb://{host}", directConnection=True, timeoutMS=5_000)
 
 
+def _unfreeze(hosts: list[str]):
+    """Best-effort unfreeze of every host; failures are logged, not raised."""
+    for host in hosts:
+        try:
+            with _member(host) as member:
+                member.admin.command("replSetFreeze", 0)
+        except PyMongoError as exc:
+            logging.getLogger(__name__).warning("unfreeze %s failed: %s", host, exc)
+
+
 def _step_up(host: str):
-    """Unfreeze `host` and make it run an election now, retrying until it wins."""
+    """Make `host` run an election now, retrying until it wins."""
     deadline = time.monotonic() + RECOVERY_TIMEOUT_SECS
     last = None
     with _member(host) as member:
-        member.admin.command("replSetFreeze", 0)
         while time.monotonic() < deadline:
             try:
                 member.admin.command("replSetStepUp")
@@ -101,25 +110,25 @@ def _force_no_primary(target: MongoClient, secs: int):
     secondaries = [h for h in hello["hosts"] if h != primary]
     assert secondaries, f"target replica set has no secondaries to freeze: {hello}"
 
-    for host in secondaries:
-        with _member(host) as member:
-            member.admin.command("replSetFreeze", FREEZE_SECS)
-
-    with _member(primary) as member:
-        try:
-            member.admin.command("replSetStepDown", FREEZE_SECS, force=True)
-        except PyMongoError as exc:
-            # The stepped-down primary drops client connections; the command
-            # still took effect.
-            logging.getLogger(__name__).info("replSetStepDown disconnected: %s", exc)
-
     try:
+        for host in secondaries:
+            with _member(host) as member:
+                member.admin.command("replSetFreeze", FREEZE_SECS)
+
+        with _member(primary) as member:
+            try:
+                member.admin.command("replSetStepDown", FREEZE_SECS, force=True)
+            except PyMongoError as exc:
+                # The stepped-down primary drops client connections; the
+                # command still took effect.
+                logging.getLogger(__name__).info("replSetStepDown disconnected: %s", exc)
+
         time.sleep(secs)  # The outage duration is the behavior under test.
     finally:
+        # Unfreeze everything first so a failed step-up cannot leave the set
+        # frozen for FREEZE_SECS, then force the election.
+        _unfreeze(hello["hosts"])
         _step_up(secondaries[0])
-        for host in [*secondaries[1:], primary]:
-            with _member(host) as member:
-                member.admin.command("replSetFreeze", 0)
 
 
 def _wait_for_primary(target: MongoClient):

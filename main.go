@@ -604,22 +604,25 @@ func runServer(cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	srv, err := createServer(ctx, cfg)
-	if err != nil {
-		return errors.Wrap(err, "new server")
-	}
-
 	// Auto-start (--start) is deferred to promotion: replication may only
-	// begin while ACTIVE.
+	// begin while ACTIVE. Resolved before the server exists so the option is
+	// in place before the first promotion is consumed.
+	var (
+		autoStart *pcsm.StartOptions
+		err       error
+	)
 	if cfg.Start {
-		startOpts, err := resolveStartOptions(cfg, startRequest{
+		autoStart, err = resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
 		})
 		if err != nil {
 			return err
 		}
+	}
 
-		srv.setAutoStart(startOpts)
+	srv, err := createServer(ctx, cfg, autoStart)
+	if err != nil {
+		return errors.Wrap(err, "new server")
 	}
 
 	go func() {
@@ -684,7 +687,8 @@ type server struct {
 	// nil while STANDBY.
 	checkpointCancel context.CancelFunc
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
-	// (the deferred effect of the --start flag).
+	// (the deferred effect of the --start flag). Set at construction, before
+	// the first promotion can be consumed.
 	autoStartOpts *pcsm.StartOptions
 	// activeTerm is the term of this process's most recent successful promotion.
 	activeTerm ha.Term
@@ -698,7 +702,7 @@ type server struct {
 // known, so an unreachable source or incompatible version fails at boot rather
 // than on the failover path, and promotion stays low-latency. A STANDBY's idle
 // source connection carries only driver monitoring traffic.
-func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
+func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.StartOptions) (*server, error) {
 	lg := log.Ctx(ctx)
 
 	source, err := mdb.Connect(ctx, cfg.Source, cfg)
@@ -813,6 +817,7 @@ func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 		pcsm:          pcs,
 		membership:    membership,
 		promRegistry:  promRegistry,
+		autoStartOpts: autoStart,
 	}
 
 	pcs.SetOnStateChanged(func(_ pcsm.State) {
@@ -950,13 +955,27 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		}
 
 	case promoteResume, promoteWaitResume:
-		var err error
 		if action == promoteWaitResume {
-			err = s.waitForPause(ctx)
+			err := s.waitForPause(ctx)
+			if err != nil {
+				lg.Error(err, "wait for demotion pause on promotion")
+
+				return
+			}
+
+			// The lease loop keeps running while the pause drains. If it
+			// demoted this instance again, the pending STANDBY transition is
+			// consumed right after this returns; do not resume a STANDBY.
+			// pausedOnDemote stays set so the next promotion resumes.
+			role, currentTerm := s.membership.CurrentRole()
+			if role != ha.RoleActive || currentTerm != term {
+				lg.Info("Demoted while the pause was draining; not resuming")
+
+				return
+			}
 		}
-		if err == nil {
-			err = s.pcsm.Resume(ctx, pcsm.ResumeOptions{})
-		}
+
+		err := s.pcsm.Resume(ctx, pcsm.ResumeOptions{})
 		if err != nil {
 			lg.Error(err, "resume on promotion; staying ACTIVE for operator recovery")
 		}
@@ -1023,13 +1042,6 @@ func (s *server) waitForPause(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-// setAutoStart records StartOptions to apply when this instance becomes ACTIVE.
-func (s *server) setAutoStart(opts *pcsm.StartOptions) {
-	s.mu.Lock()
-	s.autoStartOpts = opts
-	s.mu.Unlock()
 }
 
 // onDemote handles an ACTIVE->STANDBY transition for the given term: it stops
