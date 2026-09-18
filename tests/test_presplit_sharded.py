@@ -240,3 +240,62 @@ def test_ranged_weighted_layout(t: Testing):
         )
 
     t.compare_all_sharded()
+
+
+def test_ranged_zero_size_chunks_spread(t: Testing):
+    """Zero-size ranged chunks with unequal shard counts distribute by chunk count
+    rather than all landing on one target. This guards PCSM-379 for empty collections
+    and collections whose data lives in one range."""
+    n_src = shard_count(t.source)
+    n_tgt = shard_count(t.target)
+    if n_src == n_tgt:
+        pytest.skip("zero-size placement requires unequal shard counts (SRC_SHARDS != TGT_SHARDS)")
+
+    empty_ns = "db_1.empty_coll"
+    namespaces = (empty_ns, "db_1.mostly_empty_coll")
+    src_shards = sorted_shards(t.source)
+
+    for ns in namespaces:
+        coll_name = ns.rsplit(".", maxsplit=1)[1]
+        t.source["db_1"].create_collection(coll_name)
+        t.source.admin.command("shardCollection", ns, key={"_id": 1})
+        t.source["config"]["collections"].update_one({"_id": ns}, {"$set": {"noBalance": True}})
+        for point in (0, 100, 200, 300, 400):
+            t.source.admin.command("split", ns, middle={"_id": point})
+
+        primary = target_chunks(t.source, ns)[0]["shard"]
+        non_primary = [s for s in src_shards if s != primary]
+        for i, shard in enumerate(non_primary):
+            t.source.admin.command("moveChunk", ns, find={"_id": 150 + i * 100}, to=shard)
+
+    t.source["db_1"]["mostly_empty_coll"].insert_many([{"_id": i} for i in range(400, 500)])
+
+    for ns in namespaces:
+        src_owners = {c["shard"] for c in target_chunks(t.source, ns)}
+        assert len(src_owners) == n_src, f"source layout not spread across all shards: {src_owners}"
+
+    with t.run(phase=Runner.Phase.MANUAL) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+        for ns in namespaces:
+            src_chunks = target_chunks(t.source, ns)
+            tgt_chunks = target_chunks(t.target, ns)
+            assert len(tgt_chunks) == len(src_chunks), (
+                f"target chunk count {len(tgt_chunks)} != source {len(src_chunks)}"
+            )
+
+            tgt_shards = sorted_shards(t.target)
+            per_shard = {shard: 0 for shard in tgt_shards}
+            for c in tgt_chunks:
+                per_shard[c["shard"]] += 1
+            assert {c["shard"] for c in tgt_chunks} == set(tgt_shards), (
+                f"{ns} target does not use all shards: {per_shard}"
+            )
+
+            if ns == empty_ns:
+                assert max(per_shard.values()) - min(per_shard.values()) <= 1, (
+                    f"{ns} chunks are not evenly distributed: {per_shard}"
+                )
+
+    t.compare_all_sharded()
