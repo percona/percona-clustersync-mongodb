@@ -15,7 +15,7 @@ import pymongo
 import pytest
 import requests
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import AutoReconnect, PyMongoError
 from testing import Testing
 
 from pcsm import PCSM, Runner
@@ -118,9 +118,10 @@ def _force_no_primary(target: MongoClient, secs: int):
         with _member(primary) as member:
             try:
                 member.admin.command("replSetStepDown", FREEZE_SECS, force=True)
-            except PyMongoError as exc:
+            except AutoReconnect as exc:
                 # The stepped-down primary drops client connections; the
-                # command still took effect.
+                # command still took effect. Any other error is a real
+                # setup failure and propagates.
                 logging.getLogger(__name__).info("replSetStepDown disconnected: %s", exc)
 
         time.sleep(secs)  # The outage duration is the behavior under test.
