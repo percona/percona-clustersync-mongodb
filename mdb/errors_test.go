@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/topology"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -174,6 +175,41 @@ func TestIsTransient_HandshakeDialError(t *testing.T) {
 		// A handshake that fails above the dial (TLS trust) is not a dial
 		// error and must stay terminal.
 		{"tls unknown authority", topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
+// TestIsTransient_DDLWriteConcernError covers the DDL shape: for drop, create
+// and createIndexes the driver's wrapErrors leaves a writeConcernError as a raw
+// driver.WriteCommandError instead of converting it to mongo.WriteException.
+// A PrimarySteppedDown during a drop must still be retried.
+func TestIsTransient_DDLWriteConcernError(t *testing.T) {
+	t.Parallel()
+
+	wce := func(code int64, name string) driver.WriteCommandError {
+		return driver.WriteCommandError{
+			WriteConcernError: &driver.WriteConcernError{Name: name, Code: code, Message: name},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"primary stepped down", wce(189, "PrimarySteppedDown"), true},
+		{"wrapped by caller", errors.Wrap(wce(189, "PrimarySteppedDown"), "drop collection a.b"), true},
+		{"interrupted due to repl state change", wce(11602, "InterruptedDueToReplStateChange"), true},
+		{"not writable primary", wce(10107, "NotWritablePrimary"), true},
+		{"write error code", driver.WriteCommandError{WriteErrors: driver.WriteErrors{{Code: 189}}}, true},
+		{"unsatisfiable write concern", wce(100, "UnsatisfiableWriteConcern"), false},
 	}
 
 	for _, tt := range tests {

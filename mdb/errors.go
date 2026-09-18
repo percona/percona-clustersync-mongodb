@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
@@ -158,6 +159,26 @@ func IsTransient(err error) bool {
 	if errors.As(err, &cmdErr) {
 		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
 			return true
+		}
+	}
+
+	// DDL commands (drop, create, createIndexes, collMod) surface a
+	// writeConcernError as the raw driver.WriteCommandError: the driver's
+	// wrapErrors converts driver.Error to CommandError but leaves this type
+	// alone, so a PrimarySteppedDown during a drop never reaches the
+	// WriteException branch above.
+	var wcErr driver.WriteCommandError
+	if errors.As(err, &wcErr) {
+		for _, we := range wcErr.WriteErrors {
+			if _, ok := transientErrorCodes[int(we.Code)]; ok {
+				return true
+			}
+		}
+
+		if wcErr.WriteConcernError != nil {
+			if _, ok := transientErrorCodes[int(wcErr.WriteConcernError.Code)]; ok {
+				return true
+			}
 		}
 	}
 
