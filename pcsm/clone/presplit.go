@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"sort"
@@ -22,15 +23,19 @@ const hashedKeyType = "hashed"
 // presplitSizeWorkers bounds the parallel chunk dataSize estimates per collection.
 const presplitSizeWorkers = 4
 
-// shardSizes tracks the cumulative estimated bytes assigned to each target
-// shard across all collections in a run.
+// shardSizes tracks cumulative estimated bytes and chunk counts assigned to
+// each target shard across all collections in a run.
 type shardSizes struct {
-	mu    sync.Mutex
-	sizes map[string]int64
+	mu     sync.Mutex
+	sizes  map[string]int64
+	counts map[string]int
 }
 
 func newShardSizes() *shardSizes {
-	return &shardSizes{sizes: make(map[string]int64)}
+	return &shardSizes{
+		sizes:  make(map[string]int64),
+		counts: make(map[string]int),
+	}
 }
 
 // hasHashedField reports whether any field of the shard key is hashed.
@@ -126,10 +131,9 @@ func presplitRangedEven(
 	return nil
 }
 
-// presplitRangedUneven handles unequal shard counts by packing chunks onto
-// target shards by estimated size (largest chunk to the currently lightest
-// shard), keeping per-shard data volume even. Cumulative sizes carry across
-// collections so heavy chunks from different collections spread out.
+// presplitRangedUneven handles unequal shard counts by placing positive-size
+// chunks on the lightest target shard and zero-size chunks on the least-used
+// target shard. Cumulative byte sizes and chunk counts carry across collections.
 func presplitRangedUneven(
 	ctx context.Context,
 	source, target *mongo.Client,
@@ -245,10 +249,10 @@ func estimateChunkSizes(
 	return sizes, nil
 }
 
-// assignLargestFirst assigns chunks to target shards by processing the largest
-// chunks first and placing each on the currently lightest shard. It returns the
-// assignments in the original chunk order. Cumulative sizes are updated under
-// the lock so concurrent collections share one running total.
+// assignLargestFirst assigns chunks in stable descending size order and returns
+// assignments in original chunk order. Positive-size chunks prefer the lowest
+// cumulative byte size, then chunk count; zero-size chunks prefer the lowest
+// chunk count, then byte size. Target-shard order breaks remaining ties.
 func (s *shardSizes) assignLargestFirst(chunkSizes []int64, tgtShards []string) []string {
 	order := make([]int, len(chunkSizes))
 	for i := range order {
@@ -264,18 +268,31 @@ func (s *shardSizes) assignLargestFirst(chunkSizes []int64, tgtShards []string) 
 
 	assignment := make([]string, len(chunkSizes))
 	for _, idx := range order {
-		lightest := tgtShards[0]
-		for _, shard := range tgtShards[1:] {
-			if s.sizes[shard] < s.sizes[lightest] {
-				lightest = shard
-			}
-		}
+		lightest := s.lightest(tgtShards, chunkSizes[idx])
 
 		assignment[idx] = lightest
 		s.sizes[lightest] += chunkSizes[idx]
+		s.counts[lightest]++
 	}
 
 	return assignment
+}
+
+// lightest picks the target shard for a chunk of the given size. A sized chunk
+// goes by cumulative bytes, then chunk count. A zero-size chunk carries no
+// bytes, so byte balance says nothing about it: it goes by chunk count, then
+// bytes. Ties fall to the earlier entry in tgtShards.
+func (s *shardSizes) lightest(tgtShards []string, size int64) string {
+	return slices.MinFunc(tgtShards, func(a, b string) int {
+		bySize := cmp.Compare(s.sizes[a], s.sizes[b])
+		byCount := cmp.Compare(s.counts[a], s.counts[b])
+
+		if size > 0 {
+			return cmp.Or(bySize, byCount)
+		}
+
+		return cmp.Or(byCount, bySize)
+	})
 }
 
 // pairShards maps each source shard to a target shard by pairing the two
