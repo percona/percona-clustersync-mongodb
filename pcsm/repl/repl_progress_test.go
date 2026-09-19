@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 func TestTrackPoolProgress(t *testing.T) {
@@ -62,7 +65,7 @@ func TestTrackPoolProgress(t *testing.T) {
 				select {
 				case <-stopped:
 				case <-time.After(barrierTimeout):
-					t.Fatal("progress tracker did not stop")
+					require.FailNow(t, "progress tracker did not stop")
 				}
 			})
 			go func() {
@@ -85,17 +88,20 @@ func TestTrackPoolProgress(t *testing.T) {
 			r.advanceCheckpoint(tt.advance)
 			r.lock.Unlock()
 
-			ctx, cancel := context.WithTimeout(t.Context(), barrierTimeout)
-			defer cancel()
 			// The second unbuffered send is received only after the first
 			// checkpoint update finishes. No dispatcher activity is needed.
-			for range 2 {
-				select {
-				case ticks <- time.Time{}:
-				case <-ctx.Done():
-					t.Fatal("progress tracker did not receive tick")
+			err := util.CtxWithTimeout(t.Context(), barrierTimeout, func(ctx context.Context) error {
+				for range 2 {
+					select {
+					case ticks <- time.Time{}:
+					case <-ctx.Done():
+						return errors.Wrap(ctx.Err(), "progress tracker did not receive tick")
+					}
 				}
-			}
+
+				return nil
+			})
+			require.NoError(t, err)
 
 			status := r.Status()
 			assert.Equal(t, tt.want, status.CheckpointOpTime)
