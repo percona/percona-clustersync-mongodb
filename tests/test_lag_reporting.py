@@ -1,4 +1,4 @@
-"""Black-box regression coverage for PCSM-367 truthful replication lag."""
+"""Black-box regression coverage for truthful replication lag and frontier progress."""
 
 import time
 
@@ -84,3 +84,100 @@ def test_lag_reporting_during_resume_backlog(t: Testing):
 
         assert backlog_samples > 0, "catch-up completed before any backlog status was sampled"
         assert t.target["db_1"]["coll_1"].count_documents({}) == seed_count + total_docs
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(120)
+def test_lag_frontier_advances_during_catchup_barrier(t: Testing):
+    """PCSM-383: worker commits must advance the frontier during a DDL barrier."""
+    seed_count = 10
+    total_docs = 4_000
+    batch_size = 500
+    source_coll = t.source["db_1"]["coll_1"]
+    source_coll.insert_many([{"_id": i} for i in range(seed_count)])
+
+    # The backlog fits in the worker queue, letting the dispatcher reach the
+    # create event while the single worker still has many small bulks to apply.
+    options = {"repl_num_workers": 1, "repl_bulk_ops_size": 1}
+    with t.run(Runner.Phase.APPLY, wait_timeout=20, options=options) as runner:
+        runner.wait_for_initial_sync()
+        t.pcsm.pause()
+        runner.wait_for_state(PCSM.State.PAUSED)
+
+        batch_op_times: list[bson.Timestamp] = []
+        for start in range(seed_count, seed_count + total_docs, batch_size):
+            docs = [{"_id": i, "payload": "x" * 200} for i in range(start, start + batch_size)]
+            with t.source.start_session() as session:
+                source_coll.insert_many(docs, session=session)
+                op_time = session.operation_time
+                assert op_time is not None, "acknowledged insert has no session operationTime"
+                batch_op_times.append(op_time)
+
+        # This must be a new collection, created AFTER the backlog and BEFORE
+        # resume: its create DDL parks the dispatcher behind the queued writes.
+        t.source["db_1"]["barrier_coll"].insert_one({"_id": 0})
+        before_resume = t.pcsm.status()
+        assert before_resume["state"] == PCSM.State.PAUSED, before_resume
+        applied_before_resume = before_resume["eventsApplied"]
+        frozen_optime = before_resume["lastReplicatedOpTime"]["ts"]
+        frozen_applied = applied_before_resume
+        frozen_since = time.monotonic()
+        deadline = frozen_since + 90
+        progress_samples = 0
+        frozen_failure = None
+        t.pcsm.resume()
+
+        while time.monotonic() < deadline:
+            status = t.pcsm.status()
+            sampled_at = time.monotonic()
+            assert status["state"] == PCSM.State.RUNNING, status
+            applied = status["eventsApplied"]
+            applied_since_resume = applied - applied_before_resume
+            assert applied_since_resume >= 0, status
+            optime = status["lastReplicatedOpTime"]["ts"]
+            if optime != frozen_optime:
+                frozen_optime = optime
+                frozen_applied = applied
+                frozen_since = sampled_at
+
+            # Mirror QA's _frozen_violation: flat applied samples remain in
+            # the window; only a frontier change resets its start.
+            frozen_duration = sampled_at - frozen_since
+            if frozen_failure is None and applied > frozen_applied and frozen_duration >= 3:
+                frozen_failure = (
+                    f"lastReplicatedOpTime stood still at {frozen_optime} for "
+                    f"{frozen_duration:.1f}s while {applied - frozen_applied} events were applied; "
+                    f"applied_since_resume={applied_since_resume}/{total_docs}, "
+                    f"lagTimeSeconds={status['lagTimeSeconds']}"
+                )
+            if applied_since_resume >= total_docs:
+                break
+
+            if applied_since_resume > 0:
+                progress_samples += 1
+            reported_t, reported_i = optime.split(".")
+            reported = bson.Timestamp(int(reported_t), int(reported_i))
+            batch_index = min(len(batch_op_times) - 1, applied_since_resume // batch_size)
+            upper_bound = batch_op_times[batch_index].time + 1
+            assert reported.time <= upper_bound, (
+                "replication frontier ran ahead: "
+                f"applied_since_resume={applied_since_resume}/{total_docs}, "
+                f"batch={batch_index}, batch_op_time={batch_op_times[batch_index]}, "
+                f"reported={reported}, lagTimeSeconds={status['lagTimeSeconds']}"
+            )
+            # Elapsed time is the behavior under test: sample the frozen
+            # frontier window at the same cadence as its 500ms progress timer.
+            time.sleep(0.5)
+        else:
+            pytest.fail(f"backlog did not catch up within 90s; last status: {status}")
+
+        assert progress_samples > 0, "no worker progress sampled before backlog completion"
+
+        # The backlog counter can complete before the DDL and its insert apply.
+        runner.wait_for_current_optime()
+        assert t.target["db_1"]["coll_1"].count_documents({}) == seed_count + total_docs
+        assert t.target["db_1"]["barrier_coll"].count_documents({}) == 1
+
+    # Drain before failing: Runner's error cleanup otherwise finalizes while
+    # the dispatcher is still in the barrier and can mask this assertion.
+    assert frozen_failure is None, frozen_failure
