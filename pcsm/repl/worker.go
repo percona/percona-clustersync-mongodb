@@ -426,6 +426,16 @@ type workerPool struct {
 	workers    []*worker
 	numWorkers int
 
+	// routeMu makes Route's per-worker publishes and Checkpoint's scan
+	// mutually exclusive. Every field is atomic, but Checkpoint decides a
+	// worker imposes no constraint from lastRoutedTS == nil, so a scan that
+	// interleaves with a routing burst can skip a worker that just received
+	// its first event and take a newer worker's first routed timestamp as
+	// the floor. The floor is monotone once published, so that skip would
+	// be silent event loss on resume. Route only ever runs on the
+	// dispatcher; the lock is uncontended except during the 500ms scan.
+	routeMu sync.Mutex
+
 	target *mongo.Client
 
 	errCh  chan error
@@ -488,10 +498,14 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	w := p.workers[workerIdx]
 
 	ts := change.ClusterTime
+	p.routeMu.Lock()
 	w.firstRoutedTS.CompareAndSwap(nil, &ts)
 	w.lastRoutedTS.Store(&ts)
 	w.eventsRouted.Add(1)
+	p.routeMu.Unlock()
 
+	// The send stays outside routeMu: a full worker queue must not hold the
+	// progress tracker's scan hostage.
 	w.routedEventCh <- &routedEvent{
 		change: change,
 		ns:     ns,
@@ -561,7 +575,14 @@ func (p *workerPool) ReleaseBarrier() {
 // A nil lastCommittedTS on a worker that has been routed events must never be
 // silently skipped: doing so would let the checkpoint advance past the worker's
 // uncommitted routed events, causing silent event loss on resume.
+//
+// The scan runs under routeMu so it observes a routing-consistent pool: it is
+// called from the progress tracker concurrently with Route. A commit landing
+// mid-scan is fine, it only makes the floor staler.
 func (p *workerPool) Checkpoint() bson.Timestamp {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
 	var minTS bson.Timestamp
 	first := true
 
