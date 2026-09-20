@@ -80,8 +80,8 @@ func TestCheckpoint_ConcurrentRouteNeverSkipsNewlyRoutedWorker(t *testing.T) {
 			first := makeInsertEventWithTS(firstID, floor)
 			pool.Route(first.change, first.ns)
 
-			for i := range laterEvents {
-				ts := bson.Timestamp{T: floor.T + 1 + uint32(i), I: 1} //nolint:gosec // bounded by laterEvents
+			for i := range uint32(laterEvents) {
+				ts := bson.Timestamp{T: floor.T + 1 + i, I: 1}
 				later := makeInsertEventWithTS(laterID, ts)
 				pool.Route(later.change, later.ns)
 			}
