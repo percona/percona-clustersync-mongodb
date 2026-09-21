@@ -643,7 +643,14 @@ func (r *Repl) drainChangeStream(
 				return err
 			}
 
-			changeCh <- change
+			// The dispatcher is the only consumer and it returns on failure
+			// without draining the queue. A plain send parks here forever with a
+			// full queue and leaks this goroutine and the cursor behind it.
+			select {
+			case changeCh <- change:
+			case <-ctx.Done():
+				return nil
+			}
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
@@ -672,9 +679,13 @@ func (r *Repl) drainChangeStream(
 		if err != nil {
 			log.New("repl:watch").Debugf("Unable to decode change stream resume token: %v", err)
 		} else {
-			changeCh <- &ChangeEvent{
+			select {
+			case changeCh <- &ChangeEvent{
 				OperationType: advanceTimePseudoEvent,
 				ClusterTime:   ts,
+			}:
+			case <-ctx.Done():
+				return nil
 			}
 		}
 
