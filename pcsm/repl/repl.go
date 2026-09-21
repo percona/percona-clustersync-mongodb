@@ -972,8 +972,11 @@ func (r *Repl) trackPoolProgress(pool *workerPool, ticks <-chan time.Time, stop 
 // advancePoolCheckpoint advances both frontiers to the pool's inclusive safe
 // resume floor: the minimum committed TS, or first routed TS for a worker with
 // no commit. This is the same floor used by run's final checkpoint. During a DDL
-// barrier, all routed events precede the DDL, so the floor cannot overtake it
-// before the dispatcher applies the DDL.
+// barrier, all routed events precede the DDL on first delivery, so the floor
+// cannot exceed it before the dispatcher applies the DDL. A retry can redeliver
+// an already-applied DDL behind newer routed work (watchWithRetry reopens
+// inclusively from the checkpoint and the replay guard is strict `<`); the
+// floor may pass it, which is safe because its effect is already on the target.
 func (r *Repl) advancePoolCheckpoint(pool *workerPool) {
 	cp := pool.Checkpoint()
 	if cp.IsZero() {

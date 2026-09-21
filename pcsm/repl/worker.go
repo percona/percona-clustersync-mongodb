@@ -626,7 +626,15 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 // a committed timestamp equal to the last routed one does not prove the
 // queue is empty. A worker whose bulk failed never converges, which keeps
 // the pool non-idle until the failure is handled.
+//
+// The scan runs under routeMu for the same reason Checkpoint does: a worker
+// routed mid-scan must not be counted as caught up. Today every caller is on
+// the dispatcher goroutine, so the lock is uncontended; it is here so the next
+// off-dispatcher caller does not reintroduce the Checkpoint race.
 func (p *workerPool) Idle() bool {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
 	for _, w := range p.workers {
 		if w.eventsCommitted.Load() != w.eventsRouted.Load() {
 			return false
