@@ -106,12 +106,14 @@ func IsTransient(err error) bool {
 		return true
 	}
 
-	// A dial failure (DNS lookup, connection refused, unreachable) surfaces as
-	// a topology.ConnectionError wrapping a *net.OpError. The driver labels
-	// only in-flight I/O failures as NetworkError, so a host that stops
-	// resolving during a partition would otherwise be classified as terminal.
-	// A permanently wrong host is indistinguishable from a partition at this
-	// layer; callers bound the retries. TLS and auth failures are not OpErrors.
+	// A dial failure the driver leaves unlabeled surfaces as a
+	// topology.ConnectionError wrapping a *net.OpError. wrapConnectionError
+	// labels connection errors NetworkError except for DNS, x509 and TLS-record
+	// errors, so a host that stops resolving during a partition would otherwise
+	// be classified as terminal (connection refused is already labeled). A
+	// permanently wrong host is indistinguishable from a partition at this
+	// layer; callers bound the retries. x509 and TLS failures are not OpErrors
+	// and stay terminal.
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		return true
@@ -162,11 +164,12 @@ func IsTransient(err error) bool {
 		}
 	}
 
-	// DDL commands (drop, create, createIndexes, collMod) surface a
-	// writeConcernError as the raw driver.WriteCommandError: the driver's
-	// wrapErrors converts driver.Error to CommandError but leaves this type
-	// alone, so a PrimarySteppedDown during a drop never reaches the
-	// WriteException branch above.
+	// Collection.Drop and Database.CreateCollection return through the
+	// driver's wrapErrors, which has no driver.WriteCommandError branch, so a
+	// writeConcernError on those paths arrives as the raw driver type and
+	// misses the WriteException branch above. RunCommand and IndexView convert
+	// via processWriteError, so PCSM's collMod and createIndexes are
+	// unaffected; this branch also covers them if that ever changes.
 	var wcErr driver.WriteCommandError
 	if errors.As(err, &wcErr) {
 		for _, we := range wcErr.WriteErrors {

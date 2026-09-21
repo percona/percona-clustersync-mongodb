@@ -171,7 +171,11 @@ func TestIsTransient_HandshakeDialError(t *testing.T) {
 	}{
 		{"dns not found under connection error", connErr, true},
 		{"wrapped by caller", errors.Wrap(connErr, "drop collection"), true},
-		{"connection refused", topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}, true},
+		{
+			"connection refused, unlabeled shape",
+			topology.ConnectionError{Wrapped: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}},
+			true,
+		},
 		// A handshake that fails above the dial (TLS trust) is not a dial
 		// error and must stay terminal.
 		{"tls unknown authority", topology.ConnectionError{Wrapped: x509.UnknownAuthorityError{}}, false},
