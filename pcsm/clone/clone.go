@@ -445,7 +445,14 @@ func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error
 
 	err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
 	if err != nil {
-		return errors.Wrap(err, "presplit chunks")
+		if ctx.Err() != nil {
+			return errors.Wrap(err, "presplit chunks")
+		}
+
+		// Pre-split is a placement optimization. The target keeps its existing layout,
+		// possibly partially split or moved, and the balancer evens it out so cloning
+		// can continue.
+		lg.Warnf("Pre-split of %q failed, keeping the native chunk layout: %v", ns.String(), err)
 	}
 
 	return nil

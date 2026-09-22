@@ -41,10 +41,6 @@ func TestHasHashedField(t *testing.T) {
 func TestPresplitDispatchNoop(t *testing.T) {
 	t.Parallel()
 
-	// Every current branch is a no-op: any hashed component relies on the
-	// balanced native shardCollection layout, and ranged with <=1 chunk has
-	// nothing to replay. None of them touch the target client, so a nil client
-	// is safe. Ranged multi-chunk placement is covered by E2E.
 	tests := []struct {
 		name   string
 		shInfo *mdb.ShardingInfo
@@ -90,10 +86,8 @@ func TestPresplitRangedEvenMissingSourceShard(t *testing.T) {
 
 	ns := catalog.Namespace{Database: "db", Collection: "coll"}
 
-	// A chunk is owned by "srcC", but the source shard list only has A and B
-	// (e.g. srcC was removed between the chunk snapshot and ListShards). The
-	// pairing lookup misses, so presplit must fail before any target call — a
-	// nil target client would panic otherwise.
+	// A shard removed after the chunk snapshot must fail before any target call;
+	// the nil target client ensures no such call is made.
 	shInfo := &mdb.ShardingInfo{
 		ShardKey: bson.D{{Key: "_id", Value: int32(1)}},
 		Chunks: []mdb.ChunkInfo{
@@ -150,7 +144,6 @@ func TestPairShards(t *testing.T) {
 	}
 }
 
-// shardLoads sums the sizes assigned to each shard for a given assignment.
 func shardLoads(assignment []string, sizes []int64) map[string]int64 {
 	loads := map[string]int64{}
 	for i, s := range assignment {
@@ -172,8 +165,6 @@ func TestAssignLargestFirst(t *testing.T) {
 		assignment := newShardSizes().assignLargestFirst(sizes, shards)
 
 		require.Len(t, assignment, len(sizes))
-		// The jumbo (768) sits alone; the rest fill the other shards. Spread of
-		// per-shard load is bounded by the largest chunk.
 		loads := shardLoads(assignment, sizes)
 		var minL, maxL int64 = 1 << 62, 0
 		for _, s := range shards {
@@ -192,8 +183,6 @@ func TestAssignLargestFirst(t *testing.T) {
 		assignment := newShardSizes().assignLargestFirst(sizes, shards)
 
 		require.Len(t, assignment, 3)
-		// Largest chunk (index 1) goes to the first-lightest shard; the two
-		// small ones fill the other shard.
 		assert.Equal(t, assignment[0], assignment[2])
 		assert.NotEqual(t, assignment[1], assignment[0])
 	})
@@ -204,12 +193,42 @@ func TestAssignLargestFirst(t *testing.T) {
 		shards := []string{"s0", "s1"}
 		w := newShardSizes()
 
-		// Two collections, each with one jumbo. With cumulative weights the
-		// second jumbo must not stack on the first jumbo's shard.
 		a1 := w.assignLargestFirst([]int64{1000}, shards)
 		a2 := w.assignLargestFirst([]int64{900}, shards)
 
 		assert.NotEqual(t, a1[0], a2[0], "second jumbo stacked on the first jumbo's shard")
+	})
+
+	t.Run("failed placement does not bias the next collection", func(t *testing.T) {
+		t.Parallel()
+
+		shards := []string{"s0", "s1"}
+		w := newShardSizes()
+		sizesA := []int64{1000}
+		assignA := w.assignLargestFirst(sizesA, shards)
+
+		// nil means the target layout could not be read.
+		w.reconcile(sizesA, assignA, nil)
+
+		assignB := w.assignLargestFirst([]int64{10}, shards)
+		assert.Equal(t, assignA[0], assignB[0], "released reservation still biased placement")
+	})
+
+	t.Run("partial placement charges the shard the chunk is really on", func(t *testing.T) {
+		t.Parallel()
+
+		shards := []string{"s0", "s1"}
+		w := newShardSizes()
+		sizes := []int64{600, 400}
+		assign := w.assignLargestFirst(sizes, shards)
+		require.NotEqual(t, assign[0], assign[1])
+
+		// The failed move leaves both chunks on the second shard.
+		actual := []string{assign[1], assign[1]}
+		w.reconcile(sizes, assign, actual)
+
+		assert.Equal(t, int64(0), w.sizes[assign[0]], "unrealized reservation must be released")
+		assert.Equal(t, int64(1000), w.sizes[assign[1]], "real owner must carry the chunk")
 	})
 
 	t.Run("single shard takes everything", func(t *testing.T) {

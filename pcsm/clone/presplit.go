@@ -16,7 +16,6 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-// hashedKeyType is the shard-key field value that marks a hashed key.
 const hashedKeyType = "hashed"
 
 // presplitSizeWorkers bounds the parallel chunk dataSize estimates per collection.
@@ -65,7 +64,6 @@ func presplit(
 		return nil
 
 	case len(shInfo.Chunks) <= 1:
-		// Ranged with no interior boundaries to replay.
 		return nil
 
 	default:
@@ -113,7 +111,7 @@ func presplitRangedEven(
 		assignment[i] = dst
 	}
 
-	moves, err := replayAndPlace(ctx, target, ns, shInfo, assignment)
+	_, moves, err := replayAndPlace(ctx, target, ns, shInfo, assignment)
 	if err != nil {
 		return err
 	}
@@ -145,8 +143,13 @@ func presplitRangedUneven(
 
 	assignment := targetShardSizes.assignLargestFirst(chunkSizes, tgtShards)
 
-	moves, err := replayAndPlace(ctx, target, ns, shInfo, assignment)
+	placed, moves, err := replayAndPlace(ctx, target, ns, shInfo, assignment)
 	if err != nil {
+		// The caller keeps cloning with whatever layout exists, so the ledger
+		// must reflect where the chunks actually are, not where they were meant
+		// to go, or later collections pack around phantom load.
+		targetShardSizes.reconcile(chunkSizes, assignment, placed)
+
 		return err
 	}
 
@@ -160,35 +163,41 @@ func presplitRangedUneven(
 
 // replayAndPlace splits the target at every source boundary, then moves each
 // resulting chunk to its assigned shard (assignment is index-aligned with
-// shInfo.Chunks). Returns the number of moves performed.
+// shInfo.Chunks). It returns the last known owners in chunk order and the
+// number of successful moves. Placement is nil if splitting or reading and
+// validating the target layout fails.
 func replayAndPlace(
 	ctx context.Context,
 	target *mongo.Client,
 	ns catalog.Namespace,
 	shInfo *mdb.ShardingInfo,
 	assignment []string,
-) (int, error) {
+) ([]string, int, error) {
 	nsStr := ns.String()
 
-	// Split at every source boundary. A chunk's lower bound is its boundary;
-	// the first chunk's is the collection minimum, not a split point.
+	// The first chunk's lower bound is the collection minimum, not a split point.
 	for _, chunk := range shInfo.Chunks[1:] {
 		err := mdb.SplitChunkAt(ctx, target, nsStr, chunk.Min)
 		if err != nil {
-			return 0, errors.Wrap(err, "split chunk")
+			return nil, 0, errors.Wrap(err, "split chunk")
 		}
 	}
 
 	tgtInfo, err := mdb.GetCollectionShardingInfo(ctx, target, ns.Database, ns.Collection)
 	if err != nil {
-		return 0, errors.Wrap(err, "get target sharding info")
+		return nil, 0, errors.Wrap(err, "get target sharding info")
 	}
 
 	if len(tgtInfo.Chunks) != len(shInfo.Chunks) {
-		return 0, errors.Errorf(
+		return nil, 0, errors.Errorf(
 			"target has %d chunks after split, expected %d",
 			len(tgtInfo.Chunks), len(shInfo.Chunks),
 		)
+	}
+
+	placed := make([]string, len(tgtInfo.Chunks))
+	for i, tgtChunk := range tgtInfo.Chunks {
+		placed[i] = tgtChunk.Shard
 	}
 
 	moves := 0
@@ -200,13 +209,14 @@ func replayAndPlace(
 
 		err = mdb.MoveChunk(ctx, target, nsStr, tgtChunk.Min, tgtChunk.Max, dstShard)
 		if err != nil {
-			return moves, errors.Wrap(err, "move chunk")
+			return placed, moves, errors.Wrap(err, "move chunk")
 		}
 
+		placed[i] = dstShard
 		moves++
 	}
 
-	return moves, nil
+	return placed, moves, nil
 }
 
 // estimateChunkSizes returns the estimated byte size of each source chunk, in
@@ -276,6 +286,31 @@ func (s *shardSizes) assignLargestFirst(chunkSizes []int64, tgtShards []string) 
 	}
 
 	return assignment
+}
+
+// reconcile replaces the reservation assignLargestFirst made for a collection
+// with where its chunks actually are. actual is index-aligned with assignment;
+// a nil actual, or an empty entry, means the owner is unknown and the
+// reservation is only released.
+func (s *shardSizes) reconcile(chunkSizes []int64, assignment, actual []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, dst := range assignment {
+		var got string
+		if i < len(actual) {
+			got = actual[i]
+		}
+
+		if got == dst {
+			continue
+		}
+
+		s.sizes[dst] -= chunkSizes[i]
+		if got != "" {
+			s.sizes[got] += chunkSizes[i]
+		}
+	}
 }
 
 // pairShards maps each source shard to a target shard by pairing the two

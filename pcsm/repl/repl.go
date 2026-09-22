@@ -124,7 +124,7 @@ type Repl struct {
 	options *Options // Replication options
 
 	lastReplicatedOpTime bson.Timestamp
-	checkpointOpTime     bson.Timestamp // applied-only optime, never tick-driven
+	checkpointOpTime     bson.Timestamp // inclusive resume floor: all events before it are applied; never tick-driven
 
 	lock sync.Mutex
 	err  error
@@ -156,9 +156,11 @@ type Status struct {
 	Pausing   bool // a pause is in progress (requested, not yet paused)
 
 	LastReplicatedOpTime bson.Timestamp // Reported replication frontier, initialized to the run start
-	CheckpointOpTime     bson.Timestamp // Applied-only optime, safe for resume
-	EventsRead           int64          // Number of events read from the source
-	EventsApplied        int64          // Number of events applied
+	// CheckpointOpTime is the inclusive resume floor: every event strictly
+	// before it is applied, the event at it may need replay.
+	CheckpointOpTime bson.Timestamp
+	EventsRead       int64 // Number of events read from the source
+	EventsApplied    int64 // Number of events applied
 
 	Err error
 }
@@ -575,6 +577,22 @@ func isNonTransient(err error) bool {
 	return !mdb.IsTransient(err)
 }
 
+type changeCursor interface {
+	TryNext(ctx context.Context) bool
+	Current() bson.Raw
+	ResumeToken() bson.Raw
+	Err() error
+	ID() int64
+}
+
+type mongoChangeCursor struct {
+	*mongo.ChangeStream
+}
+
+func (c mongoChangeCursor) Current() bson.Raw {
+	return c.ChangeStream.Current
+}
+
 func (r *Repl) watchChangeEvents(
 	ctx context.Context,
 	streamOptions *options.ChangeStreamOptionsBuilder,
@@ -595,8 +613,18 @@ func (r *Repl) watchChangeEvents(
 		}
 	}()
 
+	return r.drainChangeStream(ctx, mongoChangeCursor{cur}, changeCh, func(ctx context.Context) (bson.Timestamp, error) {
+		return mdb.AdvanceClusterTime(ctx, r.source)
+	})
+}
+
+func (r *Repl) drainChangeStream(
+	ctx context.Context,
+	cur changeCursor,
+	changeCh chan<- *ChangeEvent,
+	advance func(context.Context) (bson.Timestamp, error),
+) error {
 	var invalidateErr *changeStreamInvalidateError
-	var pendingTick bson.Timestamp
 
 	for {
 		hasEvents := false
@@ -607,19 +635,14 @@ func (r *Repl) watchChangeEvents(
 			metrics.IncEventsRead()
 
 			change := &ChangeEvent{}
-			change.RawData = append(change.RawData, cur.Current...)
+			change.RawData = append(change.RawData, cur.Current()...)
 
 			err := parseEventHeader(change.RawData, &change.EventHeader)
 			if err != nil {
 				return err
 			}
 
-			ts := change.ClusterTime
 			changeCh <- change
-
-			if !pendingTick.IsZero() && !pendingTick.After(ts) {
-				pendingTick = bson.Timestamp{}
-			}
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
@@ -629,34 +652,41 @@ func (r *Repl) watchChangeEvents(
 			}
 		}
 
-		err = isChangeStreamTerminationError(invalidateErr, cur.Err(), cur.ID())
+		err := isChangeStreamTerminationError(invalidateErr, cur.Err(), cur.ID())
 		if err != nil {
 			return err
 		}
 
-		// Let one cursor drain observe writes committed before the append note.
-		if !pendingTick.IsZero() {
-			changeCh <- &ChangeEvent{
-				OperationType: advanceTimePseudoEvent,
-				ClusterTime:   pendingTick,
-			}
-			pendingTick = bson.Timestamp{}
+		if hasEvents {
+			continue
 		}
 
-		// Only advance cluster time when the cursor had no events (truly idle).
-		// Under sustained load, tryAdvanceOpTime + Checkpoint keep
-		// lastReplicatedOpTime current without the appendOplogNote overhead.
-		if !hasEvents {
-			sourceTS, err := mdb.AdvanceClusterTime(ctx, r.source)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
+		// An empty batch's postBatchResumeToken is the server's scanned
+		// frontier: no matching event before it remains undelivered. The spec
+		// states only that the token marks the oplog position scanned so far;
+		// the "nothing undelivered before it" property is inferred from the
+		// token's documented purpose, resuming a stream without missing events.
+		// Re-check this inference first if ticks ever run ahead of applied data.
+		ts, err := mdb.ResumeTokenTimestamp(cur.ResumeToken())
+		if err != nil {
+			log.New("repl:watch").Debugf("Unable to decode change stream resume token: %v", err)
+		} else {
+			changeCh <- &ChangeEvent{
+				OperationType: advanceTimePseudoEvent,
+				ClusterTime:   ts,
+			}
+		}
 
-				log.New("watch").Error(err, "Unable to advance the source cluster time")
+		// Stimulate the idle source oplog at the getMore cadence instead of
+		// waiting for periodic server no-ops. The note is never the tick value.
+		// Under sustained load, tryAdvanceOpTime tracks worker progress.
+		_, err = advance(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
 			}
 
-			pendingTick = sourceTS
+			log.New("watch").Error(err, "Unable to advance the source cluster time")
 		}
 	}
 }
@@ -756,9 +786,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
 
-			r.lock.Lock()
-			r.advanceReportedOpTime(change.ClusterTime)
-			r.lock.Unlock()
+			r.applyTick(change.ClusterTime, lastRoutedTS)
 
 			continue
 		}
@@ -860,6 +888,21 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+// applyTick reports the scanned frontier only while the worker pool has
+// committed every event routed to it (exact event accounting, see
+// workerPool.Idle). Ticks never advance the resume checkpoint.
+func (r *Repl) applyTick(ts, lastRoutedTS bson.Timestamp) {
+	if !r.poolIdle(lastRoutedTS) {
+		log.New("repl").With(log.OpTime(ts.T, ts.I)).Trace("tick dropped: worker pool busy")
+
+		return
+	}
+
+	r.lock.Lock()
+	r.advanceReportedOpTime(ts)
+	r.lock.Unlock()
 }
 
 // handleInvalidate barriers the worker pool, then recovers or fails on a
@@ -980,9 +1023,9 @@ func (r *Repl) advanceCheckpoint(ts bson.Timestamp) {
 // poolIdle returns true when no events are pending in the worker pool.
 // A zero lastRoutedTS means no events have been routed since the last
 // barrier (which flushes everything), so the pool is trivially idle.
-// Otherwise, it checks each worker's committed timestamp against its
-// own last routed timestamp to determine if all dispatched events have
-// been flushed.
+// Otherwise it delegates to workerPool.Idle, which compares the number of
+// events routed to each worker with the number it has committed. Timestamps
+// are not used: distinct events can share a clusterTime.
 func (r *Repl) poolIdle(lastRoutedTS bson.Timestamp) bool {
 	if lastRoutedTS.IsZero() {
 		return true
