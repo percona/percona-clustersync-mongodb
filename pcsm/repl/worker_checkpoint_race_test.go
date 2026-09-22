@@ -57,8 +57,29 @@ func makeRacePool(numWorkers int) *workerPool {
 // silent-loss-on-resume case Checkpoint's doc comment forbids. The workers in
 // between only widen the window between those two loads. The scanner and the
 // router run concurrently, iterations are bounded, nothing sleeps.
+//
+// ReportedFrontier has the same shape and the same hazard (worker 0 is busy:
+// routed, never committed), so it races routing in its own subtest rather than
+// behind Checkpoint's locked scan, which would already have serialized it.
 func TestCheckpoint_ConcurrentRouteNeverSkipsNewlyRoutedWorker(t *testing.T) {
 	t.Parallel()
+
+	scans := map[string]func(*workerPool) bson.Timestamp{
+		"Checkpoint":       (*workerPool).Checkpoint,
+		"ReportedFrontier": (*workerPool).ReportedFrontier,
+	}
+
+	for name, scan := range scans {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			runRouteRace(t, scan)
+		})
+	}
+}
+
+func runRouteRace(t *testing.T, scan func(*workerPool) bson.Timestamp) {
+	t.Helper()
 
 	const (
 		numWorkers  = 32
@@ -94,15 +115,13 @@ func TestCheckpoint_ConcurrentRouteNeverSkipsNewlyRoutedWorker(t *testing.T) {
 			default:
 			}
 
-			cp := pool.Checkpoint()
-			if cp.IsZero() {
-				continue
+			got := scan(pool)
+			if !got.IsZero() {
+				require.Falsef(t, floor.Before(got),
+					"round %d: scan %v ran past worker 0's unapplied %v", round, got, floor)
 			}
-
-			require.Falsef(t, floor.Before(cp),
-				"round %d: checkpoint %v ran past worker 0's unapplied %v", round, cp, floor)
 		}
 
-		require.Equalf(t, floor, pool.Checkpoint(), "round %d: settled floor", round)
+		require.Equalf(t, floor, scan(pool), "round %d: settled value", round)
 	}
 }

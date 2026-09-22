@@ -617,6 +617,63 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 	return minTS
 }
 
+// ReportedFrontier returns the inclusive frontier that may be reported as
+// replicated: every routed event strictly before it has committed. It differs
+// from Checkpoint in one way: a fully drained worker (committed == routed)
+// imposes no constraint, so a worker that finished its share early cannot
+// freeze reporting while the others apply their backlog. When every routed
+// worker has drained, the frontier is the newest committed timestamp. Zero
+// when nothing has been routed. It is never used as the resume floor.
+//
+// Runs under routeMu. Per worker, the committed count is read before
+// lastCommittedTS: runWriter stores the timestamp and then adds the count, so
+// a worker observed as drained yields the timestamp of the commit that drained
+// it, and a stale timestamp on a busy worker only makes the bound older.
+func (p *workerPool) ReportedFrontier() bson.Timestamp {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
+	var busyMin, drainedMax bson.Timestamp
+	busy := false
+
+	for _, w := range p.workers {
+		if w.lastRoutedTS.Load() == nil {
+			continue
+		}
+
+		routed := w.eventsRouted.Load()
+		committed := w.eventsCommitted.Load()
+		committedTS := w.lastCommittedTS.Load()
+
+		if committed == routed {
+			if committedTS != nil && committedTS.After(drainedMax) {
+				drainedMax = *committedTS
+			}
+
+			continue
+		}
+
+		// Outstanding events: same bound as Checkpoint. A worker that never
+		// committed, including one whose write failed, holds the frontier at
+		// its first routed event.
+		bound := committedTS
+		if bound == nil {
+			bound = w.firstRoutedTS.Load()
+		}
+
+		if !busy || bound.Before(busyMin) {
+			busyMin = *bound
+			busy = true
+		}
+	}
+
+	if busy {
+		return busyMin
+	}
+
+	return drainedMax
+}
+
 // Idle returns true when every worker has committed (flushed) every event
 // routed to it.
 //
