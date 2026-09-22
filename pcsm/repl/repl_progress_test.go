@@ -125,13 +125,13 @@ func TestTrackPoolProgress_DrainedWorkerDoesNotFreezeReporting(t *testing.T) {
 	coldID := docIDForWorker(t, 0, 2)
 	hotID := docIDForWorker(t, 1, 2)
 
-	event := makeInsertEventWithTS(coldID, cold)
-	pool.Route(event.change, event.ns)
+	coldEvent := makeInsertEventWithTS(coldID, cold)
+	pool.Route(coldEvent.change, coldEvent.ns)
 	commitRoutedEvent(t, pool.workers[0])
 
 	for _, seconds := range []uint32{201, 202, 203} {
-		event := makeInsertEventWithTS(hotID, bson.Timestamp{T: seconds, I: 1})
-		pool.Route(event.change, event.ns)
+		hotEvent := makeInsertEventWithTS(hotID, bson.Timestamp{T: seconds, I: 1})
+		pool.Route(hotEvent.change, hotEvent.ns)
 	}
 	commitRoutedEvent(t, pool.workers[1])
 	r.advancePoolCheckpoint(pool)
