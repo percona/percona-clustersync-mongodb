@@ -147,7 +147,10 @@ type PCSM struct {
 
 	err error
 
-	lock sync.Mutex
+	// runDone covers run and its monitors, not just the replication workers.
+	// Component replacement and reuse must wait for this ownership to end.
+	runDone chan struct{}
+	lock    sync.Mutex
 }
 
 // New creates a new PCSM.
@@ -213,7 +216,10 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 }
 
 func (p *PCSM) Recover(ctx context.Context, data []byte) error {
-	p.lock.Lock()
+	err := p.lockAfterRun(ctx)
+	if err != nil {
+		return err
+	}
 	defer p.lock.Unlock()
 
 	if p.state == StateRunning || p.state == StateFinalizing ||
@@ -223,7 +229,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 
 	var cp checkpoint
 
-	err := bson.Unmarshal(data, &cp)
+	err = bson.Unmarshal(data, &cp)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal")
 	}
@@ -310,7 +316,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		// run(), not doResume: it handles both a checkpoint persisted at /start
 		// time (repl not yet started) and one persisted after. doResume would
 		// reject the not-yet-started case.
-		go p.run(p.lifecycleCtx)
+		p.startRun()
 		go p.onStateChanged(StateRunning)
 	}
 
@@ -425,7 +431,10 @@ type StartOptions struct {
 
 // Start starts the replication process with the given options.
 func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
-	p.lock.Lock()
+	err := p.lockAfterRun(ctx)
+	if err != nil {
+		return err
+	}
 	defer p.lock.Unlock()
 
 	switch p.state {
@@ -475,7 +484,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.finalizeStatus = nil
 	p.state = StateRunning
 
-	go p.run(p.lifecycleCtx)
+	p.startRun()
 
 	// Persist idle->running immediately: a crash before the first periodic
 	// checkpoint would otherwise leave no recovery data to resume from.
@@ -484,21 +493,64 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	return nil
 }
 
+// lockAfterRun returns with p.lock held on success. A stopped run may still be
+// reporting failure or exiting its monitors; let it finish before validating
+// the next transition. Active states are left for the caller to reject.
+func (p *PCSM) lockAfterRun(ctx context.Context) error {
+	p.lock.Lock()
+
+	for p.runDone != nil && p.state != StateRunning && p.state != StateFinalizing {
+		done := p.runDone
+		p.lock.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx.Err(), "wait for previous run")
+		case <-done:
+		}
+
+		p.lock.Lock()
+		// Another caller may have started a run while the lock was released.
+		// Recheck its state and ownership before returning the lock.
+	}
+
+	return nil
+}
+
+// startRun registers ownership before launching the goroutine. The caller holds
+// p.lock and has joined any previous run through lockAfterRun.
+func (p *PCSM) startRun() {
+	done := make(chan struct{})
+	p.runDone = done
+
+	go func() {
+		p.run(p.lifecycleCtx)
+
+		p.lock.Lock()
+		p.runDone = nil
+		close(done)
+		p.lock.Unlock()
+	}()
+}
+
 func (p *PCSM) setFailed(err error) {
 	p.lock.Lock()
 	p.state = StateFailed
 	p.err = err
+	go p.onStateChanged(StateFailed)
 	p.lock.Unlock()
 
 	log.New("pcsm").Error(err, "Cluster Replication has failed")
-
-	go p.onStateChanged(StateFailed)
 }
 
 // run executes the cluster replication.
 func (p *PCSM) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var monitors sync.WaitGroup
+	defer func() {
+		cancel()
+		monitors.Wait()
+	}()
 
 	lg := log.New("pcsm")
 
@@ -541,9 +593,9 @@ func (p *PCSM) run(ctx context.Context) {
 	}
 
 	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
-		go p.monitorInitialSync(ctx)
+		monitors.Go(func() { p.monitorInitialSync(ctx) })
 	}
-	go p.monitorLagTime(ctx)
+	monitors.Go(func() { p.monitorLagTime(ctx) })
 
 	<-p.repl.Done()
 
@@ -708,14 +760,17 @@ type ResumeOptions struct {
 
 // Resume resumes the replication process.
 func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
-	p.lock.Lock()
+	err := p.lockAfterRun(ctx)
+	if err != nil {
+		return err
+	}
 	defer p.lock.Unlock()
 
 	if p.state != StatePaused && (p.state != StateFailed || !options.ResumeFromFailure) {
 		return errors.New("cannot resume: not paused or not resuming from failure")
 	}
 
-	err := p.doResume(ctx, options.ResumeFromFailure)
+	err = p.doResume(ctx, options.ResumeFromFailure)
 	if err != nil {
 		log.New("pcsm").Error(err, "Resume Cluster Replication")
 
@@ -741,7 +796,7 @@ func (p *PCSM) doResume(_ context.Context, fromFailure bool) error { //nolint:un
 	p.state = StateRunning
 	p.resetError()
 
-	go p.run(p.lifecycleCtx)
+	p.startRun()
 	go p.onStateChanged(StateRunning)
 
 	return nil
