@@ -934,6 +934,13 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// RoleChanges may coalesce away the intervening demotion. Retire the old
+	// term's checkpoint loop before restoring state for the new owner.
+	if term != s.activeTerm && s.checkpointCancel != nil {
+		s.checkpointCancel()
+		s.checkpointCancel = nil
+	}
+
 	status := s.pcsm.Status(ctx)
 	action := promotionPlan(status.State, status.Repl.Pausing, term, s.activeTerm, s.pausedOnDemote)
 	switch action {
