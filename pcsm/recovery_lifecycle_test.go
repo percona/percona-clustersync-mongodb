@@ -1,4 +1,4 @@
-package pcsm //nolint:testpackage
+package pcsm //nolint:testpackage // Drives the unexported run/monitor lifecycle directly.
 
 import (
 	"context"
@@ -73,8 +73,8 @@ func TestRecoverIsNotOverwrittenByPreviousRun(t *testing.T) {
 		go func() { recovered <- p.Recover(t.Context(), data) }()
 		synctest.Wait()
 		select {
-		case err := <-recovered:
-			t.Fatalf("recovery returned before the previous run exited: %v", err)
+		case early := <-recovered:
+			t.Fatalf("recovery returned before the previous run exited: %v", early)
 		default:
 		}
 
@@ -137,8 +137,8 @@ func TestResumeRechecksFailureAfterPreviousRun(t *testing.T) {
 		go func() { resumed <- p.Resume(t.Context(), ResumeOptions{}) }()
 		synctest.Wait()
 		select {
-		case err := <-resumed:
-			t.Fatalf("resume returned before the previous run exited: %v", err)
+		case early := <-resumed:
+			t.Fatalf("resume returned before the previous run exited: %v", early)
 		default:
 		}
 		release()
@@ -196,8 +196,8 @@ func TestRecoverJoinsPreviousRunMonitors(t *testing.T) {
 		go func() { recovered <- p.Recover(t.Context(), data) }()
 		synctest.Wait()
 		select {
-		case err := <-recovered:
-			t.Fatalf("recovery returned before the previous monitor exited: %v", err)
+		case early := <-recovered:
+			t.Fatalf("recovery returned before the previous monitor exited: %v", early)
 		default:
 		}
 
