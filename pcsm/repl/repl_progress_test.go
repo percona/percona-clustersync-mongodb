@@ -110,3 +110,35 @@ func TestTrackPoolProgress(t *testing.T) {
 		})
 	}
 }
+
+// A reconnect reopens inclusively from the checkpoint. Newer routed writes can
+// commit and lift the floor past an already-applied DDL before the redelivered
+// copy reaches the dispatcher; re-applying a drop there would discard those
+// writes. The guard must drop the redelivered DDL on every topology.
+func TestShouldSkipReplay_RedeliveredDropBehindNewerCommits(t *testing.T) {
+	t.Parallel()
+
+	for _, sharded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "replica set", true: "sharded"}[sharded], func(t *testing.T) {
+			t.Parallel()
+
+			drop := bson.Timestamp{T: 100, I: 1}
+			pool := makeTestPool(1)
+			r := &Repl{pool: pool, sourceIsSharded: sharded, lastReplicatedOpTime: drop, checkpointOpTime: drop}
+
+			// The drop was applied and the run continued: a newer write
+			// routed after it commits and the tracker lifts the floor.
+			event := makeInsertEventWithTS("after-drop", bson.Timestamp{T: 105, I: 1})
+			pool.Route(event.change, event.ns)
+			commitRoutedEvent(t, pool.workers[0])
+			r.advancePoolCheckpoint(pool)
+			require.Equal(t, bson.Timestamp{T: 105, I: 1}, r.Status().CheckpointOpTime)
+
+			redelivered := &ChangeEvent{OperationType: Drop, ClusterTime: drop}
+			assert.True(t, r.shouldSkipReplay(redelivered), "redelivered drop behind newer commits must be skipped")
+
+			atFloor := &ChangeEvent{OperationType: Drop, ClusterTime: bson.Timestamp{T: 105, I: 1}}
+			assert.False(t, r.shouldSkipReplay(atFloor), "an event at the inclusive floor is not a replay")
+		})
+	}
+}

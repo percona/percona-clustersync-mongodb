@@ -1011,15 +1011,20 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 }
 
 // shouldSkipReplay reports whether change is a replayed event that must be
-// skipped. This is a catch-up convergence guard, not a data-safety one: DML
-// apply is already idempotent so re-applying a redelivered event cannot corrupt
-// the target. What it prevents is a mongos forced reconnect
-// (SetStartAfter / SetStartAtOperationTime) redelivering already-applied events,
-// increasing the lag.
+// skipped. Redelivery happens on every topology: watchWithRetry reopens with
+// SetStartAtOperationTime(checkpointOpTime), inclusive, after the driver gives
+// up on its own token-based resume, and a mongos movePrimary reconnect uses
+// SetStartAfter. Skipping redelivered DML only saves catch-up time, its apply
+// is idempotent. Skipping a redelivered DDL is a data-safety guard: the floor
+// can already sit past the DDL because newer routed writes committed, and
+// re-applying a drop there would discard those writes with no replay of them
+// left in the persisted checkpoint.
 //
-// A replica set resumes from its own token and never redelivers applied writes.
+// First-delivery events always carry a timestamp at or after the checkpoint
+// (every advance comes from an applied or routed event, never from a tick), so
+// strict `<` only ever matches redelivery.
 func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
-	return r.sourceIsSharded && r.isReplay(change)
+	return r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick

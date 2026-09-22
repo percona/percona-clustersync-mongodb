@@ -655,7 +655,8 @@ func TestShouldSkipReplay(t *testing.T) {
 		changeTime      bson.Timestamp
 		want            bool
 	}{
-		{"replica set source skips nothing", false, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, false},
+		{"replica set source skips old event", false, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, true},
+		{"replica set keeps event at checkpoint", false, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 10}, false},
 		{"mongos source skips old event", true, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 9}, true},
 		{"mongos source keeps new event", true, bson.Timestamp{T: 100, I: 10}, bson.Timestamp{T: 100, I: 11}, false},
 	}
