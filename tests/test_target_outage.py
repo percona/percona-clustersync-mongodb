@@ -104,7 +104,6 @@ def _step_up(host: str):
 
 
 def _force_no_primary(target: MongoClient, secs: int):
-    """Leave the target replica set without a primary for `secs` seconds."""
     hello = target.admin.command("hello")
     primary = hello["primary"]
     secondaries = [h for h in hello["hosts"] if h != primary]

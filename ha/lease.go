@@ -39,8 +39,6 @@ func (m *Membership) runLease(ctx context.Context) {
 		if role, _ := m.CurrentRole(); role == RoleActive {
 			expiry.Reset(time.Until(m.leaseDeadline))
 			expiryCh = expiry.C
-		} else {
-			expiry.Stop()
 		}
 
 		select {

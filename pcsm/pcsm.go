@@ -511,7 +511,6 @@ func (p *PCSM) lockAfterRun(ctx context.Context) error {
 
 		p.lock.Lock()
 		// Another caller may have started a run while the lock was released.
-		// Recheck its state and ownership before returning the lock.
 	}
 
 	return nil

@@ -1,6 +1,7 @@
 package main //nolint:testpackage
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/percona/percona-clustersync-mongodb/ha"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
@@ -282,4 +284,27 @@ func TestNotActiveResponseJSONShape(t *testing.T) {
 	assert.Equal(t, false, decoded["ok"])
 	assert.Contains(t, decoded["message"], "host-2:2242")
 	assert.Contains(t, decoded, "group")
+}
+
+func TestWaitForPause(t *testing.T) {
+	t.Parallel()
+
+	s := &server{pcsm: pcsm.New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)}
+
+	t.Run("returns once the pipeline is not pausing", func(t *testing.T) {
+		t.Parallel()
+
+		require.NoError(t, s.waitForPause(t.Context()))
+	})
+
+	t.Run("canceled context fails before polling", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		err := s.waitForPause(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Contains(t, err.Error(), "wait for demotion pause")
+	})
 }

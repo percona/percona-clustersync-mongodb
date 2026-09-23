@@ -947,11 +947,11 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	case promoteRestore:
 		err := Restore(ctx, s.targetCluster, s.pcsm)
 		if err != nil {
+			message := "restore on promotion; relinquishing lease"
 			if status.State != pcsm.StateIdle {
-				lg.Error(err, "stale pipeline cannot be replaced; restart required; relinquishing lease")
-			} else {
-				lg.Error(err, "restore on promotion; relinquishing lease")
+				message = "stale pipeline cannot be replaced; restart required; relinquishing lease"
 			}
+			lg.Error(err, message)
 
 			rerr := s.membership.RelinquishLease(ctx)
 			if rerr != nil {

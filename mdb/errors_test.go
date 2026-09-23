@@ -213,7 +213,6 @@ func TestIsTransient_HandshakeDialError(t *testing.T) {
 // TestIsTransient_DDLWriteConcernError covers the DDL shape: for drop, create
 // and createIndexes the driver's wrapErrors leaves a writeConcernError as a raw
 // driver.WriteCommandError instead of converting it to mongo.WriteException.
-// A PrimarySteppedDown during a drop must still be retried.
 func TestIsTransient_DDLWriteConcernError(t *testing.T) {
 	t.Parallel()
 

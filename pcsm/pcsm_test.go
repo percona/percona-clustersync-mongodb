@@ -236,7 +236,7 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 				onStateChanged: func(State) {},
 				catalog:        oldCatalog,
 				clone:          &mockCloner{doneCh: doneCh},
-				repl:           &mockReplicator{doneCh: doneCh, pauseTime: time.Now()},
+				repl:           &mockReplicator{doneCh: doneCh, pauseTime: time.Unix(1, 0)},
 				finalizeStatus: &FinalizeStatus{Completed: true},
 				err:            errors.New("stale pipeline error"),
 				nsInclude:      []string{"old.*"},
