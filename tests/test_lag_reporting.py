@@ -1,6 +1,7 @@
 """Black-box regression coverage for truthful replication lag and frontier progress."""
 
 import time
+from dataclasses import dataclass
 
 import bson
 import pytest
@@ -119,10 +120,9 @@ def test_lag_frontier_advances_during_catchup_barrier(t: Testing):
         before_resume = t.pcsm.status()
         assert before_resume["state"] == PCSM.State.PAUSED, before_resume
         applied_before_resume = before_resume["eventsApplied"]
-        frozen_optime = before_resume["lastReplicatedOpTime"]["ts"]
-        frozen_applied = applied_before_resume
-        frozen_since = time.monotonic()
-        deadline = frozen_since + 90
+        initial_optime = before_resume["lastReplicatedOpTime"]["ts"]
+        frozen_window = _FrozenWindow(initial_optime, applied_before_resume, time.monotonic())
+        deadline = frozen_window.since + 90
         progress_samples = 0
         frozen_failure = None
         t.pcsm.resume()
@@ -135,28 +135,20 @@ def test_lag_frontier_advances_during_catchup_barrier(t: Testing):
             applied_since_resume = applied - applied_before_resume
             assert applied_since_resume >= 0, status
             optime = status["lastReplicatedOpTime"]["ts"]
-            if optime != frozen_optime:
-                frozen_optime = optime
-                frozen_applied = applied
-                frozen_since = sampled_at
-
-            # Mirror QA's _frozen_violation: flat applied samples remain in
-            # the window; only a frontier change resets its start.
-            frozen_duration = sampled_at - frozen_since
-            if frozen_failure is None and applied > frozen_applied and frozen_duration >= 3:
-                frozen_failure = (
-                    f"lastReplicatedOpTime stood still at {frozen_optime} for "
-                    f"{frozen_duration:.1f}s while {applied - frozen_applied} events were applied; "
+            if frozen_failure is None:
+                frozen_failure = frozen_window.sample(
+                    optime,
+                    applied,
+                    sampled_at,
                     f"applied_since_resume={applied_since_resume}/{total_docs}, "
-                    f"lagTimeSeconds={status['lagTimeSeconds']}"
+                    f"lagTimeSeconds={status['lagTimeSeconds']}",
                 )
             if applied_since_resume >= total_docs:
                 break
 
             if applied_since_resume > 0:
                 progress_samples += 1
-            reported_t, reported_i = optime.split(".")
-            reported = bson.Timestamp(int(reported_t), int(reported_i))
+            reported = _parse_optime(optime)
             batch_index = min(len(batch_op_times) - 1, applied_since_resume // batch_size)
             upper_bound = batch_op_times[batch_index].time + 1
             assert reported.time <= upper_bound, (
@@ -207,6 +199,25 @@ def _parse_optime(ts: str) -> bson.Timestamp:
     return bson.Timestamp(int(t_part), int(i_part))
 
 
+@dataclass
+class _FrozenWindow:
+    optime: str
+    applied: int
+    since: float
+
+    def sample(self, optime: str, applied: int, sampled_at: float, detail: str) -> str | None:
+        if optime != self.optime:
+            self.optime, self.applied, self.since = optime, applied, sampled_at
+
+        # Flat applied samples remain in the window; only a frontier change resets its start.
+        if applied > self.applied and (duration := sampled_at - self.since) >= 3:
+            return (
+                f"lastReplicatedOpTime stood still at {self.optime} for "
+                f"{duration:.1f}s while {applied - self.applied} events were applied; {detail}"
+            )
+        return None
+
+
 @pytest.mark.slow
 @pytest.mark.timeout(120)
 def test_lag_frontier_not_pinned_by_drained_worker(t: Testing):
@@ -252,10 +263,9 @@ def test_lag_frontier_not_pinned_by_drained_worker(t: Testing):
         before_resume = t.pcsm.status()
         assert before_resume["state"] == PCSM.State.PAUSED, before_resume
         applied_before_resume = before_resume["eventsApplied"]
-        frozen_optime = before_resume["lastReplicatedOpTime"]["ts"]
-        frozen_applied = applied_before_resume
-        frozen_since = time.monotonic()
-        deadline = frozen_since + 90
+        initial_optime = before_resume["lastReplicatedOpTime"]["ts"]
+        frozen_window = _FrozenWindow(initial_optime, applied_before_resume, time.monotonic())
+        deadline = frozen_window.since + 90
         total_docs = hot_docs + 1
         moved_past_cold = False
         frozen_failure = None
@@ -270,18 +280,13 @@ def test_lag_frontier_not_pinned_by_drained_worker(t: Testing):
             assert applied_since_resume >= 0, status
             optime = status["lastReplicatedOpTime"]["ts"]
             reported = _parse_optime(optime)
-            if optime != frozen_optime:
-                frozen_optime = optime
-                frozen_applied = applied
-                frozen_since = sampled_at
-
-            frozen_duration = sampled_at - frozen_since
-            if frozen_failure is None and applied > frozen_applied and frozen_duration >= 3:
-                frozen_failure = (
-                    f"lastReplicatedOpTime stood still at {frozen_optime} for "
-                    f"{frozen_duration:.1f}s while {applied - frozen_applied} events were applied; "
+            if frozen_failure is None:
+                frozen_failure = frozen_window.sample(
+                    optime,
+                    applied,
+                    sampled_at,
                     f"cold worker optime={cold_op_time}, "
-                    f"applied_since_resume={applied_since_resume}/{total_docs}"
+                    f"applied_since_resume={applied_since_resume}/{total_docs}",
                 )
             if applied_since_resume >= total_docs:
                 break

@@ -72,10 +72,19 @@ func (*scriptedChangeCursor) ID() int64 { return 1 }
 // cancellation is never observed; the goroutine and the cursor behind it leak
 // once per failed run.
 type blockingCursor struct {
-	event bson.Raw
+	event  bson.Raw
+	parked chan struct{}
+	calls  int
 }
 
-func (*blockingCursor) TryNext(context.Context) bool { return true }
+func (c *blockingCursor) TryNext(context.Context) bool {
+	c.calls++
+	if c.calls == 2 {
+		close(c.parked)
+	}
+
+	return true
+}
 
 func (c *blockingCursor) Current() bson.Raw   { return c.event }
 func (*blockingCursor) ResumeToken() bson.Raw { return nil }
@@ -96,7 +105,7 @@ func TestDrainChangeStream_ReturnsOnCancelWhileQueueFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	cur := &blockingCursor{event: raw}
+	cur := &blockingCursor{event: raw, parked: make(chan struct{})}
 	changeCh := make(chan *ChangeEvent, 1) // never consumed
 	done := make(chan error, 1)
 
@@ -106,18 +115,15 @@ func TestDrainChangeStream_ReturnsOnCancelWhileQueueFull(t *testing.T) {
 		})
 	}()
 
-	// The first send fills the queue, the second parks. Cancel from outside
-	// once the drain is parked: TryNext cannot fire again while the send blocks.
+	// The second TryNext follows the first send into the one-slot queue.
+	// With no consumer, the next send cannot complete; cancel at this signal.
 	err = util.CtxWithTimeout(t.Context(), barrierTimeout, func(waitCtx context.Context) error {
-		for len(changeCh) == 0 {
-			select {
-			case <-waitCtx.Done():
-				return errors.Wrap(waitCtx.Err(), "queue never filled")
-			default:
-			}
+		select {
+		case <-cur.parked:
+			return nil
+		case <-waitCtx.Done():
+			return errors.Wrap(waitCtx.Err(), "queue never filled")
 		}
-
-		return nil
 	})
 	require.NoError(t, err)
 	cancel()
