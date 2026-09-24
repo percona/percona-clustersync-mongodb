@@ -33,6 +33,7 @@ type mockReplicator struct {
 	doneCh           chan struct{}
 	startTime        time.Time
 	pauseTime        time.Time
+	pausing          bool
 	lastOpTime       bson.Timestamp
 	err              error
 	checkpoint       *repl.Checkpoint
@@ -49,6 +50,7 @@ func (m *mockReplicator) Status() repl.Status {
 	return repl.Status{
 		StartTime:            m.startTime,
 		PauseTime:            m.pauseTime,
+		Pausing:              m.pausing,
 		LastReplicatedOpTime: m.lastOpTime,
 		Err:                  m.err,
 	}

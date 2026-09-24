@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import time
+
 import pytest
 from bson.max_key import MaxKey
 from bson.min_key import MinKey
@@ -47,9 +49,7 @@ def shard_hash_widths(chunks: list[dict]) -> dict[str, int]:
 
 
 def test_hashed_native_layout_is_balanced(t: Testing):
-    """Hashed collections are not pre-split: PCSM relies on the balanced native
-    layout that shardCollection produces. This guards that the target ends up
-    with an even, well-distributed hashed layout after clone."""
+    """Hashed collections retain shardCollection's balanced native layout."""
     ns = "db_1.coll_1"
 
     t.source["db_1"].create_collection("coll_1")
@@ -65,18 +65,15 @@ def test_hashed_native_layout_is_balanced(t: Testing):
         n = shard_count(t.target)
         chunks = target_chunks(t.target, ns)
 
-        # 1. at least one chunk per shard, evenly divided across shards.
         assert len(chunks) >= n, f"chunk count {len(chunks)} < shard count {n}"
         assert len(chunks) % n == 0, f"chunk count {len(chunks)} not a multiple of {n}"
 
-        # 2. even ownership: every shard owns the same number of chunks.
         per_shard: dict[str, int] = {}
         for c in chunks:
             per_shard[c["shard"]] = per_shard.get(c["shard"], 0) + 1
         assert set(per_shard.values()) == {len(chunks) // n}, f"uneven chunk ownership: {per_shard}"
 
-        # 3. even data distribution: each shard owns roughly an equal share of
-        # the hash space (data volume is proportional to hash width).
+        # Data volume is proportional to hash-space width.
         width_per_shard = shard_hash_widths(chunks)
         total = sum(width_per_shard.values())
         ideal = total / n
@@ -89,24 +86,10 @@ def test_hashed_native_layout_is_balanced(t: Testing):
 
 
 def _ownership_by_bounds(chunks: list[dict]) -> dict[tuple, str]:
-    """Map each chunk's (min._id, max._id) bounds to its owning shard."""
     return {(repr(c["min"]["_id"]), repr(c["max"]["_id"])): c["shard"] for c in chunks}
 
 
-def test_ranged_mirror_layout(t: Testing):
-    """Ranged collections with equal source/target shard counts mirror the
-    source chunk layout: same boundaries, and ownership paired by sorted shard
-    ID (source[i] -> target[i])."""
-    if shard_count(t.source) != shard_count(t.target):
-        pytest.skip("mirroring requires equal shard counts (SRC_SHARDS == TGT_SHARDS)")
-
-    ns = "db_1.coll_1"
-
-    src_shards = sorted_shards(t.source)
-    if len(src_shards) < 2:
-        # Mirroring is only observable with >= 2 shards owning chunks.
-        return
-
+def _setup_ranged_layout(t: Testing, ns: str, src_shards: list[str]):
     t.source["db_1"].create_collection("coll_1")
     t.source.admin.command("shardCollection", ns, key={"_id": 1})
 
@@ -131,6 +114,35 @@ def test_ranged_mirror_layout(t: Testing):
         f"source layout not spread across all shards: {src_owners}"
     )
 
+
+def _assert_mirrored_layout(
+    src_chunks: list[dict], tgt_chunks: list[dict], src_shards: list[str], tgt_shards: list[str]
+):
+    pairing = dict(zip(src_shards, tgt_shards, strict=True))
+    src_owner = _ownership_by_bounds(src_chunks)
+    tgt_owner = _ownership_by_bounds(tgt_chunks)
+    assert src_owner.keys() == tgt_owner.keys(), "target boundaries differ from source"
+    for bounds, s_shard in src_owner.items():
+        assert tgt_owner[bounds] == pairing[s_shard], (
+            f"chunk {bounds}: target on {tgt_owner[bounds]}, "
+            f"expected {pairing[s_shard]} (source {s_shard})"
+        )
+
+
+def test_ranged_mirror_layout(t: Testing):
+    """Mirror ranged boundaries and ownership under sorted-shard pairing."""
+    if shard_count(t.source) != shard_count(t.target):
+        pytest.skip("mirroring requires equal shard counts (SRC_SHARDS == TGT_SHARDS)")
+
+    ns = "db_1.coll_1"
+
+    src_shards = sorted_shards(t.source)
+    if len(src_shards) < 2:
+        # Mirroring is only observable with >= 2 shards owning chunks.
+        return
+
+    _setup_ranged_layout(t, ns, src_shards)
+
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
         r.wait_for_clone_completed()
@@ -140,30 +152,111 @@ def test_ranged_mirror_layout(t: Testing):
         tgt_shards = sorted_shards(t.target)
         assert len(tgt_shards) == len(src_shards), "test requires equal shard counts"
 
-        pairing = dict(zip(src_shards, tgt_shards, strict=True))
-
-        # 1. same chunk boundaries on both sides.
         assert len(tgt_chunks) == len(src_chunks), (
             f"target chunk count {len(tgt_chunks)} != source {len(src_chunks)}"
         )
+        _assert_mirrored_layout(src_chunks, tgt_chunks, src_shards, tgt_shards)
 
-        # 2. ownership mirrors the source under sorted-shard pairing.
-        src_owner = _ownership_by_bounds(src_chunks)
-        tgt_owner = _ownership_by_bounds(tgt_chunks)
-        assert src_owner.keys() == tgt_owner.keys(), "target boundaries differ from source"
-        for bounds, s_shard in src_owner.items():
-            assert tgt_owner[bounds] == pairing[s_shard], (
-                f"chunk {bounds}: target on {tgt_owner[bounds]}, "
-                f"expected {pairing[s_shard]} (source {s_shard})"
+    t.compare_all_sharded()
+
+
+def _wait_for_clone_without_failure(t: Testing, timeout: int) -> dict:
+    """Fail immediately on PCSM failure rather than waiting out the clone deadline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        status = t.pcsm.status()
+        assert status["state"] != "failed", f"PCSM failed during clone: {status}"
+        if status["initialSync"]["cloneCompleted"]:
+            return status
+        assert time.monotonic() < deadline, f"clone did not complete within {timeout}s: {status}"
+        time.sleep(0.5)
+
+
+def _setup_presplit_layout(t: Testing, ns: str) -> list[str]:
+    if not t.target.admin.command({"getParameter": 1, "enableTestCommands": 1})[
+        "enableTestCommands"
+    ]:
+        pytest.skip("requires failCommand support on the target mongos")
+    if shard_count(t.target) < 2:
+        pytest.skip("presplit moveChunk requires at least two target shards")
+
+    src_shards = sorted_shards(t.source)
+    if len(src_shards) < 2:
+        pytest.skip("presplit moveChunk requires at least two source shards")
+    _setup_ranged_layout(t, ns, src_shards)
+    return src_shards
+
+
+# 24 LockTimeout is retried by every RunWithRetry caller, 11601 Interrupted only
+# by moveChunk (globally it is what killOp returns).
+@pytest.mark.parametrize("error_code", [24, 11601], ids=["LockTimeout", "Interrupted"])
+@pytest.mark.timeout(300)
+def test_presplit_retries_transient_move_chunk_error(t: Testing, error_code: int):
+    ns = "db_1.coll_1"
+    src_shards = _setup_presplit_layout(t, ns)
+    try:
+        t.target.admin.command(
+            {
+                "configureFailPoint": "failCommand",
+                "mode": {"times": 2},
+                "data": {"failCommands": ["moveChunk"], "errorCode": error_code},
+            }
+        )
+        with t.run(phase=Runner.Phase.MANUAL, wait_timeout=90) as r:
+            r.start()
+            _wait_for_clone_without_failure(t, r.wait_timeout)
+
+            # Inspect before finalize can let the balancer reshape the layout.
+            src_chunks = target_chunks(t.source, ns)
+            tgt_chunks = target_chunks(t.target, ns)
+            tgt_shards = sorted_shards(t.target)
+            assert len(tgt_chunks) == len(src_chunks), (
+                f"target chunk count {len(tgt_chunks)} != source {len(src_chunks)}"
             )
+
+            if len(src_shards) == len(tgt_shards):
+                _assert_mirrored_layout(src_chunks, tgt_chunks, src_shards, tgt_shards)
+            else:
+                tgt_owners = {c["shard"] for c in tgt_chunks}
+                assert tgt_owners == set(tgt_shards), (
+                    f"target does not use all shards: {tgt_owners}"
+                )
+    finally:
+        t.target.admin.command({"configureFailPoint": "failCommand", "mode": "off"})
+
+    t.compare_all_sharded()
+
+
+@pytest.mark.timeout(300)
+def test_presplit_gives_up_and_clone_continues(t: Testing):
+    ns = "db_1.coll_1"
+    _setup_presplit_layout(t, ns)
+
+    try:
+        t.target.admin.command(
+            {
+                "configureFailPoint": "failCommand",
+                "mode": "alwaysOn",
+                "data": {"failCommands": ["moveChunk"], "errorCode": 24},
+            }
+        )
+        with t.run(phase=Runner.Phase.MANUAL, wait_timeout=90) as r:
+            r.start()
+            status = _wait_for_clone_without_failure(t, r.wait_timeout)
+
+            src_count = t.source["db_1"]["coll_1"].count_documents({})
+            tgt_count = t.target["db_1"]["coll_1"].count_documents({})
+            assert tgt_count == src_count, (
+                f"{ns}: target count {tgt_count} != source {src_count}; status={status}"
+            )
+    finally:
+        t.target.admin.command({"configureFailPoint": "failCommand", "mode": "off"})
 
     t.compare_all_sharded()
 
 
 def test_ranged_weighted_layout(t: Testing):
-    """Ranged collections with unequal source/target shard counts are packed by
-    estimated size so per-shard data volume stays even. Runs only on an unequal
-    topology (e.g. SRC_SHARDS=3 TGT_SHARDS=2)."""
+    """Unequal shard counts use size-weighted placement to balance data volume."""
     n_src = shard_count(t.source)
     n_tgt = shard_count(t.target)
     if n_src == n_tgt:
@@ -208,28 +301,25 @@ def test_ranged_weighted_layout(t: Testing):
         src_chunks = target_chunks(t.source, ns)
         tgt_chunks = target_chunks(t.target, ns)
 
-        # 1. boundaries replayed: same chunk count.
         assert len(tgt_chunks) == len(src_chunks), (
             f"target chunk count {len(tgt_chunks)} != source {len(src_chunks)}"
         )
 
-        # 2. every target shard owns at least one chunk.
         tgt_owners = {c["shard"] for c in tgt_chunks}
         assert len(tgt_owners) == n_tgt, f"target does not use all shards: {tgt_owners}"
 
-        # 3. Per-shard document counts are roughly even. Largest-first placement
-        # bounds the spread by one chunk, so allow the heaviest chunk's share slack.
+        # Largest-first placement bounds the spread by the heaviest chunk's size.
         docs_per_shard: dict[str, int] = {}
         for c in tgt_chunks:
             lo = c["min"]["_id"]
             hi = c["max"]["_id"]
-            cnt = t.target["db_1"]["coll_1"].count_documents(
-                {"_id": {"$gte": lo, "$lt": hi}}
-                if not isinstance(hi, MaxKey)
-                else {"_id": {"$gte": lo}}
-                if not isinstance(lo, MinKey)
-                else {}
-            )
+            if not isinstance(hi, MaxKey):
+                query = {"_id": {"$gte": lo, "$lt": hi}}
+            elif not isinstance(lo, MinKey):
+                query = {"_id": {"$gte": lo}}
+            else:
+                query = {}
+            cnt = t.target["db_1"]["coll_1"].count_documents(query)
             docs_per_shard[c["shard"]] = docs_per_shard.get(c["shard"], 0) + cnt
 
         total = sum(docs_per_shard.values())

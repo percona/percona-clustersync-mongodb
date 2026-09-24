@@ -2,19 +2,19 @@ package mdb
 
 import (
 	"context"
+	"net"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
 
-// IsIndexNotFound checks if an error is an index not found error.
 func IsIndexNotFound(err error) bool {
 	return isMongoCommandError(err, "IndexNotFound")
 }
 
-// IsIndexOptionsConflict checks if an error is an index options conflict error.
 func IsIndexOptionsConflict(err error) bool {
 	return isMongoCommandError(err, "IndexOptionsConflict")
 }
@@ -33,7 +33,6 @@ func IsNamespaceExists(err error) bool {
 	return isMongoCommandError(err, "NamespaceExists")
 }
 
-// IsCollectionDropped checks if the error is caused by a collection being dropped.
 func IsCollectionDropped(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
@@ -44,7 +43,6 @@ func IsCollectionDropped(err error) bool {
 	return false
 }
 
-// IsCollectionRenamed checks if the error is caused by a collection being renamed.
 func IsCollectionRenamed(err error) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) && cmdErr.Name == "QueryPlanKilled" {
@@ -81,7 +79,6 @@ func IsSplitPointAlreadyChunkBoundary(err error) bool {
 	return false
 }
 
-// isMongoCommandError checks if an error is a MongoDB error with the specified name.
 func isMongoCommandError(err error, name string) bool {
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
@@ -91,9 +88,7 @@ func isMongoCommandError(err error, name string) bool {
 	return false
 }
 
-// IsTransient checks if the error is a transient/retriable error that is
-// expected to clear on its own. It checks for specific MongoDB error codes that
-// indicate transient issues, including a retriable ConflictingOperationInProgress.
+// IsTransient reports whether an error is expected to clear on retry.
 // Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
 	if errors.Is(err, context.Canceled) {
@@ -101,6 +96,19 @@ func IsTransient(err error) bool {
 	}
 
 	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// A dial failure the driver leaves unlabeled surfaces as a
+	// topology.ConnectionError wrapping a *net.OpError. wrapConnectionError
+	// labels connection errors NetworkError except for DNS, x509 and TLS-record
+	// errors, so a host that stops resolving during a partition would otherwise
+	// be classified as terminal (connection refused is already labeled). A
+	// permanently wrong host is indistinguishable from a partition at this
+	// layer; callers bound the retries. x509 and TLS failures are not OpErrors
+	// and stay terminal.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
 		return true
 	}
 
@@ -123,6 +131,9 @@ func IsTransient(err error) bool {
 		91:    {}, // ShutdownInProgress
 		189:   {}, // PrimarySteppedDown
 		117:   {}, // ConflictingOperationInProgress (concurrent chunk migration/DDL)
+		91331: {}, // RetriableRemoteCommandFailure (config server remote moveRange)
+		24:    {}, // LockTimeout (donor migration lock)
+		262:   {}, // ExceededTimeLimit (chunk migration in flight)
 		10107: {}, // NotWritablePrimary
 		13435: {}, // NotPrimaryNoSecondaryOk
 	}
@@ -149,7 +160,43 @@ func IsTransient(err error) bool {
 		}
 	}
 
+	// Collection.Drop and Database.CreateCollection return through the
+	// driver's wrapErrors, which has no driver.WriteCommandError branch, so a
+	// writeConcernError on those paths arrives as the raw driver type and
+	// misses the WriteException branch above. RunCommand and IndexView convert
+	// via processWriteError, so PCSM's collMod and createIndexes are
+	// unaffected; this branch also covers them if that ever changes.
+	var wcErr driver.WriteCommandError
+	if errors.As(err, &wcErr) {
+		for _, we := range wcErr.WriteErrors {
+			if _, ok := transientErrorCodes[int(we.Code)]; ok {
+				return true
+			}
+		}
+
+		if wcErr.WriteConcernError != nil {
+			if _, ok := transientErrorCodes[int(wcErr.WriteConcernError.Code)]; ok {
+				return true
+			}
+		}
+	}
+
 	return false
+}
+
+// IsChunkMigrationTransient extends IsTransient with Interrupted (11601), which
+// MigrationSourceManager returns for a move torn down before completion. It is
+// scoped to moveChunk retries only: globally, Interrupted is also what killOp
+// returns, and the replication bulk-write loop retries transient errors without
+// bound. CallbackCanceled (90) is deliberately absent: the destination manager
+// sets it only on its internal critical-section promise, after the sole waiter
+// has already returned, so it never reaches a moveChunk client.
+func IsChunkMigrationTransient(err error) bool {
+	if IsTransient(err) {
+		return true
+	}
+
+	return isMongoCommandError(err, "Interrupted")
 }
 
 func isAuthKeyNotFound(err error) bool {

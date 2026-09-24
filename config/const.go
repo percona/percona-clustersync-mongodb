@@ -63,8 +63,9 @@ const (
 	StaleMemberDuration = 3 * MemberHeartbeatInterval
 	// LeaseRenewInterval is how often the active instance renews the lease.
 	LeaseRenewInterval = 3 * time.Second
-	// LeaseTTL is how long the lease stays valid after a renewal. Sized to allow
-	// several renewal attempts before a standby may take over.
+	// LeaseTTL is how long the lease stays valid after a renewal. An ACTIVE
+	// tolerates renewal errors only until this duration from its last successful
+	// attempt's start, before a standby may take over.
 	LeaseTTL = 10 * time.Second
 	// HAOperationTimeout bounds a single lease or membership MongoDB operation.
 	HAOperationTimeout = 5 * time.Second

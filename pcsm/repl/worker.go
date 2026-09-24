@@ -31,6 +31,7 @@ type routedEvent struct {
 type pendingBulk struct {
 	writer     bulkWriter     // filled bulk, ready to execute
 	checkpoint bson.Timestamp // pendingTS when this bulk was sealed
+	events     int64          // routed events folded into this bulk
 }
 
 // worker handles a subset of document writes in parallel.
@@ -52,6 +53,13 @@ type worker struct {
 	firstRoutedTS   atomic.Pointer[bson.Timestamp] // first timestamp dispatched to this worker
 	lastRoutedTS    atomic.Pointer[bson.Timestamp] // last timestamp dispatched to this worker
 	lastPendingTS   bson.Timestamp                 // timestamp of last event in current batch
+	pendingEvents   int64                          // events folded into the current batch
+
+	// Exact event accounting for Idle. Timestamps cannot tell two distinct
+	// events with the same clusterTime apart (transactions, applyOps), so
+	// idleness compares the number of events routed with the number committed.
+	eventsRouted    atomic.Int64
+	eventsCommitted atomic.Int64
 
 	tickerOffset  time.Duration // stagger delay before starting the flush ticker
 	flushInterval time.Duration // maximum interval between bulk write flushes
@@ -154,6 +162,7 @@ func (w *worker) runWriter(ctx context.Context) {
 
 			ts := pb.checkpoint
 			w.lastCommittedTS.Store(&ts)
+			w.eventsCommitted.Add(pb.events)
 
 			lg.With(log.Int64("size", int64(size))).Trace("Flushed batch")
 		}
@@ -344,6 +353,7 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 
 	// Track the timestamp of the last event in the batch
 	w.lastPendingTS = event.change.ClusterTime
+	w.pendingEvents++
 
 	return nil
 }
@@ -368,6 +378,7 @@ func (w *worker) enqueueBulk() bool {
 	pb := &pendingBulk{
 		writer:     w.currentBulkWrite,
 		checkpoint: w.lastPendingTS,
+		events:     w.pendingEvents,
 	}
 
 	select {
@@ -378,6 +389,7 @@ func (w *worker) enqueueBulk() bool {
 	}
 
 	w.currentBulkWrite = w.newBulkWriter()
+	w.pendingEvents = 0
 
 	return true
 }
@@ -413,6 +425,16 @@ func (w *worker) drainRoutedEvents() bool {
 type workerPool struct {
 	workers    []*worker
 	numWorkers int
+
+	// routeMu makes Route's per-worker publishes and Checkpoint's scan
+	// mutually exclusive. Every field is atomic, but Checkpoint decides a
+	// worker imposes no constraint from lastRoutedTS == nil, so a scan that
+	// interleaves with a routing burst can skip a worker that just received
+	// its first event and take a newer worker's first routed timestamp as
+	// the floor. The floor is monotone once published, so that skip would
+	// be silent event loss on resume. Route only ever runs on the
+	// dispatcher; the lock is uncontended except during the 500ms scan.
+	routeMu sync.Mutex
 
 	target *mongo.Client
 
@@ -476,9 +498,14 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	w := p.workers[workerIdx]
 
 	ts := change.ClusterTime
+	p.routeMu.Lock()
 	w.firstRoutedTS.CompareAndSwap(nil, &ts)
 	w.lastRoutedTS.Store(&ts)
+	w.eventsRouted.Add(1)
+	p.routeMu.Unlock()
 
+	// The send stays outside routeMu: a full worker queue must not hold the
+	// progress tracker's scan hostage.
 	w.routedEventCh <- &routedEvent{
 		change: change,
 		ns:     ns,
@@ -548,7 +575,14 @@ func (p *workerPool) ReleaseBarrier() {
 // A nil lastCommittedTS on a worker that has been routed events must never be
 // silently skipped: doing so would let the checkpoint advance past the worker's
 // uncommitted routed events, causing silent event loss on resume.
+//
+// The scan runs under routeMu so it observes a routing-consistent pool: it is
+// called from the progress tracker concurrently with Route. A commit landing
+// mid-scan is fine, it only makes the floor staler.
 func (p *workerPool) Checkpoint() bson.Timestamp {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
 	var minTS bson.Timestamp
 	first := true
 
@@ -583,23 +617,83 @@ func (p *workerPool) Checkpoint() bson.Timestamp {
 	return minTS
 }
 
-// Idle returns true when every worker that has been routed events has
-// committed (flushed) up to its last routed timestamp. Workers that were
-// never routed an event are skipped.
+// ReportedFrontier returns the inclusive frontier that may be reported as
+// replicated: every routed event strictly before it has committed. It differs
+// from Checkpoint in one way: a fully drained worker (committed == routed)
+// imposes no constraint, so a worker that finished its share early cannot
+// freeze reporting while the others apply their backlog. When every routed
+// worker has drained, the frontier is the newest committed timestamp. Zero
+// when nothing has been routed. It is never used as the resume floor.
 //
-// This differs from Checkpoint which returns the MIN committed timestamp
-// across all workers (useful for crash recovery). Idle checks each worker
-// against its own last routed timestamp, correctly handling the case where
-// workers receive events with different timestamp ranges.
-func (p *workerPool) Idle() bool {
+// Runs under routeMu. Per worker, the committed count is read before
+// lastCommittedTS: runWriter stores the timestamp and then adds the count, so
+// a worker observed as drained yields the timestamp of the commit that drained
+// it, and a stale timestamp on a busy worker only makes the bound older.
+func (p *workerPool) ReportedFrontier() bson.Timestamp {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
+	var busyMin, drainedMax bson.Timestamp
+	busy := false
+
 	for _, w := range p.workers {
-		routed := w.lastRoutedTS.Load()
-		if routed == nil {
+		if w.lastRoutedTS.Load() == nil {
 			continue
 		}
 
-		committed := w.lastCommittedTS.Load()
-		if committed == nil || committed.Before(*routed) {
+		routed := w.eventsRouted.Load()
+		committed := w.eventsCommitted.Load()
+		committedTS := w.lastCommittedTS.Load()
+
+		if committed == routed {
+			if committedTS != nil && committedTS.After(drainedMax) {
+				drainedMax = *committedTS
+			}
+
+			continue
+		}
+
+		// Outstanding events: same bound as Checkpoint. A worker that never
+		// committed, including one whose write failed, holds the frontier at
+		// its first routed event.
+		bound := committedTS
+		if bound == nil {
+			bound = w.firstRoutedTS.Load()
+		}
+
+		if !busy || bound.Before(busyMin) {
+			busyMin = *bound
+			busy = true
+		}
+	}
+
+	if busy {
+		return busyMin
+	}
+
+	return drainedMax
+}
+
+// Idle returns true when every worker has committed (flushed) every event
+// routed to it.
+//
+// This differs from Checkpoint which returns the MIN committed timestamp
+// across all workers (useful for crash recovery). Idle compares exact event
+// counts instead of timestamps: distinct events can share a clusterTime, so
+// a committed timestamp equal to the last routed one does not prove the
+// queue is empty. A worker whose bulk failed never converges, which keeps
+// the pool non-idle until the failure is handled.
+//
+// The scan runs under routeMu for the same reason Checkpoint does: a worker
+// routed mid-scan must not be counted as caught up. Today every caller is on
+// the dispatcher goroutine, so the lock is uncontended; it is here so the next
+// off-dispatcher caller does not reintroduce the Checkpoint race.
+func (p *workerPool) Idle() bool {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+
+	for _, w := range p.workers {
+		if w.eventsCommitted.Load() != w.eventsRouted.Load() {
 			return false
 		}
 	}

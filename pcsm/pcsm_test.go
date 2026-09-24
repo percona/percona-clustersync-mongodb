@@ -179,36 +179,112 @@ func TestCheckpoint(t *testing.T) {
 	// This is covered by E2E tests.
 }
 
-func TestRecover(t *testing.T) {
+func TestRecover_QuiescentPipeline(t *testing.T) {
 	t.Parallel()
 
-	t.Run("fails when not idle - running", func(t *testing.T) {
-		t.Parallel()
+	for _, tt := range []struct {
+		name  string
+		state State
+		repl  Replicator
+	}{
+		{name: "fails when running", state: StateRunning},
+		{name: "fails when finalizing", state: StateFinalizing},
+		{
+			name:  "fails when paused and still pausing",
+			state: StatePaused,
+			repl:  &mockReplicator{pausing: true},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		p := &PCSM{
-			state:          StateRunning,
-			onStateChanged: func(State) {},
-		}
+			p := &PCSM{
+				state:          tt.state,
+				repl:           tt.repl,
+				onStateChanged: func(State) {},
+			}
 
-		err := p.Recover(context.Background(), []byte{})
+			data, err := bson.Marshal(checkpoint{State: StatePaused})
+			require.NoError(t, err)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot recover")
-	})
+			err = p.Recover(context.Background(), data)
 
-	t.Run("fails when not idle - paused", func(t *testing.T) {
+			require.ErrorContains(t, err, "cannot recover:")
+			require.ErrorContains(t, err, string(tt.state))
+			assert.Equal(t, tt.state, p.state)
+			assert.Equal(t, tt.repl, p.repl)
+		})
+	}
+
+	for _, tt := range []struct {
+		name  string
+		state State
+	}{
+		{name: "succeeds when paused and settled", state: StatePaused},
+		{name: "succeeds when failed", state: StateFailed},
+		{name: "succeeds when finalized", state: StateFinalized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doneCh := make(chan struct{})
+			close(doneCh)
+
+			oldCatalog := catalog.NewCatalog(nil, nil, mdb.ServerVersion{})
+			p := &PCSM{
+				state:          tt.state,
+				onStateChanged: func(State) {},
+				catalog:        oldCatalog,
+				clone:          &mockCloner{doneCh: doneCh},
+				repl:           &mockReplicator{doneCh: doneCh, pauseTime: time.Unix(1, 0)},
+				finalizeStatus: &FinalizeStatus{Completed: true},
+				err:            errors.New("stale pipeline error"),
+				nsInclude:      []string{"old.*"},
+				nsExclude:      []string{"old.excluded"},
+			}
+
+			cp := checkpoint{
+				State:     StatePaused,
+				NSInclude: []string{"new.*"},
+				NSExclude: []string{"new.excluded"},
+			}
+			data, err := bson.Marshal(cp)
+			require.NoError(t, err)
+
+			err = p.Recover(context.Background(), data)
+
+			require.NoError(t, err)
+			assert.Equal(t, cp.State, p.state)
+			assert.NotSame(t, oldCatalog, p.catalog)
+			assert.IsType(t, &clone.Clone{}, p.clone)
+			assert.IsType(t, &repl.Repl{}, p.repl)
+			assert.Equal(t, cp.NSInclude, p.nsInclude)
+			assert.Equal(t, cp.NSExclude, p.nsExclude)
+			assert.Nil(t, p.finalizeStatus)
+			require.NoError(t, p.err)
+		})
+	}
+
+	t.Run("succeeds when paused with nil replicator", func(t *testing.T) {
 		t.Parallel()
 
 		p := &PCSM{
 			state:          StatePaused,
 			onStateChanged: func(State) {},
 		}
+		data, err := bson.Marshal(checkpoint{State: StatePaused})
+		require.NoError(t, err)
 
-		err := p.Recover(context.Background(), []byte{})
+		err = p.Recover(context.Background(), data)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot recover")
+		require.NoError(t, err)
+		assert.Equal(t, State(StatePaused), p.state)
+		assert.NotNil(t, p.repl)
 	})
+}
+
+func TestRecover(t *testing.T) {
+	t.Parallel()
 
 	t.Run("fails with malformed BSON", func(t *testing.T) {
 		t.Parallel()

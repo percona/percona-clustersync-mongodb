@@ -24,6 +24,16 @@ func RunWithRetry(
 	retryInterval time.Duration,
 	maxRetries int,
 ) error {
+	return runWithRetry(ctx, fn, retryInterval, maxRetries, IsTransient)
+}
+
+func runWithRetry(
+	ctx context.Context,
+	fn func(context.Context) error,
+	retryInterval time.Duration,
+	maxRetries int,
+	shouldRetry func(error) bool,
+) error {
 	if retryInterval <= 0 || maxRetries <= 0 {
 		return errors.New("retryInterval and maxRetries must be greater than zero")
 	}
@@ -42,7 +52,7 @@ func RunWithRetry(
 			return err
 		}
 
-		if !IsTransient(err) {
+		if !shouldRetry(err) {
 			return err
 		}
 

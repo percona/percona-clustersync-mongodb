@@ -1,11 +1,17 @@
 package ha //nolint:testpackage
 
 import (
+	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
@@ -20,8 +26,180 @@ func newTestLeaseMember() *Membership {
 	m.instanceID = "pcsm-test"
 	m.group = "group-a"
 	m.roleChangeCh = make(chan RoleChange, 1)
+	m.acquire = func(context.Context) (leaseAttempt, error) {
+		return leaseAttempt{}, nil
+	}
 
 	return m
+}
+
+func TestLeaseTickErrorGrace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		role       Role
+		expired    bool
+		expected   Role
+		wantChange bool
+	}{
+		{name: "active within deadline", role: RoleActive, expected: RoleActive},
+		{name: "active past deadline", role: RoleActive, expired: true, expected: RoleStandby, wantChange: true},
+		{name: "standby", role: RoleStandby, expected: RoleStandby},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestLeaseMember()
+			m.SetRole(tt.role, 7)
+			m.leaseDeadline = time.Now().Add(time.Hour)
+			if tt.expired {
+				m.leaseDeadline = time.Unix(1, 0)
+			}
+			deadline := m.leaseDeadline
+			m.acquire = func(context.Context) (leaseAttempt, error) {
+				return leaseAttempt{}, errors.New("target unavailable")
+			}
+
+			m.leaseTick(t.Context(), testLogger())
+
+			role, term := m.CurrentRole()
+			assert.Equal(t, tt.expected, role)
+			assert.Equal(t, Term(7), term)
+			assert.Equal(t, deadline, m.leaseDeadline, "errors must not extend the deadline")
+			select {
+			case rc := <-m.RoleChanges():
+				require.True(t, tt.wantChange, "unexpected role change")
+				assert.Equal(t, RoleChange{Role: RoleStandby, Term: 7}, rc)
+			default:
+				require.False(t, tt.wantChange, "expected demotion")
+			}
+		})
+	}
+}
+
+func TestLeaseTickBoundsActiveAttempt(t *testing.T) {
+	t.Parallel()
+
+	m := newTestLeaseMember()
+	m.SetRole(RoleActive, 7)
+	m.leaseDeadline = time.Now().Add(time.Hour)
+	called := false
+	m.acquire = func(ctx context.Context) (leaseAttempt, error) {
+		called = true
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok, "ACTIVE attempt must carry a deadline")
+		assert.False(t, deadline.After(m.leaseDeadline))
+
+		return leaseAttempt{}, errors.New("target unavailable")
+	}
+
+	m.leaseTick(t.Context(), testLogger())
+	assert.True(t, called)
+}
+
+func TestLeaseTickSuccessfulAttemptAdvancesDeadline(t *testing.T) {
+	t.Parallel()
+
+	for _, initialRole := range []Role{RoleStandby, RoleActive} {
+		t.Run(string(initialRole), func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestLeaseMember()
+			m.SetRole(initialRole, 7)
+			m.leaseDeadline = time.Now().Add(config.LeaseTTL / 2)
+			previous := m.leaseDeadline
+			var receivedAt time.Time
+			m.acquire = func(context.Context) (leaseAttempt, error) {
+				receivedAt = time.Now()
+
+				return leaseAttempt{Acquired: true, Term: 7}, nil
+			}
+
+			before := time.Now()
+			m.FirstLeaseTick(t.Context())
+
+			role, term := m.CurrentRole()
+			assert.Equal(t, RoleActive, role)
+			assert.Equal(t, Term(7), term)
+			assert.True(t, m.leaseDeadline.After(previous))
+			assert.False(t, m.leaseDeadline.Before(before.Add(config.LeaseTTL)))
+			assert.False(t, m.leaseDeadline.After(receivedAt.Add(config.LeaseTTL)))
+		})
+	}
+}
+
+func TestLeaseTickLostLeaseDemotesWithinGrace(t *testing.T) {
+	t.Parallel()
+
+	m := newTestLeaseMember()
+	m.SetRole(RoleActive, 7)
+	m.leaseDeadline = time.Now().Add(time.Hour)
+
+	m.leaseTick(t.Context(), testLogger())
+
+	role, _ := m.CurrentRole()
+	assert.Equal(t, RoleStandby, role)
+	select {
+	case rc := <-m.RoleChanges():
+		assert.Equal(t, RoleStandby, rc.Role)
+	default:
+		t.Fatal("expected immediate demotion after losing the lease")
+	}
+}
+
+func TestLeaseTickExpiredAttemptCannotPromote(t *testing.T) {
+	t.Parallel()
+
+	m := newTestLeaseMember()
+	m.SetRole(RoleActive, 7)
+	m.leaseDeadline = time.Unix(1, 0)
+	m.acquire = func(ctx context.Context) (leaseAttempt, error) {
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+
+		return leaseAttempt{Acquired: true, Term: 7}, nil
+	}
+
+	m.leaseTick(t.Context(), testLogger())
+
+	role, term := m.CurrentRole()
+	assert.Equal(t, RoleStandby, role)
+	assert.Equal(t, Term(7), term)
+}
+
+func TestRunLeaseExpiresWithoutRenewal(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		m := newTestLeaseMember()
+		m.SetRole(RoleActive, 7)
+		m.leaseDeadline = time.Unix(1, 0)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		changes := m.RoleChanges()
+		started := time.Now()
+		go func() {
+			defer close(done)
+			m.RunLease(ctx)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("lease loop did not stop after cancellation")
+			}
+		})
+
+		select {
+		case rc := <-changes:
+			assert.Equal(t, RoleChange{Role: RoleStandby, Term: 7}, rc)
+			assert.Equal(t, started, time.Now(), "expiry must not wait for the renewal ticker")
+		case <-time.After(5 * time.Second):
+			t.Fatal("lease deadline did not emit a demotion")
+		}
+	})
 }
 
 func TestMemberDefaultRole(t *testing.T) {
