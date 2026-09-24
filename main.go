@@ -50,10 +50,10 @@ const mongoDBOperationTimeoutHelp = "Timeout for MongoDB operations (e.g., 30s, 
 
 var (
 	Version   = "v0.10.0" //nolint:gochecknoglobals
-	Platform  = ""       //nolint:gochecknoglobals
-	GitCommit = ""       //nolint:gochecknoglobals
-	GitBranch = ""       //nolint:gochecknoglobals
-	BuildTime = ""       //nolint:gochecknoglobals
+	Platform  = ""        //nolint:gochecknoglobals
+	GitCommit = ""        //nolint:gochecknoglobals
+	GitBranch = ""        //nolint:gochecknoglobals
+	BuildTime = ""        //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
