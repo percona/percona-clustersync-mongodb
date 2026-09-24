@@ -229,6 +229,8 @@ func TestAssignLargestFirst(t *testing.T) {
 
 		assert.Equal(t, int64(0), w.sizes[assign[0]], "unrealized reservation must be released")
 		assert.Equal(t, int64(1000), w.sizes[assign[1]], "real owner must carry the chunk")
+		assert.Equal(t, 0, w.counts[assign[0]], "unrealized chunk count must be released")
+		assert.Equal(t, 2, w.counts[assign[1]], "real owner must count both chunks")
 	})
 
 	t.Run("single shard takes everything", func(t *testing.T) {
@@ -237,4 +239,71 @@ func TestAssignLargestFirst(t *testing.T) {
 		assignment := newShardSizes().assignLargestFirst([]int64{5, 3, 8}, []string{"only"})
 		assert.Equal(t, []string{"only", "only", "only"}, assignment)
 	})
+}
+
+// TestAssignLargestFirstZeroSizeChunks covers chunks whose estimate is zero:
+// an empty collection, or one whose data sits in a few ranges while the rest
+// were emptied by deletes. Such chunks add nothing to the running per-shard
+// byte total, so they leave the lightest-shard comparison tied and only the
+// chunk count keeps them from all landing on the same shard.
+func TestAssignLargestFirstZeroSizeChunks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		collections [][]int64
+		shards      []string
+		evenCounts  bool
+	}{
+		{
+			name:        "empty collection spreads over every shard",
+			collections: [][]int64{{0, 0, 0, 0, 0, 0}},
+			shards:      []string{"s0", "s1", "s2"},
+			evenCounts:  true,
+		},
+		{
+			name:        "one loaded range does not strand the empty ones",
+			collections: [][]int64{{0, 0, 0, 0, 0, 5_000_000}},
+			shards:      []string{"s0", "s1", "s2"},
+		},
+		{
+			name:        "empty collections spread across a run",
+			collections: [][]int64{{0, 0}, {0, 0}, {0, 0}, {0, 0}},
+			shards:      []string{"s0", "s1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newShardSizes()
+			counts := map[string]int{}
+			total := 0
+
+			for _, sizes := range tt.collections {
+				for _, shard := range w.assignLargestFirst(sizes, tt.shards) {
+					counts[shard]++
+				}
+
+				total += len(sizes)
+			}
+
+			assert.Len(t, counts, len(tt.shards),
+				"chunks landed on %d of %d target shards: %v", len(counts), len(tt.shards), counts)
+
+			if !tt.evenCounts {
+				return
+			}
+
+			minC, maxC := total, 0
+			for _, s := range tt.shards {
+				minC = min(minC, counts[s])
+				maxC = max(maxC, counts[s])
+			}
+
+			assert.LessOrEqual(t, maxC-minC, 1,
+				"uneven chunk counts for equally sized chunks: %v", counts)
+		})
+	}
 }
