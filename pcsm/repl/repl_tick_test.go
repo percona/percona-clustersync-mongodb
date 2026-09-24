@@ -7,6 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 type scriptedDrain struct {
@@ -63,6 +66,79 @@ func (c *scriptedChangeCursor) Err() error {
 }
 
 func (*scriptedChangeCursor) ID() int64 { return 1 }
+
+// blockingCursor yields the same event forever. With nobody consuming, the
+// drain fills the queue and parks in the send. Without a selectable send the
+// cancellation is never observed; the goroutine and the cursor behind it leak
+// once per failed run.
+type blockingCursor struct {
+	event  bson.Raw
+	parked chan struct{}
+	calls  int
+}
+
+func (c *blockingCursor) TryNext(context.Context) bool {
+	c.calls++
+	if c.calls == 2 {
+		close(c.parked)
+	}
+
+	return true
+}
+
+func (c *blockingCursor) Current() bson.Raw   { return c.event }
+func (*blockingCursor) ResumeToken() bson.Raw { return nil }
+func (*blockingCursor) Err() error            { return nil }
+func (*blockingCursor) ID() int64             { return 1 }
+
+func TestDrainChangeStream_ReturnsOnCancelWhileQueueFull(t *testing.T) {
+	t.Parallel()
+
+	raw, err := bson.Marshal(bson.D{
+		{"operationType", "insert"},
+		{"clusterTime", bson.Timestamp{T: 101, I: 1}},
+		{"ns", bson.D{{"db", "test"}, {"coll", "documents"}}},
+		{"documentKey", bson.D{{"_id", 1}}},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cur := &blockingCursor{event: raw, parked: make(chan struct{})}
+	changeCh := make(chan *ChangeEvent, 1) // never consumed
+	done := make(chan error, 1)
+
+	go func() {
+		done <- (&Repl{}).drainChangeStream(ctx, cur, changeCh, func(context.Context) (bson.Timestamp, error) {
+			return bson.Timestamp{}, nil
+		})
+	}()
+
+	// The second TryNext follows the first send into the one-slot queue.
+	// With no consumer, the next send cannot complete; cancel at this signal.
+	err = util.CtxWithTimeout(t.Context(), barrierTimeout, func(waitCtx context.Context) error {
+		select {
+		case <-cur.parked:
+			return nil
+		case <-waitCtx.Done():
+			return errors.Wrap(waitCtx.Err(), "queue never filled")
+		}
+	})
+	require.NoError(t, err)
+	cancel()
+
+	err = util.CtxWithTimeout(t.Context(), barrierTimeout, func(waitCtx context.Context) error {
+		select {
+		case drainErr := <-done:
+			return drainErr
+		case <-waitCtx.Done():
+			return errors.Wrap(waitCtx.Err(), "drainChangeStream parked on a full queue after cancel")
+		}
+	})
+	require.NoError(t, err, "canceled drain must return without an error")
+	assert.Len(t, changeCh, 1, "only the first event was ever queued")
+}
 
 func TestDrainChangeStream_TicksFollowScannedFrontier(t *testing.T) {
 	t.Parallel()

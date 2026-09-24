@@ -569,8 +569,9 @@ func isChangeStreamUnrecoverable(err error) bool {
 }
 
 const (
-	maxWatchDelay      = 30 * time.Second
-	maxWriteRetryDelay = 30 * time.Second
+	maxWatchDelay        = 30 * time.Second
+	maxWriteRetryDelay   = 30 * time.Second
+	poolProgressInterval = 500 * time.Millisecond
 )
 
 func isNonTransient(err error) bool {
@@ -642,7 +643,14 @@ func (r *Repl) drainChangeStream(
 				return err
 			}
 
-			changeCh <- change
+			// The dispatcher is the only consumer and it returns on failure
+			// without draining the queue. A plain send parks here forever with a
+			// full queue and leaks this goroutine and the cursor behind it.
+			select {
+			case changeCh <- change:
+			case <-ctx.Done():
+				return nil
+			}
 
 			if change.OperationType == Invalidate {
 				invalidateErr = &changeStreamInvalidateError{
@@ -671,15 +679,19 @@ func (r *Repl) drainChangeStream(
 		if err != nil {
 			log.New("repl:watch").Debugf("Unable to decode change stream resume token: %v", err)
 		} else {
-			changeCh <- &ChangeEvent{
+			select {
+			case changeCh <- &ChangeEvent{
 				OperationType: advanceTimePseudoEvent,
 				ClusterTime:   ts,
+			}:
+			case <-ctx.Done():
+				return nil
 			}
 		}
 
 		// Stimulate the idle source oplog at the getMore cadence instead of
 		// waiting for periodic server no-ops. The note is never the tick value.
-		// Under sustained load, tryAdvanceOpTime tracks worker progress.
+		// Worker progress is tracked independently by trackPoolProgress.
 		_, err = advance(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -708,7 +720,20 @@ func isChangeStreamTerminationError(invalidateErr *changeStreamInvalidateError, 
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
+	pool := r.pool // Start/Resume initialized it; the pointer is stable for this run.
+	progressTicker := time.NewTicker(poolProgressInterval)
+	stopProgress := make(chan struct{})
+	var progressWG sync.WaitGroup
+	progressWG.Go(func() {
+		r.trackPoolProgress(pool, progressTicker.C, stopProgress)
+	})
+
 	defer func() {
+		progressTicker.Stop()
+		close(stopProgress)
+		// Join before taking r.lock or stopping the pool: the tracker uses both.
+		progressWG.Wait()
+
 		r.lock.Lock()
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
@@ -753,17 +778,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	lg := log.New("repl")
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
-	// Used with Checkpoint() to determine if the pool is idle.
+	// Used by poolIdle to detect that no events were routed since the last barrier.
 	var lastRoutedTS bson.Timestamp
-
-	// cpTicker triggers periodic advancement of lastReplicatedOpTime based on
-	// the worker pool's Checkpoint. Under sustained DML load, @tick
-	// pseudo-events may be delayed (queued behind DML in changeEventCh), and
-	// poolIdle() returns false because workers haven't caught up yet. Without
-	// this ticker, lastReplicatedOpTime stalls and reported lag grows linearly
-	// even though workers are making progress.
-	cpTicker := time.NewTicker(500 * time.Millisecond) //nolint:mnd
-	defer cpTicker.Stop()
 
 	for {
 		var change *ChangeEvent
@@ -808,8 +824,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
-			} else {
-				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
@@ -823,8 +837,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				r.lock.Unlock()
 
 				metrics.AddEventsApplied(1)
-			} else {
-				r.tryAdvanceOpTime(cpTicker)
 			}
 
 			continue
@@ -835,8 +847,6 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			ns := findNamespaceByUUID(uuidMap, change)
 			r.pool.Route(change, ns)
 			lastRoutedTS = change.ClusterTime
-
-			r.tryAdvanceOpTime(cpTicker)
 
 		case Invalidate:
 			err := r.handleInvalidate(change, r.pool)
@@ -957,22 +967,44 @@ func (r *Repl) handleInvalidate(change *ChangeEvent, bc barrierController) error
 	return invalidateErr
 }
 
-// tryAdvanceOpTime does a non-blocking check of cpTicker and, when fired,
-// advances checkpointOpTime (and lastReplicatedOpTime) to the worker
-// pool's Checkpoint. This ensures lag tracking stays current during
-// sustained DML when @tick pseudo-events and poolIdle updates are insufficient.
-func (r *Repl) tryAdvanceOpTime(cpTicker *time.Ticker) {
-	select {
-	case <-cpTicker.C:
-		cp := r.pool.Checkpoint()
-		if cp.IsZero() {
+// trackPoolProgress follows worker commits independently of the dispatcher,
+// including while it is idle or blocked in a DDL barrier. run owns its lifetime.
+func (r *Repl) trackPoolProgress(pool *workerPool, ticks <-chan time.Time, stop <-chan struct{}) {
+	for {
+		select {
+		case <-ticks:
+			r.advancePoolCheckpoint(pool)
+		case <-stop:
 			return
 		}
+	}
+}
 
-		r.lock.Lock()
+// advancePoolCheckpoint advances the resume floor to the pool's Checkpoint
+// (minimum committed TS, or first routed TS for a worker with no commit; the
+// same floor run's final checkpoint uses) and the reported frontier to the
+// pool's ReportedFrontier, which ignores fully drained workers so reporting
+// keeps moving under uneven routing. Both locks are released before r.lock is
+// taken.
+//
+// During a DDL barrier, all routed events precede the DDL on first delivery,
+// so neither value can exceed it before the dispatcher applies the DDL. A
+// retry reopens inclusively from the checkpoint and can redeliver an
+// already-applied DDL behind newer routed work; the floor may pass it, and
+// shouldSkipReplay then drops the redelivered DDL instead of re-applying it.
+func (r *Repl) advancePoolCheckpoint(pool *workerPool) {
+	cp := pool.Checkpoint()
+	reported := pool.ReportedFrontier()
+
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	if !cp.IsZero() {
 		r.advanceCheckpoint(cp)
-		r.lock.Unlock()
-	default:
+	}
+
+	if !reported.IsZero() {
+		r.advanceReportedOpTime(reported)
 	}
 }
 
@@ -988,15 +1020,20 @@ func (r *Repl) isReplay(change *ChangeEvent) bool {
 }
 
 // shouldSkipReplay reports whether change is a replayed event that must be
-// skipped. This is a catch-up convergence guard, not a data-safety one: DML
-// apply is already idempotent so re-applying a redelivered event cannot corrupt
-// the target. What it prevents is a mongos forced reconnect
-// (SetStartAfter / SetStartAtOperationTime) redelivering already-applied events,
-// increasing the lag.
+// skipped. Redelivery happens on every topology: watchWithRetry reopens with
+// SetStartAtOperationTime(checkpointOpTime), inclusive, after the driver gives
+// up on its own token-based resume, and a mongos movePrimary reconnect uses
+// SetStartAfter. Skipping redelivered DML only saves catch-up time, its apply
+// is idempotent. Skipping a redelivered DDL is a data-safety guard: the floor
+// can already sit past the DDL because newer routed writes committed, and
+// re-applying a drop there would discard those writes with no replay of them
+// left in the persisted checkpoint.
 //
-// A replica set resumes from its own token and never redelivers applied writes.
+// First-delivery events always carry a timestamp at or after the checkpoint
+// (every advance comes from an applied or routed event, never from a tick), so
+// strict `<` only ever matches redelivery.
 func (r *Repl) shouldSkipReplay(change *ChangeEvent) bool {
-	return r.sourceIsSharded && r.isReplay(change)
+	return r.isReplay(change)
 }
 
 // advanceReportedOpTime updates lastReplicatedOpTime only. Used by the tick
