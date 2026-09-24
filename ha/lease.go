@@ -23,15 +23,24 @@ type RoleChange struct {
 
 // runLease tries to acquire or renew the lease on every tick and reconciles the
 // member's role, until ctx is canceled. Holding the lease grants the right to be
-// ACTIVE. Time comparisons use the target server clock ($$NOW), not the client
-// clock. A failed renewal while ACTIVE demotes the member so it fails safe.
+// ACTIVE. MongoDB uses its server clock ($$NOW) for lease expiry. A local
+// monotonic deadline bounds how long an ACTIVE can tolerate renewal errors.
 func (m *Membership) runLease(ctx context.Context) {
 	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
 
 	ticker := time.NewTicker(config.LeaseRenewInterval)
 	defer ticker.Stop()
 
+	expiry := time.NewTimer(0)
+	defer expiry.Stop()
+
 	for {
+		var expiryCh <-chan time.Time
+		if role, _ := m.CurrentRole(); role == RoleActive {
+			expiry.Reset(time.Until(m.leaseDeadline))
+			expiryCh = expiry.C
+		}
+
 		select {
 		case <-ctx.Done():
 			lg.Info("Lease loop canceled")
@@ -40,6 +49,10 @@ func (m *Membership) runLease(ctx context.Context) {
 
 		case <-ticker.C:
 			m.leaseTick(ctx, lg)
+
+		case <-expiryCh:
+			_, term := m.CurrentRole()
+			m.reconcileRole(RoleStandby, term, lg)
 		}
 	}
 }
@@ -62,14 +75,33 @@ type leaseAttempt struct {
 
 // leaseTick performs one acquire/renew attempt and reconciles the resulting role.
 func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
-	att, err := m.tryAcquireOrRenew(ctx)
+	role, _ := m.CurrentRole()
+	if role == RoleActive {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, m.leaseDeadline)
+		defer cancel()
+	}
+
+	// Starting before the RPC makes this bound no later than server expiry,
+	// without comparing the local wall clock to the server clock.
+	sentAt := time.Now()
+	att, err := m.acquire(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
 
-		// The error says nothing about ownership; we can no longer prove we
-		// hold the lease, so fail safe and demote.
+		if role == RoleActive && time.Now().Before(m.leaseDeadline) {
+			lg.With(log.String("error", err.Error()),
+				log.String("leaseDeadline", m.leaseDeadline.Format(time.RFC3339Nano))).
+				Warn("acquire or renew lease; retaining ACTIVE within lease deadline")
+
+			return
+		}
+
 		lg.Error(err, "acquire or renew lease")
 		_, lastTerm := m.CurrentRole()
 		m.reconcileRole(RoleStandby, lastTerm, lg)
@@ -78,6 +110,7 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 	}
 
 	if att.Acquired {
+		m.leaseDeadline = sentAt.Add(config.LeaseTTL)
 		m.reconcileRole(RoleActive, att.Term, lg)
 
 		return

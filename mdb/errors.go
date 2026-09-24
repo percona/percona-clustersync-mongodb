@@ -2,9 +2,11 @@ package mdb
 
 import (
 	"context"
+	"net"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
@@ -97,6 +99,19 @@ func IsTransient(err error) bool {
 		return true
 	}
 
+	// A dial failure the driver leaves unlabeled surfaces as a
+	// topology.ConnectionError wrapping a *net.OpError. wrapConnectionError
+	// labels connection errors NetworkError except for DNS, x509 and TLS-record
+	// errors, so a host that stops resolving during a partition would otherwise
+	// be classified as terminal (connection refused is already labeled). A
+	// permanently wrong host is indistinguishable from a partition at this
+	// layer; callers bound the retries. x509 and TLS failures are not OpErrors
+	// and stay terminal.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
 	var le mongo.LabeledError
 	if errors.As(err, &le) && le.HasErrorLabel("RetryableWriteError") {
 		return true
@@ -142,6 +157,27 @@ func IsTransient(err error) bool {
 	if errors.As(err, &cmdErr) {
 		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
 			return true
+		}
+	}
+
+	// Collection.Drop and Database.CreateCollection return through the
+	// driver's wrapErrors, which has no driver.WriteCommandError branch, so a
+	// writeConcernError on those paths arrives as the raw driver type and
+	// misses the WriteException branch above. RunCommand and IndexView convert
+	// via processWriteError, so PCSM's collMod and createIndexes are
+	// unaffected; this branch also covers them if that ever changes.
+	var wcErr driver.WriteCommandError
+	if errors.As(err, &wcErr) {
+		for _, we := range wcErr.WriteErrors {
+			if _, ok := transientErrorCodes[int(we.Code)]; ok {
+				return true
+			}
+		}
+
+		if wcErr.WriteConcernError != nil {
+			if _, ok := transientErrorCodes[int(wcErr.WriteConcernError.Code)]; ok {
+				return true
+			}
 		}
 	}
 
