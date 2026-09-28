@@ -50,10 +50,10 @@ const mongoDBOperationTimeoutHelp = "Timeout for MongoDB operations (e.g., 30s, 
 
 var (
 	Version   = "v1.0.0" //nolint:gochecknoglobals
-	Platform  = ""        //nolint:gochecknoglobals
-	GitCommit = ""        //nolint:gochecknoglobals
-	GitBranch = ""        //nolint:gochecknoglobals
-	BuildTime = ""        //nolint:gochecknoglobals
+	Platform  = ""       //nolint:gochecknoglobals
+	GitCommit = ""       //nolint:gochecknoglobals
+	GitBranch = ""       //nolint:gochecknoglobals
+	BuildTime = ""       //nolint:gochecknoglobals
 )
 
 func buildVersion() string {
@@ -253,6 +253,10 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Clone.ReadBatchSize
 				startOptions.CloneReadBatchSize = &v
 			}
+			if cfg.Clone.SkipPresplit {
+				v := cfg.Clone.SkipPresplit
+				startOptions.CloneSkipPresplit = &v
+			}
 
 			if cfg.Repl.NumWorkers != 0 {
 				v := cfg.Repl.NumWorkers
@@ -311,6 +315,8 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 
 	cmd.Flags().String("clone-read-batch-size", "", "")
 	cmd.Flags().MarkHidden("clone-read-batch-size") //nolint:errcheck
+	cmd.Flags().Bool("clone-skip-presplit", false,
+		"Skip chunk pre-splitting of sharded collections on the target (keeps the native chunk layout)")
 
 	cmd.Flags().Int("repl-num-workers", 0,
 		"Number of replication workers (0 = auto)")
@@ -1236,6 +1242,7 @@ func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
 			Parallelism:   cfg.Clone.NumParallelCollections,
 			ReadWorkers:   cfg.Clone.NumReadWorkers,
 			InsertWorkers: cfg.Clone.NumInsertWorkers,
+			SkipPresplit:  cfg.Clone.SkipPresplit,
 		},
 	}
 
@@ -1299,6 +1306,10 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 			return nil, errors.Wrap(err, "invalid clone read batch size")
 		}
 		options.Clone.ReadBatchSizeBytes = batchSize
+	}
+
+	if params.CloneSkipPresplit != nil {
+		options.Clone.SkipPresplit = *params.CloneSkipPresplit
 	}
 
 	if params.ReplNumWorkers != nil {
@@ -1709,6 +1720,8 @@ type startRequest struct {
 	CloneSegmentSize *string `json:"cloneSegmentSize,omitempty"`
 	// CloneReadBatchSize is the read batch size during clone (e.g., "16MiB").
 	CloneReadBatchSize *string `json:"cloneReadBatchSize,omitempty"`
+	// CloneSkipPresplit indicates whether to skip target chunk pre-splitting.
+	CloneSkipPresplit *bool `json:"cloneSkipPresplit,omitempty"`
 
 	// ReplNumWorkers is the number of replication workers.
 	ReplNumWorkers *int `json:"replNumWorkers,omitempty"`

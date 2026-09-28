@@ -160,6 +160,29 @@ def test_ranged_mirror_layout(t: Testing):
     t.compare_all_sharded()
 
 
+def test_ranged_skip_presplit_keeps_native_layout(t: Testing):
+    """cloneSkipPresplit keeps the native single-chunk layout on a ranged collection."""
+    ns = "db_1.coll_1"
+    src_shards = sorted_shards(t.source)
+    if len(src_shards) < 2:
+        pytest.skip("requires at least two source shards so the source layout has multiple owners")
+
+    _setup_ranged_layout(t, ns, src_shards)
+
+    with t.run(phase=Runner.Phase.MANUAL, options={"clone_skip_presplit": True}) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+        assert len(target_chunks(t.source, ns)) > 1
+        target_layout = target_chunks(t.target, ns)
+        assert len(target_layout) == 1, f"target chunks: {target_layout}"
+        target_config = t.target["config"]["collections"].find_one({"_id": ns})
+        assert target_config is not None
+        assert target_config["key"] == {"_id": 1}
+
+    t.compare_all_sharded()
+
+
 def _wait_for_clone_without_failure(t: Testing, timeout: int) -> dict:
     """Fail immediately on PCSM failure rather than waiting out the clone deadline."""
     deadline = time.monotonic() + timeout

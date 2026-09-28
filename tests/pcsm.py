@@ -79,6 +79,7 @@ class PCSM:
         clone_num_read_workers=None,
         clone_num_parallel_collections=None,
         clone_num_insert_workers=None,
+        clone_skip_presplit=None,
         repl_num_workers=None,
         repl_bulk_ops_size=None,
     ):
@@ -96,6 +97,8 @@ class PCSM:
             options["cloneNumParallelCollections"] = clone_num_parallel_collections
         if clone_num_insert_workers is not None:
             options["cloneNumInsertWorkers"] = clone_num_insert_workers
+        if clone_skip_presplit is not None:
+            options["cloneSkipPresplit"] = clone_skip_presplit
         if repl_num_workers is not None:
             options["replNumWorkers"] = repl_num_workers
         if repl_bulk_ops_size is not None:

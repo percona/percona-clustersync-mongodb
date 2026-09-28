@@ -102,6 +102,9 @@ type CloneConfig struct {
 	// ReadBatchSize is the read batch size during clone (e.g., "16MiB", "100MB").
 	// Empty string means auto (calculated at runtime for each collection).
 	ReadBatchSize string `mapstructure:"clone-read-batch-size"`
+	// SkipPresplit controls target chunk pre-splitting for sharded collections.
+	// False (default) pre-splits on the target; true keeps the native chunk layout.
+	SkipPresplit bool `mapstructure:"clone-skip-presplit"`
 }
 
 // Load initializes Viper and populates the provided Config.
@@ -201,6 +204,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("clone-num-insert-workers", "PCSM_CLONE_NUM_INSERT_WORKERS")
 	_ = viper.BindEnv("clone-segment-size", "PCSM_CLONE_SEGMENT_SIZE")
 	_ = viper.BindEnv("clone-read-batch-size", "PCSM_CLONE_READ_BATCH_SIZE")
+	_ = viper.BindEnv("clone-skip-presplit", "PCSM_CLONE_SKIP_PRESPLIT")
 }
 
 //nolint:gochecknoglobals
