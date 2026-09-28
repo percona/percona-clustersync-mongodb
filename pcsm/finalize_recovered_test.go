@@ -80,7 +80,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	case err := <-finalized:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Finalize did not return even though the replicator had finished")
+		require.FailNow(t, "Finalize did not return even though the replicator had finished")
 	}
 }
 
@@ -98,8 +98,8 @@ func TestFinalizeAfterPromotionTerminates(t *testing.T) {
 	case err := <-finalized:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Finalize never returned: it blocks on <-repl.Done() for a " +
-			"replicator that was recovered but never run, so that channel can " +
+		require.FailNow(t, "Finalize never returned: it blocks on <-repl.Done() for a "+
+			"replicator that was recovered but never run, so that channel can "+
 			"never close and a promoted instance cannot leave 'finalizing'")
 	}
 }
@@ -117,7 +117,7 @@ func TestFinalizeAfterPromotionFromPausedTerminates(t *testing.T) {
 	case err := <-finalized:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Finalize did not return for a recovered paused replicator")
+		require.FailNow(t, "Finalize did not return for a recovered paused replicator")
 	}
 
 	reported := make(chan *Status, 1)
@@ -127,7 +127,7 @@ func TestFinalizeAfterPromotionFromPausedTerminates(t *testing.T) {
 	case status := <-reported:
 		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Status did not return after finalizing a recovered paused pipeline")
+		require.FailNow(t, "Status did not return after finalizing a recovered paused pipeline")
 	}
 }
 
@@ -149,13 +149,13 @@ func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 	case err := <-firstFinalize:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("first Finalize did not return after promotion")
+		require.FailNow(t, "first Finalize did not return after promotion")
 	}
 
 	select {
 	case <-finalizedState:
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("recovered finalization did not report StateFinalized")
+		require.FailNow(t, "recovered finalization did not report StateFinalized")
 	}
 
 	secondFinalize := make(chan error, 1)
@@ -165,7 +165,7 @@ func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 	case err := <-secondFinalize:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("second Finalize did not return after recovered finalization completed")
+		require.FailNow(t, "second Finalize did not return after recovered finalization completed")
 	}
 
 	reported := make(chan *Status, 1)
@@ -175,7 +175,7 @@ func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 	case status := <-reported:
 		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Status did not return after second Finalize")
+		require.FailNow(t, "Status did not return after second Finalize")
 	}
 }
 
@@ -195,7 +195,7 @@ func TestStatusStaysResponsiveDuringFinalizeAfterPromotion(t *testing.T) {
 	case err := <-finalized:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Finalize did not return after promotion")
+		require.FailNow(t, "Finalize did not return after promotion")
 	}
 
 	reported := make(chan *Status, 1)
@@ -206,7 +206,7 @@ func TestStatusStaysResponsiveDuringFinalizeAfterPromotion(t *testing.T) {
 		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
 		require.NotNil(t, status.FinalizeStatus)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Status did not return after resumed finalization")
+		require.FailNow(t, "Status did not return after resumed finalization")
 	}
 }
 
@@ -226,7 +226,7 @@ func TestFinalizeRejectsSecondCallWhileFinalizerActive(t *testing.T) {
 	case err := <-finalized:
 		require.EqualError(t, err, "finalization is already in progress")
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("second Finalize did not return while finalizer was active")
+		require.FailNow(t, "second Finalize did not return while finalizer was active")
 	}
 
 	reported := make(chan *Status, 1)
@@ -237,6 +237,6 @@ func TestFinalizeRejectsSecondCallWhileFinalizerActive(t *testing.T) {
 		require.Equal(t, State(StateFinalizing), status.State)
 		require.NotNil(t, status.FinalizeStatus)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Status did not return while finalizer was active")
+		require.FailNow(t, "Status did not return while finalizer was active")
 	}
 }
