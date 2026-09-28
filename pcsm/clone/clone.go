@@ -49,6 +49,10 @@ type Options struct {
 	// ReadBatchSizeBytes is the read batch size during clone in bytes.
 	// Default: ~47.5MB (config.DefaultCloneReadBatchSizeBytes)
 	ReadBatchSizeBytes int32
+	// SkipPresplit, when true, still shards the target collection with the source
+	// key but skips pre-splitting and keeps the native chunk layout.
+	// Default: false.
+	SkipPresplit bool
 }
 
 // Clone handles the cloning of data from a source MongoDB to a target MongoDB.
@@ -423,7 +427,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 // shardCollection replicates the source's sharding for ns onto the target:
 // it shards the target collection with the same key and, for ranged keys,
-// pre-splits the empty collection.
+// pre-splits the empty collection unless pre-splitting is disabled.
 func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error {
 	lg := log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection))
 
@@ -442,6 +446,12 @@ func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error
 	}
 
 	lg.Infof("Collection %q sharded", ns.String())
+
+	if c.options.SkipPresplit {
+		lg.Infof("Pre-split of %q skipped by configuration, keeping the native chunk layout", ns.String())
+
+		return nil
+	}
 
 	err = presplit(ctx, c.source, c.target, ns, shInfo, c.targetShardSizes)
 	if err != nil {

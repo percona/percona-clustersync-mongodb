@@ -25,6 +25,7 @@ Score: 8; distinct initial-copy domain. Owns collection sizing, segmentation, pa
 - Checkpoints persist estimated/copied bytes plus start/finish timestamps and errors.
 - Recovery is valid only before the clone has been used.
 - Target shard size estimates live for one clone run and guide presplit placement under a shared mutex.
+- `Options.SkipPresplit` skips `presplit` after `ShardCollection` succeeds; the target stays sharded with the source key and keeps the native chunk layout.
 - Any hashed shard-key field disables ranged presplitting; equal shard counts mirror sorted source/target pairing.
 - Unequal shard counts place largest chunks on the lightest target; failed placement reconciles reservations to last-known owners.
 - Collection workers run under an error group so one failure cancels the clone operation.
