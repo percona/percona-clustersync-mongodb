@@ -1,4 +1,4 @@
-package pcsm //nolint:testpackage
+package pcsm //nolint:testpackage // Exercises unexported recovered lifecycle state directly.
 
 import (
 	"context"
@@ -29,17 +29,16 @@ func unreachableSource(t *testing.T) *mongo.Client {
 		SetConnectTimeout(10 * time.Millisecond))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+
 	return client
 }
 
 // recoveredFinalizingPipeline reproduces the state HA standby is left in
 // after being promoted while the previous ACTIVE was finalizing.
 //
-// Recover assigns p.state from the checkpoint, so the promoted instance
-// restores StateFinalizing, and it rebuilds the replicator through
-// repl.NewRepl, which always allocates an open doneCh. Nothing restarts the
-// finalize goroutine and nothing ever runs that replicator, so its Done
-// channel stays open for the lifetime of the process.
+// Recover restores StateFinalizing and rebuilds a replicator with an open
+// Done channel, but it does not restore an in-process finalizer goroutine.
+// The empty catalog lets resumed finalization complete without MongoDB clients.
 func recoveredFinalizingPipeline(t *testing.T) *PCSM {
 	t.Helper()
 
@@ -63,13 +62,13 @@ func recoveredFinalizingPipeline(t *testing.T) *PCSM {
 	}
 }
 
-// Control for the two tests below: the same pipeline finalizes normally once
-// its replicator has actually run and closed Done. This isolates the failures
-// to the never-closed channel rather than to the fixture.
+// The normal StateRunning path still waits for a replicator that has run and
+// closed Done before starting catalog finalization.
 func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	t.Parallel()
 
 	p := recoveredFinalizingPipeline(t)
+	p.state = StateRunning
 	done := make(chan struct{})
 	close(done)
 	p.repl.(*mockReplicator).doneCh = done //nolint:forcetypeassert // fixture-owned type
@@ -85,8 +84,8 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	}
 }
 
-// Finalization is not resumed on promotion, so re-issuing finalize is
-// only recovery action available from a restored "finalizing" state
+// Finalization is not resumed automatically on promotion, so re-issuing
+// finalize is the recovery action from a restored "finalizing" state.
 func TestFinalizeAfterPromotionTerminates(t *testing.T) {
 	t.Parallel()
 
@@ -105,22 +104,130 @@ func TestFinalizeAfterPromotionTerminates(t *testing.T) {
 	}
 }
 
-// Finalize holds the lifecycle lock across that receive and Status needs the
-// same lock, so the promoted instance also stops answering /status. /metrics
-// is served off a different path and keeps returning 200, so a liveness probe
-// still sees a healthy instance.
+func TestFinalizeAfterPromotionFromPausedTerminates(t *testing.T) {
+	t.Parallel()
+
+	p := recoveredFinalizingPipeline(t)
+	p.state = StatePaused
+
+	finalized := make(chan error, 1)
+	go func() { finalized <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-finalized:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("Finalize did not return for a recovered paused replicator")
+	}
+
+	reported := make(chan *Status, 1)
+	go func() { reported <- p.Status(t.Context()) }()
+
+	select {
+	case status := <-reported:
+		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("Status did not return after finalizing a recovered paused pipeline")
+	}
+}
+
+func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
+	t.Parallel()
+
+	p := recoveredFinalizingPipeline(t)
+	finalizedState := make(chan struct{}, 2)
+	p.SetOnStateChanged(func(state State) {
+		if state == StateFinalized {
+			finalizedState <- struct{}{}
+		}
+	})
+
+	firstFinalize := make(chan error, 1)
+	go func() { firstFinalize <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-firstFinalize:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("first Finalize did not return after promotion")
+	}
+
+	select {
+	case <-finalizedState:
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("recovered finalization did not report StateFinalized")
+	}
+
+	secondFinalize := make(chan error, 1)
+	go func() { secondFinalize <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-secondFinalize:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("second Finalize did not return after recovered finalization completed")
+	}
+
+	reported := make(chan *Status, 1)
+	go func() { reported <- p.Status(t.Context()) }()
+
+	select {
+	case status := <-reported:
+		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("Status did not return after second Finalize")
+	}
+}
+
+// Re-issued finalize must return before status is queried. The empty catalog
+// can finish immediately, so either finalizing or finalized is valid here.
 func TestStatusStaysResponsiveDuringFinalizeAfterPromotion(t *testing.T) {
 	t.Parallel()
 
 	p := recoveredFinalizingPipeline(t)
 
-	blocked := make(chan struct{})
+	finalized := make(chan error, 1)
 	go func() {
-		close(blocked)
-		_ = p.Finalize(t.Context())
+		finalized <- p.Finalize(t.Context())
 	}()
-	<-blocked
-	time.Sleep(500 * time.Millisecond)
+
+	select {
+	case err := <-finalized:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("Finalize did not return after promotion")
+	}
+
+	reported := make(chan *Status, 1)
+	go func() { reported <- p.Status(t.Context()) }()
+
+	select {
+	case status := <-reported:
+		require.Contains(t, []State{StateFinalizing, StateFinalized}, status.State)
+		require.NotNil(t, status.FinalizeStatus)
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("Status did not return after resumed finalization")
+	}
+}
+
+func TestFinalizeRejectsSecondCallWhileFinalizerActive(t *testing.T) {
+	t.Parallel()
+
+	p := recoveredFinalizingPipeline(t)
+	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
+	// startFinalize is the only production writer of this process-local flag.
+	// Set it directly to hold the active window without racing the empty catalog.
+	p.finalizeActive = true
+
+	finalized := make(chan error, 1)
+	go func() { finalized <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-finalized:
+		require.EqualError(t, err, "finalization is already in progress")
+	case <-time.After(finalizeProbeTimeout):
+		t.Fatal("second Finalize did not return while finalizer was active")
+	}
 
 	reported := make(chan *Status, 1)
 	go func() { reported <- p.Status(t.Context()) }()
@@ -128,9 +235,8 @@ func TestStatusStaysResponsiveDuringFinalizeAfterPromotion(t *testing.T) {
 	select {
 	case status := <-reported:
 		require.Equal(t, State(StateFinalizing), status.State)
+		require.NotNil(t, status.FinalizeStatus)
 	case <-time.After(finalizeProbeTimeout):
-		t.Fatal("Status never returned: it waits on the lifecycle lock that " +
-			"Finalize holds while blocked, so the instance stops reporting its " +
-			"state even though /metrics still answers")
+		t.Fatal("Status did not return while finalizer was active")
 	}
 }

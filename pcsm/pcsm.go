@@ -144,6 +144,8 @@ type PCSM struct {
 
 	// finalizeStatus tracks finalize-stage state. Nil until /finalize is triggered.
 	finalizeStatus *FinalizeStatus
+	// finalizeActive is true only while this process owns a finalizer goroutine.
+	finalizeActive bool
 
 	err error
 
@@ -808,6 +810,61 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	if p.finalizeActive {
+		return errors.New("finalization is already in progress")
+	}
+
+	lg := log.New("finalize")
+
+	// A recovered "finalizing" pipeline passed these checks before the previous
+	// ACTIVE was lost; only catalog finalization is left to resume.
+	if p.state == StateFinalizing {
+		lg.Info("Resuming Finalization after recovery")
+	} else {
+		err := checkFinalizePreconditions(status)
+		if err != nil {
+			return err
+		}
+
+		lg.Info("Starting Finalization")
+	}
+
+	// Decide from the live repl status under the lock, not the pre-lock
+	// snapshot above. With PauseOnInitialSync, monitorInitialSync can pause
+	// repl concurrently; a stale "running" snapshot would make us call Pause
+	// on an already-pausing/paused repl and fail. A non-running repl has either
+	// never run in this process or has already closed Done before recording its
+	// pause time, so only a running repl needs to be awaited.
+	replStatus := p.repl.Status()
+	if replStatus.IsRunning() {
+		if !replStatus.Pausing {
+			lg.Info("Pausing Change Replication")
+
+			err := p.repl.Pause(ctx)
+			if err != nil {
+				return errors.Wrap(err, "pause change replication")
+			}
+		}
+
+		<-p.repl.Done()
+	}
+
+	lg.Info("Change Replication is paused")
+
+	err := p.repl.Status().Err
+	if err != nil {
+		// no need to set the PCSM failed status here.
+		// [PCSM.setFailed] is called in [PCSM.run].
+		return errors.Wrap(err, "post-pause change replication")
+	}
+
+	p.startFinalize(lg)
+
+	return nil
+}
+
+// checkFinalizePreconditions reports why the pipeline cannot start finalization.
+func checkFinalizePreconditions(status *Status) error {
 	if status.State == StateFailed {
 		return errors.Wrap(status.Error, "failed state")
 	}
@@ -824,35 +881,13 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		return errors.New("initial sync is not completed")
 	}
 
-	lg := log.New("finalize")
-	lg.Info("Starting Finalization")
+	return nil
+}
 
-	// Decide from the live repl status under the lock, not the pre-lock
-	// snapshot above. With PauseOnInitialSync, monitorInitialSync can pause
-	// repl concurrently; a stale "running" snapshot would make us call Pause
-	// on an already-pausing/paused repl and fail. Only pause when repl is
-	// running and no pause is already in flight; either way, wait for Done.
-	replStatus := p.repl.Status()
-	if replStatus.IsRunning() && !replStatus.Pausing {
-		lg.Info("Pausing Change Replication")
-
-		err := p.repl.Pause(ctx)
-		if err != nil {
-			return errors.Wrap(err, "pause change replication")
-		}
-	}
-
-	<-p.repl.Done()
-	lg.Info("Change Replication is paused")
-
-	err := p.repl.Status().Err
-	if err != nil {
-		// no need to set the PCSM failed status here.
-		// [PCSM.setFailed] is called in [PCSM.run].
-		return errors.Wrap(err, "post-pause change replication")
-	}
-
+// startFinalize launches catalog finalization. The caller must hold p.lock.
+func (p *PCSM) startFinalize(lg log.Logger) {
 	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
+	p.finalizeActive = true
 	p.state = StateFinalizing
 
 	go func() {
@@ -862,6 +897,7 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful
 		p.finalizeStatus.CompletedAt = time.Now()
 		p.finalizeStatus.Completed = true
+		p.finalizeActive = false
 		p.state = StateFinalized
 		startedAt := p.finalizeStatus.StartedAt
 		p.lock.Unlock()
@@ -875,6 +911,4 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	lg.Info("Finalizing")
 
 	go p.onStateChanged(StateFinalizing)
-
-	return nil
 }
