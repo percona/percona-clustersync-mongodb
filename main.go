@@ -253,7 +253,7 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				v := cfg.Clone.ReadBatchSize
 				startOptions.CloneReadBatchSize = &v
 			}
-			if cfg.Clone.SkipPresplit {
+			if cmd.Flags().Changed("clone-skip-presplit") || cfg.Clone.SkipPresplit {
 				v := cfg.Clone.SkipPresplit
 				startOptions.CloneSkipPresplit = &v
 			}

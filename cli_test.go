@@ -422,6 +422,11 @@ func TestStartCommand(t *testing.T) {
 			expectedBody: map[string]any{"cloneSkipPresplit": true},
 		},
 		{
+			name:         "clone-skip-presplit explicit false",
+			args:         []string{"start", "--clone-skip-presplit=false"},
+			expectedBody: map[string]any{"cloneSkipPresplit": false},
+		},
+		{
 			name: "all clone flags combined",
 			args: []string{
 				"start",
@@ -706,6 +711,30 @@ func TestStartConfigPrecedence(t *testing.T) {
 		var actualBody map[string]any
 		require.NoError(t, json.Unmarshal(captured.Body, &actualBody))
 		assert.Equal(t, true, actualBody["cloneSkipPresplit"])
+	})
+
+	t.Run("flag takes precedence over env var for clone-skip-presplit", func(t *testing.T) {
+		t.Parallel()
+
+		server := newMockServer(t, mockResponse{Ok: true})
+		defer server.Close()
+
+		port := extractPort(server.URL)
+		_, stderr, err := runPCSM(
+			t,
+			[]string{"--port", port, "start", "--clone-skip-presplit=false"},
+			map[string]string{"PCSM_CLONE_SKIP_PRESPLIT": "true"},
+		)
+		require.NoError(t, err, "stderr: %s", stderr)
+
+		captured := server.request
+
+		assert.Equal(t, http.MethodPost, captured.Method)
+		assert.Equal(t, "/start", captured.Path)
+
+		var actualBody map[string]any
+		require.NoError(t, json.Unmarshal(captured.Body, &actualBody))
+		assert.Equal(t, false, actualBody["cloneSkipPresplit"])
 	})
 }
 
