@@ -381,19 +381,14 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 func TestFinalize_FailsFromInvalidState(t *testing.T) {
 	t.Parallel()
 
-	// Note: Only StateFailed can be tested without a MongoDB client because Status()
-	// returns early for StateFailed before calling mdb.ClusterTime(). Other validation
-	// paths (clone not finished, repl not started, initial sync not completed) require
-	// Status() to call mdb.ClusterTime() which needs a real MongoDB client.
-	// Those paths are covered by E2E tests.
-
 	tests := []struct {
-		name          string
-		initialState  State
-		err           error
-		clone         *mockCloner
-		repl          *mockReplicator
-		errorContains string
+		name              string
+		initialState      State
+		err               error
+		clone             *mockCloner
+		repl              *mockReplicator
+		unreachableSource bool
+		errorContains     string
 	}{
 		{
 			name:         "fails from failed state",
@@ -411,6 +406,46 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 			},
 			errorContains: "failed state",
 		},
+		{
+			name:         "fails when clone is not completed",
+			initialState: StateRunning,
+			clone:        &mockCloner{},
+			repl: &mockReplicator{
+				doneCh:     make(chan struct{}),
+				startTime:  time.Now(),
+				pauseTime:  time.Now(),
+				lastOpTime: bson.Timestamp{T: 200},
+			},
+			unreachableSource: true,
+			errorContains:     "clone is not completed",
+		},
+		{
+			name:         "fails when change replication is not started",
+			initialState: StateRunning,
+			clone: &mockCloner{status: clone.Status{
+				FinishTime: time.Now(),
+				FinishTS:   bson.Timestamp{T: 100},
+			}},
+			repl:              &mockReplicator{doneCh: make(chan struct{})},
+			unreachableSource: true,
+			errorContains:     "change replication is not started",
+		},
+		{
+			name:         "fails when initial sync is not completed",
+			initialState: StateRunning,
+			clone: &mockCloner{status: clone.Status{
+				FinishTime: time.Now(),
+				FinishTS:   bson.Timestamp{T: 200},
+			}},
+			repl: &mockReplicator{
+				doneCh:     make(chan struct{}),
+				startTime:  time.Now(),
+				pauseTime:  time.Now(),
+				lastOpTime: bson.Timestamp{T: 100},
+			},
+			unreachableSource: true,
+			errorContains:     "initial sync is not completed",
+		},
 	}
 
 	for _, tt := range tests {
@@ -423,6 +458,9 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 				clone:          tt.clone,
 				repl:           tt.repl,
 				onStateChanged: func(State) {},
+			}
+			if tt.unreachableSource {
+				p.source = unreachableSource(t)
 			}
 
 			err := p.Finalize(context.Background())

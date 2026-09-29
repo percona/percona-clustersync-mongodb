@@ -69,9 +69,50 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 
 	p := recoveredFinalizingPipeline(t)
 	p.state = StateRunning
-	done := make(chan struct{})
-	close(done)
-	p.repl.(*mockReplicator).doneCh = done //nolint:forcetypeassert // fixture-owned type
+	repl := p.repl.(*mockReplicator) //nolint:forcetypeassert // fixture-owned type
+	repl.pauseTime = time.Time{}
+	repl.pauseCalled = make(chan struct{}, 1)
+	repl.doneCalled = make(chan struct{}, 1)
+
+	finalized := make(chan error, 1)
+	go func() { finalized <- p.Finalize(t.Context()) }()
+
+	select {
+	case <-repl.pauseCalled:
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Finalize did not pause a running replicator")
+	}
+
+	select {
+	case <-repl.doneCalled:
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Finalize did not wait for the running replicator's Done channel")
+	}
+
+	select {
+	case repl.doneCh <- struct{}{}:
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Finalize called Done but did not wait for it to close")
+	}
+
+	select {
+	case err := <-finalized:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Finalize did not return even though the replicator had finished")
+	}
+}
+
+// A recovered "finalizing" pipeline skips checkFinalizePreconditions: it
+// passed them before the previous ACTIVE was lost. The unfinished clone and
+// never-started replicator below cannot occur in a real finalizing
+// checkpoint; they are there so that re-running the checks would fail.
+func TestFinalizeAfterPromotionSkipsCompletedPreconditions(t *testing.T) {
+	t.Parallel()
+
+	p := recoveredFinalizingPipeline(t)
+	p.clone = &mockCloner{}
+	p.repl = &mockReplicator{doneCh: make(chan struct{})}
 
 	finalized := make(chan error, 1)
 	go func() { finalized <- p.Finalize(t.Context()) }()
@@ -80,7 +121,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	case err := <-finalized:
 		require.NoError(t, err)
 	case <-time.After(finalizeProbeTimeout):
-		require.FailNow(t, "Finalize did not return even though the replicator had finished")
+		require.FailNow(t, "Finalize did not resume after promotion")
 	}
 }
 
@@ -181,7 +222,7 @@ func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 
 // Re-issued finalize must return before status is queried. The empty catalog
 // can finish immediately, so either finalizing or finalized is valid here.
-func TestStatusStaysResponsiveDuringFinalizeAfterPromotion(t *testing.T) {
+func TestStatusReportsResumedFinalizeAfterPromotion(t *testing.T) {
 	t.Parallel()
 
 	p := recoveredFinalizingPipeline(t)
