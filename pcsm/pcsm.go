@@ -117,6 +117,13 @@ type FinalizeStatus struct {
 	UnsuccessfulIndexes []catalog.UnsuccessfulIndex
 }
 
+// catalogFinalizer is the part of the catalog that startFinalize drives.
+// Tests substitute it to hold a finalizer open; production leaves
+// PCSM.finalizer nil and finalizes through the catalog itself.
+type catalogFinalizer interface {
+	Finalize(ctx context.Context) []catalog.UnsuccessfulIndex
+}
+
 // PCSM manages the replication process.
 type PCSM struct {
 	lifecycleCtx context.Context //nolint:containedctx // Lifecycle context for background operations
@@ -138,9 +145,10 @@ type PCSM struct {
 
 	state State // Current state of the PCSM
 
-	catalog *catalog.Catalog // Catalog for managing collections and indexes
-	clone   Cloner           // Clone process
-	repl    Replicator       // Replication process
+	catalog   *catalog.Catalog // Catalog for managing collections and indexes
+	clone     Cloner           // Clone process
+	repl      Replicator       // Replication process
+	finalizer catalogFinalizer // Test seam for startFinalize; nil means catalog
 
 	// finalizeStatus tracks finalize-stage state. Nil until /finalize is triggered.
 	finalizeStatus *FinalizeStatus
@@ -890,8 +898,13 @@ func (p *PCSM) startFinalize(lg log.Logger) {
 	p.finalizeActive = true
 	p.state = StateFinalizing
 
+	finalizer := p.finalizer
+	if finalizer == nil {
+		finalizer = p.catalog
+	}
+
 	go func() {
-		unsuccessful := p.catalog.Finalize(p.lifecycleCtx)
+		unsuccessful := finalizer.Finalize(p.lifecycleCtx)
 
 		p.lock.Lock()
 		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful

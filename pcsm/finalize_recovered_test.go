@@ -251,6 +251,80 @@ func TestStatusReportsResumedFinalizeAfterPromotion(t *testing.T) {
 	}
 }
 
+// blockingCatalogFinalizer stands in for the catalog: it reports entry, then
+// holds Finalize open until released or canceled.
+type blockingCatalogFinalizer struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingCatalogFinalizer) Finalize(ctx context.Context) []catalog.UnsuccessfulIndex {
+	select {
+	case f.entered <- struct{}{}:
+	case <-ctx.Done():
+		return nil
+	}
+
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+
+	return nil
+}
+
+// startFinalize must set finalizeActive before its goroutine runs, so that a
+// second /finalize is rejected for as long as catalog finalization is live.
+func TestStartFinalizeMarksFinalizerActiveWhileCatalogFinalizeRuns(t *testing.T) {
+	t.Parallel()
+
+	p := recoveredFinalizingPipeline(t)
+	finalizer := &blockingCatalogFinalizer{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	p.finalizer = finalizer
+
+	firstFinalize := make(chan error, 1)
+	go func() { firstFinalize <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-firstFinalize:
+		require.NoError(t, err)
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Finalize did not launch catalog finalization")
+	}
+
+	select {
+	case <-finalizer.entered:
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "catalog finalizer did not start")
+	}
+
+	secondFinalize := make(chan error, 1)
+	go func() { secondFinalize <- p.Finalize(t.Context()) }()
+
+	select {
+	case err := <-secondFinalize:
+		require.EqualError(t, err, "finalization is already in progress")
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "second Finalize did not return while the catalog finalizer was running")
+	}
+
+	reported := make(chan *Status, 1)
+	go func() { reported <- p.Status(t.Context()) }()
+
+	select {
+	case status := <-reported:
+		require.Equal(t, State(StateFinalizing), status.State)
+		require.NotNil(t, status.FinalizeStatus)
+	case <-time.After(finalizeProbeTimeout):
+		require.FailNow(t, "Status did not return while the catalog finalizer was running")
+	}
+
+	close(finalizer.release)
+}
+
 func TestFinalizeRejectsSecondCallWhileFinalizerActive(t *testing.T) {
 	t.Parallel()
 
