@@ -149,6 +149,7 @@ Runtime flag/environment bindings:
 | `PCSM_LOG_LEVEL` | `--log-level` |
 | `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
 | `PCSM_CLONE_SEGMENT_SIZE` | `--clone-segment-size` |
+| `PCSM_CLONE_SKIP_PRESPLIT` | `--clone-skip-presplit` |
 | `PCSM_RECOVERY_CHECKPOINT_INTERVAL` | `--recovery-checkpoint-interval` (hidden) |
 
 Configuration-backed options support `PCSM_*` variables; not every CLI flag does. Namespace filters and `resume --from-failure` are read directly from flags. Config fields and environment bindings live in `config/config.go`; flag declarations, defaults, and command-only options live in `main.go`.
