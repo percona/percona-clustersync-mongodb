@@ -162,6 +162,7 @@ func (c *Catalog) finalizeUnsuccessfulIndexes(ctx context.Context) []Unsuccessfu
 				err := runWithRetry(ctx, func(ctx context.Context) error {
 					err := c.target.Database(db).RunCommand(ctx, bson.D{
 						{"createIndexes", coll},
+						{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 						{"indexes", bson.A{selectedSpec}},
 					}).Err()
 
