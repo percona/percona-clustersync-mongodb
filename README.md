@@ -28,7 +28,7 @@ Find the installation instructions in the [official documentation](https://docs.
 
 PCSM is a CLI tool, but also exposes HTTP API as well.
 
-For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/plm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
+For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/pcsm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
 ### Target data write concern
 
