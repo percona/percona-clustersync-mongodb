@@ -62,6 +62,7 @@ func TestRepl_Recover_clampsReportedFrontierToCheckpointForInterruptedRun(t *tes
 		status := r.Status()
 
 		// Then
+		require.True(t, status.IsPaused())
 		require.Equal(t, cp.CheckpointOpTime, status.CheckpointOpTime)
 		require.Equal(t, cp.CheckpointOpTime, status.LastReplicatedOpTime,
 			"recovered reported frontier overtook applied checkpoint before replay caught up")
