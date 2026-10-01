@@ -11,26 +11,38 @@ import (
 func TestWorkerSuccessiveBulkWriteConcern(t *testing.T) {
 	t.Parallel()
 
-	for _, collectionBulk := range []bool{false, true} {
-		for _, wc := range []*writeconcern.WriteConcern{nil, {W: 1}, {W: 2}} {
-			opts := &Options{WriteConcern: wc}
+	tests := []struct {
+		name           string
+		collectionBulk bool
+		wc             *writeconcern.WriteConcern
+		want           any
+	}{
+		{"client default majority", false, nil, "majority"},
+		{"client explicit one", false, writeconcern.W1(), 1},
+		{"client explicit two", false, &writeconcern.WriteConcern{W: 2}, 2},
+		{"collection default majority", true, nil, "majority"},
+		{"collection explicit one", true, writeconcern.W1(), 1},
+		{"collection explicit two", true, &writeconcern.WriteConcern{W: 2}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := &Options{WriteConcern: tt.wc}
 			opts.applyDefaults()
-			w := newWorker(0, opts, nil, nil, collectionBulk, false, make(chan error, 1))
+			w := newWorker(0, opts, nil, nil, tt.collectionBulk, false, make(chan error, 1))
 
 			for _, bw := range []bulkWriter{w.currentBulkWrite, w.newBulkWriter(), w.newBulkWriter()} {
-				if collectionBulk {
+				if tt.collectionBulk {
 					cbw, ok := bw.(*collectionBulkWrite)
 					require.True(t, ok)
-					assert.Equal(t, opts.WriteConcern, cbw.writeConcern)
+					assert.Equal(t, tt.want, cbw.writeConcern.W)
 				} else {
 					cbw, ok := bw.(*clientBulkWrite)
 					require.True(t, ok)
-					assert.Equal(t, opts.WriteConcern, cbw.writeConcern)
+					assert.Equal(t, tt.want, cbw.writeConcern.W)
 				}
 			}
-			if wc == nil {
-				assert.Equal(t, "majority", opts.WriteConcern.W)
-			}
-		}
+		})
 	}
 }

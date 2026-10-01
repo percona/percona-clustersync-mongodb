@@ -12,18 +12,31 @@ import (
 func TestCloneAndCopyManagerWriteConcernDefaults(t *testing.T) {
 	t.Parallel()
 
-	for _, wc := range []*writeconcern.WriteConcern{nil, {W: 1}, {W: 2}} {
-		opts := &Options{WriteConcern: wc}
-		cln := NewClone(nil, nil, nil, sel.AllowAllFilter, opts, false)
-		copyOpts := CopyManagerOptions{WriteConcern: cln.options.WriteConcern}
-		copyOpts.applyDefaults()
-		assert.Equal(t, cln.options.WriteConcern, copyOpts.WriteConcern)
-		if wc == nil {
-			assert.Equal(t, "majority", copyOpts.WriteConcern.W)
-		} else {
-			assert.Equal(t, wc, copyOpts.WriteConcern)
-		}
+	tests := []struct {
+		name string
+		wc   *writeconcern.WriteConcern
+		want any
+	}{
+		{"default majority", nil, "majority"},
+		{"explicit one", writeconcern.W1(), 1},
+		{"explicit two", &writeconcern.WriteConcern{W: 2}, 2},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := &Options{WriteConcern: tt.wc}
+			cln := NewClone(nil, nil, nil, sel.AllowAllFilter, opts, false)
+			assert.Equal(t, tt.want, cln.options.WriteConcern.W)
+			copyOpts := CopyManagerOptions{WriteConcern: cln.options.WriteConcern}
+			copyOpts.applyDefaults()
+			assert.Equal(t, tt.want, copyOpts.WriteConcern.W)
+		})
+	}
+}
+
+func TestCopyManagerDefaultWriteConcern(t *testing.T) {
+	t.Parallel()
 
 	opts := CopyManagerOptions{}
 	opts.applyDefaults()

@@ -38,6 +38,8 @@ acknowledgment requirement, set `--target-write-concern=1` on the server or
 `{"targetWriteConcern":"1"}` to `/start`. Values are `majority` or a positive
 integer. Unacknowledged writes (`0`) are not supported. A `/start` value overrides
 the server default for that run and is retained during checkpoint recovery.
+Changing the server default does not change a recovered run, including a legacy
+run that used majority. Start a new run to change its write concern.
 Checkpoints, HA state, and catalog DDL always use majority write concern.
 
 Using `1` can reduce stalls when target secondaries lag, but acknowledgment from

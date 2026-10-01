@@ -624,7 +624,7 @@ func runServer(cfg *config.Config) error {
 	if err != nil {
 		return errors.Wrap(err, "invalid target write concern")
 	}
-	log.New("server").Infof("Config: clone and repl target write concern: %v", wc.W)
+	log.New("server").Infof("Config: default clone and repl target write concern: %v", wc.W)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
