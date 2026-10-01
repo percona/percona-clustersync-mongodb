@@ -31,6 +31,8 @@ func (m *mockCloner) ResetError() { m.resetErrorCalled = true }
 // mockReplicator is a test double for the Replicator interface.
 type mockReplicator struct {
 	doneCh           chan struct{}
+	doneCalled       chan struct{}
+	pauseCalled      chan struct{}
 	startTime        time.Time
 	pauseTime        time.Time
 	pausing          bool
@@ -43,9 +45,28 @@ type mockReplicator struct {
 }
 
 func (m *mockReplicator) Start(context.Context, bson.Timestamp) error { return nil }
-func (m *mockReplicator) Pause(context.Context) error                 { return m.pauseErr }
-func (m *mockReplicator) Resume(context.Context) error                { return nil }
-func (m *mockReplicator) Done() <-chan struct{}                       { return m.doneCh }
+func (m *mockReplicator) Pause(context.Context) error {
+	if m.pauseCalled != nil {
+		select {
+		case m.pauseCalled <- struct{}{}:
+		default:
+		}
+	}
+
+	return m.pauseErr
+}
+func (m *mockReplicator) Resume(context.Context) error { return nil }
+func (m *mockReplicator) Done() <-chan struct{} {
+	if m.doneCalled != nil {
+		select {
+		case m.doneCalled <- struct{}{}:
+		default:
+		}
+	}
+
+	return m.doneCh
+}
+
 func (m *mockReplicator) Status() repl.Status {
 	return repl.Status{
 		StartTime:            m.startTime,

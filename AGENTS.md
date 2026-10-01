@@ -380,7 +380,7 @@ Pytest CLI options override matching environment variables:
 
 If Poetry fails with `"bad interpreter"` after a Python version change because its interpreter path is stale, invoke `.venv/bin/pytest` directly. Unqualified local pytest discovers the full `tests/` tree, including sharded modules, while skipping slow tests by default. For CI-comparable scope:
 
-- RS runs an explicit seven-file selection.
+- RS runs an explicit eight-file selection (`test_collections`, `test_documents`, `test_indexes`, `test_selective`, `test_transactions`, `test_pipeline_updates`, `test_idle_index_build`, `test_target_outage`).
 - Normal sharded jobs discover broadly with one deselection.
 - The 8.0 unequal-shard matrix entry runs only `tests/test_presplit_sharded.py`.
 
@@ -426,6 +426,7 @@ CI workflows and operations:
 - `.github/workflows/e2etests.yml` runs local RS/sharded E2E across the version matrix.
 - `.github/workflows/ci.yml` runs the external functional suite `Percona-QA/psmdb-testing` against PSMDB 6.0, 7.0, and 8.0 in five pytest partitions; this `shard` is test partitioning, not MongoDB shard count.
 - `ci.yml` ignores PR changes confined to `tests/**` and `packaging/**`.
+- `ci.yml` does not run for draft PRs (its job is gated on `github.event.pull_request.draft == false`); it runs when the PR is marked ready for review. For a draft, dispatch it manually: `gh workflow run ci.yml --ref <branch> -f pcsm_branch=<branch>`; the run attaches to the branch head commit.
 - QA branch precedence is `tests_ver`, then the first case-sensitive PR-title `PCSM-[0-9]+` branch (for example `PCSM-286`) found through the GitHub branch API, then `main`. A later eligible PCSM CI run consumes that branch; a QA-only push is not a trigger declared here.
 - Jenkins `hetzner-pcsm-functional-tests` is operationally known at <https://psmdb.cd.percona.com/view/PCSM/> but not verified from this repo. Hetzner is preferred for cost; cancel capacity-stuck builds and retry with AWS, the first cloud option in job parameters.
 
