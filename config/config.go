@@ -35,6 +35,9 @@ type Config struct {
 
 	UseCollectionBulkWrite bool `mapstructure:"use-collection-bulk-write"`
 
+	// TargetWriteConcern applies only to clone and replication data writes.
+	TargetWriteConcern string `mapstructure:"target-write-concern"`
+
 	Repl  ReplConfig  `mapstructure:",squash"`
 	Clone CloneConfig `mapstructure:",squash"`
 
@@ -187,6 +190,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("recovery-checkpoint-interval", "PCSM_RECOVERY_CHECKPOINT_INTERVAL")
 
 	_ = viper.BindEnv("use-collection-bulk-write", "PCSM_USE_COLLECTION_BULK_WRITE")
+	_ = viper.BindEnv("target-write-concern", "PCSM_TARGET_WRITE_CONCERN")
 
 	_ = viper.BindEnv("repl-num-workers", "PCSM_REPL_NUM_WORKERS")
 	_ = viper.BindEnv("repl-change-stream-batch-size", "PCSM_REPL_CHANGE_STREAM_BATCH_SIZE")

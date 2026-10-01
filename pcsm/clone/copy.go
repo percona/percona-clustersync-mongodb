@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -69,6 +70,8 @@ type CopyProgressUpdate struct {
 // CopyManagerOptions configures the behavior of CopyManager.
 // It controls concurrency settings and memory limits for collection cloning operations.
 type CopyManagerOptions struct {
+	// WriteConcern applies to insert workers; nil defaults to majority.
+	WriteConcern *writeconcern.WriteConcern
 	// NumReadWorkers is the total number of concurrent read workers.
 	// min: 1; default: max([runtime.NumCPU] / 4, 1).
 	NumReadWorkers int
@@ -110,6 +113,9 @@ func EffectiveNumInsertWorkers(configured int) int {
 }
 
 func (o *CopyManagerOptions) applyDefaults() {
+	if o.WriteConcern == nil {
+		o.WriteConcern = writeconcern.Majority()
+	}
 	o.NumReadWorkers = EffectiveNumReadWorkers(o.NumReadWorkers)
 	o.NumInsertWorkers = EffectiveNumInsertWorkers(o.NumInsertWorkers)
 
@@ -387,7 +393,8 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 	startedAt := time.Now()
 
-	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection)
+	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection,
+		options.Collection().SetWriteConcern(cm.options.WriteConcern))
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := collection.InsertMany(ctx, task.Documents, insertOptions)

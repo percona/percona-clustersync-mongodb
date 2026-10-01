@@ -138,6 +138,8 @@ func newRootCmd() *cobra.Command {
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().String("target-write-concern", "majority",
+		"Write concern for clone and replication data writes (majority or a positive integer)")
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
 	rootCmd.Flags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
 		mongoDBOperationTimeoutHelp)
@@ -225,6 +227,15 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				ExcludeNamespaces:  excludeNamespaces,
 			}
 
+			if cmd.Flags().Changed("target-write-concern") || cfg.TargetWriteConcern != "majority" {
+				_, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
+				if err != nil {
+					return errors.Wrap(err, "invalid target write concern")
+				}
+				v := cfg.TargetWriteConcern
+				startOptions.TargetWriteConcern = &v
+			}
+
 			if cfg.Clone.NumParallelCollections != 0 {
 				v := cfg.Clone.NumParallelCollections
 				startOptions.CloneNumParallelCollections = &v
@@ -297,6 +308,8 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	}
 
 	cmd.Flags().Bool("pause-on-initial-sync", false, "")
+	cmd.Flags().String("target-write-concern", "majority",
+		"Write concern for clone and replication data writes (majority or a positive integer)")
 	cmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	cmd.Flags().StringSlice("include-namespaces", nil,
@@ -607,16 +620,19 @@ func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
 
 // runServer starts the HTTP server with the provided configuration.
 func runServer(cfg *config.Config) error {
+	wc, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
+	if err != nil {
+		return errors.Wrap(err, "invalid target write concern")
+	}
+	log.New("server").Infof("Config: clone and repl target write concern: %v", wc.W)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
 	// Auto-start (--start) is deferred to promotion: replication may only
 	// begin while ACTIVE. Resolved before the server exists so the option is
 	// in place before the first promotion is consumed.
-	var (
-		autoStart *pcsm.StartOptions
-		err       error
-	)
+	var autoStart *pcsm.StartOptions
 	if cfg.Start {
 		autoStart, err = resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
@@ -1226,7 +1242,13 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // buildStartOptions builds StartOptions from config, validating clone size options.
 func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
+	_, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
+	if err != nil {
+		return nil, errors.Wrap(err, "invalid target write concern")
+	}
+
 	startOpts := &pcsm.StartOptions{
+		TargetWriteConcern: cfg.TargetWriteConcern,
 		PauseOnInitialSync: cfg.PauseOnInitialSync,
 		Repl: repl.Options{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
@@ -1278,6 +1300,14 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 	options.PauseOnInitialSync = params.PauseOnInitialSync
 	options.IncludeNamespaces = params.IncludeNamespaces
 	options.ExcludeNamespaces = params.ExcludeNamespaces
+
+	if params.TargetWriteConcern != nil {
+		_, err = config.ParseTargetWriteConcern(*params.TargetWriteConcern)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid target write concern")
+		}
+		options.TargetWriteConcern = *params.TargetWriteConcern
+	}
 
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
@@ -1701,6 +1731,9 @@ func (s *server) isActive(ctx context.Context, w http.ResponseWriter) bool {
 
 // startRequest represents the request body for the /start endpoint.
 type startRequest struct {
+	// TargetWriteConcern overrides the server's data write concern for this run.
+	TargetWriteConcern *string `json:"targetWriteConcern,omitempty"`
+
 	// PauseOnInitialSync indicates whether to pause after the initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 

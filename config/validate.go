@@ -30,6 +30,11 @@ func Validate(cfg *Config) error {
 		return errors.New("listen-host must not include a port")
 	}
 
+	_, err = ParseTargetWriteConcern(cfg.TargetWriteConcern)
+	if err != nil {
+		return err
+	}
+
 	switch {
 	case cfg.Source == "" && cfg.Target == "":
 		return errors.New("source URI and target URI are empty")

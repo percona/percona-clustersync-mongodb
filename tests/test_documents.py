@@ -12,6 +12,19 @@ from pcsm import Runner
 
 
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
+def test_target_write_concern_w1_consistency(t: Testing, phase: Runner.Phase):
+    source = t.source["db_1"]["coll_1"]
+    source.insert_many([{"_id": i, "value": i} for i in range(5)])
+
+    with t.run(phase, options={"target_write_concern": "1"}):
+        source.insert_one({"_id": 5, "value": 5})
+        source.update_one({"_id": 1}, {"$set": {"value": 100}})
+        source.delete_one({"_id": 2})
+
+    t.compare_all()
+
+
+@pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_insert_one(t: Testing, phase: Runner.Phase):
     with t.run(phase):
         for i in range(5):
