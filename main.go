@@ -992,17 +992,23 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	epochCtx := s.epochCtx
 	ectx := pcsm.WithEpoch(epochCtx, epochCtx)
 
-	// The state-change checkpoint is bound to this epoch and term: once the
-	// epoch ends it writes nothing, so a demoted instance never persists a
-	// state it no longer owns and a later tenure's state is never stamped with
-	// this term. Installed before Restore/Resume, which emit transitions.
+	// A state change is saved by this epoch's checkpointing loop, its only
+	// writer, which the callback signals: a second writer of the same term
+	// could land an older snapshot over a newer one. The callback is bound to
+	// this epoch: once it ends nothing is saved, so a demoted instance never
+	// persists a state it no longer owns. Installed before Restore/Resume,
+	// which emit transitions; a signal sent before the loop starts waits for it.
 	instanceID := s.membership.InstanceID()
+	saveNow := make(chan struct{}, 1)
 	s.pcsm.SetOnStateChanged(func(_ pcsm.State) {
 		if epochCtx.Err() != nil {
 			return
 		}
 
-		_ = DoCheckpoint(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID)
+		select {
+		case saveNow <- struct{}{}:
+		default: // a save is already pending and captures this state too
+		}
 	})
 
 	status := s.pcsm.Status(ctx)
@@ -1067,7 +1073,7 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	// suspends the pipeline immediately instead of waiting for the next lease
 	// tick.
 	go RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-		s.cfg.RecoveryCheckpointInterval, func() {
+		s.cfg.RecoveryCheckpointInterval, saveNow, func() {
 			s.onDemote(ctx, term)
 		})
 

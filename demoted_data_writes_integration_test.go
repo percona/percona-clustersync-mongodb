@@ -421,8 +421,11 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 		require.Zero(t, gate.lateStarts(), "a data write was started while demoted")
 
 		// And: a same-term re-promotion resumes the suspended pipeline, which
-		// replays the abandoned write from the inclusive checkpoint floor. The
-		// checkpoint interval is one hour, so the term-2 fence never fires here.
+		// replays the abandoned write from the inclusive checkpoint floor. A
+		// same term means no other instance held the lease: the stand-in
+		// successor's checkpoint goes first, or the resumed pipeline's own
+		// checkpoint would be fenced by it and demote this instance again.
+		require.NoError(t, DeleteRecoveryData(ctx, target))
 		gate.setDemoted(false)
 		s.onPromote(ctx, 1)
 

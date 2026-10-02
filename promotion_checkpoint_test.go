@@ -68,7 +68,7 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 		go func() {
 			defer close(oldDone)
 			RunCheckpointing(oldCtx, target, pipeline, 1, "old-active",
-				time.Second, func() { s.onDemote(ctx, 1) })
+				time.Second, nil, func() { s.onDemote(ctx, 1) })
 		}()
 		t.Cleanup(func() {
 			cancel()
@@ -92,6 +92,60 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("no periodic checkpoint after promotion")
 			}
+		}
+	})
+}
+
+// TestRunCheckpointingSavesOnSignal pins that a state change reaches the
+// target through the epoch's single writer as soon as it is signaled, not at
+// the next tick.
+func TestRunCheckpointingSavesOnSignal(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
+		require.NoError(t, err)
+		record := bson.D{{"_id", recoveryID}, {"term", int64(1)}, {"data", bson.Raw(data)}}
+		deployment := drivertest.NewMockDeployment(bson.D{{"ok", 1}, {"value", record}})
+		saves := make(chan struct{}, 1)
+		opts := options.Client().SetMonitor(&event.CommandMonitor{
+			Started: func(_ context.Context, e *event.CommandStartedEvent) {
+				if e.CommandName == "findAndModify" {
+					saves <- struct{}{}
+				}
+			},
+		})
+		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
+		target, err := mongo.Connect(opts)
+		require.NoError(t, err)
+
+		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
+		require.NoError(t, pipeline.Recover(ctx, data))
+
+		saveNow := make(chan struct{}, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour, saveNow, nil)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-done
+			require.NoError(t, target.Disconnect(t.Context()))
+		})
+
+		// When: a state change is signaled long before the next tick.
+		saveNow <- struct{}{}
+		synctest.Wait()
+
+		// Then: the checkpoint has already been written.
+		select {
+		case <-saves:
+		default:
+			require.FailNow(t, "a signaled save did not reach the target before the next tick")
 		}
 	})
 }

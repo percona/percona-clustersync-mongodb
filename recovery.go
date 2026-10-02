@@ -79,10 +79,13 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 	return nil
 }
 
-// RunCheckpointing periodically persists the checkpoint until ctx is canceled.
-// It is scoped to one ACTIVE epoch: every write is fenced against term. A write
-// fenced by a newer term means this instance was deposed; onFenced is invoked
-// once and the loop returns.
+// RunCheckpointing persists the checkpoint every interval, and as soon as
+// saveNow signals, until ctx is canceled. It is the only checkpoint writer of
+// one ACTIVE epoch: the epoch's writes share one term, so only their order
+// keeps an older snapshot from replacing a newer one, and a single writer
+// captures and saves them in order. Every write is fenced against term. A
+// write fenced by a newer term means this instance was deposed; onFenced is
+// invoked once and the loop returns.
 func RunCheckpointing(
 	ctx context.Context,
 	m *mongo.Client,
@@ -90,6 +93,7 @@ func RunCheckpointing(
 	term int64,
 	instanceID string,
 	interval time.Duration,
+	saveNow <-chan struct{},
 	onFenced func(),
 ) {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
@@ -107,19 +111,21 @@ func RunCheckpointing(
 			return
 
 		case <-ticker.C:
-			err := DoCheckpoint(ctx, m, rec, term, instanceID)
-			switch {
-			case errors.Is(err, context.Canceled):
-				return
+		case <-saveNow:
+		}
 
-			case errors.Is(err, errCheckpointFenced):
-				lg.Warn("Stopping checkpointing")
-				if onFenced != nil {
-					onFenced()
-				}
+		err := DoCheckpoint(ctx, m, rec, term, instanceID)
+		switch {
+		case errors.Is(err, context.Canceled):
+			return
 
-				return
+		case errors.Is(err, errCheckpointFenced):
+			lg.Warn("Stopping checkpointing")
+			if onFenced != nil {
+				onFenced()
 			}
+
+			return
 		}
 	}
 }
@@ -187,9 +193,9 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 		}
 
 		// Another writer created the document between the update and the
-		// insert, which says nothing about its term: a same-term writer (the
-		// periodic loop racing the state-change checkpoint of a fresh epoch)
-		// must not read as deposed. The term-gated update decides.
+		// insert, which by itself says nothing about its term: an older term's
+		// late bootstrap must not read as a newer owner. The term-gated update
+		// decides.
 		err = coll.FindOneAndUpdate(ctx, filter, update).Err()
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return errCheckpointFenced

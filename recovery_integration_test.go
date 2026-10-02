@@ -180,10 +180,9 @@ func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
 }
 
 // TestDoCheckpointBootstrapCollision pins that losing the bootstrap insert to
-// another writer is settled by the stored term, not by the collision: a
-// same-term writer (the periodic loop racing the state-change checkpoint of a
-// fresh epoch) is not deposed and still saves its checkpoint; a newer term
-// fences.
+// another writer is settled by the stored term, not by the collision: an
+// older term's late bootstrap does not depose this writer, which still saves
+// its checkpoint; a newer term fences.
 //
 //nolint:paralleltest // the cases share the suite's single checkpoint document
 func TestDoCheckpointBootstrapCollision(t *testing.T) {
@@ -192,7 +191,7 @@ func TestDoCheckpointBootstrapCollision(t *testing.T) {
 		otherTerm  int64
 		wantFenced bool
 	}{
-		{name: "same term is not a fence", otherTerm: 2},
+		{name: "older term is not a fence", otherTerm: 1},
 		{name: "newer term fences", otherTerm: 3, wantFenced: true},
 	}
 
@@ -240,7 +239,7 @@ func TestDoCheckpointBootstrapCollision(t *testing.T) {
 				return
 			}
 
-			require.NoError(t, err, "a same-term collision must not read as deposed")
+			require.NoError(t, err, "an older-term collision must not read as deposed")
 			assert.Equal(t, int64(2), cp.Term)
 			assert.Equal(t, "pcsm-self", cp.InstanceID)
 		})
