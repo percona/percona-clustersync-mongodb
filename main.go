@@ -686,7 +686,7 @@ type server struct {
 	promRegistry *prometheus.Registry
 
 	// mu serializes promotion and demotion and guards epochCtx, epochCancel,
-	// autoStartOpts, activeTerm, and suspendedOnDemote. The authoritative
+	// autoStartOpts, activeTerm, suspendedOnDemote, and checkpointDone. The authoritative
 	// (role, term) lives in membership; read it via membership.CurrentRole().
 	mu sync.Mutex
 	// epochCtx is the context of the current ACTIVE tenure. Every execution
@@ -705,6 +705,9 @@ type server struct {
 	// opposed to an operator pause or a failure; a same-term re-promotion
 	// resumes it in memory.
 	suspendedOnDemote bool
+	// checkpointDone is closed once the latest epoch's checkpoint writer has
+	// exited; a promotion joins it before this tenure saves anything.
+	checkpointDone chan struct{}
 }
 
 // createServer creates a new server with the given options.
@@ -988,6 +991,14 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		s.suspendedOnDemote = true
 	}
 
+	// Join the previous epoch's checkpoint writer, now that the pipeline work
+	// it could wait on is joined too: a snapshot it captured must not land
+	// over this tenure's newer saves of the same term.
+	if s.checkpointDone != nil {
+		<-s.checkpointDone
+		s.checkpointDone = nil
+	}
+
 	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
 	epochCtx := s.epochCtx
 	ectx := pcsm.WithEpoch(epochCtx, epochCtx)
@@ -1072,10 +1083,18 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	// write means this instance was deposed: onFenced ends the epoch and
 	// suspends the pipeline immediately instead of waiting for the next lease
 	// tick.
-	go RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-		s.cfg.RecoveryCheckpointInterval, saveNow, func() {
-			s.onDemote(ctx, term)
-		})
+	checkpointDone := make(chan struct{})
+	s.checkpointDone = checkpointDone
+
+	go func() {
+		defer close(checkpointDone)
+
+		RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
+			s.cfg.RecoveryCheckpointInterval, saveNow, func() {
+				// Off this goroutine: a promotion joins it while holding mu.
+				go s.onDemote(ctx, term)
+			})
+	}()
 
 	autoStartOpts := s.autoStartOpts
 	if autoStartOpts == nil {
