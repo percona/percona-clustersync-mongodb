@@ -891,7 +891,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lastRoutedTS = change.ClusterTime
 
 		case Invalidate:
-			err := r.handleInvalidate(change, r.pool)
+			err := r.handleInvalidate(ctx, change, r.pool)
 			if err != nil {
 				return
 			}
@@ -985,14 +985,19 @@ func (r *Repl) applyTick(ts, lastRoutedTS bson.Timestamp) {
 // using r.pool directly so tests can inject a fake pool and exercise the
 // barrier/recovery/fail-closed paths without a live worker pool; production
 // passes r.pool.
-func (r *Repl) handleInvalidate(change *ChangeEvent, bc barrierController) error {
+func (r *Repl) handleInvalidate(ctx context.Context, change *ChangeEvent, bc barrierController) error {
 	err := bc.Barrier()
 	if err != nil {
 		// Safe to release even though Barrier failed: ReleaseBarrier only does
 		// non-blocking sends to resumeCh and skips dead workers, so it has no
 		// held-state dependency on a successful barrier.
 		bc.ReleaseBarrier()
-		r.setFailed(err, "Worker error during barrier")
+
+		// A barrier over abandoned bulks reports an error by design (see
+		// runWriter); under cancellation that is not a failure.
+		if ctx.Err() == nil {
+			r.setFailed(err, "Worker error during barrier")
+		}
 
 		return errors.Wrap(err, "worker error during barrier")
 	}

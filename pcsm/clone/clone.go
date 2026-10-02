@@ -472,8 +472,8 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	// error cancels them too and the failing task can drain its progress and
 	// return. The run's own context is left alone: cancellation there is a
 	// suspension, cancellation here is a failure.
-	attemptCtx, cancelAttempt := context.WithCancel(ctx)
-	defer cancelAttempt()
+	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
+	defer cancelAttempt(nil)
 
 	copyManager := NewCopyManager(attemptCtx, c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     c.options.ReadWorkers,
@@ -496,7 +496,18 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 	err := eg.Wait()
 
-	return err //nolint:wrapcheck
+	// A fatal error aborts the attempt with itself as the cause. A sibling
+	// task can return the resulting cancellation before the failing task has
+	// drained its progress, and the group keeps whichever returned first; on a
+	// live run, report the cause rather than the cancellation.
+	if ctx.Err() == nil && errors.Is(err, context.Canceled) {
+		cause := context.Cause(attemptCtx)
+		if !errors.Is(cause, context.Canceled) {
+			err = cause
+		}
+	}
+
+	return err //nolint:wrapcheck // task errors already carry their namespace
 }
 
 // cloneTask copies one inventory entry to completion, following a rename of
@@ -504,7 +515,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 // whole task succeeded. On failure the bytes it added to copiedSize are rolled
 // back, so a redo after a suspension counts them once.
 func (c *Clone) cloneTask(
-	ctx context.Context, copyManager *CopyManager, abort func(), task namespaceInfo,
+	ctx context.Context, copyManager *CopyManager, abort func(error), task namespaceInfo,
 ) error {
 	lg := log.Ctx(ctx)
 	ns := task
@@ -514,12 +525,16 @@ func (c *Clone) cloneTask(
 	// Adding the two's complement subtracts copied atomically.
 	rollback := func() { c.copiedSize.Add(^(copied - 1)) }
 
+	// The attempt is aborted with the error this task returns, so a sibling's
+	// cancellation cannot stand in for it.
+	abortTask := func(cause error) { abort(errors.Wrap(cause, ns.String())) }
+
 	for {
 		// A collection copied again (resume after a suspension, or a rename)
 		// is dropped and sharded again; its earlier placement charge goes.
 		c.targetShardSizes.release(ns.String())
 
-		n, err := c.doCollectionClone(ctx, copyManager, abort, ns)
+		n, err := c.doCollectionClone(ctx, copyManager, abortTask, ns)
 		copied += n
 
 		if err != nil && !errors.As(err, &NamespaceNotFoundError{}) {
@@ -654,7 +669,7 @@ func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
-	abort func(),
+	abort func(error),
 	task namespaceInfo,
 ) (uint64, error) {
 	copyLogger := log.Ctx(ctx)
@@ -791,7 +806,7 @@ func (c *Clone) doCollectionClone(
 				}
 
 				fatal = errors.Wrap(err, ns.Collection)
-				abort()
+				abort(fatal)
 			}
 		}
 
