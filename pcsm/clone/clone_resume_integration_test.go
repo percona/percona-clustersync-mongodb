@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -303,4 +304,105 @@ func TestClone_SuspendResumeRedoesOnlyInFlightCollections(t *testing.T) {
 	require.Equal(t, controlStatus.CopiedSizeBytes, final.CopiedSizeBytes,
 		"resume double-counted or lost the bytes of the redone collection")
 	require.Equal(t, controlStatus.EstimatedTotalSizeBytes, final.EstimatedTotalSizeBytes)
+}
+
+// sourceRenameHook renames db.from to db.to on the source while the second
+// $collStats on from is about to reach the server: the first sizes the clone
+// inventory, the second builds the copy segmenter. The collection is then gone
+// under its old name after the clone created it on the target and before any
+// document was read, which is where a rename at clone start lands.
+type sourceRenameHook struct {
+	db, from, to string
+	renamer      *mongo.Client
+
+	seen    atomic.Int32
+	renamed chan error
+}
+
+func (h *sourceRenameHook) monitor() *event.CommandMonitor {
+	return &event.CommandMonitor{
+		Started: func(opCtx context.Context, cmd *event.CommandStartedEvent) {
+			if cmd.DatabaseName != h.db || cmd.CommandName != "aggregate" {
+				return
+			}
+
+			name, _ := cmd.Command.Lookup("aggregate").StringValueOK()
+			if name != h.from || !strings.Contains(cmd.Command.Lookup("pipeline").String(), "$collStats") {
+				return
+			}
+
+			if h.seen.Add(1) != 2 { //nolint:mnd // the segmenter's $collStats follows the inventory's
+				return
+			}
+
+			h.renamed <- h.renamer.Database("admin").RunCommand(opCtx, bson.D{
+				{"renameCollection", h.db + "." + h.from},
+				{"to", h.db + "." + h.to},
+			}).Err()
+		},
+	}
+}
+
+// TestClone_RenameBeforeCopyFollowsNewName pins that a collection renamed
+// after the clone created it on the target, but before its copy began, is the
+// collection's own outcome: the clone follows the rename by UUID, drops the
+// copy under the old name, copies the collection under its new name and goes
+// on with the other collections instead of failing the attempt.
+//
+//nolint:paralleltest // drives the shared containers and renames with a command monitor
+func TestClone_RenameBeforeCopyFollowsNewName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+
+	dbName := "pcsm388_" + bson.NewObjectID().Hex()
+
+	renamer := connect(t, sourceURI)
+	defer func() { _ = renamer.Disconnect(ctx) }()
+	defer func() { _ = renamer.Database(dbName).Drop(ctx) }()
+
+	hook := &sourceRenameHook{
+		db: dbName, from: "src", to: "renamed",
+		renamer: renamer,
+		renamed: make(chan error, 1),
+	}
+	source := connectWithMonitor(t, sourceURI, hook.monitor())
+	defer func() { _ = source.Disconnect(ctx) }()
+
+	target := connect(t, targetURI)
+	defer func() { _ = target.Disconnect(ctx) }()
+	defer func() { _ = target.Database(dbName).Drop(ctx) }()
+
+	// Given: src is larger than other, so Parallelism 1 copies it first.
+	srcDB := renamer.Database(dbName)
+	seedPadded(ctx, t, srcDB.Collection("src"), 200, 1024)
+	seedPadded(ctx, t, srcDB.Collection("other"), 50, 256)
+
+	sourceVer, err := mdb.Version(ctx, source)
+	require.NoError(t, err)
+	c := clone.NewClone(source, target, catalog.NewCatalog(source, target, sourceVer),
+		sel.MakeFilter([]string{dbName + ".*"}, nil), &clone.Options{Parallelism: 1}, false)
+
+	// When: src is renamed between its creation on the target and its copy.
+	require.NoError(t, c.Start(ctx))
+	awaitClone(ctx, t, c.Done(), "clone did not finish")
+
+	select {
+	case err := <-hook.renamed:
+		require.NoError(t, err, "rename on the source")
+	default:
+		require.FailNow(t, "the segmenter's $collStats on src was never issued")
+	}
+
+	// Then: the clone finished and holds both collections, src under its new
+	// name only.
+	status := c.Status()
+	require.NoError(t, status.Err)
+	require.True(t, status.IsFinished())
+
+	tgtDB := target.Database(dbName)
+	names, err := tgtDB.ListCollectionNames(ctx, bson.D{})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"renamed", "other"}, names)
+	require.Equal(t, int64(200), countDocs(ctx, t, tgtDB.Collection("renamed")))
+	require.Equal(t, int64(50), countDocs(ctx, t, tgtDB.Collection("other")))
 }

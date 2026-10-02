@@ -748,6 +748,11 @@ func (c *Clone) doCollectionClone(
 	// are rolled back by the caller.
 	var fatal error
 
+	// A collection that vanished under this name before its copy began
+	// (renamed or dropped) is the task's own outcome, not the attempt's: the
+	// caller resolves it by UUID while the other collections keep copying.
+	var notFound error
+
 	for progressUpdate := range progressUpdateCh {
 		err := progressUpdate.Err
 		if err != nil && fatal != nil {
@@ -759,30 +764,18 @@ func (c *Clone) doCollectionClone(
 			case mdb.IsCollectionDropped(err):
 				lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
 
-				err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
-				if err != nil {
-					lg.Errorf(err, "Drop collection %q", ns)
-				} else {
-					lg.Infof("Collection %q has been dropped on target", ns)
-				}
-
-				// update estimated size
-				c.lock.Lock()
-				c.totalSize -= c.sizeMap[ns.String()].Size
-				totalSize := c.totalSize
-				delete(c.sizeMap, ns.String())
-				c.lock.Unlock()
-
-				metrics.SetEstimatedTotalSizeBytes(totalSize)
-
-				copyLogger.With(log.Size(totalSize)).
-					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+				c.forgetDroppedCollection(ctx, ns)
 
 			case mdb.IsCollectionRenamed(err):
 				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
 
 			case errors.Is(err, catalog.ErrTimeseriesUnsupported):
 				lg.Warnf("Timeseries is not supported (%q)", ns)
+
+			case errors.As(err, &NamespaceNotFoundError{}):
+				lg.Warnf("Collection %q not found before its copy began: %s", ns, err)
+
+				notFound = errors.Wrap(err, ns.Collection)
 
 			default:
 				updateLog := lg.With(
@@ -836,6 +829,10 @@ func (c *Clone) doCollectionClone(
 		return totalCopiedSizeBytes, fatal
 	}
 
+	if notFound != nil {
+		return totalCopiedSizeBytes, notFound
+	}
+
 	elapsed := time.Since(startedAt)
 	lg.With(
 		log.Size(totalCopiedSizeBytes),
@@ -846,6 +843,32 @@ func (c *Clone) doCollectionClone(
 		elapsed.Round(time.Second), totalCopiedCount)
 
 	return totalCopiedSizeBytes, nil
+}
+
+// forgetDroppedCollection drops from the target, and from the size estimate,
+// a collection dropped on the source while it was being copied.
+func (c *Clone) forgetDroppedCollection(ctx context.Context, ns catalog.Namespace) {
+	copyLogger := log.Ctx(ctx)
+	lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
+
+	err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
+	if err != nil {
+		lg.Errorf(err, "Drop collection %q", ns)
+	} else {
+		lg.Infof("Collection %q has been dropped on target", ns)
+	}
+
+	// update estimated size
+	c.lock.Lock()
+	c.totalSize -= c.sizeMap[ns.String()].Size
+	totalSize := c.totalSize
+	delete(c.sizeMap, ns.String())
+	c.lock.Unlock()
+
+	metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+	copyLogger.With(log.Size(totalSize)).
+		Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
 }
 
 type sizeMap map[string]sizeMapElem
