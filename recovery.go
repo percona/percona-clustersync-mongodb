@@ -18,6 +18,9 @@ var (
 	// because a newer term owns the checkpoint. It is the hard guarantee that a
 	// deposed active cannot corrupt the target checkpoint.
 	errCheckpointFenced = errors.New("checkpoint fenced by newer term")
+	// errCheckpointExists is returned by the bootstrap insert when another
+	// writer created the checkpoint document first; its term decides the rest.
+	errCheckpointExists = errors.New("checkpoint already exists")
 	// errNoCheckpoint is returned by Restore when there is no recovery data.
 	// A promotion decides what that means: nothing to do for an idle
 	// pipeline, a stale pipeline that cannot be replaced otherwise.
@@ -175,22 +178,33 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 	}}}
 
 	err = coll.FindOneAndUpdate(ctx, filter, update).Err()
-	switch {
-	case err == nil:
-		return nil
-
-	case errors.Is(err, mongo.ErrNoDocuments):
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		// The document is absent (bootstrap) or a newer term owns it (fence).
-		// The bootstrap insert disambiguates.
-		return doCheckpointBootstrap(ctx, coll, data, term, instanceID)
+		// The bootstrap insert tells them apart.
+		err = doCheckpointBootstrap(ctx, coll, data, term, instanceID)
+		if !errors.Is(err, errCheckpointExists) {
+			return err
+		}
 
-	default:
+		// Another writer created the document between the update and the
+		// insert, which says nothing about its term: a same-term writer (the
+		// periodic loop racing the state-change checkpoint of a fresh epoch)
+		// must not read as deposed. The term-gated update decides.
+		err = coll.FindOneAndUpdate(ctx, filter, update).Err()
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return errCheckpointFenced
+		}
+	}
+
+	if err != nil {
 		return errors.Wrap(err, "save checkpoint")
 	}
+
+	return nil
 }
 
 // doCheckpointBootstrap inserts the first checkpoint document. A duplicate-key
-// collision means another writer created it first; treated as fenced.
+// collision means another writer created it first: errCheckpointExists.
 func doCheckpointBootstrap(
 	ctx context.Context, coll *mongo.Collection, data bson.Raw, term int64, instanceID string,
 ) error {
@@ -206,7 +220,7 @@ func doCheckpointBootstrap(
 		return nil
 
 	case mongo.IsDuplicateKeyError(err):
-		return errCheckpointFenced
+		return errCheckpointExists
 
 	default:
 		return errors.Wrap(err, "bootstrap checkpoint")
