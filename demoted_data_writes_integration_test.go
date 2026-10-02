@@ -24,6 +24,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/ha"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 const (
@@ -33,31 +34,11 @@ const (
 	cloneWaitInterval = 200 * time.Millisecond
 )
 
-// The source must be a replica set to serve change streams; the target is a
-// separate standalone because replication copies into the same namespace.
-//
-//nolint:gochecknoglobals // shared testcontainers for the demotion fencing suite
-var (
-	demotedSourceURI string
-	demotedTargetURI string
-	errDemotedMongo  error
-	demotedMongoOnce sync.Once
-)
-
-// demotedMongo starts the suite's source and target containers once. No
-// TestMain is possible in this package (cli_test.go already defines one), so
+// startDemotedMongo starts the source and target containers. The source must
+// be a replica set to serve change streams; the target is a separate
+// standalone because replication copies into the same namespace. No TestMain
+// is possible in this package (cli_test.go already defines one), so
 // termination is left to the testcontainers reaper.
-func demotedMongo(t *testing.T) (string, string) {
-	t.Helper()
-
-	demotedMongoOnce.Do(func() {
-		demotedSourceURI, demotedTargetURI, errDemotedMongo = startDemotedMongo(context.Background())
-	})
-	require.NoError(t, errDemotedMongo)
-
-	return demotedSourceURI, demotedTargetURI
-}
-
 func startDemotedMongo(ctx context.Context) (string, string, error) {
 	version := os.Getenv("MONGO_VERSION")
 	if version == "" {
@@ -332,129 +313,131 @@ func (g *markerWriteGate) monitor() *event.CommandMonitor {
 //
 //nolint:paralleltest // Drives one pipeline against a shared source and target.
 func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
-	sourceURI, targetURI := demotedMongo(t)
-
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
-	defer cancel()
-
-	source, err := mongo.Connect(options.Client().
-		ApplyURI(sourceURI).SetServerSelectionTimeout(30 * time.Second))
-	require.NoError(t, err)
-	defer func() { _ = source.Disconnect(context.Background()) }()
-
-	// The gate is installed up front but only parks writes once enabled, so
-	// the clone and the catalog setup run unimpeded.
-	gate := newMarkerWriteGate(demotedMarker)
-	defer gate.releaseAll()
-
-	target, err := mongo.Connect(options.Client().
-		ApplyURI(targetURI).
-		SetServerSelectionTimeout(30 * time.Second).
-		SetRetryWrites(false).
-		SetMonitor(gate.monitor()))
-	require.NoError(t, err)
-	defer func() { _ = target.Disconnect(context.Background()) }()
-
-	require.NoError(t, source.Database(demotedTestDB).Drop(ctx))
-	require.NoError(t, target.Database(demotedTestDB).Drop(ctx))
-	require.NoError(t, target.Database(config.PCSMDatabase).Drop(ctx))
-
-	sourceColl := source.Database(demotedTestDB).Collection(demotedTestColl)
-	_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", "cloned"}})
+	sourceURI, targetURI, err := startDemotedMongo(t.Context())
 	require.NoError(t, err)
 
-	sourceVer, err := mdb.Version(ctx, source)
-	require.NoError(t, err)
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 4*time.Minute, func(ctx context.Context) error {
+		source, err := mongo.Connect(options.Client().
+			ApplyURI(sourceURI).SetServerSelectionTimeout(30 * time.Second))
+		require.NoError(t, err)
+		defer func() { _ = source.Disconnect(context.Background()) }()
 
-	// Given: this instance is the ACTIVE of term 1 and is replicating.
-	pipeline := pcsm.New(ctx, source, target, sourceVer, false, false)
-	membership := &ha.Membership{}
-	membership.SetRole(ha.RoleActive, 1)
-	s := &server{
-		cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
-		sourceCluster: source,
-		targetCluster: target,
-		pcsm:          pipeline,
-		membership:    membership,
-		activeTerm:    1,
-	}
+		// The gate is installed up front but only parks writes once enabled, so
+		// the clone and the catalog setup run unimpeded.
+		gate := newMarkerWriteGate(demotedMarker)
+		defer gate.releaseAll()
 
-	require.NoError(t, pipeline.Start(ctx, &pcsm.StartOptions{}))
-	requireDemotedCloneDone(t, ctx, pipeline)
+		target, err := mongo.Connect(options.Client().
+			ApplyURI(targetURI).
+			SetServerSelectionTimeout(30 * time.Second).
+			SetRetryWrites(false).
+			SetMonitor(gate.monitor()))
+		require.NoError(t, err)
+		defer func() { _ = target.Disconnect(context.Background()) }()
 
-	// When: a write is in flight to the target and the lease moves on.
-	gate.enable()
+		require.NoError(t, source.Database(demotedTestDB).Drop(ctx))
+		require.NoError(t, target.Database(demotedTestDB).Drop(ctx))
+		require.NoError(t, target.Database(config.PCSMDatabase).Drop(ctx))
 
-	_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", demotedMarker}})
-	require.NoError(t, err)
+		sourceColl := source.Database(demotedTestDB).Collection(demotedTestColl)
+		_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", "cloned"}})
+		require.NoError(t, err)
 
-	select {
-	case <-gate.armed:
-	case <-ctx.Done():
-		require.FailNow(t, "no target write was issued for the source insert", "%v", ctx.Err())
-	}
+		sourceVer, err := mdb.Version(ctx, source)
+		require.NoError(t, err)
 
-	// Another instance takes the lease and establishes term 2. This instance
-	// is now provably deposed: its own checkpoint writes are fenced.
-	// Only the term matters to the fence, and the payload is never read back
-	// here, so the successor is a checkpoint rather than a second pipeline.
-	// A real one would clone the source, and its copy of the document below
-	// would be indistinguishable from a write by the deposed instance.
-	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 2, "pcsm-successor"))
-	require.ErrorIs(t, DoCheckpoint(ctx, target, pipeline, 1, "pcsm-deposed"), errCheckpointFenced)
+		// Given: this instance is the ACTIVE of term 1 and is replicating.
+		pipeline := pcsm.New(ctx, source, target, sourceVer, false, false)
+		membership := &ha.Membership{}
+		membership.SetRole(ha.RoleActive, 1)
+		s := &server{
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
+			sourceCluster: source,
+			targetCluster: target,
+			pcsm:          pipeline,
+			membership:    membership,
+			activeTerm:    1,
+		}
 
-	// Demote through the real path. Suspension cancels the parked write's
-	// context, which releases the hook; the driver then fails the command
-	// before it reaches the wire. The timer is a failure bound only: with the
-	// fence in place the context wins long before it fires, and a release by
-	// timer is reported as a failure below (byCancel false).
-	gate.setDemoted(true)
-	releaseBound := time.AfterFunc(10*time.Second, gate.releaseAll)
-	defer releaseBound.Stop()
+		require.NoError(t, pipeline.Start(ctx, &pcsm.StartOptions{}))
+		requireDemotedCloneDone(t, ctx, pipeline)
 
-	s.onDemote(ctx, 1)
+		// When: a write is in flight to the target and the lease moves on.
+		gate.enable()
 
-	var byCancel bool
-	select {
-	case byCancel = <-gate.parked:
-	case <-ctx.Done():
-		require.FailNow(t, "parked write was never released", "%v", ctx.Err())
-	}
-	require.True(t, byCancel, "demotion did not cancel the parked write's context")
+		_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", demotedMarker}})
+		require.NoError(t, err)
 
-	select {
-	case <-gate.parkedFailed:
-	case <-ctx.Done():
-		require.FailNow(t, "parked write did not report CommandFailed", "%v", ctx.Err())
-	}
+		select {
+		case <-gate.armed:
+		case <-ctx.Done():
+			require.FailNow(t, "no target write was issued for the source insert", "%v", ctx.Err())
+		}
 
-	// Then: the deposed instance landed nothing and settled as suspended.
-	status := pipeline.Status(ctx)
-	require.Equal(t, pcsm.State(pcsm.StatePaused), status.State, "demotion did not suspend the pipeline")
-	require.False(t, status.Repl.Pausing, "replication is still pausing after demotion returned")
+		// Another instance takes the lease and establishes term 2. This instance
+		// is now provably deposed: its own checkpoint writes are fenced.
+		// Only the term matters to the fence, and the payload is never read back
+		// here, so the successor is a checkpoint rather than a second pipeline.
+		// A real one would clone the source, and its copy of the document below
+		// would be indistinguishable from a write by the deposed instance.
+		require.NoError(t, DoCheckpoint(ctx, target, pipeline, 2, "pcsm-successor"))
+		require.ErrorIs(t, DoCheckpoint(ctx, target, pipeline, 1, "pcsm-deposed"), errCheckpointFenced)
 
-	targetColl := target.Database(demotedTestDB).Collection(demotedTestColl)
-	count, err := targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
-	require.NoError(t, err)
-	require.Zero(t, count,
-		"a deposed ACTIVE wrote user data to the target after losing the lease to term 2")
-	require.Zero(t, gate.lateStarts(), "a data write was started while demoted")
+		// Demote through the real path. Suspension cancels the parked write's
+		// context, which releases the hook; the driver then fails the command
+		// before it reaches the wire. The timer is a failure bound only: with the
+		// fence in place the context wins long before it fires, and a release by
+		// timer is reported as a failure below (byCancel false).
+		gate.setDemoted(true)
+		releaseBound := time.AfterFunc(10*time.Second, gate.releaseAll)
+		defer releaseBound.Stop()
 
-	// And: a same-term re-promotion resumes the suspended pipeline, which
-	// replays the abandoned write from the inclusive checkpoint floor. The
-	// checkpoint interval is one hour, so the term-2 fence never fires here.
-	gate.setDemoted(false)
-	s.onPromote(ctx, 1)
+		s.onDemote(ctx, 1)
 
-	select {
-	case <-gate.markerSucceeded:
-	case <-ctx.Done():
-		require.FailNow(t, "resumed pipeline never replayed the suspended write", "%v", ctx.Err())
-	}
+		var byCancel bool
+		select {
+		case byCancel = <-gate.parked:
+		case <-ctx.Done():
+			require.FailNow(t, "parked write was never released", "%v", ctx.Err())
+		}
+		require.True(t, byCancel, "demotion did not cancel the parked write's context")
 
-	count, err = targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count, "same-term resume did not replay the suspended write exactly once")
+		select {
+		case <-gate.parkedFailed:
+		case <-ctx.Done():
+			require.FailNow(t, "parked write did not report CommandFailed", "%v", ctx.Err())
+		}
+
+		// Then: the deposed instance landed nothing and settled as suspended.
+		status := pipeline.Status(ctx)
+		require.Equal(t, pcsm.State(pcsm.StatePaused), status.State, "demotion did not suspend the pipeline")
+		require.False(t, status.Repl.Pausing, "replication is still pausing after demotion returned")
+
+		targetColl := target.Database(demotedTestDB).Collection(demotedTestColl)
+		count, err := targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
+		require.NoError(t, err)
+		require.Zero(t, count,
+			"a deposed ACTIVE wrote user data to the target after losing the lease to term 2")
+		require.Zero(t, gate.lateStarts(), "a data write was started while demoted")
+
+		// And: a same-term re-promotion resumes the suspended pipeline, which
+		// replays the abandoned write from the inclusive checkpoint floor. The
+		// checkpoint interval is one hour, so the term-2 fence never fires here.
+		gate.setDemoted(false)
+		s.onPromote(ctx, 1)
+
+		select {
+		case <-gate.markerSucceeded:
+		case <-ctx.Done():
+			require.FailNow(t, "resumed pipeline never replayed the suspended write", "%v", ctx.Err())
+		}
+
+		count, err = targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count, "same-term resume did not replay the suspended write exactly once")
+
+		return nil
+	}))
 }
 
 // requireDemotedCloneDone waits until replication is running on a finished

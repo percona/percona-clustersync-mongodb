@@ -1,4 +1,4 @@
-package repl //nolint
+package repl //nolint:testpackage // drives the unexported worker pool, writer and barrier seams
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func (g *blockingGate) awaitParked(t *testing.T) {
 	select {
 	case <-g.started:
 	case <-time.After(barrierTimeout):
-		t.Fatal("no bulk write was parked")
+		require.FailNow(t, "no bulk write was parked")
 	}
 }
 
@@ -82,7 +82,7 @@ func awaitWorkerExit(t *testing.T, w *worker) {
 	select {
 	case <-w.done:
 	case <-time.After(barrierTimeout):
-		t.Fatal("worker did not exit after cancellation")
+		require.FailNow(t, "worker did not exit after cancellation")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestCancel_AbandonsParkedAndQueuedBulks(t *testing.T) {
 
 	select {
 	case err := <-pool.Err():
-		t.Fatalf("cancellation was reported as a worker failure: %v", err)
+		require.FailNowf(t, "cancellation was reported as a worker failure", "%v", err)
 	default:
 	}
 }
@@ -156,7 +156,7 @@ func TestCancel_BarrierOverAbandonedBulkReportsError(t *testing.T) {
 	case err := <-barrierErr:
 		require.Error(t, err, "a barrier over an abandoned bulk must not report success")
 	case <-time.After(barrierTimeout):
-		t.Fatal("barrier did not return after cancellation")
+		require.FailNow(t, "barrier did not return after cancellation")
 	}
 
 	awaitWorkerExit(t, w)
@@ -195,7 +195,7 @@ func TestRoute_ReturnsWhenWorkerExited(t *testing.T) {
 	select {
 	case <-routed:
 	case <-time.After(barrierTimeout):
-		t.Fatal("Route blocked on an exited worker")
+		require.FailNow(t, "Route blocked on an exited worker")
 	}
 }
 
@@ -282,7 +282,7 @@ func TestRelease_DrainsParkedBulk(t *testing.T) {
 	case err := <-barrierErr:
 		require.NoError(t, err)
 	case <-time.After(barrierTimeout):
-		t.Fatal("barrier did not complete after the parked write was released")
+		require.FailNow(t, "barrier did not complete after the parked write was released")
 	}
 
 	assert.Equal(t, int32(2), gate.doCalls.Load())

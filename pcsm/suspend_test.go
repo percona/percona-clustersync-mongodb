@@ -13,6 +13,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 type suspendResult struct {
@@ -107,55 +108,56 @@ func TestSuspend_IdleIsNoop(t *testing.T) {
 func TestSuspend_DuringCloneResumesInMemory(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-	cln, rpl := newSuspendMocks()
-	p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		// Given: the run is inside the clone.
+		done := startRunning(p)
+		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
+		assert.False(t, cln.resumed())
 
-	// Given: the run is inside the clone.
-	done := startRunning(p)
-	awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
-	assert.False(t, cln.resumed())
+		// When: the instance is suspended; the clone ends on cancellation alone.
+		res := suspendAsync(ctx, p)
+		awaitEvent(ctx, t, cln.lastCtx().Done(), "suspension did not cancel the clone's context")
+		close(cln.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit after the clone stopped")
 
-	// When: the instance is suspended; the clone ends on cancellation alone.
-	res := suspendAsync(ctx, p)
-	awaitEvent(ctx, t, cln.lastCtx().Done(), "suspension did not cancel the clone's context")
-	close(cln.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit after the clone stopped")
+		// Then: paused and suspended, nothing failed, replication never started.
+		r := awaitSuspend(ctx, t, res)
+		require.NoError(t, r.err)
+		assert.True(t, r.suspended)
 
-	// Then: paused and suspended, nothing failed, replication never started.
-	r := awaitSuspend(ctx, t, res)
-	require.NoError(t, r.err)
-	assert.True(t, r.suspended)
+		state, flagged, perr := pipelineState(p)
+		assert.Equal(t, State(StatePaused), state)
+		assert.True(t, flagged)
+		require.NoError(t, perr)
+		assert.Nil(t, rpl.lastCtx(), "replication must not start after a suspension")
 
-	state, flagged, perr := pipelineState(p)
-	assert.Equal(t, State(StatePaused), state)
-	assert.True(t, flagged)
-	require.NoError(t, perr)
-	assert.Nil(t, rpl.lastCtx(), "replication must not start after a suspension")
+		// And: a same-term resume continues the clone rather than starting over.
+		cln.doneCh = make(chan struct{})
+		cln.status.StartTime = time.Unix(1, 0)
+		require.NoError(t, p.Resume(ctx, ResumeOptions{}))
 
-	// And: a same-term resume continues the clone rather than starting over.
-	cln.doneCh = make(chan struct{})
-	cln.status.StartTime = time.Unix(1, 0)
-	require.NoError(t, p.Resume(ctx, ResumeOptions{}))
+		p.lock.Lock()
+		resumedDone := p.runDone
+		p.lock.Unlock()
 
-	p.lock.Lock()
-	resumedDone := p.runDone
-	p.lock.Unlock()
+		awaitEvent(ctx, t, cln.startCalled, "resumed run did not continue the clone")
+		assert.True(t, cln.resumed(), "a suspended clone must be resumed, not started again")
 
-	awaitEvent(ctx, t, cln.startCalled, "resumed run did not continue the clone")
-	assert.True(t, cln.resumed(), "a suspended clone must be resumed, not started again")
+		cln.status = finishedCloneStatus()
+		close(cln.doneCh)
+		awaitEvent(ctx, t, rpl.startCalled, "replication did not start after the resumed clone")
 
-	cln.status = finishedCloneStatus()
-	close(cln.doneCh)
-	awaitEvent(ctx, t, rpl.startCalled, "replication did not start after the resumed clone")
+		_, flagged, _ = pipelineState(p)
+		assert.False(t, flagged, "resume must consume the suspension")
 
-	_, flagged, _ = pipelineState(p)
-	assert.False(t, flagged, "resume must consume the suspension")
+		close(rpl.doneCh)
+		awaitEvent(ctx, t, resumedDone, "resumed run did not exit")
 
-	close(rpl.doneCh)
-	awaitEvent(ctx, t, resumedDone, "resumed run did not exit")
+		return nil
+	}))
 }
 
 // TestSuspend_DuringReplPausesAtFloor pins the replication phase: Suspend
@@ -163,32 +165,33 @@ func TestSuspend_DuringCloneResumesInMemory(t *testing.T) {
 func TestSuspend_DuringReplPausesAtFloor(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		cln.status = finishedCloneStatus()
+		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-	cln, rpl := newSuspendMocks()
-	cln.status = finishedCloneStatus()
-	p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		// Given: replication is running.
+		done := startRunning(p)
+		awaitEvent(ctx, t, rpl.startCalled, "run did not start replication")
 
-	// Given: replication is running.
-	done := startRunning(p)
-	awaitEvent(ctx, t, rpl.startCalled, "run did not start replication")
+		// When: the instance is suspended; replication ends on cancellation alone.
+		res := suspendAsync(ctx, p)
+		awaitEvent(ctx, t, rpl.lastCtx().Done(), "suspension did not cancel replication's context")
+		close(rpl.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit after replication stopped")
 
-	// When: the instance is suspended; replication ends on cancellation alone.
-	res := suspendAsync(ctx, p)
-	awaitEvent(ctx, t, rpl.lastCtx().Done(), "suspension did not cancel replication's context")
-	close(rpl.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit after replication stopped")
+		// Then: paused and suspended, nothing failed.
+		r := awaitSuspend(ctx, t, res)
+		require.NoError(t, r.err)
+		assert.True(t, r.suspended)
 
-	// Then: paused and suspended, nothing failed.
-	r := awaitSuspend(ctx, t, res)
-	require.NoError(t, r.err)
-	assert.True(t, r.suspended)
+		state, flagged, perr := pipelineState(p)
+		assert.Equal(t, State(StatePaused), state)
+		assert.True(t, flagged)
+		require.NoError(t, perr)
 
-	state, flagged, perr := pipelineState(p)
-	assert.Equal(t, State(StatePaused), state)
-	assert.True(t, flagged)
-	require.NoError(t, perr)
+		return nil
+	}))
 }
 
 // TestSuspend_OperatorPauseIsNotASuspension pins that a pause requested by
@@ -197,35 +200,36 @@ func TestSuspend_DuringReplPausesAtFloor(t *testing.T) {
 func TestSuspend_OperatorPauseIsNotASuspension(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		cln.status = finishedCloneStatus()
+		rpl.startTime = time.Unix(1, 0)
+		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-	cln, rpl := newSuspendMocks()
-	cln.status = finishedCloneStatus()
-	rpl.startTime = time.Unix(1, 0)
-	p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		// Given: the operator paused the pipeline and the drain is still running.
+		done := startRunning(p)
+		awaitEvent(ctx, t, rpl.startCalled, "run did not resume replication")
+		require.NoError(t, p.Pause(ctx))
+		awaitEvent(ctx, t, rpl.pauseCalled, "pause did not reach the replicator")
 
-	// Given: the operator paused the pipeline and the drain is still running.
-	done := startRunning(p)
-	awaitEvent(ctx, t, rpl.startCalled, "run did not resume replication")
-	require.NoError(t, p.Pause(ctx))
-	awaitEvent(ctx, t, rpl.pauseCalled, "pause did not reach the replicator")
+		// When: the instance is suspended during the drain.
+		res := suspendAsync(ctx, p)
+		awaitEvent(ctx, t, rpl.lastCtx().Done(), "suspension did not cancel the drain")
+		close(rpl.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit after the drain was canceled")
 
-	// When: the instance is suspended during the drain.
-	res := suspendAsync(ctx, p)
-	awaitEvent(ctx, t, rpl.lastCtx().Done(), "suspension did not cancel the drain")
-	close(rpl.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit after the drain was canceled")
+		// Then: the operator's pause stands and is not reported as a suspension.
+		r := awaitSuspend(ctx, t, res)
+		require.NoError(t, r.err)
+		assert.False(t, r.suspended)
 
-	// Then: the operator's pause stands and is not reported as a suspension.
-	r := awaitSuspend(ctx, t, res)
-	require.NoError(t, r.err)
-	assert.False(t, r.suspended)
+		state, flagged, perr := pipelineState(p)
+		assert.Equal(t, State(StatePaused), state)
+		assert.False(t, flagged)
+		require.NoError(t, perr)
 
-	state, flagged, perr := pipelineState(p)
-	assert.Equal(t, State(StatePaused), state)
-	assert.False(t, flagged)
-	require.NoError(t, perr)
+		return nil
+	}))
 }
 
 // TestSuspend_GenuineFailureRacingSuspensionStaysFailed pins invariant 5: a
@@ -234,32 +238,33 @@ func TestSuspend_OperatorPauseIsNotASuspension(t *testing.T) {
 func TestSuspend_GenuineFailureRacingSuspensionStaysFailed(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-	cln, rpl := newSuspendMocks()
-	p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		done := startRunning(p)
+		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
 
-	done := startRunning(p)
-	awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
+		// When: the clone records a real error while the suspension cancels it.
+		res := suspendAsync(ctx, p)
+		awaitEvent(ctx, t, cln.lastCtx().Done(), "suspension did not cancel the clone's context")
+		cloneErr := errors.New("insert failed")
+		cln.status.Err = cloneErr
+		close(cln.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit")
 
-	// When: the clone records a real error while the suspension cancels it.
-	res := suspendAsync(ctx, p)
-	awaitEvent(ctx, t, cln.lastCtx().Done(), "suspension did not cancel the clone's context")
-	cloneErr := errors.New("insert failed")
-	cln.status.Err = cloneErr
-	close(cln.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit")
+		// Then: the failure is kept and no suspension is reported.
+		r := awaitSuspend(ctx, t, res)
+		require.NoError(t, r.err)
+		assert.False(t, r.suspended)
 
-	// Then: the failure is kept and no suspension is reported.
-	r := awaitSuspend(ctx, t, res)
-	require.NoError(t, r.err)
-	assert.False(t, r.suspended)
+		state, flagged, perr := pipelineState(p)
+		assert.Equal(t, State(StateFailed), state)
+		assert.False(t, flagged)
+		require.ErrorIs(t, perr, cloneErr)
 
-	state, flagged, perr := pipelineState(p)
-	assert.Equal(t, State(StateFailed), state)
-	assert.False(t, flagged)
-	require.ErrorIs(t, perr, cloneErr)
+		return nil
+	}))
 }
 
 func TestSuspend_FailedIsUntouched(t *testing.T) {
@@ -284,47 +289,48 @@ func TestSuspend_FailedIsUntouched(t *testing.T) {
 func TestSuspend_CanceledJoinKeepsOwnership(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-	cln, rpl := newSuspendMocks()
-	p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		done := startRunning(p)
+		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
 
-	done := startRunning(p)
-	awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
+		// When: the join context is already dead and the clone has not stopped.
+		joinCtx, cancelJoin := context.WithCancel(ctx)
+		cancelJoin()
 
-	// When: the join context is already dead and the clone has not stopped.
-	joinCtx, cancelJoin := context.WithCancel(ctx)
-	cancelJoin()
+		suspended, err := p.Suspend(joinCtx)
 
-	suspended, err := p.Suspend(joinCtx)
+		// Then: an error, nothing settled, the execution still owned.
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, suspended)
 
-	// Then: an error, nothing settled, the execution still owned.
-	require.ErrorIs(t, err, context.Canceled)
-	assert.False(t, suspended)
+		state, flagged, _ := pipelineState(p)
+		assert.Equal(t, State(StateRunning), state)
+		assert.False(t, flagged)
 
-	state, flagged, _ := pipelineState(p)
-	assert.Equal(t, State(StateRunning), state)
-	assert.False(t, flagged)
+		p.execMu.Lock()
+		owned := p.runExec != nil
+		p.execMu.Unlock()
+		assert.True(t, owned, "a cut-short suspension must keep the execution handle")
 
-	p.execMu.Lock()
-	owned := p.runExec != nil
-	p.execMu.Unlock()
-	assert.True(t, owned, "a cut-short suspension must keep the execution handle")
+		// And: the cancellation did reach the clone; once the run has exited on
+		// its own, a later suspension settles it.
+		awaitEvent(ctx, t, cln.lastCtx().Done(), "the clone's context was not canceled")
+		close(cln.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit")
 
-	// And: the cancellation did reach the clone; once the run has exited on
-	// its own, a later suspension settles it.
-	awaitEvent(ctx, t, cln.lastCtx().Done(), "the clone's context was not canceled")
-	close(cln.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit")
+		suspended, err = p.Suspend(ctx)
+		require.NoError(t, err)
+		assert.True(t, suspended)
 
-	suspended, err = p.Suspend(ctx)
-	require.NoError(t, err)
-	assert.True(t, suspended)
+		state, flagged, _ = pipelineState(p)
+		assert.Equal(t, State(StatePaused), state)
+		assert.True(t, flagged)
 
-	state, flagged, _ = pipelineState(p)
-	assert.Equal(t, State(StatePaused), state)
-	assert.True(t, flagged)
+		return nil
+	}))
 }
 
 // gatedFinalizer blocks its first Finalize until its context is canceled and
@@ -350,51 +356,52 @@ func (f *gatedFinalizer) Finalize(ctx context.Context) []catalog.UnsuccessfulInd
 func TestSuspend_InterruptedFinalizeIsNotCompletedAndRunsAgain(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	fin := &gatedFinalizer{entered: make(chan struct{})}
-	finalized := make(chan struct{}, 1)
-	p := recoveredFinalizingPipeline(t)
-	p.finalizer = fin
-	p.onStateChanged = func(s State) {
-		if s == StateFinalized {
-			signalCalled(finalized)
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		fin := &gatedFinalizer{entered: make(chan struct{})}
+		finalized := make(chan struct{}, 1)
+		p := recoveredFinalizingPipeline(t)
+		p.finalizer = fin
+		p.onStateChanged = func(s State) {
+			if s == StateFinalized {
+				signalCalled(finalized)
+			}
 		}
-	}
 
-	// Given: catalog finalization is live.
-	require.NoError(t, p.Finalize(ctx))
-	awaitEvent(ctx, t, fin.entered, "finalizer did not start")
+		// Given: catalog finalization is live.
+		require.NoError(t, p.Finalize(ctx))
+		awaitEvent(ctx, t, fin.entered, "finalizer did not start")
 
-	// When: the instance is suspended.
-	suspended, err := p.Suspend(ctx)
-	require.NoError(t, err)
-	assert.True(t, suspended)
+		// When: the instance is suspended.
+		suspended, err := p.Suspend(ctx)
+		require.NoError(t, err)
+		assert.True(t, suspended)
 
-	// Then: still finalizing, not completed, no live finalizer.
-	p.lock.Lock()
-	state, flagged, active := p.state, p.suspended, p.finalizeActive
-	completed := p.finalizeStatus != nil && p.finalizeStatus.Completed
-	p.lock.Unlock()
+		// Then: still finalizing, not completed, no live finalizer.
+		p.lock.Lock()
+		state, flagged, active := p.state, p.suspended, p.finalizeActive
+		completed := p.finalizeStatus != nil && p.finalizeStatus.Completed
+		p.lock.Unlock()
 
-	assert.Equal(t, State(StateFinalizing), state)
-	assert.True(t, flagged)
-	assert.False(t, active)
-	assert.False(t, completed, "an interrupted finalization must not report completion")
+		assert.Equal(t, State(StateFinalizing), state)
+		assert.True(t, flagged)
+		assert.False(t, active)
+		assert.False(t, completed, "an interrupted finalization must not report completion")
 
-	// And: an explicit /finalize runs it again to completion.
-	require.NoError(t, p.Finalize(ctx))
-	awaitEvent(ctx, t, finalized, "second finalization did not complete")
+		// And: an explicit /finalize runs it again to completion.
+		require.NoError(t, p.Finalize(ctx))
+		awaitEvent(ctx, t, finalized, "second finalization did not complete")
 
-	p.lock.Lock()
-	state = p.state
-	completed = p.finalizeStatus != nil && p.finalizeStatus.Completed
-	p.lock.Unlock()
+		p.lock.Lock()
+		state = p.state
+		completed = p.finalizeStatus != nil && p.finalizeStatus.Completed
+		p.lock.Unlock()
 
-	assert.Equal(t, State(StateFinalized), state)
-	assert.True(t, completed)
-	assert.Equal(t, int32(2), fin.calls.Load())
+		assert.Equal(t, State(StateFinalized), state)
+		assert.True(t, completed)
+		assert.Equal(t, int32(2), fin.calls.Load())
+
+		return nil
+	}))
 }
 
 // TestFinalize_RefusesWhenEpochDiesDuringDrain pins C7: a /finalize whose
@@ -402,45 +409,46 @@ func TestSuspend_InterruptedFinalizeIsNotCompletedAndRunsAgain(t *testing.T) {
 func TestFinalize_RefusesWhenEpochDiesDuringDrain(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		cln.status = finishedCloneStatus()
+		rpl.startTime = time.Unix(1, 0)
+		rpl.lastOpTime = bson.Timestamp{T: 2}
+		p := &PCSM{
+			lifecycleCtx: ctx, source: unreachableSource(t), state: StateRunning,
+			clone: cln, repl: rpl, onStateChanged: func(State) {},
+		}
 
-	cln, rpl := newSuspendMocks()
-	cln.status = finishedCloneStatus()
-	rpl.startTime = time.Unix(1, 0)
-	rpl.lastOpTime = bson.Timestamp{T: 2}
-	p := &PCSM{
-		lifecycleCtx: ctx, source: unreachableSource(t), state: StateRunning,
-		clone: cln, repl: rpl, onStateChanged: func(State) {},
-	}
+		epoch, endEpoch := context.WithCancel(ctx)
+		defer endEpoch()
 
-	epoch, endEpoch := context.WithCancel(ctx)
-	defer endEpoch()
+		// Given: /finalize is draining replication under its epoch.
+		result := make(chan error, 1)
+		go func() { result <- p.Finalize(WithEpoch(ctx, epoch)) }()
+		awaitEvent(ctx, t, rpl.pauseCalled, "finalize did not pause replication")
 
-	// Given: /finalize is draining replication under its epoch.
-	result := make(chan error, 1)
-	go func() { result <- p.Finalize(WithEpoch(ctx, epoch)) }()
-	awaitEvent(ctx, t, rpl.pauseCalled, "finalize did not pause replication")
+		// When: the epoch ends before the drain completes.
+		endEpoch()
+		close(rpl.doneCh)
 
-	// When: the epoch ends before the drain completes.
-	endEpoch()
-	close(rpl.doneCh)
+		// Then: refused; no finalizer, no finalize status, state left to Suspend.
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, ErrNotActive)
+		case <-ctx.Done():
+			require.FailNow(t, "Finalize did not return", ctx.Err().Error())
+		}
 
-	// Then: refused; no finalizer, no finalize status, state left to Suspend.
-	select {
-	case err := <-result:
-		require.ErrorIs(t, err, ErrNotActive)
-	case <-ctx.Done():
-		require.FailNow(t, "Finalize did not return", ctx.Err().Error())
-	}
+		p.lock.Lock()
+		state, active, status := p.state, p.finalizeActive, p.finalizeStatus
+		p.lock.Unlock()
 
-	p.lock.Lock()
-	state, active, status := p.state, p.finalizeActive, p.finalizeStatus
-	p.lock.Unlock()
+		assert.Equal(t, State(StateRunning), state)
+		assert.False(t, active)
+		assert.Nil(t, status)
 
-	assert.Equal(t, State(StateRunning), state)
-	assert.False(t, active)
-	assert.Nil(t, status)
+		return nil
+	}))
 }
 
 // TestLaunch_RefusesDeadEpochBeforeMutatingState pins C1: a request admitted
@@ -520,38 +528,39 @@ func TestLaunch_RefusesDeadEpochBeforeMutatingState(t *testing.T) {
 func TestRun_PersistsCompletedCloneOnce(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+		cln, rpl := newSuspendMocks()
+		notified := make(chan State, 4)
+		p := &PCSM{
+			lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl,
+			onStateChanged: func(s State) { notified <- s },
+		}
 
-	cln, rpl := newSuspendMocks()
-	notified := make(chan State, 4)
-	p := &PCSM{
-		lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl,
-		onStateChanged: func(s State) { notified <- s },
-	}
+		// Given: the clone runs and completes.
+		done := startRunning(p)
+		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
+		cln.status = finishedCloneStatus()
+		close(cln.doneCh)
 
-	// Given: the clone runs and completes.
-	done := startRunning(p)
-	awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
-	cln.status = finishedCloneStatus()
-	close(cln.doneCh)
+		// Then: a running checkpoint is issued and replication starts.
+		awaitEvent(ctx, t, rpl.startCalled, "replication did not start")
 
-	// Then: a running checkpoint is issued and replication starts.
-	awaitEvent(ctx, t, rpl.startCalled, "replication did not start")
+		select {
+		case s := <-notified:
+			assert.Equal(t, State(StateRunning), s)
+		case <-ctx.Done():
+			require.FailNow(t, "no checkpoint after the clone completed", ctx.Err().Error())
+		}
 
-	select {
-	case s := <-notified:
-		assert.Equal(t, State(StateRunning), s)
-	case <-ctx.Done():
-		require.FailNow(t, "no checkpoint after the clone completed", ctx.Err().Error())
-	}
+		close(rpl.doneCh)
+		awaitEvent(ctx, t, done, "run did not exit")
 
-	close(rpl.doneCh)
-	awaitEvent(ctx, t, done, "run did not exit")
+		select {
+		case s := <-notified:
+			require.FailNowf(t, "unexpected extra state change", "%s", s)
+		default:
+		}
 
-	select {
-	case s := <-notified:
-		t.Fatalf("unexpected extra state change: %s", s)
-	default:
-	}
+		return nil
+	}))
 }

@@ -1,4 +1,4 @@
-package mdb //nolint:testpackage
+package mdb //nolint:testpackage // tests the unexported abortOnCloseDialer
 
 import (
 	"net"

@@ -24,7 +24,6 @@ import (
 // applied to a client when the connection string omits the option.
 const DriverDefaultMaxPoolSize uint64 = 100
 
-// Connect establishes a connection to a MongoDB instance using the provided URI.
 // abortOnCloseDialer dials like net.Dialer and sets SO_LINGER to zero on
 // every TCP connection, so Close sends RST and discards unsent data instead of
 // queuing a FIN behind it. The HA fence closes a demoted instance's target
@@ -56,6 +55,7 @@ func (d *abortOnCloseDialer) DialContext(ctx context.Context, network, address s
 	return conn, nil
 }
 
+// Connect establishes a connection to a MongoDB instance using the provided URI.
 func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("invalid MongoDB URI")
