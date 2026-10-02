@@ -28,12 +28,55 @@ type shardSizes struct {
 	mu     sync.Mutex
 	sizes  map[string]int64
 	counts map[string]int
+	// held remembers, per namespace, the chunk sizes and owners currently
+	// charged above, so a collection that is dropped and sharded again
+	// (resume after a suspension, rename) releases its earlier charge instead
+	// of being counted twice.
+	held map[string]heldPlacement
+}
+
+type heldPlacement struct {
+	chunkSizes []int64
+	owners     []string
 }
 
 func newShardSizes() *shardSizes {
 	return &shardSizes{
 		sizes:  make(map[string]int64),
 		counts: make(map[string]int),
+		held:   make(map[string]heldPlacement),
+	}
+}
+
+// record remembers the charge currently held for ns. owners is index-aligned
+// with chunkSizes; an empty or missing owner carries no charge.
+func (s *shardSizes) record(ns string, chunkSizes []int64, owners []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.held[ns] = heldPlacement{chunkSizes: slices.Clone(chunkSizes), owners: slices.Clone(owners)}
+}
+
+// release removes the charge recorded for ns. It is a no-op when nothing was
+// recorded for it.
+func (s *shardSizes) release(ns string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	held, ok := s.held[ns]
+	if !ok {
+		return
+	}
+
+	delete(s.held, ns)
+
+	for i, owner := range held.owners {
+		if owner == "" || i >= len(held.chunkSizes) {
+			continue
+		}
+
+		s.sizes[owner] -= held.chunkSizes[i]
+		s.counts[owner]--
 	}
 }
 
@@ -153,9 +196,12 @@ func presplitRangedUneven(
 		// must reflect where the chunks actually are, not where they were meant
 		// to go, or later collections pack around phantom load.
 		targetShardSizes.reconcile(chunkSizes, assignment, placed)
+		targetShardSizes.record(ns.String(), chunkSizes, placed)
 
 		return err
 	}
+
+	targetShardSizes.record(ns.String(), chunkSizes, assignment)
 
 	log.Ctx(ctx).With(log.NS(ns.Database, ns.Collection)).Infof(
 		"Pre-split ranged collection %s: size-weighted %d chunks across %d shards (%d moves)",

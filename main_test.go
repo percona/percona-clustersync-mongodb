@@ -1,7 +1,6 @@
 package main //nolint:testpackage
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -9,107 +8,66 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/percona/percona-clustersync-mongodb/ha"
-	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
 func TestPromotionPlan(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name           string
-		state          pcsm.State
-		replPausing    bool
-		term           ha.Term
-		activeTerm     ha.Term
-		pausedOnDemote bool
-		want           promoteAction
-	}{
-		{
-			name: "idle first promotion restores", state: pcsm.StateIdle,
-			term: 1, activeTerm: 0, want: promoteRestore,
-		},
-		{
-			name: "idle same term restores", state: pcsm.StateIdle,
-			term: 1, activeTerm: 1, pausedOnDemote: true, want: promoteRestore,
-		},
-		{
-			name: "same term demotion pause resumes", state: pcsm.StatePaused,
-			term: 3, activeTerm: 3, pausedOnDemote: true, want: promoteResume,
-		},
-		{
-			name: "same term draining demotion pause waits", state: pcsm.StatePaused,
-			replPausing: true, term: 3, activeTerm: 3, pausedOnDemote: true, want: promoteWaitResume,
-		},
-		{
-			name: "same term operator pause stays paused", state: pcsm.StatePaused,
-			term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "same term draining operator pause is retained", state: pcsm.StatePaused,
-			replPausing: true, term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "same term failed demotion pause keeps running", state: pcsm.StateRunning,
-			term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "same term failed pipeline is retained", state: pcsm.StateFailed,
-			term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "same term failed demotion pipeline attempts resume", state: pcsm.StateFailed,
-			term: 3, activeTerm: 3, pausedOnDemote: true, want: promoteResume,
-		},
-		{
-			name: "same term failed draining demotion waits", state: pcsm.StateFailed,
-			replPausing: true, term: 3, activeTerm: 3, pausedOnDemote: true, want: promoteWaitResume,
-		},
-		{
-			name: "same term finalizing pipeline is retained", state: pcsm.StateFinalizing,
-			term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "same term finalized pipeline is retained", state: pcsm.StateFinalized,
-			term: 3, activeTerm: 3, want: promoteKeep,
-		},
-		{
-			name: "new term demotion pause restores", state: pcsm.StatePaused,
-			term: 4, activeTerm: 3, pausedOnDemote: true, want: promoteRestore,
-		},
-		{
-			name: "new term draining demotion pause restores", state: pcsm.StatePaused,
-			replPausing: true, term: 4, activeTerm: 3, pausedOnDemote: true, want: promoteRestore,
-		},
-		{
-			name: "new term operator pause restores", state: pcsm.StatePaused,
-			term: 4, activeTerm: 3, want: promoteRestore,
-		},
-		{
-			name: "new term running pipeline restores", state: pcsm.StateRunning,
-			term: 4, activeTerm: 3, want: promoteRestore,
-		},
-		{
-			name: "new term failed pipeline restores", state: pcsm.StateFailed,
-			term: 4, activeTerm: 3, want: promoteRestore,
-		},
-		{
-			name: "new term finalizing pipeline restores", state: pcsm.StateFinalizing,
-			term: 4, activeTerm: 3, want: promoteRestore,
-		},
-		{
-			name: "new term finalized pipeline restores", state: pcsm.StateFinalized,
-			term: 4, activeTerm: 3, want: promoteRestore,
-		},
+	type cell struct {
+		state     pcsm.State
+		suspended bool
+		want      promoteAction
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	sameTerm := []cell{
+		{pcsm.StateIdle, false, promoteRestore},
+		{pcsm.StateIdle, true, promoteRestore},
+		{pcsm.StateRunning, false, promoteKeep},
+		{pcsm.StatePaused, false, promoteKeep},
+		{pcsm.StatePaused, true, promoteResume},
+		{pcsm.StateFailed, false, promoteKeep},
+		{pcsm.StateFailed, true, promoteKeep},
+		{pcsm.StateFinalizing, false, promoteKeep},
+		{pcsm.StateFinalizing, true, promoteKeep},
+		{pcsm.StateFinalized, false, promoteKeep},
+	}
+
+	for _, c := range sameTerm {
+		t.Run("same term "+string(c.state)+" suspended="+boolStr(c.suspended), func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, promotionPlan(tt.state, tt.replPausing, tt.term, tt.activeTerm, tt.pausedOnDemote))
+			assert.Equal(t, c.want, promotionPlan(c.state, 3, 3, c.suspended))
 		})
 	}
+
+	// A new term restores whatever is in memory, suspended or not.
+	for _, state := range []pcsm.State{
+		pcsm.StateIdle, pcsm.StateRunning, pcsm.StatePaused,
+		pcsm.StateFailed, pcsm.StateFinalizing, pcsm.StateFinalized,
+	} {
+		for _, suspended := range []bool{false, true} {
+			t.Run("new term "+string(state)+" suspended="+boolStr(suspended), func(t *testing.T) {
+				t.Parallel()
+
+				assert.Equal(t, promoteRestore, promotionPlan(state, 4, 3, suspended))
+			})
+		}
+	}
+
+	t.Run("first promotion restores", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, promoteRestore, promotionPlan(pcsm.StateIdle, 1, 0, false))
+	})
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+
+	return "false"
 }
 
 func TestActiveMemberAddr(t *testing.T) {
@@ -284,27 +242,4 @@ func TestNotActiveResponseJSONShape(t *testing.T) {
 	assert.Equal(t, false, decoded["ok"])
 	assert.Contains(t, decoded["message"], "host-2:2242")
 	assert.Contains(t, decoded, "group")
-}
-
-func TestWaitForPause(t *testing.T) {
-	t.Parallel()
-
-	s := &server{pcsm: pcsm.New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)}
-
-	t.Run("returns once the pipeline is not pausing", func(t *testing.T) {
-		t.Parallel()
-
-		require.NoError(t, s.waitForPause(t.Context()))
-	})
-
-	t.Run("canceled context fails before polling", func(t *testing.T) {
-		t.Parallel()
-
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-
-		err := s.waitForPause(ctx)
-		require.ErrorIs(t, err, context.Canceled)
-		assert.Contains(t, err.Error(), "wait for demotion pause")
-	})
 }

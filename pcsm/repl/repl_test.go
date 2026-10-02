@@ -270,7 +270,7 @@ func TestDispatch_Invalidate(t *testing.T) {
 				r.armExpectedMovePrimaryInvalidate()
 			}
 
-			_ = r.handleInvalidate(change, pool)
+			_ = r.handleInvalidate(t.Context(), change, pool)
 
 			assert.True(t, pool.barrierCalled)
 			assert.True(t, pool.releaseCalled)
@@ -307,10 +307,58 @@ func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
 		ClusterTime:   bson.Timestamp{T: 123, I: 1},
 	}
 
-	_ = r.handleInvalidate(change, pool)
+	_ = r.handleInvalidate(t.Context(), change, pool)
 
 	assert.Equal(t, []string{"Barrier", "ReleaseBarrier"}, pool.callOrder)
 	require.NoError(t, r.err)
+}
+
+var errAbandonedBulk = errors.New("bulk abandoned by cancellation")
+
+// TestDispatch_Invalidate_BarrierError pins that a barrier over bulks a
+// canceled run abandoned (a demotion) does not fail replication, so a
+// same-term re-promotion can resume it, while the same error on a live run
+// still does.
+func TestDispatch_Invalidate_BarrierError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		canceled     bool
+		expectFailed bool
+	}{
+		{name: "live_run_fails", expectFailed: true},
+		{name: "canceled_run_is_not_a_failure", canceled: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			if tt.canceled {
+				cancel()
+			}
+
+			pool := &mockPool{barrierErr: errAbandonedBulk}
+			r := newInvalidateTestRepl(false, mdb.ServerVersion{7, 0, 0, 0})
+
+			err := r.handleInvalidate(ctx, &ChangeEvent{OperationType: Invalidate}, pool)
+
+			require.ErrorIs(t, err, errAbandonedBulk)
+			assert.True(t, pool.releaseCalled)
+
+			if tt.expectFailed {
+				require.ErrorIs(t, r.err, errAbandonedBulk)
+
+				return
+			}
+
+			require.NoError(t, r.err)
+		})
+	}
 }
 
 func TestApplyCreateDDLChange(t *testing.T) {

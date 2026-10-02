@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -175,6 +177,73 @@ func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
 
 	// The stored term is unchanged by the fenced write.
 	assert.Equal(t, int64(2), readCheckpoint(t, ctx, client).Term)
+}
+
+// TestDoCheckpointBootstrapCollision pins that losing the bootstrap insert to
+// another writer is settled by the stored term, not by the collision: an
+// older term's late bootstrap does not depose this writer, which still saves
+// its checkpoint; a newer term fences.
+//
+//nolint:paralleltest // the cases share the suite's single checkpoint document
+func TestDoCheckpointBootstrapCollision(t *testing.T) {
+	tests := []struct {
+		name       string
+		otherTerm  int64
+		wantFenced bool
+	}{
+		{name: "older term is not a fence", otherTerm: 1},
+		{name: "newer term fences", otherTerm: 3, wantFenced: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			other := recoveryTestClient(t)
+			defer func() { _ = other.Disconnect(ctx) }()
+
+			require.NoError(t, recoveryColl(other).Drop(ctx))
+
+			rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
+
+			// The other writer creates the document after this writer's
+			// term-gated update found none and before its bootstrap insert
+			// reaches the server.
+			var raced atomic.Bool
+			var otherErr error
+			mon := &event.CommandMonitor{
+				Started: func(opCtx context.Context, e *event.CommandStartedEvent) {
+					if e.CommandName != "insert" || e.DatabaseName != config.PCSMDatabase ||
+						!raced.CompareAndSwap(false, true) {
+						return
+					}
+
+					otherErr = DoCheckpoint(opCtx, other, rec, tt.otherTerm, "pcsm-other")
+				},
+			}
+
+			writer, err := mongo.Connect(options.Client().ApplyURI(recoveryMongo(t)).
+				SetServerSelectionTimeout(5 * time.Second).SetMonitor(mon))
+			require.NoError(t, err)
+			defer func() { _ = writer.Disconnect(ctx) }()
+
+			err = DoCheckpoint(ctx, writer, rec, 2, "pcsm-self")
+
+			require.True(t, raced.Load(), "the bootstrap insert was never issued")
+			require.NoError(t, otherErr)
+
+			cp := readCheckpoint(t, ctx, other)
+			if tt.wantFenced {
+				require.ErrorIs(t, err, errCheckpointFenced)
+				assert.Equal(t, tt.otherTerm, cp.Term)
+
+				return
+			}
+
+			require.NoError(t, err, "an older-term collision must not read as deposed")
+			assert.Equal(t, int64(2), cp.Term)
+			assert.Equal(t, "pcsm-self", cp.InstanceID)
+		})
+	}
 }
 
 func TestDeleteRecoveryData(t *testing.T) {

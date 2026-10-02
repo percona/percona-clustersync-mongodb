@@ -19,6 +19,7 @@ import (
 type drainingReplicator struct {
 	mockReplicator
 
+	resumed      atomic.Bool
 	pausing      atomic.Bool
 	settled      atomic.Bool
 	tailCaptured atomic.Bool
@@ -26,6 +27,12 @@ type drainingReplicator struct {
 	tailObserved chan struct{}
 	releaseTail  chan struct{}
 	drainError   error
+}
+
+func (r *drainingReplicator) Resume(ctx context.Context) error {
+	r.resumed.Store(true)
+
+	return r.mockReplicator.Resume(ctx)
 }
 
 func (r *drainingReplicator) Pause(context.Context) error {
@@ -155,14 +162,19 @@ func TestResumeRechecksFailureAfterPreviousRun(t *testing.T) {
 type exitingMonitorCloner struct {
 	mockCloner
 
-	statusCalls atomic.Int64
-	observed    chan struct{}
-	release     chan struct{}
+	repl     *drainingReplicator
+	gated    atomic.Bool
+	observed chan struct{}
+	release  chan struct{}
 }
 
+func (c *exitingMonitorCloner) attachRepl(r *drainingReplicator) { c.repl = r }
+
 func (c *exitingMonitorCloner) Status() clone.Status {
-	// run reads the status first; monitorInitialSync reads it second.
-	if c.statusCalls.Add(1) == 2 {
+	// Only monitorInitialSync reads the clone status after replication has
+	// resumed; every other reader runs before. Gate on that event, not on how
+	// many readers came first.
+	if c.repl != nil && c.repl.resumed.Load() && c.gated.CompareAndSwap(false, true) {
 		close(c.observed)
 		<-c.release
 	}
@@ -176,10 +188,10 @@ func TestRecoverJoinsPreviousRunMonitors(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// Given: the initial-sync monitor still holds the old component.
 		cln := &exitingMonitorCloner{
-			mockCloner: *finishedLifecycleCloner(),
-			observed:   make(chan struct{}),
-			release:    make(chan struct{}),
+			observed: make(chan struct{}),
+			release:  make(chan struct{}),
 		}
+		cln.status = finishedLifecycleCloner().status
 		cln.status.FinishTS = bson.Timestamp{T: 2}
 		releaseMonitor := sync.OnceFunc(func() { close(cln.release) })
 		defer releaseMonitor()
@@ -239,6 +251,9 @@ func pausedPipelineWithExitingRun(t *testing.T, cln Cloner) (*PCSM, *drainingRep
 		clone:          cln,
 		repl:           old,
 		onStateChanged: func(State) {},
+	}
+	if rc, ok := cln.(interface{ attachRepl(r *drainingReplicator) }); ok {
+		rc.attachRepl(old)
 	}
 	require.NoError(t, p.Resume(ctx, ResumeOptions{}))
 	await := func(signal <-chan struct{}) {

@@ -22,6 +22,7 @@ Score: 8; distinct driver-policy boundary. Centralizes URI sanitization, topolog
 - Clients use Stable API v1, primary read preference, majority read/write concern, and configured operation timeout.
 - URI options pass only through the explicit `allowedConnStringOptions` list.
 - Source and target compressor lists are selected independently from config.
+- The target client dials with SO_LINGER(0) (`abortOnCloseDialer`): closing a connection discards unsent data and sends RST, so a write a demoted instance buffered during a partition is never retransmitted after it heals. The source client keeps the default dialer.
 - `maxPoolSize` survives URI sanitization: omitted means the driver's 100-connection default; explicit zero means unlimited.
 - Ping failure triggers a bounded disconnect before returning the connection error.
 - `RunWithRetry` retries only transient errors and stops on context cancellation.
