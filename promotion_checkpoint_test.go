@@ -57,12 +57,12 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 		membership.SetRole(ha.RoleActive, 3)
 		oldCtx, oldCancel := context.WithCancel(ctx)
 		s := &server{
-			cfg:              &config.Config{RecoveryCheckpointInterval: time.Second},
-			targetCluster:    target,
-			pcsm:             pipeline,
-			membership:       membership,
-			activeTerm:       1,
-			checkpointCancel: oldCancel,
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+			targetCluster: target,
+			pcsm:          pipeline,
+			membership:    membership,
+			activeTerm:    1,
+			epochCtx:      oldCtx, epochCancel: oldCancel,
 		}
 		oldDone := make(chan struct{})
 		go func() {

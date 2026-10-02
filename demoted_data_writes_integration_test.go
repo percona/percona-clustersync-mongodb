@@ -3,6 +3,7 @@
 package main //nolint:testpackage // Exercise demotion against a real source, target and pipeline.
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -28,6 +29,7 @@ import (
 const (
 	demotedTestDB     = "demoted_fencing_db"
 	demotedTestColl   = "docs"
+	demotedMarker     = "written-after-demotion"
 	cloneWaitInterval = 200 * time.Millisecond
 )
 
@@ -167,70 +169,166 @@ func demotedContainerURI(ctx context.Context, container testcontainers.Container
 	return "mongodb://" + net.JoinHostPort(host, port.Port()) + "/?directConnection=true", nil
 }
 
-// bulkWriteGate blocks target bulk writes so a write can be held in flight
-// across a demotion and released afterwards.
-type bulkWriteGate struct {
+// markerWriteGate parks the first target data write that carries marker
+// inside its CommandStarted hook. The hook returns when the write's own
+// context is canceled (the fence under test) or, as a failure bound only,
+// when the gate is released. It also records how the parked command finished
+// and whether any data write was started while the instance was demoted.
+type markerWriteGate struct {
+	marker []byte
+
+	mu        sync.Mutex
+	enabled   bool
+	parkedSet bool
+	parkedID  int64
+	started   map[int64]struct{} // RequestIDs of data writes carrying the marker
+	demoted   bool
+	late      int // data writes started while demoted
+
 	armed   chan struct{}
 	release chan struct{}
-	once    sync.Once
-	arm     sync.Once
+	armOnce sync.Once
+	relOnce sync.Once
+
+	parked          chan bool     // how the parked hook returned: true = its ctx was canceled
+	parkedFailed    chan struct{} // CommandFailed for the parked RequestID
+	markerSucceeded chan struct{} // CommandSucceeded for a write carrying the marker
 }
 
-func newBulkWriteGate() *bulkWriteGate {
-	return &bulkWriteGate{armed: make(chan struct{}), release: make(chan struct{})}
+func newMarkerWriteGate(marker string) *markerWriteGate {
+	return &markerWriteGate{
+		marker:          []byte(marker),
+		started:         make(map[int64]struct{}),
+		armed:           make(chan struct{}),
+		release:         make(chan struct{}),
+		parked:          make(chan bool, 1),
+		parkedFailed:    make(chan struct{}, 1),
+		markerSucceeded: make(chan struct{}, 1),
+	}
 }
 
-// monitor holds the pipeline's target writes until releaseAll is called.
-// Only writes issued after enable() are held, so the clone is unaffected.
-func (g *bulkWriteGate) monitor(ctx context.Context, enabled *bool, mu *sync.Mutex) *event.CommandMonitor {
+func (g *markerWriteGate) enable() {
+	g.mu.Lock()
+	g.enabled = true
+	g.mu.Unlock()
+}
+
+func (g *markerWriteGate) setDemoted(demoted bool) {
+	g.mu.Lock()
+	g.demoted = demoted
+	g.mu.Unlock()
+}
+
+func (g *markerWriteGate) lateStarts() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.late
+}
+
+func (g *markerWriteGate) releaseAll() {
+	g.relOnce.Do(func() { close(g.release) })
+}
+
+// isDataWrite reports whether cmd is a user-data write issued by the pipeline.
+func isDataWrite(cmd *event.CommandStartedEvent) bool {
+	switch cmd.CommandName {
+	case "bulkWrite":
+		// Client-level, used against 8.0. It runs on admin with the
+		// namespaces inside the command, so the marker match is the filter.
+		return true
+	case "insert", "update", "delete":
+		// Collection-level, used below 8.0. Checkpoints are written to the
+		// target too, and parking one would deadlock DoCheckpoint.
+		return cmd.DatabaseName == demotedTestDB
+	default:
+		return false
+	}
+}
+
+// monitor parks the first enabled data write carrying the marker. The driver
+// invokes these callbacks synchronously on the operation's goroutine and
+// passes the operation's own context to Started, so the hook can observe the
+// cancellation that the fence is supposed to deliver. Signal sends never
+// block: every channel is buffered and written at most once per event.
+func (g *markerWriteGate) monitor() *event.CommandMonitor {
 	return &event.CommandMonitor{
-		Started: func(_ context.Context, cmd *event.CommandStartedEvent) {
-			switch cmd.CommandName {
-			case "bulkWrite":
-				// Client-level, used against 8.0. It runs on admin with the
-				// namespace inside the command, so there is no database to
-				// match on here.
-			case "insert", "update", "delete":
-				// Collection-level, used below 8.0. Checkpoints are written to
-				// the target too, and holding one deadlocks DoCheckpoint.
-				if cmd.DatabaseName != demotedTestDB {
-					return
-				}
-			default:
+		Started: func(opCtx context.Context, cmd *event.CommandStartedEvent) {
+			if !isDataWrite(cmd) {
 				return
 			}
 
-			mu.Lock()
-			on := *enabled
-			mu.Unlock()
+			g.mu.Lock()
+			if g.demoted {
+				g.late++
+			}
 
-			if !on {
+			carries := bytes.Contains(cmd.Command, g.marker)
+			if carries {
+				g.started[cmd.RequestID] = struct{}{}
+			}
+
+			park := carries && g.enabled && !g.parkedSet
+			if park {
+				g.parkedSet = true
+				g.parkedID = cmd.RequestID
+			}
+			g.mu.Unlock()
+
+			if !park {
 				return
 			}
 
-			g.arm.Do(func() { close(g.armed) })
+			g.armOnce.Do(func() { close(g.armed) })
 
 			select {
+			case <-opCtx.Done():
+				g.parked <- true
 			case <-g.release:
-			case <-ctx.Done():
+				g.parked <- false
+			}
+		},
+		Failed: func(_ context.Context, evt *event.CommandFailedEvent) {
+			g.mu.Lock()
+			isParked := g.parkedSet && evt.RequestID == g.parkedID
+			g.mu.Unlock()
+
+			if !isParked {
+				return
+			}
+
+			select {
+			case g.parkedFailed <- struct{}{}:
+			default:
+			}
+		},
+		Succeeded: func(_ context.Context, evt *event.CommandSucceededEvent) {
+			g.mu.Lock()
+			_, carries := g.started[evt.RequestID]
+			g.mu.Unlock()
+
+			if !carries {
+				return
+			}
+
+			select {
+			case g.markerSucceeded <- struct{}{}:
+			default:
 			}
 		},
 	}
 }
 
-func (g *bulkWriteGate) releaseAll() {
-	g.once.Do(func() { close(g.release) })
-}
-
-// TestDemotedActiveMustNotWriteTargetData pins the contract that an instance
-// which has lost the lease cannot write user data to the target.
+// TestDemotedActiveMustNotWriteTargetData pins the fence: an instance that
+// has lost the lease stops writing user data to the target, and a same-term
+// re-promotion replays what the suspension abandoned.
 //
-// Term fencing is applied only to checkpoint documents (see DoCheckpoint).
-// Clone, replication bulk writes and catalog operations never consult the
-// term, and onDemote's pause is explicitly best-effort, so a write already in
-// flight when the lease is lost still lands. The new ACTIVE will not re-apply
-// what it has already applied, so the divergence is permanent and both
-// lag and finalization still report success over it.
+// A target write is parked inside its CommandStarted hook, another instance
+// takes the lease (term 2), and this instance is demoted. Demotion must
+// cancel the parked write's context (the driver then fails the command
+// before it reaches the wire), leave the pipeline suspended, and start no
+// further data write. Re-promotion in the same term resumes from the
+// inclusive checkpoint floor and the write lands exactly once.
 //
 //nolint:paralleltest // Drives one pipeline against a shared source and target.
 func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
@@ -244,20 +342,16 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = source.Disconnect(context.Background()) }()
 
-	// The gate is installed up front but only holds writes once enabled, so
+	// The gate is installed up front but only parks writes once enabled, so
 	// the clone and the catalog setup run unimpeded.
-	var (
-		mu      sync.Mutex
-		enabled bool
-	)
-	gate := newBulkWriteGate()
+	gate := newMarkerWriteGate(demotedMarker)
 	defer gate.releaseAll()
 
 	target, err := mongo.Connect(options.Client().
 		ApplyURI(targetURI).
 		SetServerSelectionTimeout(30 * time.Second).
 		SetRetryWrites(false).
-		SetMonitor(gate.monitor(ctx, &enabled, &mu)))
+		SetMonitor(gate.monitor()))
 	require.NoError(t, err)
 	defer func() { _ = target.Disconnect(context.Background()) }()
 
@@ -289,11 +383,9 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 	requireDemotedCloneDone(t, ctx, pipeline)
 
 	// When: a write is in flight to the target and the lease moves on.
-	mu.Lock()
-	enabled = true
-	mu.Unlock()
+	gate.enable()
 
-	_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", "written-after-demotion"}})
+	_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", demotedMarker}})
 	require.NoError(t, err)
 
 	select {
@@ -311,31 +403,58 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 2, "pcsm-successor"))
 	require.ErrorIs(t, DoCheckpoint(ctx, target, pipeline, 1, "pcsm-deposed"), errCheckpointFenced)
 
-	// Demote through the real path. Pause is asynchronous, so run it
-	// concurrently with the release rather than assuming it returns first.
-	demoted := make(chan struct{})
-	go func() {
-		defer close(demoted)
-		s.onDemote(ctx, 1)
-	}()
-	time.AfterFunc(2*time.Second, gate.releaseAll)
+	// Demote through the real path. Suspension cancels the parked write's
+	// context, which releases the hook; the driver then fails the command
+	// before it reaches the wire. The timer is a failure bound only: with the
+	// fence in place the context wins long before it fires, and a release by
+	// timer is reported as a failure below (byCancel false).
+	gate.setDemoted(true)
+	releaseBound := time.AfterFunc(10*time.Second, gate.releaseAll)
+	defer releaseBound.Stop()
+
+	s.onDemote(ctx, 1)
+
+	var byCancel bool
+	select {
+	case byCancel = <-gate.parked:
+	case <-ctx.Done():
+		require.FailNow(t, "parked write was never released", "%v", ctx.Err())
+	}
+	require.True(t, byCancel, "demotion did not cancel the parked write's context")
 
 	select {
-	case <-demoted:
+	case <-gate.parkedFailed:
 	case <-ctx.Done():
-		require.FailNow(t, "demotion did not complete", "%v", ctx.Err())
+		require.FailNow(t, "parked write did not report CommandFailed", "%v", ctx.Err())
 	}
 
-	// Then: the deposed instance must not have landed the write.
-	targetColl := target.Database(demotedTestDB).Collection(demotedTestColl)
-	require.Eventually(t, func() bool {
-		return !pipeline.Status(ctx).Repl.Pausing
-	}, 30*time.Second, 200*time.Millisecond, "replication never finished pausing")
+	// Then: the deposed instance landed nothing and settled as suspended.
+	status := pipeline.Status(ctx)
+	require.Equal(t, pcsm.State(pcsm.StatePaused), status.State, "demotion did not suspend the pipeline")
+	require.False(t, status.Repl.Pausing, "replication is still pausing after demotion returned")
 
-	count, err := targetColl.CountDocuments(ctx, bson.D{{"_id", "written-after-demotion"}})
+	targetColl := target.Database(demotedTestDB).Collection(demotedTestColl)
+	count, err := targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
 	require.NoError(t, err)
 	require.Zero(t, count,
 		"a deposed ACTIVE wrote user data to the target after losing the lease to term 2")
+	require.Zero(t, gate.lateStarts(), "a data write was started while demoted")
+
+	// And: a same-term re-promotion resumes the suspended pipeline, which
+	// replays the abandoned write from the inclusive checkpoint floor. The
+	// checkpoint interval is one hour, so the term-2 fence never fires here.
+	gate.setDemoted(false)
+	s.onPromote(ctx, 1)
+
+	select {
+	case <-gate.markerSucceeded:
+	case <-ctx.Done():
+		require.FailNow(t, "resumed pipeline never replayed the suspended write", "%v", ctx.Err())
+	}
+
+	count, err = targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count, "same-term resume did not replay the suspended write exactly once")
 }
 
 // requireDemotedCloneDone waits until replication is running on a finished

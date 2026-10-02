@@ -18,6 +18,10 @@ var (
 	// because a newer term owns the checkpoint. It is the hard guarantee that a
 	// deposed active cannot corrupt the target checkpoint.
 	errCheckpointFenced = errors.New("checkpoint fenced by newer term")
+	// errNoCheckpoint is returned by Restore when there is no recovery data.
+	// A promotion decides what that means: nothing to do for an idle
+	// pipeline, a stale pipeline that cannot be replaced otherwise.
+	errNoCheckpoint = errors.New("no checkpoint to restore")
 )
 
 const recoveryID = "pcsm"
@@ -54,7 +58,7 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			lg.Info("Recovery Data not found")
 
-			return nil
+			return errNoCheckpoint
 		}
 
 		return errors.Wrap(err, "find")

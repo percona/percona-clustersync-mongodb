@@ -135,18 +135,33 @@ func newWorker(
 
 // runWriter is the writer goroutine. It reads sealed bulks from pendingBulkCh,
 // executes them against MongoDB, and updates the committed timestamp.
-// It exits when pendingBulkCh is closed (normal) or a write fails (error).
-// On exit it closes writerDone so the main loop can detect it.
+// It exits when pendingBulkCh is closed (normal), a write fails (error), or
+// ctx is canceled (abandon). Abandoned work is recorded in writerErr without
+// being reported: a barrier over it must not report a successful drain, and
+// the run already knows it was canceled. On exit it closes writerDone so the
+// main loop can detect it.
 func (w *worker) runWriter(ctx context.Context) {
 	defer close(w.writerDone)
 
 	lg := log.New("repl:writer").With(log.String("id", w.id))
 
 	for pb := range w.pendingBulkCh {
+		if ctx.Err() != nil {
+			w.writerErr = errors.Wrap(ctx.Err(), "bulk write abandoned")
+
+			return
+		}
+
 		start := time.Now()
 
 		size, err := pb.writer.Do(ctx, w.target)
 		if err != nil {
+			if ctx.Err() != nil {
+				w.writerErr = errors.Wrap(ctx.Err(), "bulk write abandoned")
+
+				return
+			}
+
 			w.writerErr = errors.Wrap(err, "bulk write")
 			w.reportError(w.writerErr)
 
@@ -222,9 +237,8 @@ func (w *worker) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Enqueue remaining ops before exit (best-effort)
-			_ = w.enqueueBulk()
-
+			// Abandon the current and queued bulks: a canceled run must not
+			// drain to the target. The deferred stopWriter joins the writer.
 			lg.Debug("Worker stopped (context done)")
 
 			return
@@ -505,10 +519,14 @@ func (p *workerPool) Route(change *ChangeEvent, ns catalog.Namespace) {
 	p.routeMu.Unlock()
 
 	// The send stays outside routeMu: a full worker queue must not hold the
-	// progress tracker's scan hostage.
-	w.routedEventCh <- &routedEvent{
-		change: change,
-		ns:     ns,
+	// progress tracker's scan hostage. A worker that has exited (canceled
+	// run or writer failure) never drains its queue, so do not wait on it:
+	// the timestamps above were recorded, the event is at or after the resume
+	// floor, and it replays on resume.
+	select {
+	case w.routedEventCh <- &routedEvent{change: change, ns: ns}:
+	case <-w.done:
+		return
 	}
 
 	metrics.SetReplWorkerEventQueueSize(w.id, len(w.routedEventCh))

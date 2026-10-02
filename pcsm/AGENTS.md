@@ -33,6 +33,8 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 
 - Do not mutate `state`, `err`, component pointers, or finalization status outside the lifecycle lock.
 - Do not add a state transition without matching invalid-state coverage.
-- Do not resume an interrupted initial clone as though its copy workers had persisted their progress.
+- Do not resume an interrupted initial clone as though its copy workers had persisted their progress. The one exception is in-process: `Suspend` followed by a same-term `Resume` continues the clone from its in-memory inventory (completed collections kept, in-flight ones copied again); a checkpoint-restored clone never qualifies.
+- Do not launch a run or finalizer outside `startRun`/`startFinalize`: they derive the execution from the request's epoch (`WithEpoch`) and publish the handle `Suspend` cancels and joins.
+- Do not persist a suspended state or treat a cancellation-induced component error as a failure; only an error the component recorded is one.
 - Do not report finalization complete before `CompletedAt` and unsuccessful-index results are available.
 - Do not make orchestration tests depend on live MongoDB when the local interfaces cover the seam.
