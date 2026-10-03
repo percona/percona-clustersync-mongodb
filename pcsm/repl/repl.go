@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -54,6 +55,8 @@ type barrierController interface {
 
 // Options configures the replication behavior.
 type Options struct {
+	// WriteConcern applies to replicated documents only; nil defaults to majority.
+	WriteConcern *writeconcern.WriteConcern
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
@@ -82,6 +85,9 @@ type Options struct {
 }
 
 func (o *Options) applyDefaults() {
+	if o.WriteConcern == nil {
+		o.WriteConcern = writeconcern.Majority()
+	}
 	if o.NumWorkers <= 0 {
 		o.NumWorkers = runtime.NumCPU()
 	}
@@ -193,6 +199,7 @@ func NewRepl(
 	opts.applyDefaults()
 
 	lg := log.New("repl")
+	lg.Infof("Config: TargetWriteConcern: %v", opts.WriteConcern.W)
 	lg.Infof("Config: NumWorkers: %d", opts.NumWorkers)
 	lg.Infof("Config: UseCollectionBulkWrite: %t", opts.UseCollectionBulkWrite)
 	lg.Infof("Config: ChangeStreamBatchSize: %d", opts.ChangeStreamBatchSize)

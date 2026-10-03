@@ -26,6 +26,8 @@ var ErrTimeseriesUnsupported = errors.New("timeseries is not supported")
 const IDIndex = "_id_"
 
 const (
+	majorityWriteConcern = "majority"
+	writeConcernOption   = "writeConcern"
 	// SystemPrefix is the prefix for system collections.
 	SystemPrefix = "system."
 	// TimeseriesPrefix is the prefix for timeseries buckets.
@@ -253,7 +255,7 @@ func (c *Catalog) doCreateCollection(
 	coll string,
 	opts *CreateCollectionOptions,
 ) error {
-	cmd := bson.D{{"create", coll}}
+	cmd := bson.D{{"create", coll}, {writeConcernOption, bson.D{{"w", majorityWriteConcern}}}}
 	if opts.ClusteredIndex != nil {
 		cmd = append(cmd, bson.E{"clusteredIndex", opts.ClusteredIndex})
 	}
@@ -324,6 +326,7 @@ func (c *Catalog) doCreateView(
 ) error {
 	cmd := bson.D{
 		{"create", view},
+		{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 		{"viewOn", opts.ViewOn},
 		{"pipeline", opts.Pipeline},
 	}
@@ -483,6 +486,7 @@ func (c *Catalog) CreateIndexes(
 		err := runWithRetry(ctx, func(ctx context.Context) error {
 			err := c.target.Database(db).RunCommand(ctx, bson.D{
 				{"createIndexes", coll},
+				{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 				{"indexes", bson.A{index}},
 			}).Err()
 
@@ -634,7 +638,7 @@ func (c *Catalog) ModifyCappedCollection(
 	sizeBytes *int64,
 	maxDocs *int64,
 ) error {
-	cmd := bson.D{{"collMod", coll}}
+	cmd := bson.D{{"collMod", coll}, {writeConcernOption, bson.D{{"w", majorityWriteConcern}}}}
 	if sizeBytes != nil {
 		cmd = append(cmd, bson.E{"cappedSize", sizeBytes})
 	}
@@ -654,6 +658,7 @@ func (c *Catalog) ModifyCappedCollection(
 func (c *Catalog) ModifyView(ctx context.Context, db, view, viewOn string, pipeline any) error {
 	cmd := bson.D{
 		{"collMod", view},
+		{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 		{"viewOn", viewOn},
 		{"pipeline", pipeline},
 	}
@@ -674,6 +679,7 @@ func (c *Catalog) ModifyChangeStreamPreAndPostImages(
 ) error {
 	cmd := bson.D{
 		{"collMod", coll},
+		{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 		{"changeStreamPreAndPostImages", bson.D{{"enabled", enabled}}},
 	}
 
@@ -693,7 +699,7 @@ func (c *Catalog) ModifyValidation(
 	validationLevel *string,
 	validationAction *string,
 ) error {
-	cmd := bson.D{{"collMod", coll}}
+	cmd := bson.D{{"collMod", coll}, {writeConcernOption, bson.D{{"w", majorityWriteConcern}}}}
 	if validator != nil {
 		cmd = append(cmd, bson.E{"validator", validator})
 	}
@@ -718,6 +724,7 @@ func (c *Catalog) ModifyIndex(ctx context.Context, db, coll string, mods *Modify
 	if mods.ExpireAfterSeconds != nil {
 		cmd := bson.D{
 			{"collMod", coll},
+			{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 			{"index", bson.D{
 				{"name", mods.Name},
 				{"expireAfterSeconds", math.MaxInt32},
@@ -768,6 +775,7 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 
 	opts := bson.D{
 		{"renameCollection", db + "." + coll},
+		{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 		{"to", targetDB + "." + targetColl},
 		{"dropTarget", true},
 	}
@@ -1092,6 +1100,7 @@ func (c *Catalog) doModifyIndexOption(
 	err := runWithRetry(ctx, func(ctx context.Context) error {
 		err := c.target.Database(db).RunCommand(ctx, bson.D{
 			{"collMod", coll},
+			{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 			{"index", bson.D{
 				{"name", indexName},
 				{propName, value},
@@ -1140,6 +1149,7 @@ func (c *Catalog) dropAndRecreateIndex(
 		return errors.Wrapf(
 			c.target.Database(db).RunCommand(ctx, bson.D{
 				{"dropIndexes", coll},
+				{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 				{"index", indexName},
 			}).Err(),
 			"drop index %s.%s.%s before recreate", db, coll, indexName,
@@ -1153,6 +1163,7 @@ func (c *Catalog) dropAndRecreateIndex(
 		return errors.Wrapf(
 			c.target.Database(db).RunCommand(ctx, bson.D{
 				{"createIndexes", coll},
+				{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 				{"indexes", bson.A{spec}},
 			}).Err(),
 			"recreate index %s.%s.%s after conflict", db, coll, indexName,
@@ -1386,6 +1397,7 @@ func (c *Catalog) ShardCollection(
 ) error {
 	cmd := bson.D{
 		{Key: "shardCollection", Value: db + "." + coll},
+		{writeConcernOption, bson.D{{"w", majorityWriteConcern}}},
 		{Key: "key", Value: shardKey},
 		{"collation", bson.D{{"locale", "simple"}}},
 	}
