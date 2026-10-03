@@ -138,8 +138,6 @@ func newRootCmd() *cobra.Command {
 	// Root command specific flags
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	rootCmd.Flags().String("target-write-concern", "majority",
-		"Write concern for clone and replication data writes (majority or a positive integer)")
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
 	rootCmd.Flags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
 		mongoDBOperationTimeoutHelp)
@@ -620,19 +618,16 @@ func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
 
 // runServer starts the HTTP server with the provided configuration.
 func runServer(cfg *config.Config) error {
-	wc, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
-	if err != nil {
-		return errors.Wrap(err, "invalid target write concern")
-	}
-	log.New("server").Infof("Config: default clone and repl target write concern: %v", wc.W)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
 	// Auto-start (--start) is deferred to promotion: replication may only
 	// begin while ACTIVE. Resolved before the server exists so the option is
 	// in place before the first promotion is consumed.
-	var autoStart *pcsm.StartOptions
+	var (
+		autoStart *pcsm.StartOptions
+		err       error
+	)
 	if cfg.Start {
 		autoStart, err = resolveStartOptions(cfg, startRequest{
 			PauseOnInitialSync: cfg.PauseOnInitialSync,
@@ -1242,13 +1237,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // buildStartOptions builds StartOptions from config, validating clone size options.
 func buildStartOptions(cfg *config.Config) (*pcsm.StartOptions, error) {
-	_, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
-	if err != nil {
-		return nil, errors.Wrap(err, "invalid target write concern")
-	}
-
 	startOpts := &pcsm.StartOptions{
-		TargetWriteConcern: cfg.TargetWriteConcern,
 		PauseOnInitialSync: cfg.PauseOnInitialSync,
 		Repl: repl.Options{
 			UseCollectionBulkWrite: cfg.UseCollectionBulkWrite,
@@ -1731,7 +1720,7 @@ func (s *server) isActive(ctx context.Context, w http.ResponseWriter) bool {
 
 // startRequest represents the request body for the /start endpoint.
 type startRequest struct {
-	// TargetWriteConcern overrides the server's data write concern for this run.
+	// TargetWriteConcern sets this run's data write concern; omitted means majority.
 	TargetWriteConcern *string `json:"targetWriteConcern,omitempty"`
 
 	// PauseOnInitialSync indicates whether to pause after the initial sync.

@@ -21,11 +21,11 @@ func TestResolveStartOptionsTargetWriteConcern(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "default", body: `{}`, want: ""},
-		{name: "server setting", config: "1", body: `{}`, want: "1"},
-		{name: "request overrides server", config: "majority", body: `{"targetWriteConcern":"1"}`, want: "1"},
+		{name: "server setting ignored", config: "1", body: `{}`, want: ""},
+		{name: "invalid server setting ignored", config: "invalid", body: `{}`, want: ""},
+		{name: "request sets run", body: `{"targetWriteConcern":"1"}`, want: "1"},
 		{name: "explicit majority", config: "1", body: `{"targetWriteConcern":"majority"}`, want: "majority"},
 		{name: "unacknowledged request", body: `{"targetWriteConcern":"0"}`, wantErr: true},
-		{name: "invalid server setting", config: "invalid", body: `{}`, wantErr: true},
 	}
 
 	for _, tt := range tests {

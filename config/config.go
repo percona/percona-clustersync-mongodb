@@ -35,7 +35,8 @@ type Config struct {
 
 	UseCollectionBulkWrite bool `mapstructure:"use-collection-bulk-write"`
 
-	// TargetWriteConcern applies only to clone and replication data writes.
+	// TargetWriteConcern is the data write concern `pcsm start` requests for a
+	// new run. The server ignores it; a run without one uses majority.
 	TargetWriteConcern string `mapstructure:"target-write-concern"`
 
 	Repl  ReplConfig  `mapstructure:",squash"`

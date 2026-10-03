@@ -33,14 +33,14 @@ For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-f
 ### Target data write concern
 
 Clone inserts and replication data writes default to `majority`. To change their
-acknowledgment requirement, set `--target-write-concern=1` on the server or
-`pcsm start`, set `PCSM_TARGET_WRITE_CONCERN=1`, or send
+acknowledgment requirement for a run, pass `--target-write-concern=1` to
+`pcsm start` (or set `PCSM_TARGET_WRITE_CONCERN=1` for it), or send
 `{"targetWriteConcern":"1"}` to `/start`. Values are `majority` or a positive
-integer. Unacknowledged writes (`0`) are not supported. A `/start` value overrides
-the server default for that run and is retained during checkpoint recovery.
-Changing the server default does not change a recovered run, including a legacy
-run that used majority. Start a new run to change its write concern.
-Checkpoints, HA state, and catalog DDL always use majority write concern.
+integer. Unacknowledged writes (`0`) are not supported. The server has no write
+concern setting, so a run started without one uses `majority`. The value is
+stored with the run and retained during checkpoint recovery and HA takeover.
+Start a new run to change it. Checkpoints, HA state, and catalog DDL always use
+majority write concern.
 
 Using `1` can reduce stalls when target secondaries lag, but acknowledgment from
 the primary alone does not make data majority-durable. A target primary failure
