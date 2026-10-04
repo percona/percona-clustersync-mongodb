@@ -57,18 +57,18 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 		membership.SetRole(ha.RoleActive, 3)
 		oldCtx, oldCancel := context.WithCancel(ctx)
 		s := &server{
-			cfg:              &config.Config{RecoveryCheckpointInterval: time.Second},
-			targetCluster:    target,
-			pcsm:             pipeline,
-			membership:       membership,
-			activeTerm:       1,
-			checkpointCancel: oldCancel,
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+			targetCluster: target,
+			pcsm:          pipeline,
+			membership:    membership,
+			activeTerm:    1,
+			epochCtx:      oldCtx, epochCancel: oldCancel,
 		}
 		oldDone := make(chan struct{})
 		go func() {
 			defer close(oldDone)
 			RunCheckpointing(oldCtx, target, pipeline, 1, "old-active",
-				time.Second, func() { s.onDemote(ctx, 1) })
+				time.Second, nil, func() { s.onDemote(ctx, 1) })
 		}()
 		t.Cleanup(func() {
 			cancel()
@@ -93,5 +93,129 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 				t.Fatal("no periodic checkpoint after promotion")
 			}
 		}
+	})
+}
+
+// TestRunCheckpointingSavesOnSignal pins that a state change reaches the
+// target through the epoch's single writer as soon as it is signaled, not at
+// the next tick.
+func TestRunCheckpointingSavesOnSignal(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
+		require.NoError(t, err)
+		record := bson.D{{"_id", recoveryID}, {"term", int64(1)}, {"data", bson.Raw(data)}}
+		deployment := drivertest.NewMockDeployment(bson.D{{"ok", 1}, {"value", record}})
+		saves := make(chan struct{}, 1)
+		opts := options.Client().SetMonitor(&event.CommandMonitor{
+			Succeeded: func(_ context.Context, e *event.CommandSucceededEvent) {
+				if e.CommandName == "findAndModify" {
+					saves <- struct{}{}
+				}
+			},
+		})
+		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
+		target, err := mongo.Connect(opts)
+		require.NoError(t, err)
+
+		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
+		require.NoError(t, pipeline.Recover(ctx, data))
+
+		saveNow := make(chan struct{}, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour, saveNow, nil)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-done
+			require.NoError(t, target.Disconnect(t.Context()))
+		})
+
+		// When: a state change is signaled long before the next tick.
+		saveNow <- struct{}{}
+		synctest.Wait()
+
+		// Then: the checkpoint has already been written.
+		select {
+		case <-saves:
+		default:
+			require.FailNow(t, "a signaled save did not reach the target before the next tick")
+		}
+	})
+}
+
+// TestPromotionJoinsPreviousCheckpointWriter pins that a promotion waits for
+// the previous epoch's checkpoint writer to exit before this tenure saves
+// anything, so a snapshot that writer captured cannot land over newer ones.
+func TestPromotionJoinsPreviousCheckpointWriter(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		// No checkpoint is stored: the idle pipeline has nothing to restore.
+		deployment := drivertest.NewMockDeployment(bson.D{{"ok", 1}, {"cursor", bson.D{
+			{"id", int64(0)},
+			{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
+			{"firstBatch", bson.A{}},
+		}}})
+		opts := options.Client()
+		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
+		target, err := mongo.Connect(opts)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			cancel()
+			synctest.Wait()
+			require.NoError(t, target.Disconnect(t.Context()))
+		})
+
+		membership := &ha.Membership{}
+		membership.SetRole(ha.RoleActive, 2)
+		previous := make(chan struct{})
+		s := &server{
+			cfg:            &config.Config{RecoveryCheckpointInterval: time.Hour},
+			targetCluster:  target,
+			pcsm:           pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false),
+			membership:     membership,
+			activeTerm:     1,
+			checkpointDone: previous,
+		}
+
+		// Given: the previous epoch's checkpoint writer has not exited yet.
+		promoted := make(chan struct{})
+		go func() {
+			defer close(promoted)
+			s.onPromote(ctx, 2)
+		}()
+		synctest.Wait()
+
+		// Then: the promotion waits for it.
+		select {
+		case <-promoted:
+			require.FailNow(t, "promotion did not wait for the previous checkpoint writer")
+		default:
+		}
+
+		// And: completes once it has exited.
+		close(previous)
+		synctest.Wait()
+
+		select {
+		case <-promoted:
+		default:
+			require.FailNow(t, "promotion did not complete after the writer exited")
+		}
+
+		s.mu.Lock()
+		activeTerm := s.activeTerm
+		s.mu.Unlock()
+		require.Equal(t, ha.Term(2), activeTerm)
 	})
 }

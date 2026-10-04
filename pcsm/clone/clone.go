@@ -1,8 +1,10 @@
 package clone
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/hex"
 	"runtime"
 	"slices"
 	"sync"
@@ -74,6 +76,13 @@ type Clone struct {
 	totalSize  uint64        // Estimated total bytes to be cloned
 	copiedSize atomic.Uint64 // Bytes copied so far
 
+	// namespaces is the inventory, published once by the first attempt and
+	// kept across a suspension: sizeMap shrinks as tasks complete and cannot
+	// rebuild it. completed holds the finished tasks, keyed by taskKey.
+	namespaces     []namespaceInfo
+	inventoryReady bool
+	completed      map[string]struct{}
+
 	startTS  bson.Timestamp // source cluster timestamp when cloning started
 	finishTS bson.Timestamp // source cluster timestamp when cloning completed
 
@@ -128,6 +137,7 @@ func NewClone(
 		nsFilter:         nsFilter,
 		options:          opts,
 		doneCh:           make(chan struct{}),
+		completed:        make(map[string]struct{}),
 		targetIsSharded:  targetIsSharded,
 		targetShardSizes: newShardSizes(),
 	}
@@ -246,59 +256,178 @@ func (c *Clone) Start(ctx context.Context) error {
 
 	c.startTime = time.Now()
 
-	go func() {
-		err := c.run(ctx)
-
-		c.lock.Lock()
-		defer c.lock.Unlock()
-
-		if err != nil {
-			c.err = err
-		}
-
-		select {
-		case <-c.doneCh:
-		default:
-			close(c.doneCh)
-		}
-
-		c.finishTime = time.Now()
-		elapsed := c.finishTime.Sub(c.startTime)
-
-		if err != nil {
-			lg.With(log.Elapsed(elapsed)).
-				Errorf(err, "Data Clone has failed: %s in %s",
-					humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
-
-			return
-		}
-
-		lg.With(log.Elapsed(elapsed), log.Size(c.copiedSize.Load())).
-			Infof("Data Clone completed: %s in %s",
-				humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
-	}()
+	go c.runAttempt(ctx)
 
 	return nil
+}
+
+// Resume continues a clone whose previous attempt ended on cancellation. That
+// attempt left startTS, the inventory and the completed tasks in place, so
+// only the remaining tasks run; a collection that was in flight is copied
+// again from scratch, replayed from the same startTS by change replication.
+func (c *Clone) Resume(ctx context.Context) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if c.err != nil {
+		return errors.Wrap(c.err, "cannot resume due an existing error")
+	}
+
+	if c.startTime.IsZero() {
+		return errors.New("not started")
+	}
+
+	if !c.finishTime.IsZero() {
+		return errors.New("already completed")
+	}
+
+	select {
+	case <-c.doneCh:
+	default:
+		return errors.New("still running")
+	}
+
+	c.doneCh = make(chan struct{})
+
+	log.New("clone").Info("Resuming Data Clone")
+
+	go c.runAttempt(ctx)
+
+	return nil
+}
+
+// runAttempt runs one attempt and publishes its outcome. A run ended by the
+// caller's cancellation is a suspension: no error and no finish time are
+// recorded, so Resume can continue it. A genuine error, even one racing the
+// cancellation, fails the clone as before.
+func (c *Clone) runAttempt(ctx context.Context) {
+	lg := log.New("clone")
+
+	err := c.run(ctx)
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		lg.With(log.Size(c.copiedSize.Load())).Info("Data Clone suspended")
+		close(c.doneCh)
+
+		return
+	}
+
+	if err != nil {
+		c.err = err
+	}
+
+	close(c.doneCh)
+
+	c.finishTime = time.Now()
+	elapsed := c.finishTime.Sub(c.startTime)
+
+	if err != nil {
+		lg.With(log.Elapsed(elapsed)).
+			Errorf(err, "Data Clone has failed: %s in %s",
+				humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
+
+		return
+	}
+
+	lg.With(log.Elapsed(elapsed), log.Size(c.copiedSize.Load())).
+		Infof("Data Clone completed: %s in %s",
+			humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
+}
+
+// taskKey identifies an inventory entry across attempts: the source UUID
+// where there is one, the namespace for views.
+func taskKey(ns namespaceInfo) string {
+	if ns.UUID != nil {
+		return hex.EncodeToString(ns.UUID.Data)
+	}
+
+	return ns.String()
+}
+
+// remainingNamespaces returns the inventory minus the completed tasks. The
+// caller holds c.lock.
+func (c *Clone) remainingNamespaces() []namespaceInfo {
+	remaining := make([]namespaceInfo, 0, len(c.namespaces))
+
+	for _, ns := range c.namespaces {
+		if _, done := c.completed[taskKey(ns)]; !done {
+			remaining = append(remaining, ns)
+		}
+	}
+
+	return remaining
 }
 
 func (c *Clone) run(ctx context.Context) error {
 	lg := log.New("clone")
 	ctx = lg.WithContext(ctx)
 
-	// Use appendOplogNote, not ping: it waits until all in-flight writes are
-	// durable so startTS anchors to a real oplog event. ping would return before
-	// those writes commit, so an earlier write could be missed by both the clone
-	// scan and the change stream that starts at startTS. See PCSM-241.
-	startTS, err := mdb.AdvanceClusterTime(ctx, c.source)
+	err := c.prepare(ctx)
 	if err != nil {
-		return errors.Wrap(err, "startTS: advance source cluster time")
+		return err
 	}
 
 	c.lock.Lock()
-	c.startTS = startTS
+	remaining := c.remainingNamespaces()
+	inventory := len(c.namespaces)
 	c.lock.Unlock()
 
-	err = c.collectSizeMap(ctx)
+	switch {
+	case len(remaining) != 0:
+		err = c.doClone(ctx, remaining)
+		if err != nil {
+			return errors.Wrap(err, "copy")
+		}
+	case inventory == 0:
+		lg.Warn("No collection to clone")
+	}
+
+	finishTS, err := mdb.ClusterTime(ctx, c.source)
+	if err != nil {
+		return errors.Wrap(err, "finishTS: get source cluster time")
+	}
+
+	c.lock.Lock()
+	c.finishTS = finishTS
+	c.lock.Unlock()
+
+	return nil
+}
+
+// prepare captures the oplog anchor and the inventory. Both are taken once: a
+// resumed attempt keeps startTS as the replay anchor of every collection, and
+// keeps the inventory because sizeMap shrinks as tasks complete.
+func (c *Clone) prepare(ctx context.Context) error {
+	lg := log.Ctx(ctx)
+
+	c.lock.Lock()
+	startTS := c.startTS
+	ready := c.inventoryReady
+	c.lock.Unlock()
+
+	if startTS.IsZero() {
+		// Use appendOplogNote, not ping: it waits until all in-flight writes are
+		// durable so startTS anchors to a real oplog event. ping would return before
+		// those writes commit, so an earlier write could be missed by both the clone
+		// scan and the change stream that starts at startTS. See PCSM-241.
+		ts, err := mdb.AdvanceClusterTime(ctx, c.source)
+		if err != nil {
+			return errors.Wrap(err, "startTS: advance source cluster time")
+		}
+
+		c.lock.Lock()
+		c.startTS = ts
+		c.lock.Unlock()
+	}
+
+	if ready {
+		return nil
+	}
+
+	err := c.collectSizeMap(ctx)
 	if err != nil {
 		return errors.Wrap(err, "get size map")
 	}
@@ -320,22 +449,9 @@ func (c *Clone) run(ctx context.Context) error {
 		return errors.Wrap(err, "list prioritized namespaces")
 	}
 
-	if len(namespaces) != 0 {
-		err = c.doClone(ctx, namespaces)
-		if err != nil {
-			return errors.Wrap(err, "copy")
-		}
-	} else {
-		lg.Warn("No collection to clone")
-	}
-
-	finishTS, err := mdb.ClusterTime(ctx, c.source)
-	if err != nil {
-		return errors.Wrap(err, "finishTS: get source cluster time")
-	}
-
 	c.lock.Lock()
-	c.finishTS = finishTS
+	c.namespaces = namespaces
+	c.inventoryReady = true
 	c.lock.Unlock()
 
 	return nil
@@ -351,7 +467,15 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 
 	cloneLogger.Debugf("NumParallelCollections: %d", numParallelCollections)
 
-	copyManager := NewCopyManager(ctx, c.source, c.target, CopyManagerOptions{
+	// One attempt-wide context for the manager and every collection. Inserts
+	// run on the manager's context, not the collection's, so the first fatal
+	// error cancels them too and the failing task can drain its progress and
+	// return. The run's own context is left alone: cancellation there is a
+	// suspension, cancellation here is a failure.
+	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
+	defer cancelAttempt(nil)
+
+	copyManager := NewCopyManager(attemptCtx, c.source, c.target, CopyManagerOptions{
 		NumReadWorkers:     c.options.ReadWorkers,
 		NumInsertWorkers:   c.options.InsertWorkers,
 		SegmentSizeBytes:   c.options.SegmentSizeBytes,
@@ -359,70 +483,140 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	})
 	defer copyManager.Close()
 
-	eg, grpCtx := errgroup.WithContext(ctx)
+	eg, grpCtx := errgroup.WithContext(attemptCtx)
 	eg.SetLimit(numParallelCollections)
 
-	for _, ns := range namespaces {
+	for _, task := range namespaces {
 		eg.Go(func() error {
-			ns := ns
-			lg := cloneLogger.With(log.NS(ns.Database, ns.Collection))
-			ctx := lg.WithContext(grpCtx)
+			lg := cloneLogger.With(log.NS(task.Database, task.Collection))
 
-			for {
-				err := c.doCollectionClone(ctx, copyManager, ns.Namespace)
-				if err != nil && !errors.As(err, &NamespaceNotFoundError{}) {
-					return errors.Wrap(err, ns.String())
-				}
-
-				// check if the collection was renamed during clone.
-
-				if ns.UUID == nil { // view cannot be renamed
-					return nil
-				}
-
-				name, err := mdb.GetCollectionNameByUUID(ctx, c.source, ns.Database, *ns.UUID)
-				if err != nil {
-					if errors.Is(err, mdb.ErrNotFound) { // dropped
-						lg.Warnf("Collection %s not found", ns.Namespace)
-
-						return nil
-					}
-
-					return errors.Wrapf(err, "get collection name by uuid: %s", ns)
-				}
-
-				if name == ns.Collection {
-					return nil // OK: collection has not been renamed
-				}
-
-				prevNS := ns
-				ns = namespaceInfo{
-					Database: prevNS.Database, Collection: name,
-					UUID: prevNS.UUID,
-				}
-
-				c.lock.Lock()
-				elem := c.sizeMap[prevNS.String()]
-				delete(c.sizeMap, prevNS.String())
-				c.sizeMap[prevNS.String()] = elem
-				c.lock.Unlock()
-
-				lg.Infof("Collection %s was renamed to %s. Retrying to clone the collection",
-					prevNS.Namespace, ns.Namespace)
-
-				err = c.catalog.DropCollection(ctx, prevNS.Database, prevNS.Collection)
-				if err != nil {
-					return errors.Wrapf(err, "drop collection %q", prevNS.Namespace)
-				}
-
-				lg.Infof("Previous collection %s was dropped", prevNS.Namespace)
-			}
+			return c.cloneTask(lg.WithContext(grpCtx), copyManager, cancelAttempt, task)
 		})
 	}
 
 	err := eg.Wait()
 
-	return err //nolint:wrapcheck
+	// A fatal error aborts the attempt with itself as the cause. A sibling
+	// task can return the resulting cancellation before the failing task has
+	// drained its progress, and the group keeps whichever returned first; on a
+	// live run, report the cause rather than the cancellation.
+	if ctx.Err() == nil && errors.Is(err, context.Canceled) {
+		cause := context.Cause(attemptCtx)
+		if !errors.Is(cause, context.Canceled) {
+			err = cause
+		}
+	}
+
+	return err //nolint:wrapcheck // task errors already carry their namespace
+}
+
+// cloneTask copies one inventory entry to completion, following a rename of
+// the source collection, and commits the task's accounting only once the
+// whole task succeeded. On failure the bytes it added to copiedSize are rolled
+// back, so a redo after a suspension counts them once.
+func (c *Clone) cloneTask(
+	ctx context.Context, copyManager *CopyManager, abort func(error), task namespaceInfo,
+) error {
+	lg := log.Ctx(ctx)
+	ns := task
+
+	var copied uint64
+
+	// Adding the two's complement subtracts copied atomically.
+	rollback := func() { c.copiedSize.Add(^(copied - 1)) }
+
+	// The attempt is aborted with the error this task returns, so a sibling's
+	// cancellation cannot stand in for it.
+	abortTask := func(cause error) { abort(errors.Wrap(cause, ns.String())) }
+
+	for {
+		// A collection copied again (resume after a suspension, or a rename)
+		// is dropped and sharded again; its earlier placement charge goes.
+		c.targetShardSizes.release(ns.String())
+
+		n, err := c.doCollectionClone(ctx, copyManager, abortTask, ns)
+		copied += n
+
+		if err != nil && !errors.As(err, &NamespaceNotFoundError{}) {
+			rollback()
+
+			return errors.Wrap(err, ns.String())
+		}
+
+		// check if the collection was renamed during clone.
+
+		if ns.UUID == nil { // view cannot be renamed
+			break
+		}
+
+		name, err := mdb.GetCollectionNameByUUID(ctx, c.source, ns.Database, *ns.UUID)
+		if err != nil {
+			if errors.Is(err, mdb.ErrNotFound) { // dropped
+				lg.Warnf("Collection %s not found", ns.Namespace)
+
+				break
+			}
+
+			rollback()
+
+			return errors.Wrapf(err, "get collection name by uuid: %s", ns)
+		}
+
+		if name == ns.Collection {
+			break // OK: collection has not been renamed
+		}
+
+		prevNS := ns
+		ns.Collection = name
+
+		c.lock.Lock()
+		elem := c.sizeMap[prevNS.String()]
+		delete(c.sizeMap, prevNS.String())
+		c.sizeMap[ns.String()] = elem
+		c.lock.Unlock()
+
+		lg.Infof("Collection %s was renamed to %s. Retrying to clone the collection",
+			prevNS.Namespace, ns.Namespace)
+
+		err = c.catalog.DropCollection(ctx, prevNS.Database, prevNS.Collection)
+		if err != nil {
+			rollback()
+
+			return errors.Wrapf(err, "drop collection %q", prevNS.Namespace)
+		}
+
+		// The copy under the previous name is gone from the target, and so are
+		// its bytes and its placement charge.
+		c.targetShardSizes.release(prevNS.String())
+		c.copiedSize.Add(^(n - 1))
+		copied -= n
+
+		lg.Infof("Previous collection %s was dropped", prevNS.Namespace)
+	}
+
+	c.commitTask(ctx, task, ns, copied)
+
+	return nil
+}
+
+// commitTask settles a finished task: it corrects the estimate with the bytes
+// the collection really had, removes its sizeMap entry and marks it completed
+// so a resumed attempt skips it.
+func (c *Clone) commitTask(ctx context.Context, task, final namespaceInfo, copied uint64) {
+	c.lock.Lock()
+	diff := c.sizeMap[final.String()].Size - copied
+	c.totalSize -= diff // adjust
+	totalSize := c.totalSize
+	delete(c.sizeMap, final.String())
+	c.completed[taskKey(task)] = struct{}{}
+	c.lock.Unlock()
+
+	metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+	if diff != 0 {
+		log.Ctx(ctx).With(log.Size(totalSize)).
+			Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+	}
 }
 
 // shardCollection replicates the source's sharding for ns onto the target:
@@ -468,12 +662,18 @@ func (c *Clone) shardCollection(ctx context.Context, ns catalog.Namespace) error
 	return nil
 }
 
+// doCollectionClone copies one collection and returns the bytes it added to
+// copiedSize, so the caller can roll them back when the task fails. On the
+// first fatal progress error it aborts the attempt but keeps draining the
+// progress channel to closure, so no producer blocks on a send.
 func (c *Clone) doCollectionClone(
 	ctx context.Context,
 	copyManager *CopyManager,
-	ns catalog.Namespace,
-) error {
+	abort func(error),
+	task namespaceInfo,
+) (uint64, error) {
 	copyLogger := log.Ctx(ctx)
+	ns := task.Namespace
 
 	lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
 
@@ -497,20 +697,28 @@ func (c *Clone) doCollectionClone(
 
 	capturedAt, err := mdb.ClusterTime(ctx, c.source)
 	if err != nil {
-		return errors.Wrap(err, "get source cluster time")
+		return 0, errors.Wrap(err, "get source cluster time")
 	}
 
 	spec, err := mdb.GetCollectionSpec(ctx, c.source, ns.Database, ns.Collection)
 	if err != nil {
 		if errors.Is(err, mdb.ErrNotFound) {
-			return NamespaceNotFoundError{ns.Database, ns.Collection}
+			return 0, NamespaceNotFoundError{ns.Database, ns.Collection}
 		}
 
-		return errors.Wrap(err, "$collStats")
+		return 0, errors.Wrap(err, "$collStats")
+	}
+
+	// The task is the source UUID: a different collection living at this
+	// name now is a different generation. Leave it to the caller's UUID
+	// lookup, which decides between renamed and dropped; replay creates the
+	// new one from its own events.
+	if task.UUID != nil && spec.UUID != nil && !bytes.Equal(spec.UUID.Data, task.UUID.Data) {
+		return 0, NamespaceNotFoundError{ns.Database, ns.Collection}
 	}
 
 	if spec.Type == mdb.TypeTimeseries {
-		return catalog.ErrTimeseriesUnsupported
+		return 0, catalog.ErrTimeseriesUnsupported
 	}
 
 	err = c.createCollection(ctx, ns, spec)
@@ -519,13 +727,13 @@ func (c *Clone) doCollectionClone(
 			lg.Errorf(err, "Failed to create %q collection", ns.String())
 		}
 
-		return errors.Wrap(err, "createCollection")
+		return 0, errors.Wrap(err, "createCollection")
 	}
 
 	if spec.Type == mdb.TypeCollection {
 		err = c.createIndexes(ctx, ns)
 		if err != nil {
-			return errors.Wrap(err, "create indexes")
+			return 0, errors.Wrap(err, "create indexes")
 		}
 	}
 
@@ -534,7 +742,7 @@ func (c *Clone) doCollectionClone(
 	if c.targetIsSharded {
 		err = c.shardCollection(ctx, ns)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -548,37 +756,41 @@ func (c *Clone) doCollectionClone(
 
 	progressUpdateCh := copyManager.Start(ctx, ns, spec)
 
+	// After the first fatal error the attempt is aborted and the channel is
+	// drained to closure: a producer parked on a send would otherwise pin the
+	// manager's collectionsWg and Close would never return. Later errors are
+	// the abort's own fallout; later byte counts are inserts that landed and
+	// are rolled back by the caller.
+	var fatal error
+
+	// A collection that vanished under this name before its copy began
+	// (renamed or dropped) is the task's own outcome, not the attempt's: the
+	// caller resolves it by UUID while the other collections keep copying.
+	var notFound error
+
 	for progressUpdate := range progressUpdateCh {
 		err := progressUpdate.Err
+		if err != nil && fatal != nil {
+			continue
+		}
+
 		if err != nil {
 			switch {
 			case mdb.IsCollectionDropped(err):
 				lg.Warnf("Collection %q has been dropped during clone: %s", ns, err)
 
-				err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
-				if err != nil {
-					lg.Errorf(err, "Drop collection %q", ns)
-				} else {
-					lg.Infof("Collection %q has been dropped on target", ns)
-				}
-
-				// update estimated size
-				c.lock.Lock()
-				c.totalSize -= c.sizeMap[ns.String()].Size
-				totalSize := c.totalSize
-				delete(c.sizeMap, ns.String())
-				c.lock.Unlock()
-
-				metrics.SetEstimatedTotalSizeBytes(totalSize)
-
-				copyLogger.With(log.Size(totalSize)).
-					Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+				c.forgetDroppedCollection(ctx, ns)
 
 			case mdb.IsCollectionRenamed(err):
 				lg.Warnf("Collection %q has been renamed during clone: %s", ns, err)
 
 			case errors.Is(err, catalog.ErrTimeseriesUnsupported):
 				lg.Warnf("Timeseries is not supported (%q)", ns)
+
+			case errors.As(err, &NamespaceNotFoundError{}):
+				lg.Warnf("Collection %q not found before its copy began: %s", ns, err)
+
+				notFound = errors.Wrap(err, ns.Collection)
 
 			default:
 				updateLog := lg.With(
@@ -588,12 +800,13 @@ func (c *Clone) doCollectionClone(
 				)
 
 				if errors.Is(err, context.Canceled) {
-					updateLog.Errorf(err, "Copy documents for collection %q is canceled", ns)
+					updateLog.Warnf("Copy documents for collection %q is canceled: %s", ns, err)
 				} else {
 					updateLog.Errorf(err, "Failed to copy documents for collection %q", ns)
 				}
 
-				return errors.Wrap(err, ns.Collection)
+				fatal = errors.Wrap(err, ns.Collection)
+				abort(fatal)
 			}
 		}
 
@@ -627,14 +840,13 @@ func (c *Clone) doCollectionClone(
 			humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
 	}
 
-	c.lock.Lock()
-	diff := c.sizeMap[ns.String()].Size - totalCopiedSizeBytes
-	c.totalSize -= diff // adjust
-	totalSize := c.totalSize
-	delete(c.sizeMap, ns.String())
-	c.lock.Unlock()
+	if fatal != nil {
+		return totalCopiedSizeBytes, fatal
+	}
 
-	metrics.SetEstimatedTotalSizeBytes(totalSize)
+	if notFound != nil {
+		return totalCopiedSizeBytes, notFound
+	}
 
 	elapsed := time.Since(startedAt)
 	lg.With(
@@ -645,12 +857,33 @@ func (c *Clone) doCollectionClone(
 		ns, humanize.Bytes(totalCopiedSizeBytes),
 		elapsed.Round(time.Second), totalCopiedCount)
 
-	if diff != 0 {
-		copyLogger.With(log.Size(totalSize)).
-			Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
+	return totalCopiedSizeBytes, nil
+}
+
+// forgetDroppedCollection drops from the target, and from the size estimate,
+// a collection dropped on the source while it was being copied.
+func (c *Clone) forgetDroppedCollection(ctx context.Context, ns catalog.Namespace) {
+	copyLogger := log.Ctx(ctx)
+	lg := copyLogger.With(log.NS(ns.Database, ns.Collection))
+
+	err := c.catalog.DropCollection(ctx, ns.Database, ns.Collection)
+	if err != nil {
+		lg.Errorf(err, "Drop collection %q", ns)
+	} else {
+		lg.Infof("Collection %q has been dropped on target", ns)
 	}
 
-	return nil
+	// update estimated size
+	c.lock.Lock()
+	c.totalSize -= c.sizeMap[ns.String()].Size
+	totalSize := c.totalSize
+	delete(c.sizeMap, ns.String())
+	c.lock.Unlock()
+
+	metrics.SetEstimatedTotalSizeBytes(totalSize)
+
+	copyLogger.With(log.Size(totalSize)).
+		Infof("Estimated Total Size %s [updated]", humanize.Bytes(totalSize))
 }
 
 type sizeMap map[string]sizeMapElem

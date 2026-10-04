@@ -368,6 +368,10 @@ func TestResume_FailsFromInvalidState(t *testing.T) {
 					doneCh: make(chan struct{}),
 				}
 			}
+			if p.repl != nil {
+				// doResume reads the clone status alongside the replicator's.
+				p.clone = finishedLifecycleCloner()
+			}
 			err := p.Resume(context.Background(), ResumeOptions{
 				ResumeFromFailure: tt.fromFailure,
 			})
