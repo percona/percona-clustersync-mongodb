@@ -210,8 +210,10 @@ def test_demo_writer_sigint_exits_interactive_process(tmp_path: Path):
         process.stdin.flush()
         wait_for_output(process, b"WRITING  side=SOURCE")
         process.send_signal(signal.SIGINT)
+        # main() lets an in-flight write finish, joining the writer for up to
+        # 5s, so allow the whole shutdown rather than one write interval.
         try:
-            returncode = process.wait(timeout=2)
+            returncode = process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             returncode = None
     finally:
