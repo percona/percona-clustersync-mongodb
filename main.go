@@ -225,6 +225,15 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 				ExcludeNamespaces:  excludeNamespaces,
 			}
 
+			if cmd.Flags().Changed("target-write-concern") || cfg.TargetWriteConcern != "majority" {
+				_, err := config.ParseTargetWriteConcern(cfg.TargetWriteConcern)
+				if err != nil {
+					return errors.Wrap(err, "invalid target write concern")
+				}
+				v := cfg.TargetWriteConcern
+				startOptions.TargetWriteConcern = &v
+			}
+
 			if cfg.Clone.NumParallelCollections != 0 {
 				v := cfg.Clone.NumParallelCollections
 				startOptions.CloneNumParallelCollections = &v
@@ -297,6 +306,8 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 	}
 
 	cmd.Flags().Bool("pause-on-initial-sync", false, "")
+	cmd.Flags().String("target-write-concern", "majority",
+		"Write concern for clone and replication data writes (majority or a positive integer)")
 	cmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	cmd.Flags().StringSlice("include-namespaces", nil,
@@ -1340,6 +1351,14 @@ func resolveStartOptions(cfg *config.Config, params startRequest) (*pcsm.StartOp
 	options.IncludeNamespaces = params.IncludeNamespaces
 	options.ExcludeNamespaces = params.ExcludeNamespaces
 
+	if params.TargetWriteConcern != nil {
+		_, err = config.ParseTargetWriteConcern(*params.TargetWriteConcern)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid target write concern")
+		}
+		options.TargetWriteConcern = *params.TargetWriteConcern
+	}
+
 	if params.CloneNumParallelCollections != nil {
 		options.Clone.Parallelism = *params.CloneNumParallelCollections
 	}
@@ -1828,6 +1847,9 @@ func (s *server) writeNotActive(ctx context.Context, w http.ResponseWriter, role
 
 // startRequest represents the request body for the /start endpoint.
 type startRequest struct {
+	// TargetWriteConcern sets this run's data write concern; omitted means majority.
+	TargetWriteConcern *string `json:"targetWriteConcern,omitempty"`
+
 	// PauseOnInitialSync indicates whether to pause after the initial sync.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 

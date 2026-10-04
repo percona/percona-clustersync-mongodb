@@ -118,11 +118,17 @@ func newWorker(
 
 	if useCollectionBulk {
 		w.newBulkWriter = func() bulkWriter {
-			return newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, source)
+			bw := newCollectionBulkWriter(bulkOpsSize, useSimpleCollation, source)
+			bw.writeConcern = opts.WriteConcern
+
+			return bw
 		}
 	} else {
 		w.newBulkWriter = func() bulkWriter {
-			return newClientBulkWriter(bulkOpsSize, useSimpleCollation, source)
+			bw := newClientBulkWriter(bulkOpsSize, useSimpleCollation, source)
+			bw.writeConcern = opts.WriteConcern
+
+			return bw
 		}
 	}
 

@@ -15,6 +15,7 @@ package pcsm
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -164,6 +165,7 @@ type PCSM struct {
 	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
 
 	pauseOnInitialSync bool
+	targetWriteConcern string
 
 	state State // Current state of the PCSM
 
@@ -219,8 +221,9 @@ func New(
 }
 
 type checkpoint struct {
-	NSInclude []string `bson:"nsInclude,omitempty"`
-	NSExclude []string `bson:"nsExclude,omitempty"`
+	TargetWriteConcern string   `bson:"targetWriteConcern,omitempty"`
+	NSInclude          []string `bson:"nsInclude,omitempty"`
+	NSExclude          []string `bson:"nsExclude,omitempty"`
 
 	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
 	Clone   *clone.Checkpoint   `bson:"clone,omitempty"`
@@ -251,6 +254,10 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 		Repl:    p.repl.Checkpoint(),
 
 		State: p.state,
+	}
+
+	if p.targetWriteConcern != "majority" {
+		cp.TargetWriteConcern = p.targetWriteConcern
 	}
 
 	if p.err != nil {
@@ -290,12 +297,17 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		return nil
 	}
 
+	wc, err := config.ParseTargetWriteConcern(cp.TargetWriteConcern)
+	if err != nil {
+		return errors.Wrap(err, "recover target write concern")
+	}
+
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	cat := catalog.NewCatalog(p.source, p.target, p.sourceVer)
-	// Use empty options for recovery (clone tuning is less relevant when resuming from checkpoint)
-	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{}, p.targetIsSharded)
+	// Restore data-write concern; clone tuning uses defaults during recovery.
+	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{WriteConcern: wc}, p.targetIsSharded)
 	rpl := repl.NewRepl(
-		p.source, p.target, cat, nsFilter, &repl.Options{},
+		p.source, p.target, cat, nsFilter, &repl.Options{WriteConcern: wc},
 		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
 	)
 
@@ -332,6 +344,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	p.nsInclude = cp.NSInclude
+	p.targetWriteConcern = fmt.Sprint(wc.W)
 	p.nsExclude = cp.NSExclude
 	p.nsFilter = nsFilter
 	p.catalog = cat
@@ -469,6 +482,8 @@ func copyFinalizeStatus(fs *FinalizeStatus) *FinalizeStatus {
 
 // StartOptions represents the options for starting the PCSM.
 type StartOptions struct {
+	// TargetWriteConcern selects the data-write acknowledgement; empty means majority.
+	TargetWriteConcern string
 	// PauseOnInitialSync indicates whether to pause after the initial sync completes.
 	PauseOnInitialSync bool
 	// IncludeNamespaces are the namespaces to include.
@@ -527,17 +542,27 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 		return err
 	}
 
+	wc, err := config.ParseTargetWriteConcern(options.TargetWriteConcern)
+	if err != nil {
+		return errors.Wrap(err, "start target write concern")
+	}
+	cloneOptions := options.Clone
+	cloneOptions.WriteConcern = wc
+	replOptions := options.Repl
+	replOptions.WriteConcern = wc
+
 	p.err = nil
 	p.suspended = false
+	p.targetWriteConcern = fmt.Sprint(wc.W)
 
 	p.nsInclude = options.IncludeNamespaces
 	p.nsExclude = options.ExcludeNamespaces
 	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
 	p.pauseOnInitialSync = options.PauseOnInitialSync
 	p.catalog = catalog.NewCatalog(p.source, p.target, p.sourceVer)
-	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &options.Clone, p.targetIsSharded)
+	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &cloneOptions, p.targetIsSharded)
 	p.repl = repl.NewRepl(
-		p.source, p.target, p.catalog, p.nsFilter, &options.Repl,
+		p.source, p.target, p.catalog, p.nsFilter, &replOptions,
 		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
 	)
 	p.finalizeStatus = nil

@@ -14,6 +14,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
@@ -36,6 +37,8 @@ type Catalog interface {
 
 // Options configures the clone behavior.
 type Options struct {
+	// WriteConcern applies to cloned documents only; nil defaults to majority.
+	WriteConcern *writeconcern.WriteConcern
 	// Parallelism is the number of collections to clone in parallel.
 	// Default: 2 (config.DefaultCloneNumParallelCollection)
 	Parallelism int
@@ -130,6 +133,11 @@ func NewClone(
 	opts *Options,
 	targetIsSharded bool,
 ) *Clone {
+	if opts.WriteConcern == nil {
+		opts.WriteConcern = writeconcern.Majority()
+	}
+	log.New("clone").Infof("Config: TargetWriteConcern: %v", opts.WriteConcern.W)
+
 	return &Clone{
 		source:           source,
 		target:           target,
@@ -476,6 +484,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []namespaceInfo) error {
 	defer cancelAttempt(nil)
 
 	copyManager := NewCopyManager(attemptCtx, c.source, c.target, CopyManagerOptions{
+		WriteConcern:       c.options.WriteConcern,
 		NumReadWorkers:     c.options.ReadWorkers,
 		NumInsertWorkers:   c.options.InsertWorkers,
 		SegmentSizeBytes:   c.options.SegmentSizeBytes,
