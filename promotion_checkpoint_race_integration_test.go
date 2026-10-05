@@ -98,16 +98,17 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	membership := &ha.Membership{}
 	membership.SetRole(ha.RoleActive, 8)
 	s := &server{
-		cfg:              &config.Config{RecoveryCheckpointInterval: time.Hour},
-		targetCluster:    target,
-		pcsm:             pipeline,
-		membership:       membership,
-		activeTerm:       7,
-		checkpointCancel: cancelOldEpoch,
+		cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
+		targetCluster: target,
+		pcsm:          pipeline,
+		membership:    membership,
+		activeTerm:    7,
+		epochCtx:      oldEpoch,
+		epochCancel:   cancelOldEpoch,
 	}
 	defer func() {
-		if s.checkpointCancel != nil {
-			s.checkpointCancel()
+		if s.epochCancel != nil {
+			s.epochCancel()
 		}
 	}()
 
@@ -127,7 +128,7 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	if writeErr != nil {
 		require.ErrorIs(t, writeErr, errCheckpointFenced)
 	}
-	s.checkpointCancel() // Model a crash before the first new-epoch checkpoint.
+	s.epochCancel() // Model a crash before the first new-epoch checkpoint.
 
 	// Then: a fresh process must not recover an older lifecycle state than
 	// the state restored by the successful promotion.

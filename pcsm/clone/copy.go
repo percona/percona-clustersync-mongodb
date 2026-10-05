@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -48,6 +49,7 @@ type CopyManager struct {
 	insertTaskCh  chan insertTask // channel for insert batch tasks
 	close         func()          // function to stop workers and clean up resources
 	collectionsWg sync.WaitGroup  // tracks active collections being processed
+	insertWg      sync.WaitGroup  // tracks insert workers until they exit
 	readSem       chan struct{}   // semaphore to limit concurrent read workers
 }
 
@@ -69,6 +71,8 @@ type CopyProgressUpdate struct {
 // CopyManagerOptions configures the behavior of CopyManager.
 // It controls concurrency settings and memory limits for collection cloning operations.
 type CopyManagerOptions struct {
+	// WriteConcern applies to insert workers; nil defaults to majority.
+	WriteConcern *writeconcern.WriteConcern
 	// NumReadWorkers is the total number of concurrent read workers.
 	// min: 1; default: max([runtime.NumCPU] / 4, 1).
 	NumReadWorkers int
@@ -110,6 +114,9 @@ func EffectiveNumInsertWorkers(configured int) int {
 }
 
 func (o *CopyManagerOptions) applyDefaults() {
+	if o.WriteConcern == nil {
+		o.WriteConcern = writeconcern.Majority()
+	}
 	o.NumReadWorkers = EffectiveNumReadWorkers(o.NumReadWorkers)
 	o.NumInsertWorkers = EffectiveNumInsertWorkers(o.NumInsertWorkers)
 
@@ -157,7 +164,7 @@ func NewCopyManager(ctx context.Context, source, target *mongo.Client, options C
 	// Start an insert worker goroutine that processes insertBatchTask from the queue.
 	// Each worker receives document batches and inserts them into the target collection.
 	for id := range cm.options.NumInsertWorkers {
-		go func() {
+		cm.insertWg.Go(func() {
 			lg := log.New(fmt.Sprintf("copy:w:i:%d", id+1))
 			lg.Tracef("Insert Worker %d has started", id+1)
 
@@ -165,7 +172,7 @@ func NewCopyManager(ctx context.Context, source, target *mongo.Client, options C
 				l := lg.With(log.NS(t.Namespace.Database, t.Namespace.Collection))
 				cm.insertBatch(l.WithContext(insertCtx), t)
 			}
-		}()
+		})
 	}
 
 	var once sync.Once
@@ -175,6 +182,7 @@ func NewCopyManager(ctx context.Context, source, target *mongo.Client, options C
 			cm.collectionsWg.Wait()
 			close(cm.readSem)
 			close(cm.insertTaskCh)
+			cm.insertWg.Wait()
 		})
 	}
 
@@ -225,6 +233,8 @@ func (cm *CopyManager) runReadDispatcher(
 	nextSegment nextSegmentFunc,
 	progressUpdateCh chan<- CopyProgressUpdate,
 ) {
+	defer close(session.dispatcherDone)
+
 	for {
 		select {
 		case <-session.ctx.Done():
@@ -366,6 +376,8 @@ func (cm *CopyManager) copyCollection(
 
 		nextSegment = segmenter.Next
 
+		session.activeSegmentsWg.Add(1)
+
 		go segmenter.handleNanIDDoc(session)
 	}
 
@@ -376,7 +388,10 @@ func (cm *CopyManager) copyCollection(
 
 	session.waitAndCleanup()
 
-	return nil
+	// Normal exhaustion also cancels the session, so only the collection
+	// context tells a finished copy from a canceled one: a cancel landing
+	// between segments ends the copy without any producer reporting an error.
+	return errors.Wrap(ctx.Err(), "copy collection")
 }
 
 // insertBatch inserts a batch of documents into the target collection.
@@ -387,7 +402,8 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 	startedAt := time.Now()
 
-	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection)
+	collection := cm.target.Database(task.Namespace.Database).Collection(task.Namespace.Collection,
+		options.Collection().SetWriteConcern(cm.options.WriteConcern))
 
 	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
 		_, err := collection.InsertMany(ctx, task.Documents, insertOptions)
@@ -456,6 +472,7 @@ type collectionCopySession struct {
 
 	readBatchCh      chan readBatch
 	allBatchesSentCh chan struct{}
+	dispatcherDone   chan struct{}
 
 	activeSegmentsWg *sync.WaitGroup
 	activeInsertsWg  *sync.WaitGroup
@@ -477,6 +494,7 @@ func newCollectionCopySession(ctx context.Context, ns catalog.Namespace, isCappe
 		isCapped:         isCapped,
 		readBatchCh:      make(chan readBatch),
 		allBatchesSentCh: make(chan struct{}),
+		dispatcherDone:   make(chan struct{}),
 		activeSegmentsWg: &sync.WaitGroup{},
 		activeInsertsWg:  &sync.WaitGroup{},
 		ctx:              sessionCtx,
@@ -499,6 +517,10 @@ func (s *collectionCopySession) nextSegmentID() uint32 {
 // all insert operations complete before returning.
 func (s *collectionCopySession) waitAndCleanup() {
 	<-s.ctx.Done()
+	// The dispatcher registers a reader between taking a cursor and
+	// activeSegmentsWg.Add; join it first so no reader is born after the
+	// wait below and sends on the closed channel.
+	<-s.dispatcherDone
 	s.activeSegmentsWg.Wait()
 	close(s.readBatchCh)
 	<-s.allBatchesSentCh
@@ -873,18 +895,27 @@ func (seg *Segmenter) findSegmentMaxKey(
 	return raw.Lookup("_id"), nil
 }
 
-// handleNanIDDoc sends a document with NaN _id to the readBatchCh channel if it exists.
+// handleNanIDDoc sends a document with NaN _id to the readBatchCh channel if
+// it exists. It is a tracked producer like a segment reader: the caller adds
+// it to activeSegmentsWg so cleanup cannot close readBatchCh under its send.
 func (seg *Segmenter) handleNanIDDoc(
 	session *collectionCopySession,
 ) {
+	defer session.activeSegmentsWg.Done()
+
 	if len(seg.nanDoc) == 0 {
 		return
 	}
 
-	session.readBatchCh <- readBatch{
+	batch := readBatch{
 		ID:        session.nextBatchID(),
 		Documents: []any{seg.nanDoc},
 		SizeBytes: len(seg.nanDoc),
+	}
+
+	select {
+	case session.readBatchCh <- batch:
+	case <-session.ctx.Done():
 	}
 }
 

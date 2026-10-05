@@ -18,6 +18,13 @@ var (
 	// because a newer term owns the checkpoint. It is the hard guarantee that a
 	// deposed active cannot corrupt the target checkpoint.
 	errCheckpointFenced = errors.New("checkpoint fenced by newer term")
+	// errCheckpointExists is returned by the bootstrap insert when another
+	// writer created the checkpoint document first; its term decides the rest.
+	errCheckpointExists = errors.New("checkpoint already exists")
+	// errNoCheckpoint is returned by Restore when there is no recovery data.
+	// A promotion decides what that means: nothing to do for an idle
+	// pipeline, a stale pipeline that cannot be replaced otherwise.
+	errNoCheckpoint = errors.New("no checkpoint to restore")
 )
 
 const recoveryID = "pcsm"
@@ -54,7 +61,7 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			lg.Info("Recovery Data not found")
 
-			return nil
+			return errNoCheckpoint
 		}
 
 		return errors.Wrap(err, "find")
@@ -72,10 +79,13 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 	return nil
 }
 
-// RunCheckpointing periodically persists the checkpoint until ctx is canceled.
-// It is scoped to one ACTIVE epoch: every write is fenced against term. A write
-// fenced by a newer term means this instance was deposed; onFenced is invoked
-// once and the loop returns.
+// RunCheckpointing persists the checkpoint every interval, and as soon as
+// saveNow signals, until ctx is canceled. It is the only checkpoint writer of
+// one ACTIVE epoch: the epoch's writes share one term, so only their order
+// keeps an older snapshot from replacing a newer one, and a single writer
+// captures and saves them in order. Every write is fenced against term. A
+// write fenced by a newer term means this instance was deposed; onFenced is
+// invoked once and the loop returns.
 func RunCheckpointing(
 	ctx context.Context,
 	m *mongo.Client,
@@ -83,6 +93,7 @@ func RunCheckpointing(
 	term int64,
 	instanceID string,
 	interval time.Duration,
+	saveNow <-chan struct{},
 	onFenced func(),
 ) {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
@@ -100,19 +111,21 @@ func RunCheckpointing(
 			return
 
 		case <-ticker.C:
-			err := DoCheckpoint(ctx, m, rec, term, instanceID)
-			switch {
-			case errors.Is(err, context.Canceled):
-				return
+		case <-saveNow:
+		}
 
-			case errors.Is(err, errCheckpointFenced):
-				lg.Warn("Stopping checkpointing")
-				if onFenced != nil {
-					onFenced()
-				}
+		err := DoCheckpoint(ctx, m, rec, term, instanceID)
+		switch {
+		case errors.Is(err, context.Canceled):
+			return
 
-				return
+		case errors.Is(err, errCheckpointFenced):
+			lg.Warn("Stopping checkpointing")
+			if onFenced != nil {
+				onFenced()
 			}
+
+			return
 		}
 	}
 }
@@ -171,22 +184,33 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 	}}}
 
 	err = coll.FindOneAndUpdate(ctx, filter, update).Err()
-	switch {
-	case err == nil:
-		return nil
-
-	case errors.Is(err, mongo.ErrNoDocuments):
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		// The document is absent (bootstrap) or a newer term owns it (fence).
-		// The bootstrap insert disambiguates.
-		return doCheckpointBootstrap(ctx, coll, data, term, instanceID)
+		// The bootstrap insert tells them apart.
+		err = doCheckpointBootstrap(ctx, coll, data, term, instanceID)
+		if !errors.Is(err, errCheckpointExists) {
+			return err
+		}
 
-	default:
+		// Another writer created the document between the update and the
+		// insert, which by itself says nothing about its term: an older term's
+		// late bootstrap must not read as a newer owner. The term-gated update
+		// decides.
+		err = coll.FindOneAndUpdate(ctx, filter, update).Err()
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return errCheckpointFenced
+		}
+	}
+
+	if err != nil {
 		return errors.Wrap(err, "save checkpoint")
 	}
+
+	return nil
 }
 
 // doCheckpointBootstrap inserts the first checkpoint document. A duplicate-key
-// collision means another writer created it first; treated as fenced.
+// collision means another writer created it first: errCheckpointExists.
 func doCheckpointBootstrap(
 	ctx context.Context, coll *mongo.Collection, data bson.Raw, term int64, instanceID string,
 ) error {
@@ -202,7 +226,7 @@ func doCheckpointBootstrap(
 		return nil
 
 	case mongo.IsDuplicateKeyError(err):
-		return errCheckpointFenced
+		return errCheckpointExists
 
 	default:
 		return errors.Wrap(err, "bootstrap checkpoint")

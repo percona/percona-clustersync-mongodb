@@ -2,6 +2,7 @@ package mdb
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -22,6 +23,37 @@ import (
 // DriverDefaultMaxPoolSize mirrors the MongoDB Go driver's default maxPoolSize,
 // applied to a client when the connection string omits the option.
 const DriverDefaultMaxPoolSize uint64 = 100
+
+// abortOnCloseDialer dials like net.Dialer and sets SO_LINGER to zero on
+// every TCP connection, so Close sends RST and discards unsent data instead of
+// queuing a FIN behind it. The HA fence closes a demoted instance's target
+// connections; without this, a write that instance handed to the kernel
+// during a network partition is retransmitted once the partition heals and
+// lands on the target under a lease the instance no longer holds.
+type abortOnCloseDialer struct {
+	net.Dialer
+}
+
+func (d *abortOnCloseDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := d.Dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the driver classifies dial errors itself
+	}
+
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return conn, nil
+	}
+
+	err = tcp.SetLinger(0)
+	if err != nil {
+		_ = conn.Close()
+
+		return nil, errors.Wrap(err, "set SO_LINGER")
+	}
+
+	return conn, nil
+}
 
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client, error) {
@@ -67,6 +99,10 @@ func Connect(ctx context.Context, uri string, cfg *config.Config) (*mongo.Client
 	log.New("connect").Infof("Config: %s client compressors: %v", role, compressors)
 
 	opts.SetCompressors(compressors)
+
+	if role == "target" {
+		opts.SetDialer(&abortOnCloseDialer{})
+	}
 
 	switch {
 	case opts.MaxPoolSize == nil:

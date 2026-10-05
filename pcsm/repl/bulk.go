@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
@@ -23,11 +24,6 @@ var yes = true // for ref
 
 //nolint:gochecknoglobals
 var simpleCollation = &options.Collation{Locale: "simple"}
-
-//nolint:gochecknoglobals
-var clientBulkOptions = options.ClientBulkWrite().
-	SetOrdered(true).
-	SetBypassDocumentValidation(false)
 
 //nolint:gochecknoglobals
 var collectionBulkOptions = options.BulkWrite().
@@ -104,6 +100,7 @@ type bulkWriter interface {
 }
 
 type clientBulkWrite struct {
+	writeConcern       *writeconcern.WriteConcern
 	useSimpleCollation bool
 	maxOpsSize         int
 	bytes              int
@@ -114,6 +111,7 @@ type clientBulkWrite struct {
 
 func newClientBulkWriter(size int, useSimpleCollation bool, source *mongo.Client) *clientBulkWrite {
 	return &clientBulkWrite{
+		writeConcern:       writeconcern.Majority(),
 		useSimpleCollation: useSimpleCollation,
 		maxOpsSize:         size,
 		writes:             make([]mongo.ClientBulkWrite, 0, size),
@@ -164,7 +162,8 @@ func (cbw *clientBulkWrite) doWithRetry(
 	var bulkErr error
 
 	err := mdb.RetryWithBackoff(ctx, func() error {
-		_, err := m.BulkWrite(ctx, bulkWrites, clientBulkOptions)
+		_, err := m.BulkWrite(ctx, bulkWrites, options.ClientBulkWrite().
+			SetOrdered(true).SetBypassDocumentValidation(false).SetWriteConcern(cbw.writeConcern))
 		bulkErr = err
 
 		return errors.Wrap(err, "bulk write")
@@ -177,7 +176,8 @@ func (cbw *clientBulkWrite) doWithRetry(
 	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
 	if replacement != nil {
 		write := bulkWrites[idx]
-		coll := m.Database(write.Database).Collection(write.Collection)
+		coll := m.Database(write.Database).Collection(write.Collection,
+			options.Collection().SetWriteConcern(cbw.writeConcern))
 
 		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
 		if err != nil {
@@ -194,7 +194,8 @@ func (cbw *clientBulkWrite) doWithRetry(
 	// document from source and applying it as an upserting replaceOne on
 	// target (PCSM-314).
 	if filter != nil {
-		targetColl := m.Database(ns.Database).Collection(ns.Collection)
+		targetColl := m.Database(ns.Database).Collection(ns.Collection,
+			options.Collection().SetWriteConcern(cbw.writeConcern))
 
 		err = handleRecoverableUpdateError(ctx, cbw.source, targetColl, ns, filter, cbw.useSimpleCollation)
 		if err != nil {
@@ -393,6 +394,7 @@ func (cbw *clientBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent) {
 }
 
 type collectionBulkWrite struct {
+	writeConcern       *writeconcern.WriteConcern
 	useSimpleCollation bool
 	maxOpsSize         int
 	count              int
@@ -406,6 +408,7 @@ func newCollectionBulkWriter(
 	size int, nonDefaultCollationSupport bool, source *mongo.Client,
 ) *collectionBulkWrite {
 	return &collectionBulkWrite{
+		writeConcern:       writeconcern.Majority(),
 		useSimpleCollation: nonDefaultCollationSupport,
 		maxOpsSize:         size,
 		writes:             make(map[string][]mongo.WriteModel),
@@ -438,7 +441,8 @@ func (cbw *collectionBulkWrite) Do(ctx context.Context, m *mongo.Client) (int, e
 		}
 
 		grp.Go(func() error {
-			mcoll := m.Database(namespace.Database).Collection(namespace.Collection)
+			mcoll := m.Database(namespace.Database).Collection(namespace.Collection,
+				options.Collection().SetWriteConcern(cbw.writeConcern))
 
 			err := cbw.doWithRetry(grpCtx, mcoll, namespace, ops)
 			if err != nil {

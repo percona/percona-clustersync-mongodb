@@ -183,12 +183,13 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
-		name  string
-		state State
-		repl  Replicator
+		name           string
+		state          State
+		finalizeActive bool
+		repl           Replicator
 	}{
 		{name: "fails when running", state: StateRunning},
-		{name: "fails when finalizing", state: StateFinalizing},
+		{name: "fails when finalizing with a live finalizer", state: StateFinalizing, finalizeActive: true},
 		{
 			name:  "fails when paused and still pausing",
 			state: StatePaused,
@@ -200,6 +201,7 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 
 			p := &PCSM{
 				state:          tt.state,
+				finalizeActive: tt.finalizeActive,
 				repl:           tt.repl,
 				onStateChanged: func(State) {},
 			}
@@ -222,6 +224,7 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 	}{
 		{name: "succeeds when paused and settled", state: StatePaused},
 		{name: "succeeds when failed", state: StateFailed},
+		{name: "succeeds when finalizing with no live finalizer", state: StateFinalizing},
 		{name: "succeeds when finalized", state: StateFinalized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

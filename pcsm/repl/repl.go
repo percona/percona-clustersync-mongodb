@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -54,6 +55,8 @@ type barrierController interface {
 
 // Options configures the replication behavior.
 type Options struct {
+	// WriteConcern applies to replicated documents only; nil defaults to majority.
+	WriteConcern *writeconcern.WriteConcern
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
 	// instead of client bulk write. Default: false (use client bulk write).
 	UseCollectionBulkWrite bool
@@ -82,6 +85,9 @@ type Options struct {
 }
 
 func (o *Options) applyDefaults() {
+	if o.WriteConcern == nil {
+		o.WriteConcern = writeconcern.Majority()
+	}
 	if o.NumWorkers <= 0 {
 		o.NumWorkers = runtime.NumCPU()
 	}
@@ -193,6 +199,7 @@ func NewRepl(
 	opts.applyDefaults()
 
 	lg := log.New("repl")
+	lg.Infof("Config: TargetWriteConcern: %v", opts.WriteConcern.W)
 	lg.Infof("Config: NumWorkers: %d", opts.NumWorkers)
 	lg.Infof("Config: UseCollectionBulkWrite: %t", opts.UseCollectionBulkWrite)
 	lg.Infof("Config: ChangeStreamBatchSize: %d", opts.ChangeStreamBatchSize)
@@ -400,8 +407,11 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		log.New("repl").Debug("Use collection-level bulk write")
 	}
 
+	// The pool shares the run's context: canceling the run abandons queued
+	// and in-flight bulks instead of draining them. An operator pause cancels
+	// only the change-stream watch (see run), so it still drains.
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+		ctx, r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
 	r.lastReplicatedOpTime = startAt
@@ -442,25 +452,27 @@ func (r *Repl) Pause(_ context.Context) error {
 	return nil
 }
 
+// doPause requests a graceful pause: it asks the run to cancel its
+// change-stream watch and lets the workers drain. It publishes nothing else;
+// the run's cleanup is the sole writer of pauseTime and pausing, so a late
+// pause can never mark a resumed run as paused. The caller holds r.lock.
 func (r *Repl) doPause() {
+	if r.pausing {
+		return
+	}
+
 	r.pausing = true
 	doneCh := r.doneCh
 
 	go func() {
 		log.New("repl").Debug("Change Replication is pausing")
 
-		r.pauseCh <- struct{}{}
-		<-doneCh
-
-		r.lock.Lock()
-		r.pauseTime = time.Now()
-		r.pausing = false
-		optime := r.lastReplicatedOpTime
-		r.lock.Unlock()
-
-		log.New("repl").
-			With(log.OpTime(optime.T, optime.I)).
-			Info("Change Replication paused")
+		// The run's watch-cancel goroutine receives this. If the run has
+		// already exited (canceled or failed), nobody will: do not block.
+		select {
+		case r.pauseCh <- struct{}{}:
+		case <-doneCh:
+		}
 	}()
 }
 
@@ -500,7 +512,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 	r.pauseTime = time.Time{}
 	r.doneCh = make(chan struct{})
 	r.pool = newWorkerPool(
-		context.Background(), r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
+		ctx, r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
 	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
@@ -643,6 +655,17 @@ func (r *Repl) drainChangeStream(
 				return err
 			}
 
+			// The dispatcher parses a DDL event's body into this same struct
+			// after receiving it, so everything this loop needs is read before
+			// the send.
+			var invalidate *changeStreamInvalidateError
+			if change.OperationType == Invalidate {
+				invalidate = &changeStreamInvalidateError{
+					invalidEventID: append(bson.Raw(nil), change.ID...),
+					clusterTime:    change.ClusterTime,
+				}
+			}
+
 			// The dispatcher is the only consumer and it returns on failure
 			// without draining the queue. A plain send parks here forever with a
 			// full queue and leaks this goroutine and the cursor behind it.
@@ -652,11 +675,8 @@ func (r *Repl) drainChangeStream(
 				return nil
 			}
 
-			if change.OperationType == Invalidate {
-				invalidateErr = &changeStreamInvalidateError{
-					invalidEventID: append(bson.Raw(nil), change.ID...),
-					clusterTime:    change.ClusterTime,
-				}
+			if invalidate != nil {
+				invalidateErr = invalidate
 			}
 		}
 
@@ -728,15 +748,21 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		r.trackPoolProgress(pool, progressTicker.C, stopProgress)
 	})
 
+	watchDone := make(chan struct{})
+
 	defer func() {
 		progressTicker.Stop()
 		close(stopProgress)
 		// Join before taking r.lock or stopping the pool: the tracker uses both.
 		progressWG.Wait()
+		// Join the watch so no change-stream read or setFailed outlives Done.
+		<-watchDone
 
 		r.lock.Lock()
 		r.eventsApplied += r.pool.TotalEventsApplied()
 
+		// With a canceled run ctx the pool abandons its bulks; with a live one
+		// (operator pause) it drains. Either way the floor below is inclusive.
 		r.pool.Stop()
 		r.advanceCheckpoint(r.pool.Checkpoint())
 
@@ -745,7 +771,18 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		// Clear the movePrimary-invalidate expectation so arming never leaks
 		// past the run that set it.
 		r.expectMovePrimaryInvalidate = false
+
+		// The run is the sole publisher of its terminal state: a graceful
+		// pause, a cancellation and a failure all end here, so nothing can
+		// mark a later resumed run as paused.
+		r.pauseTime = time.Now()
+		r.pausing = false
+		optime := r.lastReplicatedOpTime
 		r.lock.Unlock()
+
+		log.New("repl").
+			With(log.OpTime(optime.T, optime.I)).
+			Info("Change Replication paused")
 
 		close(r.doneCh)
 	}()
@@ -753,18 +790,24 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	changeEventCh := make(chan *ChangeEvent, r.options.EventQueueSize)
 
 	go func() {
+		defer close(watchDone)
 		defer close(changeEventCh)
 
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+		// A pause cancels only the watch; the run ctx stays alive so the
+		// pool drains. Run cancellation reaches the watch through the parent.
+		watchCtx, cancelWatch := context.WithCancel(ctx)
+		defer cancelWatch()
 
 		go func() {
-			<-r.pauseCh
-			cancel()
+			select {
+			case <-r.pauseCh:
+				cancelWatch()
+			case <-watchCtx.Done():
+			}
 		}()
 
-		err := r.watchWithRetry(ctx, opts, changeEventCh)
-		if err != nil && !errors.Is(err, context.Canceled) {
+		err := r.watchWithRetry(watchCtx, opts, changeEventCh)
+		if err != nil && watchCtx.Err() == nil && !errors.Is(err, context.Canceled) {
 			if mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
 			}
@@ -792,8 +835,14 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				return
 			}
 		case err := <-r.pool.Err():
-			r.setFailed(err, "Worker error")
+			// A worker error caused by run cancellation is not a failure.
+			if ctx.Err() == nil {
+				r.setFailed(err, "Worker error")
+			}
 
+			return
+		case <-ctx.Done():
+			// Undispatched events are at or after the resume floor; they replay.
 			return
 		}
 
@@ -849,7 +898,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lastRoutedTS = change.ClusterTime
 
 		case Invalidate:
-			err := r.handleInvalidate(change, r.pool)
+			err := r.handleInvalidate(ctx, change, r.pool)
 			if err != nil {
 				return
 			}
@@ -857,47 +906,70 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lastRoutedTS = bson.Timestamp{}
 
 		default:
-			err := r.pool.Barrier()
-			if err != nil {
-				r.pool.ReleaseBarrier()
-				r.setFailed(err, "Worker error during barrier")
-
+			if !r.applyDDL(ctx, change) {
 				return
 			}
 
-			// DDL events need full parsing (rare path). The header is already
-			// parsed; this additionally deserializes the typed event body
-			// (e.g. CreateEvent, RenameEvent) needed by applyDDLChange.
-			err = parseChangeEvent(change.RawData, change)
-			if err != nil {
-				r.pool.ReleaseBarrier()
-				r.setFailed(err, "Parse DDL event")
-
-				return
-			}
-
-			err = mdb.RetryWithBackoff(ctx, func() error {
-				return r.applyDDLChange(ctx, change)
-			}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
-			if err != nil {
-				r.pool.ReleaseBarrier()
-				r.setFailed(err, "Apply change")
-
-				return
-			}
-
-			r.lock.Lock()
-			r.advanceCheckpoint(change.ClusterTime)
-			r.eventsApplied++
-			r.lock.Unlock()
-
-			metrics.AddEventsApplied(1)
 			uuidMap = r.catalog.UUIDMap()
-
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
-			r.pool.ReleaseBarrier()
 		}
 	}
+}
+
+// applyDDL applies a DDL change behind a worker barrier: every routed DML is
+// committed before the DDL runs, and the barrier is released afterwards. It
+// returns false when the run must stop. Failures are recorded with setFailed
+// unless the run was canceled; a cancellation observed after the drain
+// releases the barrier without applying or advancing past the DDL.
+func (r *Repl) applyDDL(ctx context.Context, change *ChangeEvent) bool {
+	defer r.pool.ReleaseBarrier()
+
+	err := r.pool.Barrier()
+	if err != nil {
+		// A barrier over abandoned bulks reports an error by design (see
+		// runWriter); under cancellation that is not a failure.
+		if ctx.Err() == nil {
+			r.setFailed(err, "Worker error during barrier")
+		}
+
+		return false
+	}
+
+	// The barrier drained everything before the DDL; a run canceled
+	// meanwhile must neither apply it nor advance past it.
+	if ctx.Err() != nil {
+		return false
+	}
+
+	// DDL events need full parsing (rare path). The header is already
+	// parsed; this additionally deserializes the typed event body
+	// (e.g. CreateEvent, RenameEvent) needed by applyDDLChange.
+	err = parseChangeEvent(change.RawData, change)
+	if err != nil {
+		r.setFailed(err, "Parse DDL event")
+
+		return false
+	}
+
+	err = mdb.RetryWithBackoff(ctx, func() error {
+		return r.applyDDLChange(ctx, change)
+	}, isNonTransient, mdb.DefaultRetryInterval, maxWriteRetryDelay, 0)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.setFailed(err, "Apply change")
+		}
+
+		return false
+	}
+
+	r.lock.Lock()
+	r.advanceCheckpoint(change.ClusterTime)
+	r.eventsApplied++
+	r.lock.Unlock()
+
+	metrics.AddEventsApplied(1)
+
+	return true
 }
 
 // applyTick reports the scanned frontier only while the worker pool has
@@ -920,14 +992,19 @@ func (r *Repl) applyTick(ts, lastRoutedTS bson.Timestamp) {
 // using r.pool directly so tests can inject a fake pool and exercise the
 // barrier/recovery/fail-closed paths without a live worker pool; production
 // passes r.pool.
-func (r *Repl) handleInvalidate(change *ChangeEvent, bc barrierController) error {
+func (r *Repl) handleInvalidate(ctx context.Context, change *ChangeEvent, bc barrierController) error {
 	err := bc.Barrier()
 	if err != nil {
 		// Safe to release even though Barrier failed: ReleaseBarrier only does
 		// non-blocking sends to resumeCh and skips dead workers, so it has no
 		// held-state dependency on a successful barrier.
 		bc.ReleaseBarrier()
-		r.setFailed(err, "Worker error during barrier")
+
+		// A barrier over abandoned bulks reports an error by design (see
+		// runWriter); under cancellation that is not a failure.
+		if ctx.Err() == nil {
+			r.setFailed(err, "Worker error during barrier")
+		}
 
 		return errors.Wrap(err, "worker error during barrier")
 	}

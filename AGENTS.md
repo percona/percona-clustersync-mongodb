@@ -289,7 +289,7 @@ HA persistence and fencing contracts:
 - Exactly one instance owns target lease `percona_clustersync_mongodb.lease`, becomes ACTIVE, and drives replication; other live members are STANDBY and can take over. Per-instance liveness documents live in `percona_clustersync_mongodb.members`.
 - Startup performs one synchronous lease attempt before serving HTTP, so a sole instance becomes ACTIVE without a transient STANDBY API window.
 - Every instance connects to source and target before election. Startup performs version and hello reads; after that, STANDBY source connections carry driver monitoring traffic but no replication reads. Unreachable or incompatible sources fail startup rather than failover, and promotion avoids connection setup latency.
-- Lease terms are monotonic fencing tokens on checkpoint writes. A stale term cannot overwrite a newer checkpoint. Periodic fencing stops checkpointing and requests a best-effort pipeline pause; membership role changes remain controlled by election reconciliation.
+- Lease terms are monotonic fencing tokens on checkpoint writes. A stale term cannot overwrite a newer checkpoint. Every ACTIVE tenure owns one epoch context: pipeline executions, the checkpointing loop, and the state-change checkpoint derive from it. Demotion (lease lost, lease deadline passed, or a fenced checkpoint write) cancels the epoch and suspends the pipeline: queued and in-flight target writes are abandoned, never drained, and the suspended state is not persisted. A same-term re-promotion resumes the suspended pipeline in memory (completed clone collections are kept; in-flight ones are copied again); a new term restores the checkpoint over it. Lifecycle requests (`/start`, `/resume`, `/finalize`) are admitted under the current epoch and refused with 409 `not_active` once it ends. Cancellation is containment, not server-side fencing: a command already on the wire at the demotion instant may still apply.
 - The five operational endpoints reject otherwise valid STANDBY requests with HTTP 409 and JSON `error: "not_active"`. Optional envelope fields include the responder's `role` and `group.members[]`, which may locate ACTIVE.
 - `/status` is also ACTIVE-only because a STANDBY has no meaningful pipeline state.
 - The `me`/`role`/`group` envelope appears only when more than one live member is observed. Membership-read failure or degradation to one observed member omits it; a lone instance therefore keeps the pre-HA API byte-for-byte.
@@ -380,7 +380,7 @@ Pytest CLI options override matching environment variables:
 
 If Poetry fails with `"bad interpreter"` after a Python version change because its interpreter path is stale, invoke `.venv/bin/pytest` directly. Unqualified local pytest discovers the full `tests/` tree, including sharded modules, while skipping slow tests by default. For CI-comparable scope:
 
-- RS runs an explicit seven-file selection.
+- RS runs an explicit eight-file selection (`test_collections`, `test_documents`, `test_indexes`, `test_selective`, `test_transactions`, `test_pipeline_updates`, `test_idle_index_build`, `test_target_outage`).
 - Normal sharded jobs discover broadly with one deselection.
 - The 8.0 unequal-shard matrix entry runs only `tests/test_presplit_sharded.py`.
 
@@ -426,6 +426,7 @@ CI workflows and operations:
 - `.github/workflows/e2etests.yml` runs local RS/sharded E2E across the version matrix.
 - `.github/workflows/ci.yml` runs the external functional suite `Percona-QA/psmdb-testing` against PSMDB 6.0, 7.0, and 8.0 in five pytest partitions; this `shard` is test partitioning, not MongoDB shard count.
 - `ci.yml` ignores PR changes confined to `tests/**` and `packaging/**`.
+- `ci.yml` does not run for draft PRs (its job is gated on `github.event.pull_request.draft == false`); it runs when the PR is marked ready for review. For a draft, dispatch it manually: `gh workflow run ci.yml --ref <branch> -f pcsm_branch=<branch>`; the run attaches to the branch head commit.
 - QA branch precedence is `tests_ver`, then the first case-sensitive PR-title `PCSM-[0-9]+` branch (for example `PCSM-286`) found through the GitHub branch API, then `main`. A later eligible PCSM CI run consumes that branch; a QA-only push is not a trigger declared here.
 - Jenkins `hetzner-pcsm-functional-tests` is operationally known at <https://psmdb.cd.percona.com/view/PCSM/> but not verified from this repo. Hetzner is preferred for cost; cancel capacity-stuck builds and retry with AWS, the first cloud option in job parameters.
 

@@ -363,8 +363,20 @@ func makeInsertEvent(id string) *routedEvent {
 func makeTestPoolLive(t *testing.T, bws []bulkWriter) *workerPool {
 	t.Helper()
 
+	return makeTestPoolLiveWithParent(t, context.Background(), bws,
+		func() bulkWriter { return &mockBulkWriter{} })
+}
+
+// makeTestPoolLiveWithParent is makeTestPoolLive with a caller-supplied parent
+// context and bulkWriter factory, so a test can cancel the pool the way a
+// suspended run does and observe the bulks sealed after the first one.
+func makeTestPoolLiveWithParent(
+	t *testing.T, parent context.Context, bws []bulkWriter, newBW func() bulkWriter,
+) *workerPool {
+	t.Helper()
+
 	numWorkers := len(bws)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	errCh := make(chan error, 1)
 
 	p := &workerPool{
@@ -383,7 +395,7 @@ func makeTestPoolLive(t *testing.T, bws []bulkWriter) *workerPool {
 			pendingBulkCh:    make(chan *pendingBulk, config.WorkerBulkQueueSize),
 			writerDone:       make(chan struct{}),
 			bulkQueueSize:    config.WorkerBulkQueueSize,
-			newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
+			newBulkWriter:    newBW,
 			barrierReq:       make(chan struct{}),
 			barrierDone:      make(chan error),
 			resumeCh:         make(chan struct{}),

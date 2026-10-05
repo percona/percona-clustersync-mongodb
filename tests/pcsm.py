@@ -82,9 +82,14 @@ class PCSM:
         clone_skip_presplit=None,
         repl_num_workers=None,
         repl_bulk_ops_size=None,
+        target_write_concern: str | None = None,
     ):
         """Start the PCSM service with the given parameters."""
-        options = {"pauseOnInitialSync": pause_on_initial_sync}
+        options: dict[str, bool | str | int | list[str]] = {
+            "pauseOnInitialSync": pause_on_initial_sync
+        }
+        if target_write_concern is not None:
+            options["targetWriteConcern"] = target_write_concern
         if include_namespaces:
             options["includeNamespaces"] = include_namespaces
         if exclude_namespaces:

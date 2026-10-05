@@ -2,6 +2,7 @@ package pcsm //nolint:testpackage
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -10,16 +11,68 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
 
-// mockCloner is a test double for the Cloner interface.
+// mockCloner is a test double for the Cloner interface. It records the
+// context of the last Start/Resume so a test can observe its cancellation.
 type mockCloner struct {
 	doneCh           chan struct{}
 	status           clone.Status
 	checkpoint       *clone.Checkpoint
 	recoverErr       error
 	resetErrorCalled bool
+
+	mu           sync.Mutex
+	startCtx     context.Context //nolint:containedctx // recorded for assertions
+	resumeCalled bool
+	startCalled  chan struct{} // signaled (non-blocking) on each Start/Resume
 }
 
-func (m *mockCloner) Start(context.Context) error   { return nil }
+// signalCalled reports a call on an optional, buffered observation channel.
+func signalCalled(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (m *mockCloner) Start(ctx context.Context) error {
+	m.mu.Lock()
+	m.startCtx = ctx
+	m.mu.Unlock()
+
+	signalCalled(m.startCalled)
+
+	return nil
+}
+
+func (m *mockCloner) Resume(ctx context.Context) error {
+	m.mu.Lock()
+	m.startCtx = ctx
+	m.resumeCalled = true
+	m.mu.Unlock()
+
+	signalCalled(m.startCalled)
+
+	return nil
+}
+
+func (m *mockCloner) lastCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.startCtx
+}
+
+func (m *mockCloner) resumed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.resumeCalled
+}
+
 func (m *mockCloner) Done() <-chan struct{}         { return m.doneCh }
 func (m *mockCloner) Status() clone.Status          { return m.status }
 func (m *mockCloner) Checkpoint() *clone.Checkpoint { return m.checkpoint }
@@ -31,6 +84,8 @@ func (m *mockCloner) ResetError() { m.resetErrorCalled = true }
 // mockReplicator is a test double for the Replicator interface.
 type mockReplicator struct {
 	doneCh           chan struct{}
+	doneCalled       chan struct{}
+	pauseCalled      chan struct{}
 	startTime        time.Time
 	pauseTime        time.Time
 	pausing          bool
@@ -40,12 +95,61 @@ type mockReplicator struct {
 	pauseErr         error
 	recoverErr       error
 	resetErrorCalled bool
+
+	mu          sync.Mutex
+	startCtx    context.Context //nolint:containedctx // recorded for assertions
+	startCalled chan struct{}   // signaled (non-blocking) on each Start/Resume
 }
 
-func (m *mockReplicator) Start(context.Context, bson.Timestamp) error { return nil }
-func (m *mockReplicator) Pause(context.Context) error                 { return m.pauseErr }
-func (m *mockReplicator) Resume(context.Context) error                { return nil }
-func (m *mockReplicator) Done() <-chan struct{}                       { return m.doneCh }
+func (m *mockReplicator) Start(ctx context.Context, _ bson.Timestamp) error {
+	m.mu.Lock()
+	m.startCtx = ctx
+	m.mu.Unlock()
+
+	signalCalled(m.startCalled)
+
+	return nil
+}
+
+func (m *mockReplicator) lastCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.startCtx
+}
+
+func (m *mockReplicator) Pause(context.Context) error {
+	if m.pauseCalled != nil {
+		select {
+		case m.pauseCalled <- struct{}{}:
+		default:
+		}
+	}
+
+	return m.pauseErr
+}
+
+func (m *mockReplicator) Resume(ctx context.Context) error {
+	m.mu.Lock()
+	m.startCtx = ctx
+	m.mu.Unlock()
+
+	signalCalled(m.startCalled)
+
+	return nil
+}
+
+func (m *mockReplicator) Done() <-chan struct{} {
+	if m.doneCalled != nil {
+		select {
+		case m.doneCalled <- struct{}{}:
+		default:
+		}
+	}
+
+	return m.doneCh
+}
+
 func (m *mockReplicator) Status() repl.Status {
 	return repl.Status{
 		StartTime:            m.startTime,

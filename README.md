@@ -28,7 +28,27 @@ Find the installation instructions in the [official documentation](https://docs.
 
 PCSM is a CLI tool, but also exposes HTTP API as well.
 
-For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/plm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
+For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/pcsm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
+
+### Target data write concern
+
+Clone inserts and replication data writes default to `majority`. To change their
+acknowledgment requirement for a run, pass `--target-write-concern=1` to
+`pcsm start` (or set `PCSM_TARGET_WRITE_CONCERN=1` for it), or send
+`{"targetWriteConcern":"1"}` to `/start`. Values are `majority` or a positive
+integer. Unacknowledged writes (`0`) are not supported. The server has no write
+concern setting, so a run started without one uses `majority`. The value is
+stored with the run and retained during checkpoint recovery and HA takeover.
+Start a new run to change it. Checkpoints, HA state, and catalog DDL always use
+majority write concern.
+
+Using `1` can reduce stalls when target secondaries lag, but acknowledgment from
+the primary alone does not make data majority-durable. A target primary failure
+can roll back acknowledged data, and a majority checkpoint does not guarantee
+that earlier data writes on other shards are durable. Keep `majority` when
+automatic recovery must preserve that guarantee. Lower it only for a controlled
+migration that can tolerate restarting and validating the copy after a target
+failure. Retain the source and verify target consistency before cutover.
 
 ## Submit Bug Report / Feature Request
 
