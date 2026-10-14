@@ -130,18 +130,19 @@ func (m *Membership) Group() string { return m.group }
 // heartbeat so the member document reflects the change without waiting for the
 // next tick. It returns true when the role actually transitioned. Membership is
 // the single source of truth for (role, term); the election layer drives all
-// transitions through here.
+// transitions through here. The gauges are published under the lock, so they
+// never report a transition out of the order it was recorded.
 func (m *Membership) SetRole(role Role, term Term) bool {
 	m.mu.Lock()
 	transitioned := m.role != role
 	m.role = role
 	m.term = term
-	m.mu.Unlock()
 
 	metrics.SetHARoleAndTerm(role == RoleActive, int64(term))
 	if transitioned {
 		metrics.IncHARoleTransitions()
 	}
+	m.mu.Unlock()
 
 	// Non-blocking nudge; if a beat is already pending, this is a no-op.
 	select {
@@ -150,6 +151,34 @@ func (m *Membership) SetRole(role Role, term Term) bool {
 	}
 
 	return transitioned
+}
+
+// StepDown records a demotion observed outside the lease loop: a checkpoint
+// write fenced by a newer term. It demotes to STANDBY only while this instance
+// still advertises ACTIVE at exactly term, in one atomic step, so a transition
+// the lease loop recorded meanwhile (a newer term, or a STANDBY already on its
+// way) is never overwritten by a late step-down. It returns true when it
+// demoted. A lease this instance still holds then renews as a real
+// STANDBY->ACTIVE transition at the same term instead of renewing silently.
+func (m *Membership) StepDown(term Term) bool {
+	m.mu.Lock()
+	if m.role != RoleActive || m.term != term {
+		m.mu.Unlock()
+
+		return false
+	}
+	m.role = RoleStandby
+
+	metrics.SetHARoleAndTerm(false, int64(term))
+	metrics.IncHARoleTransitions()
+	m.mu.Unlock()
+
+	select {
+	case m.beatNow <- struct{}{}:
+	default:
+	}
+
+	return true
 }
 
 // CurrentRole returns the role and term this instance currently advertises.
