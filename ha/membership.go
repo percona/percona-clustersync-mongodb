@@ -130,18 +130,19 @@ func (m *Membership) Group() string { return m.group }
 // heartbeat so the member document reflects the change without waiting for the
 // next tick. It returns true when the role actually transitioned. Membership is
 // the single source of truth for (role, term); the election layer drives all
-// transitions through here.
+// transitions through here. The gauges are published under the lock, so they
+// never report a transition out of the order it was recorded.
 func (m *Membership) SetRole(role Role, term Term) bool {
 	m.mu.Lock()
 	transitioned := m.role != role
 	m.role = role
 	m.term = term
-	m.mu.Unlock()
 
 	metrics.SetHARoleAndTerm(role == RoleActive, int64(term))
 	if transitioned {
 		metrics.IncHARoleTransitions()
 	}
+	m.mu.Unlock()
 
 	// Non-blocking nudge; if a beat is already pending, this is a no-op.
 	select {
@@ -167,10 +168,10 @@ func (m *Membership) StepDown(term Term) bool {
 		return false
 	}
 	m.role = RoleStandby
-	m.mu.Unlock()
 
 	metrics.SetHARoleAndTerm(false, int64(term))
 	metrics.IncHARoleTransitions()
+	m.mu.Unlock()
 
 	select {
 	case m.beatNow <- struct{}{}:
