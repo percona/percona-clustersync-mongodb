@@ -152,6 +152,34 @@ func (m *Membership) SetRole(role Role, term Term) bool {
 	return transitioned
 }
 
+// StepDown records a demotion observed outside the lease loop: a checkpoint
+// write fenced by a newer term. It demotes to STANDBY only while this instance
+// still advertises ACTIVE at exactly term, in one atomic step, so a transition
+// the lease loop recorded meanwhile (a newer term, or a STANDBY already on its
+// way) is never overwritten by a late step-down. It returns true when it
+// demoted. A lease this instance still holds then renews as a real
+// STANDBY->ACTIVE transition at the same term instead of renewing silently.
+func (m *Membership) StepDown(term Term) bool {
+	m.mu.Lock()
+	if m.role != RoleActive || m.term != term {
+		m.mu.Unlock()
+
+		return false
+	}
+	m.role = RoleStandby
+	m.mu.Unlock()
+
+	metrics.SetHARoleAndTerm(false, int64(term))
+	metrics.IncHARoleTransitions()
+
+	select {
+	case m.beatNow <- struct{}{}:
+	default:
+	}
+
+	return true
+}
+
 // CurrentRole returns the role and term this instance currently advertises.
 func (m *Membership) CurrentRole() (Role, Term) {
 	return m.currentRole()

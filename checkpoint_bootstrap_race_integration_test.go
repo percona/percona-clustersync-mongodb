@@ -86,11 +86,11 @@ func TestSameTermBootstrapCollisionIsNotATakeover(t *testing.T) {
 		"a same-term writer is not a newer instance taking over")
 }
 
-// A demotion has to leave the instance able to come back. onDemote stops
-// checkpointing but tells membership nothing, so a still-held lease keeps
-// renewing as ACTIVE, reports no transition, and never triggers a promotion to
-// restart the loop or resume the pipeline. The recorded role is what turns that
-// next renewal into a transition, so that is what this checks.
+// A demotion has to leave the instance able to come back. A fence-driven
+// demotion stops checkpointing; if it tells membership nothing, a still-held
+// lease keeps renewing as ACTIVE, reports no transition, and never triggers a
+// promotion to restart the loop or resume the pipeline. The recorded role is
+// what turns that next renewal into a transition, so that is what this checks.
 //
 //nolint:paralleltest // The recovery integration suite shares one checkpoint document.
 func TestDemotionRecordsStandbyRole(t *testing.T) {
@@ -100,94 +100,114 @@ func TestDemotionRecordsStandbyRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
-	// Given: an ACTIVE instance in term 1 with a running checkpoint loop.
+	// Given: an ACTIVE instance in term 1 with an open epoch.
 	membership := &ha.Membership{}
 	membership.SetRole(ha.RoleActive, 1)
-	cpCtx, cpCancel := context.WithCancel(ctx)
-	defer cpCancel()
+	epochCtx, epochCancel := context.WithCancel(ctx)
+	defer epochCancel()
 	s := &server{
-		cfg:              &config.Config{RecoveryCheckpointInterval: time.Second},
-		targetCluster:    target,
-		pcsm:             pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false),
-		membership:       membership,
-		activeTerm:       1,
-		checkpointCancel: cpCancel,
+		cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+		targetCluster: target,
+		pcsm:          pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false),
+		membership:    membership,
+		activeTerm:    1,
+		epochCtx:      epochCtx,
+		epochCancel:   epochCancel,
 	}
-	go RunCheckpointing(cpCtx, target, s.pcsm, 1, "pcsm-demoted",
-		time.Second, func() { s.onDemote(ctx, 1) })
 
 	// When: a fenced checkpoint demotes it while it still holds the lease.
-	s.onDemote(ctx, 1)
-	require.Nil(t, s.checkpointCancel, "demotion must stop checkpointing")
+	s.onFenced(ctx, epochCtx, 1)
+	require.Nil(t, s.epochCancel, "demotion must stop checkpointing")
 
 	// Then: the demotion is visible to membership, so the next renewal of the
 	// lease it still holds is a real transition back to ACTIVE.
-	role, _ := membership.CurrentRole()
+	role, term := membership.CurrentRole()
 	require.Equal(t, ha.RoleStandby, role,
 		"a demoted instance that still reports ACTIVE is never promoted again, "+
 			"so checkpointing stays stopped and a demotion pause is never resumed")
+	require.Equal(t, ha.Term(1), term, "a step-down keeps the term")
+
+	// And: the fence belongs to the epoch that raised it. Once a new epoch of
+	// the same term is open, a late callback of the old one must not end it;
+	// a term does not identify an epoch.
+	membership.SetRole(ha.RoleActive, 1)
+	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
+	defer s.epochCancel()
+
+	s.onFenced(ctx, epochCtx, 1)
+	require.NotNil(t, s.epochCancel, "a late fence of an ended epoch must not end the new one")
+	role, _ = membership.CurrentRole()
+	require.Equal(t, ha.RoleActive, role, "a late fence of an ended epoch must not demote")
 }
 
-// Finalize fires one state-change callback for finalizing and another for
-// finalized. Each snapshots the state under the pipeline lock but writes to
-// MongoDB after releasing it, and nothing orders the two writes. Both hold the
-// same term, so the fence lets both through and whichever lands last decides
-// the stored state, which can leave the checkpoint behind the run it describes.
-// Recover restores the finalize status only for StateFinalized, so a restart
-// then comes back without it even though finalization succeeded.
+// Finalize fires one state-change signal for finalizing and another for
+// finalized, and the epoch's single writer saves them in order. What that
+// order cannot cover is a write of the same term that lands late: the previous
+// epoch's writer, canceled with its update on the wire, is joined by the next
+// promotion, but MongoDB may still apply its older snapshot after the new
+// epoch saved a newer one. Both carry the same term, so the fence lets both
+// through. The snapshot sequence orders them: a snapshot captured earlier must
+// not replace one captured later, a newer term still replaces anything, and
+// Recover must never rewind the sequence. Recover restores the finalize status
+// only for StateFinalized, so a regressed checkpoint would bring a restart
+// back without it even though finalization succeeded.
 //
 //nolint:paralleltest // The recovery integration suite shares one checkpoint document.
 func TestOlderSnapshotMustNotOverwriteNewerCheckpoint(t *testing.T) {
 	target := recoveryTestClient(t)
 	defer func() { require.NoError(t, target.Disconnect(t.Context())) }()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	require.NoError(t, recoveryColl(target).Drop(ctx))
 
-	recovered := func(state string) *pcsm.PCSM {
-		p := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
-		data, err := bson.Marshal(bson.D{{"state", state}})
+	pipeline := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
+	recoverFrom := func(doc bson.D) {
+		data, err := bson.Marshal(doc)
 		require.NoError(t, err)
-		require.NoError(t, p.Recover(ctx, data))
+		require.NoError(t, pipeline.Recover(ctx, data))
+	}
+	snapshot := func() bson.Raw {
+		data, err := pipeline.Checkpoint(ctx)
+		require.NoError(t, err)
 
-		return p
+		return data
+	}
+	storedState := func() string {
+		return readCheckpoint(t, ctx, target).Data.Lookup("state").StringValue()
 	}
 
-	// The checkpoint the run wrote before finalize, so both racing writes
-	// update an existing document instead of bootstrapping one.
-	require.NoError(t, DoCheckpoint(ctx, target, recovered(pcsm.StateRunning), 1, "pcsm-run"))
+	// Given: the run's checkpoint before finalize, then two snapshots captured
+	// in order from the same pipeline: finalizing, then finalized.
+	recoverFrom(bson.D{{"state", pcsm.StateFinalizing}})
+	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 1, "pcsm-run"))
+	older := snapshot()
+	recoverFrom(bson.D{{"state", pcsm.StateFinalized}})
+	newer := snapshot()
+	require.Greater(t, snapshotSeq(newer), snapshotSeq(older), "snapshots are numbered in capture order")
 
-	writers := []*pcsm.PCSM{recovered(pcsm.StateFinalizing), recovered(pcsm.StateFinalized)}
+	// When: the newer snapshot is saved first and the older one lands after it
+	// in the same term, as a canceled writer's late update would.
+	require.NoError(t, DoCheckpoint(ctx, target, staticRecoverable{data: newer}, 1, "pcsm-finalize"))
+	require.NoError(t, DoCheckpoint(ctx, target, staticRecoverable{data: older}, 1, "pcsm-finalize"),
+		"a superseded snapshot of the same term is dropped, not a takeover")
 
-	// Which write MongoDB applies last is a coin flip, so repeat rather than
-	// force an order. A run that stays correct throughout is the passing case.
-	for attempt := 1; attempt <= 50; attempt++ {
-		start := make(chan struct{})
-		errs := make([]error, len(writers))
+	// Then: the stored checkpoint is still the newer snapshot.
+	require.Equal(t, pcsm.StateFinalized, storedState(),
+		"an older snapshot overwrote a newer checkpoint at the same term")
+	require.Equal(t, snapshotSeq(newer), readCheckpoint(t, ctx, target).Seq)
 
-		var racing sync.WaitGroup
-		for i, rec := range writers {
-			racing.Go(func() {
-				<-start
-				errs[i] = DoCheckpoint(ctx, target, rec, 1, "pcsm-finalize")
-			})
-		}
+	// And: a newer term replaces it regardless of the sequence.
+	require.NoError(t, DoCheckpoint(ctx, target, staticRecoverable{data: older}, 2, "pcsm-next-term"))
+	require.Equal(t, pcsm.StateFinalizing, storedState(), "a newer term always wins")
 
-		close(start)
-		racing.Wait()
-		require.NoError(t, errs[0])
-		require.NoError(t, errs[1])
+	// And: the same term is fenced by it, whatever the sequence says.
+	require.ErrorIs(t, DoCheckpoint(ctx, target, staticRecoverable{data: newer}, 1, "pcsm-finalize"),
+		errCheckpointFenced)
 
-		var stored struct {
-			Data struct {
-				State string `bson:"state"`
-			} `bson:"data"`
-		}
-		require.NoError(t, recoveryColl(target).
-			FindOne(ctx, bson.D{{"_id", recoveryID}}).Decode(&stored))
-		require.Equal(t, pcsm.StateFinalized, stored.Data.State,
-			"attempt %d: an older snapshot overwrote a newer checkpoint at the same term",
-			attempt)
-	}
+	// And: recovering an older checkpoint never rewinds the sequence, so the
+	// next snapshot of this process still outranks everything it saved.
+	recoverFrom(bson.D{{"state", pcsm.StateFinalized}, {"seq", int64(1)}})
+	require.Greater(t, snapshotSeq(snapshot()), snapshotSeq(newer),
+		"a snapshot captured after recovering older data must still be the newest")
 }
