@@ -71,7 +71,7 @@ func TestSameTermBootstrapCollisionIsNotATakeover(t *testing.T) {
 	select {
 	case <-inserting:
 	case <-ctx.Done():
-		t.Fatal("the periodic checkpoint never reached its bootstrap insert")
+		require.FailNow(t, "the periodic checkpoint never reached its bootstrap insert")
 	}
 
 	// When: the state-change callback bootstraps the document first, in the
