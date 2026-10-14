@@ -28,6 +28,7 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - Role state and term are read and updated through `Membership` synchronization methods.
 - `RoleChanges` coalesces to the latest transition in a one-slot channel; consumers must not require a complete transition history.
 - `Release` stops lease competition for shutdown; `RelinquishLease` demotes without stopping the election loop.
+- `StepDown(term)` records an out-of-band demotion (a fenced checkpoint write) atomically: only ACTIVE at exactly that term becomes STANDBY, the term is kept, and a lease still held renews as a real STANDBY->ACTIVE transition. It never emits a role change itself.
 
 ## ANTI-PATTERNS
 

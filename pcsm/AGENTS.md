@@ -23,7 +23,7 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 - `PCSM` is the synchronization boundary for lifecycle state; transition checks and mutations stay under `p.lock`.
 - `Cloner` and `Replicator` interfaces are the seams used by orchestration tests.
 - A fresh `Start` builds one catalog shared by clone and repl.
-- `Checkpoint` returns nil while idle and serializes catalog, clone, repl, state, filters, and the current error together.
+- `Checkpoint` returns nil while idle and serializes catalog, clone, repl, state, filters, and the current error together, numbered by `seq` in capture order under the lifecycle lock; `Recover` never rewinds that sequence, so a snapshot captured after recovery outranks everything restored.
 - Component checkpoint acquisition and BSON marshaling remain one coordinated operation; catalog lock mechanics live in child guidance.
 - Recovery reconstructs catalog, clone, and repl before applying component checkpoints.
 - `FinalizeStatus` is absent until finalize starts; copy it before returning status to callers.

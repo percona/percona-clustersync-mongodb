@@ -86,9 +86,9 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 		for range 2 {
 			select {
 			case command := <-checkpoints:
-				terms, decodeErr := command.Lookup("query", "$expr", "$lte").Array().Values()
-				require.NoError(t, decodeErr)
-				require.Equal(t, int64(3), terms[1].Int64())
+				term, ok := command.Lookup("update", "$set", "term").AsInt64OK()
+				require.True(t, ok, "checkpoint update must stamp a term")
+				require.Equal(t, int64(3), term)
 			case <-time.After(2 * time.Second):
 				t.Fatal("no periodic checkpoint after promotion")
 			}
