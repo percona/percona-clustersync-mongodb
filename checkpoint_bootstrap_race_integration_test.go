@@ -147,9 +147,9 @@ func TestDemotionRecordsStandbyRole(t *testing.T) {
 // Finalize fires one state-change signal for finalizing and another for
 // finalized, and the epoch's single writer saves them in order. What that
 // order cannot cover is a write of the same term that lands late: the previous
-// epoch's writer, canceled with its update on the wire, is joined by the next
-// promotion, but MongoDB may still apply its older snapshot after the new
-// epoch saved a newer one. Both carry the same term, so the fence lets both
+// epoch's writer, canceled with its update on the wire, may still have its
+// older snapshot applied by MongoDB after the new epoch saved a newer one.
+// Both carry the same term, so the fence lets both
 // through. The snapshot sequence orders them: a snapshot captured earlier must
 // not replace one captured later, a newer term still replaces anything, and
 // Recover must never rewind the sequence. Recover restores the finalize status

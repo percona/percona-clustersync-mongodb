@@ -206,7 +206,7 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		go func() {
 			defer close(done)
 			RunCheckpointing(epochCtx, target, pipeline, 1, instanceID, time.Hour, saveNow,
-				func(storedTerm int64) { go s.onFenced(ctx, epochCtx, 1, ha.Term(storedTerm)) })
+				func(storedTerm int64) { s.onFenced(ctx, epochCtx, 1, ha.Term(storedTerm)) })
 		}()
 		t.Cleanup(func() {
 			cancel()
@@ -311,75 +311,5 @@ func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 		default:
 			require.FailNow(t, "a signaled save did not reach the target before the next tick")
 		}
-	})
-}
-
-// TestPromotionJoinsPreviousCheckpointWriter pins that a promotion waits for
-// the previous epoch's checkpoint writer to exit before this tenure saves
-// anything, so a snapshot that writer captured cannot land over newer ones.
-func TestPromotionJoinsPreviousCheckpointWriter(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-
-		// No checkpoint is stored: the idle pipeline has nothing to restore.
-		deployment := drivertest.NewMockDeployment(bson.D{{"ok", 1}, {"cursor", bson.D{
-			{"id", int64(0)},
-			{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-			{"firstBatch", bson.A{}},
-		}}})
-		opts := options.Client()
-		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
-		target, err := mongo.Connect(opts)
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			cancel()
-			synctest.Wait()
-			require.NoError(t, target.Disconnect(t.Context()))
-		})
-
-		membership := &ha.Membership{}
-		membership.SetRole(ha.RoleActive, 2)
-		previous := make(chan struct{})
-		s := &server{
-			cfg:            &config.Config{RecoveryCheckpointInterval: time.Hour},
-			targetCluster:  target,
-			pcsm:           pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false),
-			membership:     membership,
-			activeTerm:     1,
-			checkpointDone: previous,
-		}
-
-		// Given: the previous epoch's checkpoint writer has not exited yet.
-		promoted := make(chan struct{})
-		go func() {
-			defer close(promoted)
-			s.onPromote(ctx, 2)
-		}()
-		synctest.Wait()
-
-		// Then: the promotion waits for it.
-		select {
-		case <-promoted:
-			require.FailNow(t, "promotion did not wait for the previous checkpoint writer")
-		default:
-		}
-
-		// And: completes once it has exited.
-		close(previous)
-		synctest.Wait()
-
-		select {
-		case <-promoted:
-		default:
-			require.FailNow(t, "promotion did not complete after the writer exited")
-		}
-
-		s.mu.Lock()
-		activeTerm := s.activeTerm
-		s.mu.Unlock()
-		require.Equal(t, ha.Term(2), activeTerm)
 	})
 }

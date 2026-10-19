@@ -697,7 +697,7 @@ type server struct {
 	promRegistry *prometheus.Registry
 
 	// mu serializes promotion and demotion and guards epochCtx, epochCancel,
-	// autoStartOpts, activeTerm, suspendedOnDemote, and checkpointDone. The authoritative
+	// autoStartOpts, activeTerm, and suspendedOnDemote. The authoritative
 	// (role, term) lives in membership; read it via membership.CurrentRole().
 	mu sync.Mutex
 	// epochCtx is the context of the current ACTIVE tenure. Every execution
@@ -716,9 +716,6 @@ type server struct {
 	// opposed to an operator pause or a failure; a same-term re-promotion
 	// resumes it in memory.
 	suspendedOnDemote bool
-	// checkpointDone is closed once the latest epoch's checkpoint writer has
-	// exited; a promotion joins it before this tenure saves anything.
-	checkpointDone chan struct{}
 }
 
 // createServer creates a new server with the given options.
@@ -967,8 +964,8 @@ func (s *server) endEpoch() {
 }
 
 // onPromote handles a STANDBY->ACTIVE transition. It ends an epoch a coalesced
-// demotion left open and joins its work, opens this tenure's epoch and binds
-// the state-change checkpoint to it, then resumes a pipeline that demotion
+// demotion left open and joins its pipeline work, opens this tenure's epoch
+// and binds the state-change checkpoint to it, then resumes a pipeline that demotion
 // suspended in the same term, restores the persisted checkpoint for an idle or
 // stale pipeline, or keeps the pipeline as it is. Checkpointing starts for the
 // new epoch even when resuming failed, so the operator can inspect and recover
@@ -977,7 +974,7 @@ func (s *server) endEpoch() {
 // Concurrency: watchRoleChanges serializes role-driven transitions. mu also
 // serializes this method with the out-of-band checkpoint fencing callback and
 // with request admission (admit); it remains held while joining the previous
-// epoch's work, which cancellation makes short.
+// epoch's pipeline work, which cancellation makes short.
 func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 
@@ -1014,24 +1011,14 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		s.suspendedOnDemote = true
 	}
 
-	// Join the previous epoch's checkpoint writer, now that the pipeline work
-	// it could wait on is joined too: a snapshot it captured must not land
-	// over this tenure's newer saves of the same term.
-	if s.checkpointDone != nil {
-		<-s.checkpointDone
-		s.checkpointDone = nil
-	}
-
 	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
 	epochCtx := s.epochCtx
 	ectx := pcsm.WithEpoch(epochCtx, epochCtx)
 
-	// A state change is saved by this epoch's checkpointing loop, its only
-	// writer, which the callback signals: a second writer of the same term
-	// could land an older snapshot over a newer one. The callback is bound to
-	// this epoch: once it ends nothing is saved, so a demoted instance never
-	// persists a state it no longer owns. Installed before Restore/Resume,
-	// which emit transitions; a signal sent before the loop starts waits for it.
+	// A state change signals this epoch's checkpointing loop, coalescing
+	// pending saves. The callback is bound to this epoch and stops signaling
+	// once it ends. Installed before Restore/Resume, which emit transitions;
+	// a signal sent before the loop starts waits for it.
 	instanceID := s.membership.InstanceID()
 	saveNow := make(chan struct{}, 1)
 	s.pcsm.SetOnStateChanged(func(_ pcsm.State) {
@@ -1105,19 +1092,13 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	// Checkpointing loop scoped to this ACTIVE epoch, fenced by term. A fenced
 	// write means this instance was deposed: onFenced ends the epoch and
 	// suspends the pipeline immediately instead of waiting for the next lease
-	// tick.
-	checkpointDone := make(chan struct{})
-	s.checkpointDone = checkpointDone
-
-	go func() {
-		defer close(checkpointDone)
-
-		RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-			s.cfg.RecoveryCheckpointInterval, saveNow, func(storedTerm int64) {
-				// Off this goroutine: a promotion joins it while holding mu.
-				go s.onFenced(ctx, epochCtx, term, ha.Term(storedTerm))
-			})
-	}()
+	// tick. Previous writers are canceled, not joined: term and seq order
+	// late writes on the server. onFenced takes mu, so do not join this
+	// goroutine while holding mu.
+	go RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
+		s.cfg.RecoveryCheckpointInterval, saveNow, func(storedTerm int64) {
+			s.onFenced(ctx, epochCtx, term, ha.Term(storedTerm))
+		})
 
 	autoStartOpts := s.autoStartOpts
 	if autoStartOpts == nil {
