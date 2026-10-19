@@ -14,6 +14,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/percona/percona-clustersync-mongodb/util"
+)
+
+const (
+	listTestTimeout    = 30 * time.Second
+	listCleanupTimeout = 5 * time.Second
 )
 
 // filterRecorder captures the filter document of every listCollections and
@@ -68,7 +75,7 @@ func (r *filterRecorder) requireNoServerSideFilter(t *testing.T, command string,
 	}
 }
 
-func connectWithRecorder(t *testing.T, ctx context.Context) (*mongo.Client, *filterRecorder) {
+func connectWithRecorder(t *testing.T) (*mongo.Client, *filterRecorder) {
 	t.Helper()
 
 	recorder := newFilterRecorder()
@@ -77,10 +84,18 @@ func connectWithRecorder(t *testing.T, ctx context.Context) (*mongo.Client, *fil
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		_ = client.Disconnect(ctx)
+		_ = util.CtxWithTimeout(context.Background(), listCleanupTimeout, client.Disconnect)
 	})
 
 	return client, recorder
+}
+
+func dropOnCleanup(t *testing.T, db *mongo.Database) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		_ = util.CtxWithTimeout(context.Background(), listCleanupTimeout, db.Drop)
+	})
 }
 
 // TestListCollections_ExcludeSystemCollectionsClientSide verifies PCSM-399:
@@ -91,35 +106,33 @@ func connectWithRecorder(t *testing.T, ctx context.Context) (*mongo.Client, *fil
 func TestListCollections_ExcludeSystemCollectionsClientSide(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	client, recorder := connectWithRecorder(t, ctx)
+	client, recorder := connectWithRecorder(t)
 
 	db := client.Database("pcsm399_list_collections")
-	require.NoError(t, db.Drop(ctx))
+	dropOnCleanup(t, db)
 
-	defer func() {
-		_ = db.Drop(context.Background())
-	}()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), listTestTimeout, func(ctx context.Context) error {
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "alpha"))
+		// A view materializes <db>.system.views, giving the helpers something to exclude.
+		require.NoError(t, db.CreateView(ctx, "alpha_view", "alpha", mongo.Pipeline{}))
 
-	require.NoError(t, db.CreateCollection(ctx, "alpha"))
-	// A view materializes <db>.system.views, giving the helpers something to exclude.
-	require.NoError(t, db.CreateView(ctx, "alpha_view", "alpha", mongo.Pipeline{}))
+		names, err := ListCollectionNames(ctx, client, db.Name())
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"alpha", "alpha_view"}, names)
 
-	names, err := ListCollectionNames(ctx, client, db.Name())
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"alpha", "alpha_view"}, names)
+		specs, err := ListCollectionSpecs(ctx, client, db.Name())
+		require.NoError(t, err)
 
-	specs, err := ListCollectionSpecs(ctx, client, db.Name())
-	require.NoError(t, err)
+		specNames := make([]string, 0, len(specs))
+		for _, spec := range specs {
+			specNames = append(specNames, spec.Name)
+		}
 
-	specNames := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		specNames = append(specNames, spec.Name)
-	}
+		assert.ElementsMatch(t, []string{"alpha", "alpha_view"}, specNames)
 
-	assert.ElementsMatch(t, []string{"alpha", "alpha_view"}, specNames)
+		return nil
+	}))
 
 	recorder.requireNoServerSideFilter(t, "listCollections", 2)
 }
@@ -131,25 +144,24 @@ func TestListCollections_ExcludeSystemCollectionsClientSide(t *testing.T) {
 func TestListDatabaseNames_ExcludeInternalClientSide(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	client, recorder := connectWithRecorder(t, ctx)
+	client, recorder := connectWithRecorder(t)
 
 	db := client.Database("pcsm399_list_databases")
-	require.NoError(t, db.CreateCollection(ctx, "alpha"))
+	dropOnCleanup(t, db)
 
-	defer func() {
-		_ = db.Drop(context.Background())
-	}()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), listTestTimeout, func(ctx context.Context) error {
+		require.NoError(t, db.CreateCollection(ctx, "alpha"))
 
-	names, err := ListDatabaseNames(ctx, client)
-	require.NoError(t, err)
+		names, err := ListDatabaseNames(ctx, client)
+		require.NoError(t, err)
 
-	assert.Contains(t, names, db.Name())
-	assert.NotContains(t, names, "admin")
-	assert.NotContains(t, names, "config")
-	assert.NotContains(t, names, "local")
+		assert.Contains(t, names, db.Name())
+		assert.NotContains(t, names, "admin")
+		assert.NotContains(t, names, "config")
+		assert.NotContains(t, names, "local")
+
+		return nil
+	}))
 
 	recorder.requireNoServerSideFilter(t, "listDatabases", 1)
 }

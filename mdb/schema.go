@@ -79,10 +79,10 @@ func isInternalDatabase(name string) bool {
 // reject the operator form (PCSM-399).
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
 	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
-		return m.ListDatabaseNames(ctx, bson.D{}) //nolint:wrapcheck
+		return m.ListDatabaseNames(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, err //nolint:wrapcheck
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
 	}
 
 	return slices.DeleteFunc(names, isInternalDatabase), nil
@@ -105,10 +105,10 @@ func isSystemCollection(name string) bool {
 // regex" (PCSM-399).
 func ListCollectionNames(ctx context.Context, m *mongo.Client, dbName string) ([]string, error) {
 	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
-		return m.Database(dbName).ListCollectionNames(ctx, bson.D{}) //nolint:wrapcheck
+		return m.Database(dbName).ListCollectionNames(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, err //nolint:wrapcheck
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
 	}
 
 	return slices.DeleteFunc(names, isSystemCollection), nil
@@ -124,10 +124,11 @@ func ListCollectionSpecs(
 	dbName string,
 ) ([]CollectionSpecification, error) {
 	specs, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]CollectionSpecification, error) {
-		return m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{}) //nolint:wrapcheck
+		return m.Database(dbName).
+			ListCollectionSpecifications(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
-		return nil, err //nolint:wrapcheck
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
 	}
 
 	return slices.DeleteFunc(specs, func(spec CollectionSpecification) bool {

@@ -1,4 +1,4 @@
-package mdb //nolint:testpackage
+package mdb //nolint:testpackage // exercises the unexported name predicates
 
 import (
 	"testing"
