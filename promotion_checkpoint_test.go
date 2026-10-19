@@ -257,6 +257,13 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		default:
 			require.FailNow(t, "the renewal after a repaired term did not promote")
 		}
+
+		// And: an old transition consumed before the repair must not open an
+		// epoch if it reaches the server lock after renewal at the new term.
+		s.onPromote(ctx, 1)
+		s.mu.Lock()
+		require.Nil(t, s.epochCancel, "a promotion at an outdated term must not open an epoch")
+		s.mu.Unlock()
 	})
 }
 

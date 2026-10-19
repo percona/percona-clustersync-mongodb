@@ -981,13 +981,11 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// A transition membership has already stepped down from launches nothing:
-	// a fence-driven demotion that stepped down after a renewal raced it leaves
-	// the renewal's ACTIVE transition queued, and acting on it would resume
-	// the pipeline for an instance that advertises STANDBY. The next renewal
-	// emits a fresh transition.
-	if role, _ := s.membership.CurrentRole(); role != ha.RoleActive {
-		lg.Info("Ignoring a promotion membership has already stepped down from")
+	// A stale transition launches nothing: membership may have stepped down
+	// or renewed at a newer term while this promotion waited for mu. The
+	// newer transition must restore the pipeline instead of resuming stale work.
+	if role, currentTerm := s.membership.CurrentRole(); role != ha.RoleActive || currentTerm != term {
+		lg.With(log.Int64("currentTerm", int64(currentTerm))).Info("Ignoring a stale promotion")
 
 		return
 	}
