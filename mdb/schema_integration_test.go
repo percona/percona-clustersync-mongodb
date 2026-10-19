@@ -67,9 +67,7 @@ func (r *filterRecorder) requireNoServerSideFilter(t *testing.T, command string,
 	require.GreaterOrEqual(t, len(r.filters[command]), minCalls, "%s calls", command)
 
 	for i, filter := range r.filters[command] {
-		if filter == nil {
-			continue
-		}
+		require.NotNil(t, filter, "%s #%d must carry a filter field", command, i+1)
 
 		elems, err := filter.Elements()
 		require.NoError(t, err)
