@@ -56,13 +56,15 @@ func (r *filterRecorder) monitor() *event.CommandMonitor {
 	}
 }
 
-func (r *filterRecorder) requireNoServerSideFilter(t *testing.T, command string, wantCalls int) {
+func (r *filterRecorder) requireNoServerSideFilter(t *testing.T, command string, minCalls int) {
 	t.Helper()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	require.Len(t, r.filters[command], wantCalls, "%s calls", command)
+	// At least, not exactly: a transient error retried by RunWithRetryVal adds
+	// Started events while the helper still succeeds.
+	require.GreaterOrEqual(t, len(r.filters[command]), minCalls, "%s calls", command)
 
 	for i, filter := range r.filters[command] {
 		if filter == nil {
