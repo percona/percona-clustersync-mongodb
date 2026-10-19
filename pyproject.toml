@@ -3,7 +3,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.13"
-pymongo = "^4.17.0"
+pymongo = "^4.19.0"
 pytest = "^9.1.1"
 pytest-timeout = "^2.4.0"
 requests = "^2.34.2"
