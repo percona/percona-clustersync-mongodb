@@ -241,6 +241,13 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		require.Contains(t, advances[0], `"$max"`)
 		require.Contains(t, advances[0], `"instanceId": "`+instanceID+`"`)
 
+		// And: the ACTIVE transition the racing renewal queued launches nothing
+		// once consumed, since membership has stepped down from it.
+		s.onPromote(ctx, 1)
+		s.mu.Lock()
+		require.Nil(t, s.epochCancel, "a promotion membership stepped down from must not open an epoch")
+		s.mu.Unlock()
+
 		// And: the next lease tick is a real promotion at the advanced term,
 		// not a same-term resume that would be fenced again.
 		membership.FirstLeaseTick(ctx)

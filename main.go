@@ -980,10 +980,22 @@ func (s *server) endEpoch() {
 // epoch's work, which cancellation makes short.
 func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
-	lg.Info("Instance role: ACTIVE (promoted)")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A transition membership has already stepped down from launches nothing:
+	// a fence-driven demotion that stepped down after a renewal raced it leaves
+	// the renewal's ACTIVE transition queued, and acting on it would resume
+	// the pipeline for an instance that advertises STANDBY. The next renewal
+	// emits a fresh transition.
+	if role, _ := s.membership.CurrentRole(); role != ha.RoleActive {
+		lg.Info("Ignoring a promotion membership has already stepped down from")
+
+		return
+	}
+
+	lg.Info("Instance role: ACTIVE (promoted)")
 
 	// RoleChanges may coalesce away the intervening demotion: end the open
 	// epoch and join its work, so no execution of a previous tenure outlives
