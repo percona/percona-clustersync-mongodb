@@ -332,7 +332,7 @@ func (m *Membership) AdvanceTerm(ctx context.Context, to Term) (bool, error) {
 			return nil
 		}
 
-		return err //nolint:wrapcheck
+		return err //nolint:wrapcheck // RunWithRetry classifies the raw driver error
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 	if err != nil {
 		return false, errors.Wrap(err, "advance lease term")

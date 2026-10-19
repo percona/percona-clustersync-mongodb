@@ -103,8 +103,11 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 // stored term, onFenced records the step-down and advances the lease term past
 // it, and the next lease tick is a real promotion at that term, which is what
 // restores the checkpoint instead of resuming at the stale term and being
-// fenced again. The driver is mocked and the clock is virtual, so no tick is
-// waited for.
+// fenced again. A renewal at the stale term that reconciles ACTIVE between the
+// step-down and the advance is modeled too: the demotion must not leave
+// membership ACTIVE, or the renewal at the advanced term would only update the
+// term and nothing would ever promote. The driver is mocked and the clock is
+// virtual, so no tick is waited for.
 func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +154,7 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		var (
 			commandsMu  sync.Mutex
 			leaseWrites []string
+			membership  *ha.Membership
 		)
 		opts := options.Client().SetMonitor(&event.CommandMonitor{
 			Started: func(_ context.Context, e *event.CommandStartedEvent) {
@@ -161,7 +165,15 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 
 				commandsMu.Lock()
 				leaseWrites = append(leaseWrites, e.Command.String())
+				advance := len(leaseWrites) == 1
 				commandsMu.Unlock()
+
+				// The lease loop takes no server lock: a renewal at the stale
+				// term reconciles ACTIVE after the step-down, while the advance
+				// is still on the wire.
+				if advance {
+					membership.SetRole(ha.RoleActive, 1)
+				}
 			},
 		})
 		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
@@ -169,7 +181,7 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		require.NoError(t, err)
 
 		// Given: an ACTIVE instance at term 1 whose checkpoint is owned by term 5.
-		membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
+		membership, err = ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
 		require.NoError(t, err)
 		// The heartbeat loop would consume mocked responses on its own clock.
 		require.NoError(t, membership.Stop(ctx))
@@ -207,7 +219,7 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 		synctest.Wait()
 
 		// Then: the writer stopped, the step-down is recorded at the stale term
-		// and the epoch is over.
+		// despite the racing renewal, and the epoch is over.
 		select {
 		case <-done:
 		default:

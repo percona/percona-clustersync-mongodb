@@ -1203,13 +1203,22 @@ func (s *server) onFenced(ctx, epochCtx context.Context, term, storedTerm ha.Ter
 	advanced, err := s.membership.AdvanceTerm(ctx, storedTerm+1)
 	if err != nil {
 		lg.Error(err, "advance the lease term past the fencing term")
-
-		return
-	}
-
-	if advanced {
+	} else if advanced {
 		lg.With(log.Int64("storedTerm", int64(storedTerm))).
 			Warn("Lease term was behind the checkpoint term; advanced it to restore at the next renewal")
+	}
+
+	// The lease loop does not take mu. A renewal at the stale term that
+	// reconciled ACTIVE between the step-down and the advance leaves
+	// membership ACTIVE; the renewal at the advanced term then only updates
+	// the term, since same-role renewals never emit, and nothing promotes this
+	// instance again. With the epoch over, membership must not stay ACTIVE:
+	// step down at whatever term it advertises, so the next renewal is a real
+	// transition.
+	if role, current := s.membership.CurrentRole(); role == ha.RoleActive {
+		s.membership.StepDown(current)
+		lg.With(log.Int64("currentTerm", int64(current))).
+			Debug("Stepped down again after a renewal raced the demotion")
 	}
 }
 

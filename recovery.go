@@ -36,17 +36,17 @@ const recoveryID = "pcsm"
 
 // fencedError is the errCheckpointFenced of one rejected write: it carries the
 // term that owns the checkpoint, which the demotion uses to repair a lease
-// that fell behind it.
+// that fell behind it. It unwraps to the sentinel, so errors.Is still matches.
 type fencedError struct {
 	StoredTerm int64
 }
 
 func (e fencedError) Error() string {
-	return errCheckpointFenced.Error() + " " + strconv.FormatInt(e.StoredTerm, 10)
+	return errCheckpointFenced.Error() + ": stored term " + strconv.FormatInt(e.StoredTerm, 10)
 }
 
-func (e fencedError) Is(target error) bool {
-	return target == errCheckpointFenced //nolint:err113,errorlint // sentinel identity is the contract
+func (e fencedError) Unwrap() error {
+	return errCheckpointFenced
 }
 
 type Recoverable interface {
