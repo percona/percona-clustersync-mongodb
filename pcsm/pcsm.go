@@ -168,6 +168,11 @@ type PCSM struct {
 	targetWriteConcern string
 
 	state State // Current state of the PCSM
+	// checkpointSeq numbers the snapshots Checkpoint captures, in capture
+	// order. Persisted with each snapshot so the checkpoint writer can tell an
+	// older snapshot from a newer one of the same term; Recover never rewinds
+	// it, so every snapshot of this process outranks everything it restored.
+	checkpointSeq int64
 
 	catalog   *catalog.Catalog // Catalog for managing collections and indexes
 	clone     Cloner           // Clone process
@@ -231,8 +236,13 @@ type checkpoint struct {
 
 	State State  `bson:"state"`
 	Error string `bson:"error,omitempty"`
+
+	// Seq is the snapshot's position in capture order; see checkpointSeq.
+	Seq int64 `bson:"seq,omitempty"`
 }
 
+// Checkpoint captures the pipeline state as one snapshot, numbered in capture
+// order. It returns nil while idle.
 func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
@@ -245,6 +255,8 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	p.catalog.LockWrite()
 	defer p.catalog.UnlockWrite()
 
+	p.checkpointSeq++
+
 	cp := &checkpoint{
 		NSInclude: p.nsInclude,
 		NSExclude: p.nsExclude,
@@ -254,6 +266,7 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 		Repl:    p.repl.Checkpoint(),
 
 		State: p.state,
+		Seq:   p.checkpointSeq,
 	}
 
 	if p.targetWriteConcern != "majority" {
@@ -352,6 +365,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	p.repl = rpl
 	p.finalizeStatus = finalizeStatus
 	p.state = cp.State
+	p.checkpointSeq = max(p.checkpointSeq, cp.Seq)
 	p.err = nil
 	p.suspended = false
 

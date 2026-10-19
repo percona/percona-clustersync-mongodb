@@ -697,7 +697,7 @@ type server struct {
 	promRegistry *prometheus.Registry
 
 	// mu serializes promotion and demotion and guards epochCtx, epochCancel,
-	// autoStartOpts, activeTerm, suspendedOnDemote, and checkpointDone. The authoritative
+	// autoStartOpts, activeTerm, and suspendedOnDemote. The authoritative
 	// (role, term) lives in membership; read it via membership.CurrentRole().
 	mu sync.Mutex
 	// epochCtx is the context of the current ACTIVE tenure. Every execution
@@ -716,9 +716,6 @@ type server struct {
 	// opposed to an operator pause or a failure; a same-term re-promotion
 	// resumes it in memory.
 	suspendedOnDemote bool
-	// checkpointDone is closed once the latest epoch's checkpoint writer has
-	// exited; a promotion joins it before this tenure saves anything.
-	checkpointDone chan struct{}
 }
 
 // createServer creates a new server with the given options.
@@ -967,8 +964,8 @@ func (s *server) endEpoch() {
 }
 
 // onPromote handles a STANDBY->ACTIVE transition. It ends an epoch a coalesced
-// demotion left open and joins its work, opens this tenure's epoch and binds
-// the state-change checkpoint to it, then resumes a pipeline that demotion
+// demotion left open and joins its pipeline work, opens this tenure's epoch
+// and binds the state-change checkpoint to it, then resumes a pipeline that demotion
 // suspended in the same term, restores the persisted checkpoint for an idle or
 // stale pipeline, or keeps the pipeline as it is. Checkpointing starts for the
 // new epoch even when resuming failed, so the operator can inspect and recover
@@ -977,13 +974,23 @@ func (s *server) endEpoch() {
 // Concurrency: watchRoleChanges serializes role-driven transitions. mu also
 // serializes this method with the out-of-band checkpoint fencing callback and
 // with request admission (admit); it remains held while joining the previous
-// epoch's work, which cancellation makes short.
+// epoch's pipeline work, which cancellation makes short.
 func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
-	lg.Info("Instance role: ACTIVE (promoted)")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A stale transition launches nothing: membership may have stepped down
+	// or renewed at a newer term while this promotion waited for mu. The
+	// newer transition must restore the pipeline instead of resuming stale work.
+	if role, currentTerm := s.membership.CurrentRole(); role != ha.RoleActive || currentTerm != term {
+		lg.With(log.Int64("currentTerm", int64(currentTerm))).Info("Ignoring a stale promotion")
+
+		return
+	}
+
+	lg.Info("Instance role: ACTIVE (promoted)")
 
 	// RoleChanges may coalesce away the intervening demotion: end the open
 	// epoch and join its work, so no execution of a previous tenure outlives
@@ -1002,24 +1009,14 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		s.suspendedOnDemote = true
 	}
 
-	// Join the previous epoch's checkpoint writer, now that the pipeline work
-	// it could wait on is joined too: a snapshot it captured must not land
-	// over this tenure's newer saves of the same term.
-	if s.checkpointDone != nil {
-		<-s.checkpointDone
-		s.checkpointDone = nil
-	}
-
 	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
 	epochCtx := s.epochCtx
 	ectx := pcsm.WithEpoch(epochCtx, epochCtx)
 
-	// A state change is saved by this epoch's checkpointing loop, its only
-	// writer, which the callback signals: a second writer of the same term
-	// could land an older snapshot over a newer one. The callback is bound to
-	// this epoch: once it ends nothing is saved, so a demoted instance never
-	// persists a state it no longer owns. Installed before Restore/Resume,
-	// which emit transitions; a signal sent before the loop starts waits for it.
+	// A state change signals this epoch's checkpointing loop, coalescing
+	// pending saves. The callback is bound to this epoch and stops signaling
+	// once it ends. Installed before Restore/Resume, which emit transitions;
+	// a signal sent before the loop starts waits for it.
 	instanceID := s.membership.InstanceID()
 	saveNow := make(chan struct{}, 1)
 	s.pcsm.SetOnStateChanged(func(_ pcsm.State) {
@@ -1093,19 +1090,13 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	// Checkpointing loop scoped to this ACTIVE epoch, fenced by term. A fenced
 	// write means this instance was deposed: onFenced ends the epoch and
 	// suspends the pipeline immediately instead of waiting for the next lease
-	// tick.
-	checkpointDone := make(chan struct{})
-	s.checkpointDone = checkpointDone
-
-	go func() {
-		defer close(checkpointDone)
-
-		RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-			s.cfg.RecoveryCheckpointInterval, saveNow, func() {
-				// Off this goroutine: a promotion joins it while holding mu.
-				go s.onDemote(ctx, term)
-			})
-	}()
+	// tick. Previous writers are canceled, not joined: term and seq order
+	// late writes on the server. onFenced takes mu, so do not join this
+	// goroutine while holding mu.
+	go RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
+		s.cfg.RecoveryCheckpointInterval, saveNow, func(storedTerm int64) {
+			s.onFenced(ctx, epochCtx, term, ha.Term(storedTerm))
+		})
 
 	autoStartOpts := s.autoStartOpts
 	if autoStartOpts == nil {
@@ -1128,21 +1119,20 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	}
 }
 
-// onDemote handles an ACTIVE->STANDBY transition for the given term. It ends
-// the ACTIVE epoch, which cancels checkpointing, the epoch-bound state-change
-// checkpoint and every execution the pipeline launched in it, then suspends
-// the pipeline: its work is joined and settles as paused (or finalizing),
-// unpersisted. A same-term re-promotion resumes it in memory; a new term
-// restores the checkpoint over it. Nothing queued or retrying drains to the
-// target: cancellation is the fence. Term fencing on checkpoint writes remains
-// the guarantee for the recovery document itself.
+// onDemote handles an ACTIVE->STANDBY transition for the given term, as
+// recorded and emitted by the lease loop. It ends the ACTIVE epoch, which
+// cancels checkpointing, the epoch-bound state-change checkpoint and every
+// execution the pipeline launched in it, then suspends the pipeline: its work
+// is joined and settles as paused (or finalizing), unpersisted. A same-term
+// re-promotion resumes it in memory; a new term restores the checkpoint over
+// it. Nothing queued or retrying drains to the target: cancellation is the
+// fence. Term fencing on checkpoint writes remains the guarantee for the
+// recovery document itself.
 //
-// Concurrency: watchRoleChanges is the only in-band caller and processes role
-// changes one at a time, so onPromote and a role-driven onDemote never overlap.
-// The out-of-band caller is the checkpointing fence callback (onFenced), which
-// fires only when a newer term owns the checkpoint; the guard below drops it
-// once membership has advanced past term. Suspend joins only the pipeline's
-// run and finalizer, never the checkpoint goroutine that invoked onFenced.
+// Concurrency: watchRoleChanges is the only caller and processes role changes
+// one at a time, so onPromote and onDemote never overlap. The guard below
+// drops a transition membership has already advanced past. Suspend joins only
+// the pipeline's run and finalizer, never the checkpoint goroutine.
 func (s *server) onDemote(ctx context.Context, term ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 
@@ -1158,7 +1148,73 @@ func (s *server) onDemote(ctx context.Context, term ha.Term) {
 	}
 
 	lg.Info("Instance role: STANDBY (demoted)")
+	s.demote(ctx, lg)
+}
 
+// onFenced handles a checkpoint write fenced by a newer term: the out-of-band
+// demotion raised by the epoch's checkpoint writer, ahead of the lease tick
+// that will observe the loss. It is bound to the epoch that raised it: a term
+// does not identify an epoch, so a callback that arrives after its epoch
+// ended or was replaced is dropped. The step-down is recorded in membership
+// atomically against the lease loop; without that record a lease this
+// instance still holds renews silently as ACTIVE, nothing ever promotes it
+// again, and it sits with no epoch, no checkpointing and a suspended pipeline
+// until a restart. With it, the next renewal is a real STANDBY->ACTIVE
+// transition.
+//
+// A lease this instance still owns at a term behind storedTerm is a lease
+// document that was reset while recovery data existed: nothing else moves its
+// term forward, so every write would stay fenced and the renewal would only
+// repeat this demotion. The lease term is advanced past storedTerm, so the
+// renewal promotes this instance at a term the checkpoint accepts and it
+// restores from that checkpoint. A lease owned by another instance, the
+// genuine takeover, is left alone.
+func (s *server) onFenced(ctx, epochCtx context.Context, term, storedTerm ha.Term) {
+	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.epochCtx != epochCtx {
+		lg.Debug("Ignoring a fenced checkpoint of an ended epoch")
+
+		return
+	}
+
+	lg.Info("Instance role: STANDBY (demoted: checkpoint fenced by a newer term)")
+
+	if !s.membership.StepDown(term) {
+		// The lease loop recorded the loss first; its STANDBY transition is on
+		// its way and finds the work below already done.
+		lg.Debug("Lease loop already recorded the step-down")
+	}
+
+	s.demote(ctx, lg)
+
+	advanced, err := s.membership.AdvanceTerm(ctx, storedTerm+1)
+	if err != nil {
+		lg.Error(err, "advance the lease term past the fencing term")
+	} else if advanced {
+		lg.With(log.Int64("storedTerm", int64(storedTerm))).
+			Warn("Lease term was behind the checkpoint term; advanced it to restore at the next renewal")
+	}
+
+	// The lease loop does not take mu. A renewal at the stale term that
+	// reconciled ACTIVE between the step-down and the advance leaves
+	// membership ACTIVE; the renewal at the advanced term then only updates
+	// the term, since same-role renewals never emit, and nothing promotes this
+	// instance again. With the epoch over, membership must not stay ACTIVE:
+	// step down at whatever term it advertises, so the next renewal is a real
+	// transition.
+	if role, current := s.membership.CurrentRole(); role == ha.RoleActive {
+		s.membership.StepDown(current)
+		lg.With(log.Int64("currentTerm", int64(current))).
+			Debug("Stepped down again after a renewal raced the demotion")
+	}
+}
+
+// demote ends the ACTIVE epoch and suspends the pipeline. The caller holds mu.
+func (s *server) demote(ctx context.Context, lg log.Logger) {
 	// The fence first, without any pipeline lock: a Finalize blocked on its
 	// drain under the pipeline lock is unblocked by this.
 	s.endEpoch()
