@@ -299,6 +299,48 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 	return errors.Wrap(err, "release lease")
 }
 
+// AdvanceTerm raises the lease term to at least `to` while this instance owns
+// the lease, and reports whether the lease is now owned at such a term. It
+// repairs a lease that fell behind the checkpoint's fencing term (the lease
+// document was reset while recovery data existed): every write at the stale
+// term is fenced and nothing else moves the term forward. The next renewal
+// then promotes this instance at the new term. A lease owned by another
+// instance is left untouched. The recorded role and term are not changed here;
+// the lease loop reconciles them on its next tick.
+func (m *Membership) AdvanceTerm(ctx context.Context, to Term) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
+	defer cancel()
+
+	var lease Lease
+
+	err := mdb.RunWithRetry(ctx, func(ctx context.Context) error {
+		err := m.leaseColl().FindOneAndUpdate(
+			ctx,
+			bson.D{{"_id", LeaseID}, {fieldInstanceID, m.instanceID}},
+			mongo.Pipeline{
+				{{"$set", bson.D{{fieldTerm, bson.D{{aggMax, bson.A{
+					bson.D{{aggIfNull, bson.A{"$" + fieldTerm, int64(0)}}},
+					int64(to),
+				}}}}}}},
+			},
+			options.FindOneAndUpdate().SetReturnDocument(options.After),
+		).Decode(&lease)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			// Not the owner: nothing to repair.
+			lease = Lease{}
+
+			return nil
+		}
+
+		return err //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+	if err != nil {
+		return false, errors.Wrap(err, "advance lease term")
+	}
+
+	return lease.InstanceID == m.instanceID && lease.Term >= to, nil
+}
+
 func (m *Membership) leaseColl() *mongo.Collection {
 	return m.target.Database(config.PCSMDatabase).Collection(config.LeaseCollection)
 }

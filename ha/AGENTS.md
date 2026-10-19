@@ -29,6 +29,7 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - `RoleChanges` coalesces to the latest transition in a one-slot channel; consumers must not require a complete transition history.
 - `Release` stops lease competition for shutdown; `RelinquishLease` demotes without stopping the election loop.
 - `StepDown(term)` records an out-of-band demotion (a fenced checkpoint write) atomically: only ACTIVE at exactly that term becomes STANDBY, the term is kept, and a lease still held renews as a real STANDBY->ACTIVE transition. It never emits a role change itself.
+- `AdvanceTerm(ctx, to)` raises the lease term to at least `to` only while this instance owns the lease (`$max`, never lowers). It repairs a lease document that was reset while recovery data kept a higher fencing term; the next renewal then promotes at the new term. The recorded role/term are left to the lease loop.
 
 ## ANTI-PATTERNS
 

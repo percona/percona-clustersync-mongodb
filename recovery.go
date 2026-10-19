@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -32,6 +33,21 @@ var (
 )
 
 const recoveryID = "pcsm"
+
+// fencedError is the errCheckpointFenced of one rejected write: it carries the
+// term that owns the checkpoint, which the demotion uses to repair a lease
+// that fell behind it.
+type fencedError struct {
+	StoredTerm int64
+}
+
+func (e fencedError) Error() string {
+	return errCheckpointFenced.Error() + " " + strconv.FormatInt(e.StoredTerm, 10)
+}
+
+func (e fencedError) Is(target error) bool {
+	return target == errCheckpointFenced //nolint:err113,errorlint // sentinel identity is the contract
+}
 
 type Recoverable interface {
 	Checkpoint(ctx context.Context) ([]byte, error)
@@ -96,7 +112,8 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 // previous epoch's writer had on the wire when it was canceled, which MongoDB
 // may still apply after the next epoch saved a newer snapshot. Every write is
 // fenced against term. A write fenced by a newer term means this instance was
-// deposed; onFenced is invoked once and the loop returns.
+// deposed; onFenced is invoked once with the term that owns the checkpoint and
+// the loop returns.
 func RunCheckpointing(
 	ctx context.Context,
 	m *mongo.Client,
@@ -105,7 +122,7 @@ func RunCheckpointing(
 	instanceID string,
 	interval time.Duration,
 	saveNow <-chan struct{},
-	onFenced func(),
+	onFenced func(storedTerm int64),
 ) {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
 
@@ -133,7 +150,9 @@ func RunCheckpointing(
 		case errors.Is(err, errCheckpointFenced):
 			lg.Warn("Stopping checkpointing")
 			if onFenced != nil {
-				onFenced()
+				var fenced fencedError
+				_ = errors.As(err, &fenced)
+				onFenced(fenced.StoredTerm)
 			}
 
 			return
@@ -259,7 +278,7 @@ func classifyRejectedCheckpoint(ctx context.Context, coll *mongo.Collection, ter
 
 	switch {
 	case stored.Term > term:
-		return errCheckpointFenced
+		return fencedError{StoredTerm: stored.Term}
 
 	case stored.Term == term && stored.Seq > seq:
 		return errCheckpointSuperseded

@@ -1101,9 +1101,9 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 		defer close(checkpointDone)
 
 		RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-			s.cfg.RecoveryCheckpointInterval, saveNow, func() {
+			s.cfg.RecoveryCheckpointInterval, saveNow, func(storedTerm int64) {
 				// Off this goroutine: a promotion joins it while holding mu.
-				go s.onFenced(ctx, epochCtx, term)
+				go s.onFenced(ctx, epochCtx, term, ha.Term(storedTerm))
 			})
 	}()
 
@@ -1169,8 +1169,16 @@ func (s *server) onDemote(ctx context.Context, term ha.Term) {
 // instance still holds renews silently as ACTIVE, nothing ever promotes it
 // again, and it sits with no epoch, no checkpointing and a suspended pipeline
 // until a restart. With it, the next renewal is a real STANDBY->ACTIVE
-// transition at the same term, which resumes the suspended pipeline.
-func (s *server) onFenced(ctx, epochCtx context.Context, term ha.Term) {
+// transition.
+//
+// A lease this instance still owns at a term behind storedTerm is a lease
+// document that was reset while recovery data existed: nothing else moves its
+// term forward, so every write would stay fenced and the renewal would only
+// repeat this demotion. The lease term is advanced past storedTerm, so the
+// renewal promotes this instance at a term the checkpoint accepts and it
+// restores from that checkpoint. A lease owned by another instance, the
+// genuine takeover, is left alone.
+func (s *server) onFenced(ctx, epochCtx context.Context, term, storedTerm ha.Term) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
 
 	s.mu.Lock()
@@ -1191,6 +1199,18 @@ func (s *server) onFenced(ctx, epochCtx context.Context, term ha.Term) {
 	}
 
 	s.demote(ctx, lg)
+
+	advanced, err := s.membership.AdvanceTerm(ctx, storedTerm+1)
+	if err != nil {
+		lg.Error(err, "advance the lease term past the fencing term")
+
+		return
+	}
+
+	if advanced {
+		lg.With(log.Int64("storedTerm", int64(storedTerm))).
+			Warn("Lease term was behind the checkpoint term; advanced it to restore at the next renewal")
+	}
 }
 
 // demote ends the ACTIVE epoch and suspends the pipeline. The caller holds mu.

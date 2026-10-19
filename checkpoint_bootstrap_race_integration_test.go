@@ -100,8 +100,12 @@ func TestDemotionRecordsStandbyRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
-	// Given: an ACTIVE instance in term 1 with an open epoch.
-	membership := &ha.Membership{}
+	// Given: an ACTIVE instance in term 1 with an open epoch and no lease
+	// document, so the fence cannot be a stale lease term to repair.
+	require.NoError(t, target.Database(config.PCSMDatabase).Collection(config.LeaseCollection).Drop(ctx))
+	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: "pcsm-demoted", Group: "g"})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, membership.Stop(t.Context())) }()
 	membership.SetRole(ha.RoleActive, 1)
 	epochCtx, epochCancel := context.WithCancel(ctx)
 	defer epochCancel()
@@ -115,8 +119,8 @@ func TestDemotionRecordsStandbyRole(t *testing.T) {
 		epochCancel:   epochCancel,
 	}
 
-	// When: a fenced checkpoint demotes it while it still holds the lease.
-	s.onFenced(ctx, epochCtx, 1)
+	// When: a checkpoint owned by term 5 fences it.
+	s.onFenced(ctx, epochCtx, 1, 5)
 	require.Nil(t, s.epochCancel, "demotion must stop checkpointing")
 
 	// Then: the demotion is visible to membership, so the next renewal of the
@@ -134,7 +138,7 @@ func TestDemotionRecordsStandbyRole(t *testing.T) {
 	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
 	defer s.epochCancel()
 
-	s.onFenced(ctx, epochCtx, 1)
+	s.onFenced(ctx, epochCtx, 1, 5)
 	require.NotNil(t, s.epochCancel, "a late fence of an ended epoch must not end the new one")
 	role, _ = membership.CurrentRole()
 	require.Equal(t, ha.RoleActive, role, "a late fence of an ended epoch must not demote")

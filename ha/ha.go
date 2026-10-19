@@ -43,6 +43,7 @@ const (
 	aggNow    = "$$NOW"
 	aggIfNull = "$ifNull"
 	aggAdd    = "$add"
+	aggMax    = "$max"
 )
 
 // Member is the per-instance liveness/identity document in the members

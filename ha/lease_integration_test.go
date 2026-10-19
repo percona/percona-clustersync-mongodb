@@ -113,6 +113,50 @@ func TestLeaseRenewKeepsTerm(t *testing.T) {
 	assert.False(t, latest.ExpiresAt.Before(first.ExpiresAt), "expiresAt should advance on renewal")
 }
 
+// A lease that fell behind the checkpoint's fencing term is repaired by its
+// owner only: a non-owner must not move another instance's term, the owner
+// raises it to the requested floor, never lowers it, and renews at the new
+// term afterwards.
+func TestAdvanceTermOnlyForOwner(t *testing.T) {
+	ctx := t.Context()
+	client := connectToMongoDB(t)
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	cleanLease(t, ctx, client)
+
+	owner := newLeaseMemberForTest(t, ctx, client, "pcsm-owner")
+	other := newLeaseMemberForTest(t, ctx, client, "pcsm-other")
+
+	advanced, err := owner.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.False(t, advanced, "no lease to advance before the first acquisition")
+
+	att, err := owner.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	require.True(t, att.Acquired)
+	require.Equal(t, Term(1), att.Term)
+
+	advanced, err = other.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.False(t, advanced, "a non-owner must not advance the lease")
+	assert.Equal(t, Term(1), readLease(t, ctx, client).Term)
+
+	advanced, err = owner.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+	assert.Equal(t, Term(5), readLease(t, ctx, client).Term)
+
+	advanced, err = owner.AdvanceTerm(ctx, 3)
+	require.NoError(t, err)
+	assert.True(t, advanced, "already at or past the floor still counts as owned at that term")
+	assert.Equal(t, Term(5), readLease(t, ctx, client).Term, "the term never goes backwards")
+
+	att, err = owner.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	assert.True(t, att.Acquired)
+	assert.Equal(t, Term(5), att.Term, "the owner renews at the advanced term")
+}
+
 func TestLeaseContentionExactlyOneActive(t *testing.T) {
 	ctx := t.Context()
 	client := connectToMongoDB(t)
