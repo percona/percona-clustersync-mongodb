@@ -14,18 +14,26 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 )
 
-// RoleChange is a single active-standby role transition. Term is the lease term
-// at the transition; it grows monotonically and doubles as the fencing token.
-type RoleChange struct {
-	Role Role
+// Ownership is what one lease attempt established: whether this instance
+// holds the lease and, when it does, at which term. The lease loop reports it
+// after every attempt as a level, not a transition: an observer reconciles
+// against the latest ownership and never depends on having seen every change.
+type Ownership struct {
+	Held bool
 	Term Term
 }
 
-// runLease tries to acquire or renew the lease on every tick and reconciles the
-// member's role, until ctx is canceled. Holding the lease grants the right to be
-// ACTIVE. MongoDB uses its server clock ($$NOW) for lease expiry. A local
-// monotonic deadline bounds how long an ACTIVE can tolerate renewal errors.
-func (m *Membership) runLease(ctx context.Context) {
+// Observer receives the ownership each lease attempt established. The lease
+// loop calls it synchronously, so the next attempt waits for it to return and
+// an observer that ends work on a loss has done so before the next renewal.
+type Observer func(Ownership)
+
+// runLease tries to acquire or renew the lease on every tick and reports the
+// resulting ownership, until ctx is canceled. Holding the lease grants the
+// right to be ACTIVE. MongoDB uses its server clock ($$NOW) for lease expiry.
+// A local monotonic deadline bounds how long a holder can tolerate renewal
+// errors before it reports the lease lost.
+func (m *Membership) runLease(ctx context.Context, observe Observer) {
 	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
 
 	ticker := time.NewTicker(config.LeaseRenewInterval)
@@ -36,7 +44,7 @@ func (m *Membership) runLease(ctx context.Context) {
 
 	for {
 		var expiryCh <-chan time.Time
-		if role, _ := m.CurrentRole(); role == RoleActive {
+		if m.held {
 			expiry.Reset(time.Until(m.leaseDeadline))
 			expiryCh = expiry.C
 		}
@@ -48,22 +56,23 @@ func (m *Membership) runLease(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			m.leaseTick(ctx, lg)
+			m.leaseTick(ctx, lg, observe)
 
 		case <-expiryCh:
-			_, term := m.CurrentRole()
-			m.reconcileRole(RoleStandby, term, lg)
+			lg.Warn("Lease deadline passed without a successful renewal")
+			m.report(Ownership{}, observe)
 		}
 	}
 }
 
-// FirstLeaseTick performs one synchronous acquire/renew attempt. Called once at
-// startup, before the HTTP server serves requests, so the role is settled by
-// then: without it a fresh instance would briefly report the STANDBY default
-// and spuriously reject writes. Subsequent renewals run in RunLease.
-func (m *Membership) FirstLeaseTick(ctx context.Context) {
+// FirstLeaseTick performs one synchronous acquire/renew attempt and reports
+// its outcome. Called once at startup, before the HTTP server serves requests,
+// so ownership is settled by then: without it a fresh instance would briefly
+// report the STANDBY default and spuriously reject writes. Subsequent attempts
+// run in RunLease.
+func (m *Membership) FirstLeaseTick(ctx context.Context, observe Observer) {
 	lg := log.New("ha:lease").With(log.String("instanceId", m.instanceID))
-	m.leaseTick(ctx, lg)
+	m.leaseTick(ctx, lg, observe)
 }
 
 // leaseAttempt is the outcome of a single acquire/renew attempt. Term is
@@ -73,10 +82,11 @@ type leaseAttempt struct {
 	Term     Term
 }
 
-// leaseTick performs one acquire/renew attempt and reconciles the resulting role.
-func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
-	role, _ := m.CurrentRole()
-	if role == RoleActive {
+// leaseTick performs one acquire/renew attempt and reports the ownership it
+// established. A failed attempt while the lease is held and the local deadline
+// has not passed reports nothing: ownership is unchanged until the deadline.
+func (m *Membership) leaseTick(ctx context.Context, lg log.Logger, observe Observer) {
+	if m.held {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, m.leaseDeadline)
 		defer cancel()
@@ -94,43 +104,36 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 			return
 		}
 
-		if role == RoleActive && time.Now().Before(m.leaseDeadline) {
+		if m.held && time.Now().Before(m.leaseDeadline) {
 			lg.With(log.String("error", err.Error()),
 				log.String("leaseDeadline", m.leaseDeadline.Format(time.RFC3339Nano))).
-				Warn("acquire or renew lease; retaining ACTIVE within lease deadline")
+				Warn("acquire or renew lease; retaining the lease within its deadline")
 
 			return
 		}
 
 		lg.Error(err, "acquire or renew lease")
-		_, lastTerm := m.CurrentRole()
-		m.reconcileRole(RoleStandby, lastTerm, lg)
+		m.report(Ownership{}, observe)
 
 		return
 	}
 
 	if att.Acquired {
 		m.leaseDeadline = sentAt.Add(config.LeaseTTL)
-		m.reconcileRole(RoleActive, att.Term, lg)
+		m.report(Ownership{Held: true, Term: att.Term}, observe)
 
 		return
 	}
 
-	m.reconcileRole(RoleStandby, att.Term, lg)
+	m.report(Ownership{}, observe)
 }
 
-// reconcileRole records the role/term on the member and emits a RoleChange when
-// the tenure changes: a role transition, or an ACTIVE renewed at a new term.
-// Same-term renewals do not emit.
-func (m *Membership) reconcileRole(role Role, term Term, lg log.Logger) {
-	if !m.SetRole(role, term) {
-		return
-	}
-
-	lg.With(log.String("role", string(role)), log.Int64("term", int64(term))).
-		Info("Role transition")
-
-	m.emitRoleChange(RoleChange{Role: role, Term: term})
+// report records the ownership the lease loop established and hands it to
+// the observer. Only the lease loop (and FirstLeaseTick before it starts)
+// calls it.
+func (m *Membership) report(o Ownership, observe Observer) {
+	m.held = o.Held
+	observe(o)
 }
 
 // tryAcquireOrRenew acquires or renews the lease. Losing to another instance's
@@ -277,7 +280,7 @@ func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, 
 }
 
 // releaseLease expires the lease (only if this instance still owns it) so a
-// standby can take over without waiting for the TTL, and demotes the member.
+// standby can take over without waiting for the TTL.
 func (m *Membership) releaseLease(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
@@ -294,20 +297,19 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 		return err //nolint:wrapcheck
 	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
 
-	_, term := m.CurrentRole()
-	m.SetRole(RoleStandby, term)
-
 	return errors.Wrap(err, "release lease")
 }
 
 // AdvanceTerm raises the lease term to at least `to` while this instance owns
-// the lease, and reports whether the lease is now owned at such a term. It
-// repairs a lease that fell behind the checkpoint's fencing term (the lease
-// document was reset while recovery data existed): every write at the stale
-// term is fenced and nothing else moves the term forward. The next renewal
-// then promotes this instance at the new term. A lease owned by another
-// instance is left untouched. The recorded role and term are not changed here;
-// the lease loop reconciles them on its next tick.
+// the lease, and reports whether the lease is now owned at such a term. The
+// next renewal returns the new term. A lease owned by another instance is
+// left untouched.
+//
+// It gives a new ACTIVE tenure a term no earlier tenure used: a renewal after
+// a loss keeps the term when nobody else took the lease in between, and a
+// lease document reset while recovery data existed can sit below the
+// checkpoint's fencing term. Both would otherwise let two tenures write under
+// one term.
 func (m *Membership) AdvanceTerm(ctx context.Context, to Term) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()
@@ -327,7 +329,7 @@ func (m *Membership) AdvanceTerm(ctx context.Context, to Term) (bool, error) {
 			options.FindOneAndUpdate().SetReturnDocument(options.After),
 		).Decode(&lease)
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			// Not the owner: nothing to repair.
+			// Not the owner: nothing to advance.
 			lease = Lease{}
 
 			return nil

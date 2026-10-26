@@ -71,7 +71,11 @@ type checkpoint struct {
 	InstanceID string `bson:"instanceId,omitempty"`
 }
 
-func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
+// Restore recovers rec from the stored checkpoint, for a tenure at term. A
+// checkpoint owned by a newer term is not restored: the write that would
+// follow is fenced anyway, so the tenure is told now, through a fencedError,
+// instead of after an attempt.
+func Restore(ctx context.Context, m *mongo.Client, rec Recoverable, term int64) error {
 	lg := log.New("recovery")
 
 	lg.Infof("Checking Recovery Data for %q", recoveryID)
@@ -90,6 +94,13 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable) error {
 		}
 
 		return errors.Wrap(err, "find")
+	}
+
+	if cp.Term > term {
+		lg.With(log.Int64("term", term), log.Int64("storedTerm", cp.Term)).
+			Warn("Recovery Data is owned by a newer term")
+
+		return fencedError{StoredTerm: cp.Term}
 	}
 
 	lg.Info("Found Recovery Data. Recovering...")

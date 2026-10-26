@@ -86,62 +86,80 @@ func TestSameTermBootstrapCollisionIsNotATakeover(t *testing.T) {
 		"a same-term writer is not a newer instance taking over")
 }
 
-// A demotion has to leave the instance able to come back. A fence-driven
-// demotion stops checkpointing; if it tells membership nothing, a still-held
-// lease keeps renewing as ACTIVE, reports no transition, and never triggers a
-// promotion to restart the loop or resume the pipeline. The recorded role is
-// what turns that next renewal into a transition, so that is what this checks.
+// A fenced checkpoint has to leave the instance able to come back. The
+// tenure it fences ends, and a lease the instance still holds at a term the
+// checkpoint rejects (the lease document was reset while recovery data
+// existed) is advanced past the fencing term, so the tenure that follows
+// restores the checkpoint at a term it accepts.
 //
 //nolint:paralleltest // The recovery integration suite shares one checkpoint document.
-func TestDemotionRecordsStandbyRole(t *testing.T) {
+func TestFencedTenureEndsAndTheLeaseIsAdvanced(t *testing.T) {
 	target := recoveryTestClient(t)
 	defer func() { require.NoError(t, target.Disconnect(t.Context())) }()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
-	// Given: an ACTIVE instance in term 1 with an open epoch and no lease
-	// document, so the fence cannot be a stale lease term to repair.
-	require.NoError(t, target.Database(config.PCSMDatabase).Collection(config.LeaseCollection).Drop(ctx))
-	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: "pcsm-demoted", Group: "g"})
+	leaseColl := target.Database(config.PCSMDatabase).Collection(config.LeaseCollection)
+	require.NoError(t, leaseColl.Drop(ctx))
+	require.NoError(t, recoveryColl(target).Drop(ctx))
+
+	// Given: this instance holds the lease at term 1, with a tenure open, and a
+	// checkpoint owned by term 5 exists.
+	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: "pcsm-fenced", Group: "g"})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, membership.Stop(t.Context())) }()
-	membership.SetRole(ha.RoleActive, 1)
-	epochCtx, epochCancel := context.WithCancel(ctx)
-	defer epochCancel()
 	s := &server{
-		cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+		cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
+		sourceCluster: target,
 		targetCluster: target,
-		pcsm:          pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false),
 		membership:    membership,
-		activeTerm:    1,
-		epochCtx:      epochCtx,
-		epochCancel:   epochCancel,
 	}
+	observe := s.ownershipObserver(ctx)
+	defer closeTenure(ctx, s)
 
-	// When: a checkpoint owned by term 5 fences it.
-	s.onFenced(ctx, epochCtx, 1, 5)
-	require.Nil(t, s.epochCancel, "demotion must stop checkpointing")
+	membership.FirstLeaseTick(ctx, observe)
+	fenced := awaitTenure(t, ctx, s)
+	require.Equal(t, ha.Term(1), fenced.term)
 
-	// Then: the demotion is visible to membership, so the next renewal of the
-	// lease it still holds is a real transition back to ACTIVE.
+	other := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
+	failed, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
+	require.NoError(t, err)
+	require.NoError(t, other.Recover(ctx, failed))
+	require.NoError(t, DoCheckpoint(ctx, target, other, 5, "pcsm-other"))
+
+	// When: the tenure's checkpoint write is fenced by the stored term.
+	s.onFenced(ctx, fenced, 5)
+
+	// Then: the tenure is over and the instance is STANDBY.
+	require.Nil(t, currentTenure(s), "a fenced tenure must end")
+	require.ErrorIs(t, fenced.ctx.Err(), context.Canceled)
+	role, _ := membership.CurrentRole()
+	require.Equal(t, ha.RoleStandby, role)
+
+	// And: the next lease attempt, which still owns the lease at term 1,
+	// advances it past the fencing term and opens nothing.
+	membership.FirstLeaseTick(ctx, observe)
+	require.Nil(t, currentTenure(s), "ownership at a fenced term must not open a tenure")
+
+	var lease ha.Lease
+	require.NoError(t, leaseColl.FindOne(ctx, bson.D{{"_id", ha.LeaseID}}).Decode(&lease))
+	require.Equal(t, "pcsm-fenced", lease.InstanceID)
+	require.Equal(t, ha.Term(6), lease.Term, "the lease term must move past the checkpoint's")
+
+	// And: the attempt after that opens a tenure at the advanced term, which
+	// restores the checkpoint and is accepted by it.
+	membership.FirstLeaseTick(ctx, observe)
+	repaired := awaitTenure(t, ctx, s)
+	require.Equal(t, ha.Term(6), repaired.term)
+	require.Equal(t, pcsm.State(pcsm.StateFailed), repaired.pipeline.Status(ctx).State,
+		"the tenure must restore the checkpoint of the fencing term")
 	role, term := membership.CurrentRole()
-	require.Equal(t, ha.RoleStandby, role,
-		"a demoted instance that still reports ACTIVE is never promoted again, "+
-			"so checkpointing stays stopped and a demotion pause is never resumed")
-	require.Equal(t, ha.Term(1), term, "a step-down keeps the term")
+	require.Equal(t, ha.RoleActive, role)
+	require.Equal(t, ha.Term(6), term)
 
-	// And: the fence belongs to the epoch that raised it. Once a new epoch of
-	// the same term is open, a late callback of the old one must not end it;
-	// a term does not identify an epoch.
-	membership.SetRole(ha.RoleActive, 1)
-	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
-	defer s.epochCancel()
-
-	s.onFenced(ctx, epochCtx, 1, 5)
-	require.NotNil(t, s.epochCancel, "a late fence of an ended epoch must not end the new one")
-	role, _ = membership.CurrentRole()
-	require.Equal(t, ha.RoleActive, role, "a late fence of an ended epoch must not demote")
+	require.NoError(t, DoCheckpoint(ctx, target, repaired.pipeline, int64(repaired.term), "pcsm-fenced"))
+	require.Equal(t, int64(6), readCheckpoint(t, ctx, target).Term)
 }
 
 // Finalize fires one state-change signal for finalizing and another for

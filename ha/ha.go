@@ -1,10 +1,12 @@
 // Package ha provides active-standby high availability for PCSM during the
 // replication phase. Multiple PCSM instances connect to the same target; one
 // holds a MongoDB-backed lease and is ACTIVE while the rest stay STANDBY and
-// take over on failover. The lease term doubles as a fencing token on checkpoint
-// writes, so a deposed active cannot overwrite the recovery checkpoint after
-// losing the lease. Its data writes are not fenced: cancellation contains them,
-// and a command already on the wire may still apply.
+// take over on failover. The lease loop reports the ownership each attempt
+// established to one observer, which derives the role from it. The lease term
+// doubles as a fencing token on checkpoint writes, so a deposed active cannot
+// overwrite the recovery checkpoint after losing the lease. Its data writes are
+// not fenced: cancellation contains them, and a command already on the wire may
+// still apply.
 package ha
 
 import (

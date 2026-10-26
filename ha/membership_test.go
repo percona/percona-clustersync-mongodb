@@ -56,45 +56,15 @@ func TestSetRoleRoundTrip(t *testing.T) {
 	assert.Equal(t, Term(8), term)
 }
 
-func TestStepDown(t *testing.T) {
+func TestSetRoleReportsTransition(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		role     Role
-		term     Term
-		stepDown Term
-		want     bool
-		wantRole Role
-	}{
-		{"active at the term steps down", RoleActive, 5, 5, true, RoleStandby},
-		{"active at a newer term is kept", RoleActive, 7, 5, false, RoleActive},
-		{"active at an older term is kept", RoleActive, 3, 5, false, RoleActive},
-		{"standby is left alone", RoleStandby, 5, 5, false, RoleStandby},
-	}
+	m := newTestMembership()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			m := newTestMembership()
-			m.SetRole(tt.role, tt.term)
-			<-m.beatNow
-
-			assert.Equal(t, tt.want, m.StepDown(tt.stepDown))
-
-			role, term := m.currentRole()
-			assert.Equal(t, tt.wantRole, role)
-			assert.Equal(t, tt.term, term, "a step-down never changes the recorded term")
-
-			select {
-			case <-m.beatNow:
-				assert.True(t, tt.want, "only a step-down that demoted nudges the heartbeat")
-			default:
-				assert.False(t, tt.want, "a step-down that demoted must nudge the heartbeat")
-			}
-		})
-	}
+	assert.True(t, m.SetRole(RoleActive, 1), "STANDBY->ACTIVE is a transition")
+	assert.False(t, m.SetRole(RoleActive, 1), "a renewal is not")
+	assert.False(t, m.SetRole(RoleActive, 2), "nor is a new term while ACTIVE; the role is what transitions")
+	assert.True(t, m.SetRole(RoleStandby, 2), "ACTIVE->STANDBY is a transition")
 }
 
 func TestSetRoleSignalsBeatNow(t *testing.T) {

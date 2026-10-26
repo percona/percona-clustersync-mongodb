@@ -1,4 +1,4 @@
-package main //nolint:testpackage // Exercise server promotion and its checkpoint loop together.
+package main //nolint:testpackage // Exercise the lifecycle controller and its checkpoint writer together.
 
 import (
 	"context"
@@ -21,94 +21,178 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
-func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
+// commandLog records the writes the controller issues: checkpoint terms and
+// lease updates, in command order.
+type commandLog struct {
+	mu          sync.Mutex
+	checkpoints []int64
+	leaseWrites []string
+}
+
+func (l *commandLog) monitor() *event.CommandMonitor {
+	return &event.CommandMonitor{
+		Started: func(_ context.Context, e *event.CommandStartedEvent) {
+			if e.CommandName != "findAndModify" {
+				return
+			}
+
+			l.mu.Lock()
+			defer l.mu.Unlock()
+
+			switch e.Command.Lookup("findAndModify").StringValue() {
+			case config.RecoveryCollection:
+				term, _ := e.Command.Lookup("update", "$set", "term").AsInt64OK()
+				l.checkpoints = append(l.checkpoints, term)
+			case config.LeaseCollection:
+				l.leaseWrites = append(l.leaseWrites, e.Command.String())
+			}
+		},
+	}
+}
+
+func (l *commandLog) checkpointTerms() []int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]int64(nil), l.checkpoints...)
+}
+
+func (l *commandLog) leases() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.leaseWrites...)
+}
+
+func recoveryCursor(records ...bson.D) bson.D {
+	batch := make(bson.A, 0, len(records))
+	for _, r := range records {
+		batch = append(batch, r)
+	}
+
+	return bson.D{{"ok", 1}, {"cursor", bson.D{
+		{"id", int64(0)},
+		{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
+		{"firstBatch", batch},
+	}}}
+}
+
+func failedRecord(t *testing.T, term int64) bson.D {
+	t.Helper()
+
+	data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
+	require.NoError(t, err)
+
+	return bson.D{{"_id", recoveryID}, {"term", term}, {"seq", int64(1)}, {"data", bson.Raw(data)}}
+}
+
+func mockedTarget(t *testing.T, log *commandLog, responses ...bson.D) *mongo.Client {
+	t.Helper()
+
+	opts := options.Client().SetMonitor(log.monitor())
+	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", drivertest.NewMockDeployment(responses...)))
+	target, err := mongo.Connect(opts)
+	require.NoError(t, err)
+
+	return target
+}
+
+func currentTenure(s *server) *tenure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.tenure
+}
+
+// TestOwnershipDrivesTenures pins the controller against the ownership
+// levels the lease loop reports: ownership opens a tenure that restores the
+// checkpoint and checkpoints under its term; the same ownership again is a
+// renewal; ownership at another term replaces the tenure with one at that
+// term; and a lost lease ends it.
+func TestOwnershipDrivesTenures(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		// Given: a coalesced demotion leaves the prior checkpoint loop alive.
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
-		require.NoError(t, err)
-		record := bson.D{{"_id", recoveryID}, {"term", int64(2)}, {"data", bson.Raw(data)}}
-		deployment := drivertest.NewMockDeployment(
-			bson.D{{"ok", 1}, {"cursor", bson.D{
-				{"id", int64(0)},
-				{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-				{"firstBatch", bson.A{record}},
-			}}},
-			bson.D{{"ok", 1}, {"value", record}},
-			bson.D{{"ok", 1}, {"value", record}},
-		)
-		checkpoints := make(chan bson.Raw, 1)
-		opts := options.Client().SetMonitor(&event.CommandMonitor{
-			Started: func(_ context.Context, e *event.CommandStartedEvent) {
-				if e.CommandName == "findAndModify" {
-					checkpoints <- append(bson.Raw(nil), e.Command...)
-				}
-			},
-		})
-		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
-		target, err := mongo.Connect(opts)
-		require.NoError(t, err)
 
-		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
-		require.NoError(t, pipeline.Recover(ctx, data))
-		membership := &ha.Membership{}
-		membership.SetRole(ha.RoleActive, 3)
-		oldCtx, oldCancel := context.WithCancel(ctx)
+		var log commandLog
+		record := failedRecord(t, 2)
+		saved := bson.D{{"ok", 1}, {"value", record}}
+		// Responses in command order: the restore and first checkpoint of the
+		// tenure at term 3, then those of the tenure at term 4.
+		target := mockedTarget(t, &log, recoveryCursor(record), saved, recoveryCursor(record), saved)
+		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
+
 		s := &server{
 			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
 			targetCluster: target,
-			pcsm:          pipeline,
-			membership:    membership,
-			activeTerm:    1,
-			epochCtx:      oldCtx, epochCancel: oldCancel,
+			membership:    &ha.Membership{},
 		}
-		oldDone := make(chan struct{})
-		go func() {
-			defer close(oldDone)
-			RunCheckpointing(oldCtx, target, pipeline, 1, "old-active",
-				time.Second, nil, func(int64) { s.onDemote(ctx, 1) })
-		}()
-		t.Cleanup(func() {
-			cancel()
-			synctest.Wait()
-			<-oldDone
-			require.NoError(t, target.Disconnect(t.Context()))
-		})
+
+		// When: the lease is held at term 3.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 3})
 		synctest.Wait()
 
-		// When: the next observed role change is ACTIVE in a newer term.
-		s.onPromote(ctx, 3)
-		require.Equal(t, ha.Term(3), s.activeTerm, "restore must have succeeded")
+		// Then: a tenure at term 3 is open for requests, restored, and advertised.
+		first := currentTenure(s)
+		require.NotNil(t, first)
+		require.Equal(t, ha.Term(3), first.term)
+		require.True(t, first.isReady(), "the tenure did not open for requests")
+		require.Equal(t, pcsm.State(pcsm.StateFailed), first.pipeline.Status(ctx).State, "the checkpoint was not restored")
+		role, term := s.membership.CurrentRole()
+		require.Equal(t, ha.RoleActive, role)
+		require.Equal(t, ha.Term(3), term)
+		require.Equal(t, ha.Term(4), s.minTerm, "the next tenure must open above this one's term")
 
-		// Then: periodic checkpoints continue with the new ownership term.
-		for range 2 {
-			select {
-			case command := <-checkpoints:
-				term, ok := command.Lookup("update", "$set", "term").AsInt64OK()
-				require.True(t, ok, "checkpoint update must stamp a term")
-				require.Equal(t, int64(3), term)
-			case <-time.After(2 * time.Second):
-				t.Fatal("no periodic checkpoint after promotion")
-			}
-		}
+		// And: the same ownership again is a renewal.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 3})
+		require.Same(t, first, currentTenure(s))
+
+		// And: its writer checkpoints under term 3.
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Equal(t, []int64{3}, log.checkpointTerms())
+
+		// When: the lease is held at term 4 while the tenure at 3 is open.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 4})
+		synctest.Wait()
+
+		// Then: the tenure at 3 is over and one at 4 replaced it.
+		require.ErrorIs(t, first.ctx.Err(), context.Canceled)
+		second := currentTenure(s)
+		require.NotNil(t, second)
+		require.NotSame(t, first, second)
+		require.Equal(t, ha.Term(4), second.term)
+		require.True(t, second.isReady())
+		_, term = s.membership.CurrentRole()
+		require.Equal(t, ha.Term(4), term)
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Equal(t, []int64{3, 4}, log.checkpointTerms(), "the old writer must not outlive its tenure")
+
+		// When: the lease is lost.
+		s.observeOwnership(ctx, ha.Ownership{})
+
+		// Then: no tenure, STANDBY at the last term held.
+		require.Nil(t, currentTenure(s))
+		require.ErrorIs(t, second.ctx.Err(), context.Canceled)
+		role, term = s.membership.CurrentRole()
+		require.Equal(t, ha.RoleStandby, role)
+		require.Equal(t, ha.Term(4), term)
 	})
 }
 
-// TestFencedWriteRepairsStaleLeaseTerm pins the whole fence-driven recovery
-// path for a lease that fell behind the checkpoint's term (the lease document
-// was reset while recovery data existed): the epoch's writer is fenced by the
-// stored term, onFenced records the step-down and advances the lease term past
-// it, and the next lease tick is a real promotion at that term, which is what
-// restores the checkpoint instead of resuming at the stale term and being
-// fenced again. A renewal at the stale term that reconciles ACTIVE between the
-// step-down and the advance is modeled too: the demotion must not leave
-// membership ACTIVE, or the renewal at the advanced term would only update the
-// term and nothing would ever promote. The driver is mocked and the clock is
+// TestFencedCheckpointEndsTenureAndRepairsLease pins the whole path for a
+// lease that fell behind the checkpoint's term (the lease document was reset
+// while recovery data existed): the tenure is fenced by the stored term and
+// ends; ownership reported at the stale term is advanced past the fencing
+// term through the owner-only AdvanceTerm, opening nothing; ownership at the
+// advanced term opens a tenure that restores the checkpoint and checkpoints
+// under a term the checkpoint accepts. The driver is mocked and the clock is
 // virtual, so no tick is waited for.
-func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
+func TestFencedCheckpointEndsTenureAndRepairsLease(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -117,321 +201,132 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 
 		const instanceID = "pcsm-stale"
 
-		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
-		require.NoError(t, err)
-		fenced := bson.D{{"_id", recoveryID}, {"term", int64(5)}, {"seq", int64(1)}, {"data", bson.Raw(data)}}
-		lease := func(term int64) bson.D {
-			return bson.D{
-				{"_id", ha.LeaseID},
-				{"group", "g"},
-				{"instanceId", instanceID},
-				{"term", term},
-				{"electionDate", time.Now()},
-				{"expiresAt", time.Now().Add(config.LeaseTTL)},
-			}
+		var log commandLog
+		fenced := failedRecord(t, 5)
+		lease := bson.D{
+			{"_id", ha.LeaseID},
+			{"group", "g"},
+			{"instanceId", instanceID},
+			{"term", int64(6)},
+			{"electionDate", time.Now()},
+			{"expiresAt", time.Now().Add(config.LeaseTTL)},
 		}
-		noMatch := bson.D{{"ok", 1}, {"value", nil}}
-		// Responses in command order: join, leave, the fenced write (ordered
-		// update, bootstrap insert, retried update, classifying read), the
-		// lease term advance, and the lease tick that renews at the new term.
-		deployment := drivertest.NewMockDeployment(
+		// Responses in command order: join, leave, the restore of the tenure
+		// at term 1 (fenced by the stored term), the lease term advance, the
+		// restore of the tenure at term 6 and its first checkpoint.
+		target := mockedTarget(t, &log,
 			bson.D{{"ok", 1}, {"n", 1}},
 			bson.D{{"ok", 1}, {"n", 1}},
-			noMatch,
-			bson.D{{"ok", 1}, {"n", 0}, {"writeErrors", bson.A{
-				bson.D{{"index", 0}, {"code", 11000}, {"errmsg", "E11000 duplicate key error"}},
-			}}},
-			noMatch,
-			bson.D{{"ok", 1}, {"cursor", bson.D{
-				{"id", int64(0)},
-				{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-				{"firstBatch", bson.A{fenced}},
-			}}},
-			bson.D{{"ok", 1}, {"value", lease(6)}},
-			bson.D{{"ok", 1}, {"value", lease(6)}},
+			recoveryCursor(fenced),
+			bson.D{{"ok", 1}, {"value", lease}},
+			recoveryCursor(fenced),
+			bson.D{{"ok", 1}, {"value", fenced}},
 		)
+		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
 
-		var (
-			commandsMu  sync.Mutex
-			leaseWrites []string
-			membership  *ha.Membership
-		)
-		opts := options.Client().SetMonitor(&event.CommandMonitor{
-			Started: func(_ context.Context, e *event.CommandStartedEvent) {
-				if e.CommandName != "findAndModify" ||
-					e.Command.Lookup("findAndModify").StringValue() != config.LeaseCollection {
-					return
-				}
-
-				commandsMu.Lock()
-				leaseWrites = append(leaseWrites, e.Command.String())
-				advance := len(leaseWrites) == 1
-				commandsMu.Unlock()
-
-				// The lease loop takes no server lock: a renewal at the stale
-				// term reconciles ACTIVE after the step-down, while the advance
-				// is still on the wire.
-				if advance {
-					membership.SetRole(ha.RoleActive, 1)
-				}
-			},
-		})
-		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
-		target, err := mongo.Connect(opts)
-		require.NoError(t, err)
-
-		// Given: an ACTIVE instance at term 1 whose checkpoint is owned by term 5.
-		membership, err = ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
+		membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
 		require.NoError(t, err)
 		// The heartbeat loop would consume mocked responses on its own clock.
 		require.NoError(t, membership.Stop(ctx))
-		membership.SetRole(ha.RoleActive, 1)
 
-		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
-		require.NoError(t, pipeline.Recover(ctx, data))
-
-		epochCtx, epochCancel := context.WithCancel(ctx)
-		defer epochCancel()
 		s := &server{
-			cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
 			targetCluster: target,
-			pcsm:          pipeline,
 			membership:    membership,
-			activeTerm:    1,
-			epochCtx:      epochCtx,
-			epochCancel:   epochCancel,
 		}
-		saveNow := make(chan struct{}, 1)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			RunCheckpointing(epochCtx, target, pipeline, 1, instanceID, time.Hour, saveNow,
-				func(storedTerm int64) { s.onFenced(ctx, epochCtx, 1, ha.Term(storedTerm)) })
-		}()
-		t.Cleanup(func() {
-			cancel()
-			<-done
-			require.NoError(t, target.Disconnect(t.Context()))
-		})
 
-		// When: the epoch's writer is fenced by the stored term.
-		saveNow <- struct{}{}
+		// When: the lease is held at term 1 while the checkpoint is owned by term 5.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 1})
+		stale := currentTenure(s)
+		require.NotNil(t, stale)
 		synctest.Wait()
 
-		// Then: the writer stopped, the step-down is recorded at the stale term
-		// despite the racing renewal, and the epoch is over.
-		select {
-		case <-done:
-		default:
-			require.FailNow(t, "a fenced write did not stop the checkpoint writer")
-		}
-		role, term := membership.CurrentRole()
+		// Then: the tenure ended without restoring, the role is STANDBY, and no
+		// tenure may open below term 6.
+		require.Nil(t, currentTenure(s), "a tenure fenced by the checkpoint must end")
+		require.ErrorIs(t, stale.ctx.Err(), context.Canceled)
+		require.Equal(t, pcsm.State(pcsm.StateIdle), stale.pipeline.Status(ctx).State)
+		role, _ := membership.CurrentRole()
 		require.Equal(t, ha.RoleStandby, role)
-		require.Equal(t, ha.Term(1), term)
-		s.mu.Lock()
-		require.Nil(t, s.epochCancel, "a fenced write must end the epoch")
-		s.mu.Unlock()
+		require.Equal(t, ha.Term(6), s.minTerm)
+		require.Empty(t, log.leases())
 
-		// And: the lease this instance still owns was advanced past the term
-		// that fenced it, by an owner-only write.
-		commandsMu.Lock()
-		advances := append([]string(nil), leaseWrites...)
-		commandsMu.Unlock()
-		require.Len(t, advances, 1, "exactly one lease write repairs the term")
+		// When: the next attempt still reports the lease held at the stale term.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 1})
+
+		// Then: the lease term is advanced past the fencing term, by an
+		// owner-only write, and nothing opens.
+		require.Nil(t, currentTenure(s))
+		advances := log.leases()
+		require.Len(t, advances, 1, "exactly one lease write advances the term")
 		require.Contains(t, advances[0], `"$max"`)
 		require.Contains(t, advances[0], `"instanceId": "`+instanceID+`"`)
+		role, _ = membership.CurrentRole()
+		require.Equal(t, ha.RoleStandby, role)
 
-		// And: the ACTIVE transition the racing renewal queued launches nothing
-		// once consumed, since membership has stepped down from it.
-		s.onPromote(ctx, 1)
-		s.mu.Lock()
-		require.Nil(t, s.epochCancel, "a promotion membership stepped down from must not open an epoch")
-		s.mu.Unlock()
+		// When: the attempt after that reports the advanced term.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 6})
+		synctest.Wait()
 
-		// And: the next lease tick is a real promotion at the advanced term,
-		// not a same-term resume that would be fenced again.
-		membership.FirstLeaseTick(ctx)
-		select {
-		case rc := <-membership.RoleChanges():
-			require.Equal(t, ha.RoleChange{Role: ha.RoleActive, Term: 6}, rc)
-		default:
-			require.FailNow(t, "the renewal after a repaired term did not promote")
-		}
+		// Then: a tenure at term 6 restored the checkpoint and checkpoints
+		// under a term the checkpoint accepts.
+		repaired := currentTenure(s)
+		require.NotNil(t, repaired)
+		require.Equal(t, ha.Term(6), repaired.term)
+		require.True(t, repaired.isReady())
+		require.Equal(t, pcsm.State(pcsm.StateFailed), repaired.pipeline.Status(ctx).State)
+		role, term := membership.CurrentRole()
+		require.Equal(t, ha.RoleActive, role)
+		require.Equal(t, ha.Term(6), term)
 
-		// And: an old transition consumed before the repair must not open an
-		// epoch if it reaches the server lock after renewal at the new term.
-		s.onPromote(ctx, 1)
-		s.mu.Lock()
-		require.Nil(t, s.epochCancel, "a promotion at an outdated term must not open an epoch")
-		s.mu.Unlock()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Equal(t, []int64{6}, log.checkpointTerms())
 	})
 }
 
-// TestRenewalAtNewTermPromotesWhileActive pins the level invariant behind the
-// lease repair: an instance that owns the lease at a term the checkpoint
-// accepts has an epoch and a checkpoint writer at that term, whatever the
-// order in which its renewals returned. The racing renewal here is one whose
-// response lands only after onFenced has finished: it reconciles ACTIVE at
-// the stale term and queues that promotion, then the renewal at the repaired
-// term returns before the queue is consumed. The term changes while the role
-// stays ACTIVE; unless that is a transition too, the queued stale promotion
-// is rejected and nothing ever opens an epoch at the repaired term.
-func TestRenewalAtNewTermPromotesWhileActive(t *testing.T) {
+// TestLateFenceOfEndedTenureIsIgnored pins that a fenced write reported by
+// a tenure that is no longer current ends nothing, while the term that fenced
+// it still raises the floor for the next tenure.
+func TestLateFenceOfEndedTenureIsIgnored(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
-		const instanceID = "pcsm-late-renewal"
+		var log commandLog
+		target := mockedTarget(t, &log, recoveryCursor(), recoveryCursor())
+		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
 
-		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
-		require.NoError(t, err)
-		fenced := bson.D{{"_id", recoveryID}, {"term", int64(5)}, {"seq", int64(1)}, {"data", bson.Raw(data)}}
-		recoveryRead := bson.D{{"ok", 1}, {"cursor", bson.D{
-			{"id", int64(0)},
-			{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-			{"firstBatch", bson.A{fenced}},
-		}}}
-		lease := func(term int64) bson.D {
-			return bson.D{
-				{"_id", ha.LeaseID},
-				{"group", "g"},
-				{"instanceId", instanceID},
-				{"term", term},
-				{"electionDate", time.Now()},
-				{"expiresAt", time.Now().Add(config.LeaseTTL)},
-			}
-		}
-		noMatch := bson.D{{"ok", 1}, {"value", nil}}
-		saved := bson.D{{"ok", 1}, {"value", fenced}}
-		// Responses in command order: join, leave, the fenced write (ordered
-		// update, bootstrap insert, retried update, classifying read), the
-		// lease term advance, the late renewal response at the stale term, the
-		// renewal at the repaired term, the restore read on promotion, and the
-		// checkpoints of the new epoch.
-		deployment := drivertest.NewMockDeployment(
-			bson.D{{"ok", 1}, {"n", 1}},
-			bson.D{{"ok", 1}, {"n", 1}},
-			noMatch,
-			bson.D{{"ok", 1}, {"n", 0}, {"writeErrors", bson.A{
-				bson.D{{"index", 0}, {"code", 11000}, {"errmsg", "E11000 duplicate key error"}},
-			}}},
-			noMatch,
-			recoveryRead,
-			bson.D{{"ok", 1}, {"value", lease(6)}},
-			bson.D{{"ok", 1}, {"value", lease(1)}},
-			bson.D{{"ok", 1}, {"value", lease(6)}},
-			recoveryRead,
-			saved,
-			saved,
-			saved,
-		)
-
-		// Terms stamped on checkpoint writes, in command order.
-		checkpoints := make(chan int64, 8)
-		opts := options.Client().SetMonitor(&event.CommandMonitor{
-			Started: func(_ context.Context, e *event.CommandStartedEvent) {
-				if e.CommandName != "findAndModify" ||
-					e.Command.Lookup("findAndModify").StringValue() != config.RecoveryCollection {
-					return
-				}
-
-				term, _ := e.Command.Lookup("update", "$set", "term").AsInt64OK()
-				checkpoints <- term
-			},
-		})
-		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
-		target, err := mongo.Connect(opts)
-		require.NoError(t, err)
-
-		// Given: an ACTIVE instance at term 1 whose checkpoint is owned by term 5.
-		membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
-		require.NoError(t, err)
-		// The heartbeat loop would consume mocked responses on its own clock.
-		require.NoError(t, membership.Stop(ctx))
-		membership.SetRole(ha.RoleActive, 1)
-
-		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
-		require.NoError(t, pipeline.Recover(ctx, data))
-
-		epochCtx, epochCancel := context.WithCancel(ctx)
-		defer epochCancel()
 		s := &server{
-			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
 			targetCluster: target,
-			pcsm:          pipeline,
-			membership:    membership,
-			activeTerm:    1,
-			epochCtx:      epochCtx,
-			epochCancel:   epochCancel,
+			membership:    &ha.Membership{},
 		}
-		saveNow := make(chan struct{}, 1)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			RunCheckpointing(epochCtx, target, pipeline, 1, instanceID, time.Hour, saveNow,
-				func(storedTerm int64) { s.onFenced(ctx, epochCtx, 1, ha.Term(storedTerm)) })
-		}()
-		t.Cleanup(func() {
-			cancel()
-			<-done
-			require.NoError(t, target.Disconnect(t.Context()))
-		})
 
-		// And: the epoch's writer was fenced and the lease term repaired, with
-		// no renewal interleaved: membership has stepped down at the stale term.
-		saveNow <- struct{}{}
+		// Given: a tenure at term 3 ended and one at term 4 is current.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 3})
 		synctest.Wait()
-		role, term := membership.CurrentRole()
-		require.Equal(t, ha.RoleStandby, role)
-		require.Equal(t, ha.Term(1), term)
-		for len(checkpoints) > 0 {
-			require.Equal(t, int64(1), <-checkpoints, "only the fenced epoch has written so far")
-		}
+		ended := currentTenure(s)
+		s.observeOwnership(ctx, ha.Ownership{})
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 4})
+		synctest.Wait()
+		current := currentTenure(s)
+		require.NotSame(t, ended, current)
 
-		// When: a renewal sent before the fence has its stale-term response
-		// reconciled now, and the next renewal returns the repaired term before
-		// the promotion the first one queued is consumed.
-		membership.FirstLeaseTick(ctx)
-		membership.FirstLeaseTick(ctx)
-		role, term = membership.CurrentRole()
-		require.Equal(t, ha.RoleActive, role)
-		require.Equal(t, ha.Term(6), term)
+		// When: a fenced write of the ended tenure arrives late.
+		s.onFenced(ctx, ended, 9)
 
-		// Then: consuming the queued transitions, as watchRoleChanges does,
-		// leaves an epoch at the term this instance owns the lease at.
-		for drained := false; !drained; {
-			select {
-			case rc := <-membership.RoleChanges():
-				switch rc.Role {
-				case ha.RoleActive:
-					s.onPromote(ctx, rc.Term)
-				case ha.RoleStandby:
-					s.onDemote(ctx, rc.Term)
-				}
-			default:
-				drained = true
-			}
-		}
-		s.mu.Lock()
-		epoch := s.epochCtx
-		s.mu.Unlock()
-		require.NotNil(t, epoch, "the instance owns the lease at term 6 but has no epoch")
-		require.Equal(t, ha.Term(6), s.activeTerm)
-
-		// And: the new epoch's writer stamps the repaired term.
-		select {
-		case term := <-checkpoints:
-			require.Equal(t, int64(6), term)
-		case <-time.After(2 * time.Second):
-			t.Fatal("no checkpoint from the epoch at the repaired term")
-		}
+		// Then: the current tenure stands, and the floor moved past the fence.
+		require.Same(t, current, currentTenure(s))
+		require.NoError(t, current.ctx.Err())
+		require.Equal(t, ha.Term(10), s.minTerm)
 	})
 }
 
 // TestRunCheckpointingSavesOnSignal pins that a state change reaches the
-// target through the epoch's single writer as soon as it is signaled, not at
+// target through the tenure's single writer as soon as it is signaled, not at
 // the next tick.
 func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 	t.Parallel()

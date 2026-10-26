@@ -93,31 +93,21 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	require.NoError(t, pipeline.Recover(ctx, finalized))
 	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 7, "same-instance"))
 
-	oldEpoch, cancelOldEpoch := context.WithCancel(ctx)
-	defer cancelOldEpoch()
-	membership := &ha.Membership{}
-	membership.SetRole(ha.RoleActive, 8)
 	s := &server{
 		cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
+		sourceCluster: target,
 		targetCluster: target,
-		pcsm:          pipeline,
-		membership:    membership,
-		activeTerm:    7,
-		epochCtx:      oldEpoch,
-		epochCancel:   cancelOldEpoch,
+		membership:    &ha.Membership{},
 	}
-	defer func() {
-		if s.epochCancel != nil {
-			s.epochCancel()
-		}
-	}()
+	defer closeTenure(ctx, s)
 
-	// When: promotion restores the newer checkpoint, then the old callback
-	// reaches MongoDB before a checkpoint establishes term 8.
-	s.onPromote(ctx, 8)
-	require.Equal(t, ha.Term(8), s.activeTerm)
-	require.ErrorIs(t, oldEpoch.Err(), context.Canceled)
-	require.Equal(t, pcsm.State(pcsm.StateFinalized), pipeline.Status(ctx).State)
+	// When: ownership at term 8 opens a tenure that restores the newer
+	// checkpoint, then the old callback reaches MongoDB before a checkpoint
+	// establishes term 8.
+	s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 8})
+	promoted := awaitTenure(t, ctx, s)
+	require.Equal(t, ha.Term(8), promoted.term)
+	require.Equal(t, pcsm.State(pcsm.StateFinalized), promoted.pipeline.Status(ctx).State)
 
 	release()
 	select {
@@ -128,12 +118,12 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	if writeErr != nil {
 		require.ErrorIs(t, writeErr, errCheckpointFenced)
 	}
-	s.epochCancel() // Model a crash before the first new-epoch checkpoint.
+	promoted.cancel() // Model a crash before the first checkpoint of the new tenure.
 
 	// Then: a fresh process must not recover an older lifecycle state than
 	// the state restored by the successful promotion.
 	restarted := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
-	require.NoError(t, Restore(ctx, target, restarted))
+	require.NoError(t, Restore(ctx, target, restarted, 9))
 	require.Equal(t, pcsm.State(pcsm.StateFinalized), restarted.Status(ctx).State,
 		"late term-7 checkpoint replaced the promoted state; write error: %v", writeErr)
 }

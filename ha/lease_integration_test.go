@@ -5,7 +5,6 @@ package ha //nolint:testpackage
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -270,7 +269,7 @@ func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
 	assert.Equal(t, "pcsm-owner", lease.InstanceID)
 }
 
-func TestLeaseRunEmitsActive(t *testing.T) {
+func TestLeaseFirstTickReportsOwnership(t *testing.T) {
 	ctx := t.Context()
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
@@ -279,17 +278,10 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-run")
 
-	// FirstLeaseTick settles the role synchronously, as at startup.
-	m.FirstLeaseTick(ctx)
+	// FirstLeaseTick settles ownership synchronously, as at startup.
+	var reports []Ownership
+	m.FirstLeaseTick(ctx, func(o Ownership) { reports = append(reports, o) })
 
-	select {
-	case rc := <-m.RoleChanges():
-		assert.Equal(t, RoleActive, rc.Role, "the sole instance should become ACTIVE")
-		assert.Equal(t, Term(1), rc.Term)
-	case <-time.After(5 * time.Second):
-		t.Fatal("expected a RoleChange to ACTIVE within timeout")
-	}
-
-	role, _ := m.CurrentRole()
-	assert.Equal(t, RoleActive, role)
+	assert.Equal(t, []Ownership{{Held: true, Term: 1}}, reports, "the sole instance holds the lease at term 1")
+	assert.True(t, m.held)
 }

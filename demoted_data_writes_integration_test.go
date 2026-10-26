@@ -300,16 +300,16 @@ func (g *markerWriteGate) monitor() *event.CommandMonitor {
 	}
 }
 
-// TestDemotedActiveMustNotWriteTargetData pins the fence: an instance that
-// has lost the lease stops writing user data to the target, and a same-term
-// re-promotion replays what the suspension abandoned.
+// TestDemotedActiveMustNotWriteTargetData pins the containment: an instance
+// that has lost the lease stops writing user data to the target, and the
+// tenure that follows replays what the ended one abandoned.
 //
 // A target write is parked inside its CommandStarted hook, another instance
-// takes the lease (term 2), and this instance is demoted. Demotion must
-// cancel the parked write's context (the driver then fails the command
-// before it reaches the wire), leave the pipeline suspended, and start no
-// further data write. Re-promotion in the same term resumes from the
-// inclusive checkpoint floor and the write lands exactly once.
+// takes the lease (term 2), and this instance loses it. The loss must cancel
+// the parked write's context (the driver then fails the command before it
+// reaches the wire), end the tenure, and start no further data write. A later
+// tenure restores the checkpoint, resumes from its inclusive floor and the
+// write lands exactly once.
 //
 //nolint:paralleltest // Drives one pipeline against a shared source and target.
 func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
@@ -347,19 +347,20 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 		require.NoError(t, err)
 
 		// Given: this instance is the ACTIVE of term 1 and is replicating.
-		pipeline := pcsm.New(ctx, source, target, sourceVer, false, false)
-		membership := &ha.Membership{}
-		membership.SetRole(ha.RoleActive, 1)
 		s := &server{
 			cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
 			sourceCluster: source,
 			targetCluster: target,
-			pcsm:          pipeline,
-			membership:    membership,
-			activeTerm:    1,
+			sourceVersion: sourceVer,
+			membership:    &ha.Membership{},
 		}
+		defer closeTenure(ctx, s)
 
-		require.NoError(t, pipeline.Start(ctx, &pcsm.StartOptions{}))
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 1})
+		first := awaitTenure(t, ctx, s)
+		pipeline := first.pipeline
+
+		require.NoError(t, pipeline.Start(pcsm.WithEpoch(ctx, first.ctx), &pcsm.StartOptions{}))
 		requireDemotedCloneDone(t, ctx, pipeline)
 
 		// When: a write is in flight to the target and the lease moves on.
@@ -383,16 +384,16 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 		require.NoError(t, DoCheckpoint(ctx, target, pipeline, 2, "pcsm-successor"))
 		require.ErrorIs(t, DoCheckpoint(ctx, target, pipeline, 1, "pcsm-deposed"), errCheckpointFenced)
 
-		// Demote through the real path. Suspension cancels the parked write's
-		// context, which releases the hook; the driver then fails the command
-		// before it reaches the wire. The timer is a failure bound only: with the
-		// fence in place the context wins long before it fires, and a release by
-		// timer is reported as a failure below (byCancel false).
+		// Lose the lease through the real path. Ending the tenure cancels the
+		// parked write's context, which releases the hook; the driver then fails
+		// the command before it reaches the wire. The timer is a failure bound
+		// only: the context wins long before it fires, and a release by timer is
+		// reported as a failure below (byCancel false).
 		gate.setDemoted(true)
 		releaseBound := time.AfterFunc(10*time.Second, gate.releaseAll)
 		defer releaseBound.Stop()
 
-		s.onDemote(ctx, 1)
+		s.observeOwnership(ctx, ha.Ownership{})
 
 		var byCancel bool
 		select {
@@ -408,10 +409,9 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 			require.FailNow(t, "parked write did not report CommandFailed", "%v", ctx.Err())
 		}
 
-		// Then: the deposed instance landed nothing and settled as suspended.
-		status := pipeline.Status(ctx)
-		require.Equal(t, pcsm.State(pcsm.StatePaused), status.State, "demotion did not suspend the pipeline")
-		require.False(t, status.Repl.Pausing, "replication is still pausing after demotion returned")
+		// Then: the deposed instance landed nothing and its tenure is over.
+		require.Nil(t, currentTenure(s), "a lost lease did not end the tenure")
+		require.ErrorIs(t, first.ctx.Err(), context.Canceled)
 
 		targetColl := target.Database(demotedTestDB).Collection(demotedTestColl)
 		count, err := targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
@@ -420,24 +420,23 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 			"a deposed ACTIVE wrote user data to the target after losing the lease to term 2")
 		require.Zero(t, gate.lateStarts(), "a data write was started while demoted")
 
-		// And: a same-term re-promotion resumes the suspended pipeline, which
-		// replays the abandoned write from the inclusive checkpoint floor. A
-		// same term means no other instance held the lease: the stand-in
-		// successor's checkpoint goes first, or the resumed pipeline's own
-		// checkpoint would be fenced by it and demote this instance again.
-		require.NoError(t, DeleteRecoveryData(ctx, target))
+		// And: ownership at a later term opens a tenure with a new pipeline,
+		// restored from the stand-in successor's checkpoint, which replays the
+		// abandoned write from the inclusive checkpoint floor.
 		gate.setDemoted(false)
-		s.onPromote(ctx, 1)
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 3})
+		second := awaitTenure(t, ctx, s)
+		require.NotSame(t, pipeline, second.pipeline, "a new tenure must not reuse the ended one's pipeline")
 
 		select {
 		case <-gate.markerSucceeded:
 		case <-ctx.Done():
-			require.FailNow(t, "resumed pipeline never replayed the suspended write", "%v", ctx.Err())
+			require.FailNow(t, "the restored pipeline never replayed the abandoned write", "%v", ctx.Err())
 		}
 
 		count, err = targetColl.CountDocuments(ctx, bson.D{{"_id", demotedMarker}})
 		require.NoError(t, err)
-		require.Equal(t, int64(1), count, "same-term resume did not replay the suspended write exactly once")
+		require.Equal(t, int64(1), count, "the restored pipeline did not replay the abandoned write exactly once")
 
 		return nil
 	}))

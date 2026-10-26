@@ -316,8 +316,8 @@ func TestDispatch_Invalidate_CallOrdering(t *testing.T) {
 var errAbandonedBulk = errors.New("bulk abandoned by cancellation")
 
 // TestDispatch_Invalidate_BarrierError pins that a barrier over bulks a
-// canceled run abandoned (a demotion) does not fail replication, so a
-// same-term re-promotion can resume it, while the same error on a live run
+// canceled run abandoned (the end of a tenure) does not fail replication, so
+// the run settles at its inclusive floor, while the same error on a live run
 // still does.
 func TestDispatch_Invalidate_BarrierError(t *testing.T) {
 	t.Parallel()
