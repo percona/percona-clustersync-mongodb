@@ -702,8 +702,10 @@ type server struct {
 	mu sync.Mutex
 	// epochCtx is the context of the current ACTIVE tenure. Every execution
 	// the pipeline launches, the checkpointing loop and the state-change
-	// checkpoint derive from it; canceling it is the fence that stops a
-	// deposed instance from writing to the target. nil while STANDBY.
+	// checkpoint derive from it; canceling it contains a deposed instance: no
+	// further target write is issued, though a command already on the wire
+	// may still apply. Only checkpoint writes are fenced, by term. nil while
+	// STANDBY.
 	epochCtx    context.Context //nolint:containedctx // per-tenure ownership; see onPromote
 	epochCancel context.CancelFunc
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
@@ -876,7 +878,8 @@ func (s *server) logInitialRole() {
 // Close ends the ACTIVE epoch and joins the pipeline's work, releases the
 // lease (so a standby can take over promptly), leaves the membership set, and
 // closes the server connections. The epoch ends before the lease is released,
-// so no pipeline write can outlive the lease.
+// so no pipeline execution outlives the lease; a command already on the wire
+// may still apply.
 func (s *server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.endEpoch()

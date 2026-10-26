@@ -21,7 +21,7 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - `Term` increases on takeover and is passed downstream as the checkpoint fencing token.
 - Lease expiry and renewal use MongoDB server time (`$$NOW`), not client clocks.
 - Startup performs `FirstLeaseTick` before serving HTTP so the initial role is settled.
-- A non-cancellation acquire/renew error demotes to STANDBY with the last term; `context.Canceled` returns without reconciliation.
+- A non-cancellation acquire/renew error keeps an ACTIVE within its local lease deadline and otherwise demotes to STANDBY with the last term; `context.Canceled` returns without reconciliation.
 - Acquire/renew attempts use `HAOperationTimeout`; bootstrap timestamps are provisional until server-clock renewal succeeds.
 - Same-term renewals update state without emitting duplicate role-change events. An ACTIVE renewed at a new term emits: the lease was re-acquired, so the epoch opened for the previous term no longer matches it.
 - Bootstrap uses insert, not upsert; duplicate key means another contender won.
