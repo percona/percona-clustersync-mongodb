@@ -2,6 +2,8 @@ package mdb
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -59,39 +61,79 @@ func (s *IndexSpecification) IsClustered() bool {
 	return s.Clustered != nil && *s.Clustered
 }
 
+// isInternalDatabase reports whether name is one of the MongoDB-managed
+// databases that PCSM never replicates.
+func isInternalDatabase(name string) bool {
+	switch name {
+	case "admin", "config", "local":
+		return true
+	default:
+		return false
+	}
+}
+
+// ListDatabaseNames returns the names of all databases except admin, config, and local.
+//
+// The exclusion is client-side rather than a {name: {$nin: [...]}} filter: the
+// Atlas proxy tiers (Flex, M0) accept only a string or regex for name and
+// reject the operator form (PCSM-399).
 func ListDatabaseNames(ctx context.Context, m *mongo.Client) ([]string, error) {
 	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
-		return m.ListDatabaseNames(ctx,
-			bson.D{{"name", bson.D{{"$nin", bson.A{"admin", "config", "local"}}}}}) //nolint:wrapcheck
+		return m.ListDatabaseNames(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
+	}
 
-	return names, err //nolint:wrapcheck
+	return slices.DeleteFunc(names, isInternalDatabase), nil
+}
+
+// systemCollectionPrefix marks collections managed by MongoDB itself
+// (system.views, system.profile, system.buckets.*, ...).
+const systemCollectionPrefix = "system."
+
+// isSystemCollection reports whether name is a MongoDB system collection.
+func isSystemCollection(name string) bool {
+	return strings.HasPrefix(name, systemCollectionPrefix)
 }
 
 // ListCollectionNames returns a list of non-system collection names in the specified database.
+//
+// System collections are excluded client-side rather than with a
+// {name: {$not: <regex>}} filter: the Atlas proxy tiers (Flex, M0) reject any
+// regex under $not with "(AtlasError) can't get regex from filter doc not a
+// regex" (PCSM-399).
 func ListCollectionNames(ctx context.Context, m *mongo.Client, dbName string) ([]string, error) {
 	names, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]string, error) {
-		return m.Database(dbName).ListCollectionNames(ctx,
-			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}}) //nolint:wrapcheck
+		return m.Database(dbName).ListCollectionNames(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
+	}
 
-	return names, err //nolint:wrapcheck
+	return slices.DeleteFunc(names, isSystemCollection), nil
 }
 
 var ErrNotFound = errors.New("not found")
 
-// ListCollectionSpecs retrieves the specifications of collections.
+// ListCollectionSpecs retrieves the specifications of non-system collections.
+// System collections are excluded client-side; see ListCollectionNames.
 func ListCollectionSpecs(
 	ctx context.Context,
 	m *mongo.Client,
 	dbName string,
 ) ([]CollectionSpecification, error) {
 	specs, err := RunWithRetryVal(ctx, func(ctx context.Context) ([]CollectionSpecification, error) {
-		return m.Database(dbName).ListCollectionSpecifications(ctx,
-			bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}}) //nolint:wrapcheck
+		return m.Database(dbName).
+			ListCollectionSpecifications(ctx, bson.D{}) //nolint:wrapcheck // driver error, classified by callers
 	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // driver error, classified by callers
+	}
 
-	return specs, err //nolint:wrapcheck
+	return slices.DeleteFunc(specs, func(spec CollectionSpecification) bool {
+		return isSystemCollection(spec.Name)
+	}), nil
 }
 
 // GetCollectionSpec retrieves the specification of a collection.
