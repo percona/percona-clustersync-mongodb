@@ -26,9 +26,8 @@ var (
 	// same term holds a newer snapshot than the one being written. The write
 	// is dropped; the instance was not deposed.
 	errCheckpointSuperseded = errors.New("checkpoint superseded by a newer snapshot")
-	// errNoCheckpoint is returned by Restore when there is no recovery data.
-	// A promotion decides what that means: nothing to do for an idle
-	// pipeline, a stale pipeline that cannot be replaced otherwise.
+	// errNoCheckpoint is returned by Restore when there is no recovery data:
+	// the tenure's fresh pipeline stays idle, for a /start.
 	errNoCheckpoint = errors.New("no checkpoint to restore")
 )
 
@@ -117,14 +116,14 @@ func Restore(ctx context.Context, m *mongo.Client, rec Recoverable, term int64) 
 
 // RunCheckpointing persists the checkpoint every interval, and as soon as
 // saveNow signals, until ctx is canceled. It is the only checkpoint writer of
-// one ACTIVE epoch: the epoch's writes share one term, and a single writer
+// one ACTIVE tenure: the tenure's writes share one term, and a single writer
 // captures and saves them in order. The snapshot sequence covers what that
-// order cannot: a write of the same term that lands late, such as the one the
-// previous epoch's writer had on the wire when it was canceled, which MongoDB
-// may still apply after the next epoch saved a newer snapshot. Every write is
-// fenced against term. A write fenced by a newer term means this instance was
-// deposed; onFenced is invoked once with the term that owns the checkpoint and
-// the loop returns.
+// order cannot: a write of the same term that lands late or out of order, which
+// a process never produces across its own tenures (each opens at a new term)
+// but another process writing under the same term can, after a reset of the
+// lease document. Every write is fenced against term. A write fenced by a
+// newer term means the checkpoint is owned by a newer tenure; onFenced is
+// invoked once with that term and the loop returns.
 func RunCheckpointing(
 	ctx context.Context,
 	m *mongo.Client,

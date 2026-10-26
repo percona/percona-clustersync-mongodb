@@ -3,10 +3,10 @@
 // holds a MongoDB-backed lease and is ACTIVE while the rest stay STANDBY and
 // take over on failover. The lease loop reports the ownership each attempt
 // established to one observer, which derives the role from it. The lease term
-// doubles as a fencing token on checkpoint writes, so a deposed active cannot
-// overwrite the recovery checkpoint after losing the lease. Its data writes are
-// not fenced: cancellation contains them, and a command already on the wire may
-// still apply.
+// is stamped on checkpoint writes as a fencing token: a checkpoint owned by a
+// newer term rejects the writes of every older term, whatever the lease says
+// at that moment. Data writes are not fenced: cancellation contains them, and
+// a command already on the wire may still apply.
 package ha
 
 import (

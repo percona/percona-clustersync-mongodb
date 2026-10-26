@@ -29,7 +29,12 @@ func awaitTenure(t *testing.T, ctx context.Context, s *server) *tenure {
 	select {
 	case <-tn.ready:
 	case <-tn.done:
-		require.FailNow(t, "the tenure ended before it opened for requests")
+		// The opener has returned; it closed ready just before unless it failed.
+		select {
+		case <-tn.ready:
+		default:
+			require.FailNow(t, "the tenure ended before it opened for requests")
+		}
 	case <-ctx.Done():
 		require.FailNow(t, "the tenure did not open for requests", "%v", ctx.Err())
 	}

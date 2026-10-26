@@ -16,8 +16,10 @@ import (
 
 // Ownership is what one lease attempt established: whether this instance
 // holds the lease and, when it does, at which term. The lease loop reports it
-// after every attempt as a level, not a transition: an observer reconciles
-// against the latest ownership and never depends on having seen every change.
+// after every attempt that settles it, as a level, not a transition: an
+// observer reconciles against the latest ownership and never depends on
+// having seen every change. A canceled attempt, or a failed one while the
+// lease is held within its deadline, settles nothing and reports nothing.
 type Ownership struct {
 	Held bool
 	Term Term

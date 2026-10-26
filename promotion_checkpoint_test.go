@@ -107,8 +107,8 @@ func currentTenure(s *server) *tenure {
 // TestOwnershipDrivesTenures pins the controller against the ownership
 // levels the lease loop reports: ownership opens a tenure that restores the
 // checkpoint and checkpoints under its term; the same ownership again is a
-// renewal; ownership at another term replaces the tenure with one at that
-// term; and a lost lease ends it.
+// renewal; ownership at another term ends the tenure, and the next report of
+// it opens one at that term; and a lost lease ends the tenure.
 func TestOwnershipDrivesTenures(t *testing.T) {
 	t.Parallel()
 
@@ -156,16 +156,27 @@ func TestOwnershipDrivesTenures(t *testing.T) {
 
 		// When: the lease is held at term 4 while the tenure at 3 is open.
 		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 4})
+
+		// Then: the tenure at 3 is over, and the report that ended it opened
+		// nothing: it joined the tenure's work and may be stale by now.
+		require.ErrorIs(t, first.ctx.Err(), context.Canceled)
+		require.Nil(t, currentTenure(s), "a report that ended a tenure must not open one")
+		role, term = s.membership.CurrentRole()
+		require.Equal(t, ha.RoleStandby, role)
+		require.Equal(t, ha.Term(4), term)
+
+		// When: the next report still holds the lease at term 4.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 4})
 		synctest.Wait()
 
-		// Then: the tenure at 3 is over and one at 4 replaced it.
-		require.ErrorIs(t, first.ctx.Err(), context.Canceled)
+		// Then: a tenure at 4 is open.
 		second := currentTenure(s)
 		require.NotNil(t, second)
 		require.NotSame(t, first, second)
 		require.Equal(t, ha.Term(4), second.term)
 		require.True(t, second.isReady())
-		_, term = s.membership.CurrentRole()
+		role, term = s.membership.CurrentRole()
+		require.Equal(t, ha.RoleActive, role)
 		require.Equal(t, ha.Term(4), term)
 
 		time.Sleep(time.Second)

@@ -280,7 +280,14 @@ func (c *Clone) runToCompletion(ctx context.Context) {
 	c.finishTime = time.Now()
 	elapsed := c.finishTime.Sub(c.startTime)
 
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()):
+		lg.With(log.Elapsed(elapsed), log.Size(c.copiedSize.Load())).
+			Info("Data Clone canceled with its tenure")
+
+		return
+
+	case err != nil:
 		lg.With(log.Elapsed(elapsed)).
 			Errorf(err, "Data Clone has failed: %s in %s",
 				humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))

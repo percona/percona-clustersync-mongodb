@@ -1474,13 +1474,23 @@ type notActiveResponse struct {
 
 // admit binds a request to the current ACTIVE tenure and hands out its
 // pipeline: work the request launches ends with the tenure and is refused
-// once the tenure has ended. With no tenure open for requests (STANDBY, a
-// tenure still restoring its pipeline, or one that has ended) it answers 409
-// not_active and reports false.
+// once the tenure has ended. A tenure still restoring its pipeline admits the
+// request once the restore is done, within the request's context, so a client
+// that reached a just-promoted instance is served rather than bounced. With
+// no tenure open for requests (STANDBY, or a tenure that has ended) it
+// answers 409 not_active and reports false.
 func (s *server) admit(ctx context.Context, w http.ResponseWriter) (context.Context, *pcsm.PCSM, bool) {
 	s.mu.Lock()
 	t := s.tenure
 	s.mu.Unlock()
+
+	if t != nil {
+		select {
+		case <-t.ready:
+		case <-t.ctx.Done():
+		case <-ctx.Done():
+		}
+	}
 
 	if t == nil || t.ctx.Err() != nil || !t.isReady() {
 		role, _ := s.membership.CurrentRole()

@@ -20,10 +20,11 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
-// A run writes its first checkpoint from two places at once: the periodic loop
-// and the state-change callback. Neither finds a document, so both bootstrap
-// it, and the loser reads its duplicate key as a takeover by a newer instance.
-// Both writers hold the same term, so neither has been deposed.
+// Two writers of one term bootstrap the first checkpoint at once (once the
+// periodic loop and the state-change callback; today any two processes that
+// share a term after a lease reset). Neither finds a document, so both
+// bootstrap it, and the loser reads its duplicate key as a takeover by a newer
+// instance. Both writers hold the same term, so neither has been deposed.
 //
 //nolint:paralleltest // The recovery integration suite shares one checkpoint document.
 func TestSameTermBootstrapCollisionIsNotATakeover(t *testing.T) {
@@ -163,14 +164,13 @@ func TestFencedTenureEndsAndTheLeaseIsAdvanced(t *testing.T) {
 }
 
 // Finalize fires one state-change signal for finalizing and another for
-// finalized, and the epoch's single writer saves them in order. What that
-// order cannot cover is a write of the same term that lands late: the previous
-// epoch's writer, canceled with its update on the wire, may still have its
-// older snapshot applied by MongoDB after the new epoch saved a newer one.
-// Both carry the same term, so the fence lets both
-// through. The snapshot sequence orders them: a snapshot captured earlier must
-// not replace one captured later, a newer term still replaces anything, and
-// Recover must never rewind the sequence. Recover restores the finalize status
+// finalized, and the tenure's single writer saves them in order. What that
+// order cannot cover is a write of the same term that lands late or out of
+// order, as two writers sharing a term after a lease reset can produce. Both
+// carry the same term, so the fence lets both through. The snapshot sequence
+// orders them: a snapshot captured earlier must not replace one captured
+// later, a newer term still replaces anything, and Recover must never rewind
+// the sequence. Recover restores the finalize status
 // only for StateFinalized, so a regressed checkpoint would bring a restart
 // back without it even though finalization succeeded.
 //

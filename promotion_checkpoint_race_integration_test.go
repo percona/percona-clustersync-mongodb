@@ -67,8 +67,9 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	var writeErr error
 	go func() {
 		defer close(writeDone)
-		// Like createServer's state-change callback, this uses the server
-		// context, not the periodic checkpoint loop's cancellable context.
+		// A historical state-change writer on the server context, not on the
+		// tenure's cancelable one: the race this test keeps is about the
+		// write's ordering on the server, not about who issued it.
 		writeErr = DoCheckpoint(ctx, delayedTarget, pipeline, 7, "same-instance")
 	}()
 	defer func() {

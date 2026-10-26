@@ -91,6 +91,19 @@ func TestRestoreRefusesCheckpointOfNewerTerm(t *testing.T) {
 		"a refused restore must not recover the pipeline")
 }
 
+func newTestTenure(t *testing.T, target *mongo.Client) *tenure {
+	t.Helper()
+
+	tctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	return &tenure{
+		term: 1, ctx: tctx, cancel: cancel,
+		pipeline: pcsm.New(tctx, nil, target, mdb.ServerVersion{}, false, false),
+		ready:    make(chan struct{}), done: make(chan struct{}),
+	}
+}
+
 // TestHandlersRefuseWithoutOpenTenure pins admission: an ACTIVE role is not
 // enough to launch work; the request must be admitted under a tenure that is
 // open for requests.
@@ -119,30 +132,88 @@ func TestHandlersRefuseWithoutOpenTenure(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "not_active")
 
-	// And: a tenure still restoring its pipeline is not open for requests.
-	tctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	tn := &tenure{
-		term: 1, ctx: tctx, cancel: cancel,
-		pipeline: pcsm.New(tctx, nil, target, mdb.ServerVersion{}, false, false),
-		ready:    make(chan struct{}), done: make(chan struct{}),
+	// And: a tenure that ended before its restore finished is refused.
+	failed := newTestTenure(t, target)
+	failed.cancel()
+	close(failed.done)
+	s.tenure = failed
+
+	rec = post()
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "not_active")
+
+	// And: a tenure that ended after it opened is refused the same way.
+	ended := newTestTenure(t, target)
+	close(ended.ready)
+	ended.cancel()
+	s.tenure = ended
+
+	rec = post()
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "not_active")
+
+	for _, tn := range []*tenure{failed, ended} {
+		assert.Equal(t, pcsm.State(pcsm.StateIdle), tn.pipeline.Status(t.Context()).State,
+			"a refused request must not start the pipeline")
 	}
-	s.tenure = tn
+}
 
-	rec = post()
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	assert.Contains(t, rec.Body.String(), "not_active")
+// TestAdmitWaitsForRestore pins that a request reaching a tenure still
+// restoring its pipeline is admitted once the restore is done, not bounced.
+func TestAdmitWaitsForRestore(t *testing.T) {
+	t.Parallel()
 
-	// And: a tenure that ended since is refused the same way.
+	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+	tn := newTestTenure(t, target)
+	s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
+
+	type outcome struct {
+		ok       bool
+		pipeline *pcsm.PCSM
+	}
+	admitted := make(chan outcome, 1)
+	rec := httptest.NewRecorder()
+	go func() {
+		_, pipeline, ok := s.admit(t.Context(), rec)
+		admitted <- outcome{ok: ok, pipeline: pipeline}
+	}()
+
+	// When: the restore finishes.
 	close(tn.ready)
-	cancel()
 
-	rec = post()
+	// Then: the request is admitted to the tenure's pipeline, with no 409.
+	select {
+	case got := <-admitted:
+		assert.True(t, got.ok)
+		assert.Same(t, tn.pipeline, got.pipeline)
+	case <-t.Context().Done():
+		require.FailNow(t, "admit did not return after the restore finished")
+	}
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Body.String())
+}
+
+// TestAdmitRefusesWhenRequestExpiresDuringRestore pins the bound on that wait:
+// a request whose context ends while the restore is still in progress is
+// refused with 409.
+func TestAdmitRefusesWhenRequestExpiresDuringRestore(t *testing.T) {
+	t.Parallel()
+
+	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+	tn := newTestTenure(t, target)
+	s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
+
+	reqCtx, cancelReq := context.WithCancel(t.Context())
+	cancelReq()
+	rec := httptest.NewRecorder()
+
+	_, pipeline, ok := s.admit(reqCtx, rec)
+
+	assert.False(t, ok)
+	assert.Nil(t, pipeline)
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "not_active")
-
-	assert.Equal(t, pcsm.State(pcsm.StateIdle), tn.pipeline.Status(t.Context()).State,
-		"a refused request must not start the pipeline")
 }
 
 func TestRefusedNotActive(t *testing.T) {

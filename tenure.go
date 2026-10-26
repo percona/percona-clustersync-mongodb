@@ -42,18 +42,28 @@ func (s *server) ownershipObserver(ctx context.Context) ha.Observer {
 }
 
 // observeOwnership reconciles the lifecycle with the ownership the lease loop
-// reports after every attempt. The report is a level, not a transition: a
-// tenure open at the reported term is a renewal and nothing happens; any
-// other open tenure ends; ownership at an acceptable term with no tenure open
-// opens one. Ownership below minTerm is advanced through the lease instead,
-// so the tenure that follows gets a term no earlier one used.
+// reports. The report is a level, not a transition: a tenure open at the
+// reported term is a renewal and nothing happens; any other open tenure ends;
+// ownership at an acceptable term with no tenure open opens one. A report
+// that ended a tenure opens nothing itself: ending one joins its work, and
+// the report may be older than the lease by then, so the next report, a
+// fresh level, decides. Ownership below minTerm is advanced through the lease
+// instead, so the tenure that follows gets a term no earlier one used.
 func (s *server) observeOwnership(ctx context.Context, o ha.Ownership) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(o.Term)))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.tenure != nil && (!o.Held || o.Term != s.tenure.term) {
+	if o.Held {
+		s.term = o.Term
+	}
+
+	if s.tenure != nil {
+		if o.Held && o.Term == s.tenure.term {
+			return
+		}
+
 		if o.Held {
 			lg.With(log.Int64("tenureTerm", int64(s.tenure.term))).
 				Warn("Instance role: STANDBY (lease held at another term than the tenure's)")
@@ -62,17 +72,13 @@ func (s *server) observeOwnership(ctx context.Context, o ha.Ownership) {
 		}
 
 		s.endTenure(ctx, lg)
+
+		return
 	}
 
 	if !o.Held {
 		s.publishRole()
 
-		return
-	}
-
-	s.term = o.Term
-
-	if s.tenure != nil {
 		return
 	}
 
@@ -144,9 +150,9 @@ func (s *server) openTenure(ctx context.Context, term ha.Term, lg log.Logger) {
 }
 
 // runTenure does the work of opening tenure t: it restores the pipeline from
-// the checkpoint, starts the tenure's checkpoint writer, admits requests and
-// applies the deferred --start. It never takes mu, since endTenure joins it
-// under mu; an outcome it must act on is handed to a goroutine of its own.
+// the checkpoint, starts the tenure's checkpoint writer, applies the deferred
+// --start and then admits requests. It never takes mu, since endTenure joins
+// it under mu; an outcome it must act on is handed to a goroutine of its own.
 func (s *server) runTenure(ctx context.Context, t *tenure) {
 	defer close(t.done)
 
@@ -196,15 +202,20 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 			s.onFenced(ctx, t, ha.Term(storedTerm))
 		})
 
-	close(t.ready)
-
-	if s.autoStartOpts == nil {
-		return
+	// Apply the deferred --start now that this instance is ACTIVE, before any
+	// request is admitted, so a /start cannot pre-empt the configured options.
+	// Only valid from idle: a restored non-idle pipeline must not be restarted.
+	if s.autoStartOpts != nil {
+		s.autoStart(ectx, t, lg)
 	}
 
-	// Apply the deferred --start now that this instance is ACTIVE. Only valid
-	// from idle: a restored non-idle pipeline must not be restarted.
-	state := t.pipeline.Status(ctx).State
+	close(t.ready)
+}
+
+// autoStart applies the deferred --start to tenure t's pipeline, when it is
+// idle.
+func (s *server) autoStart(ectx context.Context, t *tenure, lg log.Logger) {
+	state := t.pipeline.Status(ectx).State
 	if state != pcsm.StateIdle {
 		lg.With(log.String("state", string(state))).
 			Info("Skipping --start on promotion: replication already in progress")
@@ -212,18 +223,21 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 		return
 	}
 
-	err = t.pipeline.Start(ectx, s.autoStartOpts)
+	err := t.pipeline.Start(ectx, s.autoStartOpts)
 	if err != nil {
 		lg.Error(err, "auto-start on promotion")
 	}
 }
 
-// endTenure ends the current tenure, if any: it cancels the epoch, joins the
-// goroutine that opened it and the pipeline's executions, and drops the
-// pipeline. Cancellation contains a deposed instance's writes; a command
-// already on the wire may still apply. The caller holds mu, also while
-// joining, which cancellation makes short. A join cut short by ctx is
-// logged; the tenure is over either way.
+// endTenure ends the current tenure, if any: it cancels the epoch, advertises
+// STANDBY, then joins the goroutine that opened the tenure and the pipeline's
+// executions, and drops the pipeline. Cancellation contains a deposed
+// instance's writes; a command already on the wire may still apply. The
+// caller holds mu, also while joining: nothing of the tenure may be reused,
+// so no replacement opens before the join. Cancellation makes the join short
+// except where a component finishes its own cleanup on a bounded context of
+// its own; a join cut short by ctx is logged, and the tenure is over either
+// way, since every execution derives from the canceled epoch.
 func (s *server) endTenure(ctx context.Context, lg log.Logger) {
 	t := s.tenure
 	if t == nil {
@@ -232,14 +246,18 @@ func (s *server) endTenure(ctx context.Context, lg log.Logger) {
 
 	s.tenure = nil
 	t.cancel()
-	<-t.done
+	s.publishRole()
+
+	select {
+	case <-t.done:
+	case <-ctx.Done():
+		lg.Warn("Ending the tenure without waiting for its opener to return")
+	}
 
 	err := t.pipeline.Stop(ctx)
 	if err != nil {
 		lg.Error(err, "stop the pipeline of the ended tenure")
 	}
-
-	s.publishRole()
 }
 
 // onFenced handles a checkpoint write of tenure t fenced by storedTerm: the

@@ -93,7 +93,8 @@ func TestStop_IdleIsNoop(t *testing.T) {
 // TestStop_DuringCloneCancelsAndJoins pins the clone phase: Stop cancels the
 // clone's context, waits for the run to exit and starts no replication. The
 // clone ended by that cancellation is not a failure; the pipeline is
-// discarded with its tenure, and the next one re-clones from the checkpoint.
+// discarded with its tenure, the next one restores the interrupted clone as a
+// failed state, and a new /start re-clones.
 func TestStop_DuringCloneCancelsAndJoins(t *testing.T) {
 	t.Parallel()
 
