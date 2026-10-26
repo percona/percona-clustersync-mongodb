@@ -1492,7 +1492,9 @@ func (s *server) admit(ctx context.Context, w http.ResponseWriter) (context.Cont
 		}
 	}
 
-	if t == nil || t.ctx.Err() != nil || !t.isReady() {
+	// A request that expired while waiting is refused even if the tenure is
+	// ready by now: nothing may launch for a caller that has gone away.
+	if t == nil || t.ctx.Err() != nil || !t.isReady() || ctx.Err() != nil {
 		role, _ := s.membership.CurrentRole()
 		s.writeNotActive(ctx, w, role)
 

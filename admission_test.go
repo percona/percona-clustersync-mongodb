@@ -195,25 +195,34 @@ func TestAdmitWaitsForRestore(t *testing.T) {
 }
 
 // TestAdmitRefusesWhenRequestExpiresDuringRestore pins the bound on that wait:
-// a request whose context ends while the restore is still in progress is
-// refused with 409.
+// a request whose context ended while the restore was in progress is refused
+// with 409, also when the restore has finished by the time the wait returns.
 func TestAdmitRefusesWhenRequestExpiresDuringRestore(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
-	tn := newTestTenure(t, target)
-	s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
+	for _, readyByThen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "still restoring", true: "ready by then"}[readyByThen], func(t *testing.T) {
+			t.Parallel()
 
-	reqCtx, cancelReq := context.WithCancel(t.Context())
-	cancelReq()
-	rec := httptest.NewRecorder()
+			target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+			tn := newTestTenure(t, target)
+			s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
 
-	_, pipeline, ok := s.admit(reqCtx, rec)
+			reqCtx, cancelReq := context.WithCancel(t.Context())
+			cancelReq()
+			if readyByThen {
+				close(tn.ready)
+			}
+			rec := httptest.NewRecorder()
 
-	assert.False(t, ok)
-	assert.Nil(t, pipeline)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	assert.Contains(t, rec.Body.String(), "not_active")
+			_, pipeline, ok := s.admit(reqCtx, rec)
+
+			assert.False(t, ok)
+			assert.Nil(t, pipeline)
+			assert.Equal(t, http.StatusConflict, rec.Code)
+			assert.Contains(t, rec.Body.String(), "not_active")
+		})
+	}
 }
 
 func TestRefusedNotActive(t *testing.T) {
