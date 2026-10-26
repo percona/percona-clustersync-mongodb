@@ -1076,8 +1076,9 @@ func (s *server) onPromote(ctx context.Context, term ha.Term) {
 	}
 
 	// The lease loop kept running meanwhile. If it demoted this instance
-	// again, the pending STANDBY transition is consumed right after this
-	// returns and ends the epoch; do not start checkpointing for it.
+	// again, or renewed it at a newer term, the transition it emitted is
+	// consumed right after this returns and ends this epoch (a promotion at
+	// the newer term replaces it); do not start checkpointing for it.
 	role, currentTerm := s.membership.CurrentRole()
 	if role != ha.RoleActive || currentTerm != term {
 		lg.Info("Demoted during promotion; not starting checkpointing")
@@ -1201,11 +1202,11 @@ func (s *server) onFenced(ctx, epochCtx context.Context, term, storedTerm ha.Ter
 
 	// The lease loop does not take mu. A renewal at the stale term that
 	// reconciled ACTIVE between the step-down and the advance leaves
-	// membership ACTIVE; the renewal at the advanced term then only updates
-	// the term, since same-role renewals never emit, and nothing promotes this
-	// instance again. With the epoch over, membership must not stay ACTIVE:
-	// step down at whatever term it advertises, so the next renewal is a real
-	// transition.
+	// membership ACTIVE at a term every checkpoint write rejects, and the
+	// promotion it queued would open an epoch there only to be fenced again.
+	// With the epoch over, membership must not stay ACTIVE: step down at
+	// whatever term it advertises, so that promotion is dropped as stale and
+	// the renewal at the advanced term is a real transition.
 	if role, current := s.membership.CurrentRole(); role == ha.RoleActive {
 		s.membership.StepDown(current)
 		lg.With(log.Int64("currentTerm", int64(current))).

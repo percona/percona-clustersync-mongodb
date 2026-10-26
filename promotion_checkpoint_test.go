@@ -267,6 +267,169 @@ func TestFencedWriteRepairsStaleLeaseTerm(t *testing.T) {
 	})
 }
 
+// TestRenewalAtNewTermPromotesWhileActive pins the level invariant behind the
+// lease repair: an instance that owns the lease at a term the checkpoint
+// accepts has an epoch and a checkpoint writer at that term, whatever the
+// order in which its renewals returned. The racing renewal here is one whose
+// response lands only after onFenced has finished: it reconciles ACTIVE at
+// the stale term and queues that promotion, then the renewal at the repaired
+// term returns before the queue is consumed. The term changes while the role
+// stays ACTIVE; unless that is a transition too, the queued stale promotion
+// is rejected and nothing ever opens an epoch at the repaired term.
+func TestRenewalAtNewTermPromotesWhileActive(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		const instanceID = "pcsm-late-renewal"
+
+		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
+		require.NoError(t, err)
+		fenced := bson.D{{"_id", recoveryID}, {"term", int64(5)}, {"seq", int64(1)}, {"data", bson.Raw(data)}}
+		recoveryRead := bson.D{{"ok", 1}, {"cursor", bson.D{
+			{"id", int64(0)},
+			{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
+			{"firstBatch", bson.A{fenced}},
+		}}}
+		lease := func(term int64) bson.D {
+			return bson.D{
+				{"_id", ha.LeaseID},
+				{"group", "g"},
+				{"instanceId", instanceID},
+				{"term", term},
+				{"electionDate", time.Now()},
+				{"expiresAt", time.Now().Add(config.LeaseTTL)},
+			}
+		}
+		noMatch := bson.D{{"ok", 1}, {"value", nil}}
+		saved := bson.D{{"ok", 1}, {"value", fenced}}
+		// Responses in command order: join, leave, the fenced write (ordered
+		// update, bootstrap insert, retried update, classifying read), the
+		// lease term advance, the late renewal response at the stale term, the
+		// renewal at the repaired term, the restore read on promotion, and the
+		// checkpoints of the new epoch.
+		deployment := drivertest.NewMockDeployment(
+			bson.D{{"ok", 1}, {"n", 1}},
+			bson.D{{"ok", 1}, {"n", 1}},
+			noMatch,
+			bson.D{{"ok", 1}, {"n", 0}, {"writeErrors", bson.A{
+				bson.D{{"index", 0}, {"code", 11000}, {"errmsg", "E11000 duplicate key error"}},
+			}}},
+			noMatch,
+			recoveryRead,
+			bson.D{{"ok", 1}, {"value", lease(6)}},
+			bson.D{{"ok", 1}, {"value", lease(1)}},
+			bson.D{{"ok", 1}, {"value", lease(6)}},
+			recoveryRead,
+			saved,
+			saved,
+			saved,
+		)
+
+		// Terms stamped on checkpoint writes, in command order.
+		checkpoints := make(chan int64, 8)
+		opts := options.Client().SetMonitor(&event.CommandMonitor{
+			Started: func(_ context.Context, e *event.CommandStartedEvent) {
+				if e.CommandName != "findAndModify" ||
+					e.Command.Lookup("findAndModify").StringValue() != config.RecoveryCollection {
+					return
+				}
+
+				term, _ := e.Command.Lookup("update", "$set", "term").AsInt64OK()
+				checkpoints <- term
+			},
+		})
+		require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", deployment))
+		target, err := mongo.Connect(opts)
+		require.NoError(t, err)
+
+		// Given: an ACTIVE instance at term 1 whose checkpoint is owned by term 5.
+		membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{InstanceID: instanceID, Group: "g"})
+		require.NoError(t, err)
+		// The heartbeat loop would consume mocked responses on its own clock.
+		require.NoError(t, membership.Stop(ctx))
+		membership.SetRole(ha.RoleActive, 1)
+
+		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
+		require.NoError(t, pipeline.Recover(ctx, data))
+
+		epochCtx, epochCancel := context.WithCancel(ctx)
+		defer epochCancel()
+		s := &server{
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+			targetCluster: target,
+			pcsm:          pipeline,
+			membership:    membership,
+			activeTerm:    1,
+			epochCtx:      epochCtx,
+			epochCancel:   epochCancel,
+		}
+		saveNow := make(chan struct{}, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			RunCheckpointing(epochCtx, target, pipeline, 1, instanceID, time.Hour, saveNow,
+				func(storedTerm int64) { s.onFenced(ctx, epochCtx, 1, ha.Term(storedTerm)) })
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-done
+			require.NoError(t, target.Disconnect(t.Context()))
+		})
+
+		// And: the epoch's writer was fenced and the lease term repaired, with
+		// no renewal interleaved: membership has stepped down at the stale term.
+		saveNow <- struct{}{}
+		synctest.Wait()
+		role, term := membership.CurrentRole()
+		require.Equal(t, ha.RoleStandby, role)
+		require.Equal(t, ha.Term(1), term)
+		for len(checkpoints) > 0 {
+			require.Equal(t, int64(1), <-checkpoints, "only the fenced epoch has written so far")
+		}
+
+		// When: a renewal sent before the fence has its stale-term response
+		// reconciled now, and the next renewal returns the repaired term before
+		// the promotion the first one queued is consumed.
+		membership.FirstLeaseTick(ctx)
+		membership.FirstLeaseTick(ctx)
+		role, term = membership.CurrentRole()
+		require.Equal(t, ha.RoleActive, role)
+		require.Equal(t, ha.Term(6), term)
+
+		// Then: consuming the queued transitions, as watchRoleChanges does,
+		// leaves an epoch at the term this instance owns the lease at.
+		for drained := false; !drained; {
+			select {
+			case rc := <-membership.RoleChanges():
+				switch rc.Role {
+				case ha.RoleActive:
+					s.onPromote(ctx, rc.Term)
+				case ha.RoleStandby:
+					s.onDemote(ctx, rc.Term)
+				}
+			default:
+				drained = true
+			}
+		}
+		s.mu.Lock()
+		epoch := s.epochCtx
+		s.mu.Unlock()
+		require.NotNil(t, epoch, "the instance owns the lease at term 6 but has no epoch")
+		require.Equal(t, ha.Term(6), s.activeTerm)
+
+		// And: the new epoch's writer stamps the repaired term.
+		select {
+		case term := <-checkpoints:
+			require.Equal(t, int64(6), term)
+		case <-time.After(2 * time.Second):
+			t.Fatal("no checkpoint from the epoch at the repaired term")
+		}
+	})
+}
+
 // TestRunCheckpointingSavesOnSignal pins that a state change reaches the
 // target through the epoch's single writer as soon as it is signaled, not at
 // the next tick.

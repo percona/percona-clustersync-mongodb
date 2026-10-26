@@ -128,13 +128,16 @@ func (m *Membership) Group() string { return m.group }
 
 // SetRole updates the advertised role and term and triggers an immediate
 // heartbeat so the member document reflects the change without waiting for the
-// next tick. It returns true when the role actually transitioned. Membership is
-// the single source of truth for (role, term); the election layer drives all
+// next tick. It returns true when the tenure changed: the role transitioned,
+// or an ACTIVE was renewed at a new term. The latter is a re-acquisition, not
+// a renewal: the lease was lost and won again between two ticks, so the epoch
+// opened for the previous term no longer matches the lease. Membership is the
+// single source of truth for (role, term); the election layer drives all
 // transitions through here. The gauges are published under the lock, so they
 // never report a transition out of the order it was recorded.
 func (m *Membership) SetRole(role Role, term Term) bool {
 	m.mu.Lock()
-	transitioned := m.role != role
+	transitioned := m.role != role || (role == RoleActive && m.term != term)
 	m.role = role
 	m.term = term
 

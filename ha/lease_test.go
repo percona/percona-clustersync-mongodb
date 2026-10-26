@@ -250,7 +250,7 @@ func TestReconcileNoEmitOnRenew(t *testing.T) {
 	}
 }
 
-func TestReconcileNoEmitOnTermOnlyChangeWhileActive(t *testing.T) {
+func TestReconcileEmitsOnTermChangeWhileActive(t *testing.T) {
 	t.Parallel()
 
 	m := newTestLeaseMember()
@@ -258,16 +258,18 @@ func TestReconcileNoEmitOnTermOnlyChangeWhileActive(t *testing.T) {
 	m.reconcileRole(RoleActive, 1, testLogger())
 	<-m.roleChangeCh
 
-	// A term advance with no role change is still not a transition.
+	// An ACTIVE renewed at a new term re-acquired the lease: the epoch opened
+	// for term 1 no longer matches it, so this is a transition.
 	m.reconcileRole(RoleActive, 2, testLogger())
 
 	_, term := m.CurrentRole()
-	assert.Equal(t, Term(2), term, "term should still be updated")
+	assert.Equal(t, Term(2), term)
 
 	select {
 	case rc := <-m.roleChangeCh:
-		t.Fatalf("expected no emit on term-only change while ACTIVE, got %+v", rc)
+		assert.Equal(t, RoleChange{Role: RoleActive, Term: 2}, rc)
 	default:
+		t.Fatal("expected a RoleChange on an ACTIVE renewal at a new term")
 	}
 }
 

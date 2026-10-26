@@ -23,7 +23,7 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - Startup performs `FirstLeaseTick` before serving HTTP so the initial role is settled.
 - A non-cancellation acquire/renew error demotes to STANDBY with the last term; `context.Canceled` returns without reconciliation.
 - Acquire/renew attempts use `HAOperationTimeout`; bootstrap timestamps are provisional until server-clock renewal succeeds.
-- Same-role renewals update state without emitting duplicate role-change events.
+- Same-term renewals update state without emitting duplicate role-change events. An ACTIVE renewed at a new term emits: the lease was re-acquired, so the epoch opened for the previous term no longer matches it.
 - Bootstrap uses insert, not upsert; duplicate key means another contender won.
 - Role state and term are read and updated through `Membership` synchronization methods.
 - `RoleChanges` coalesces to the latest transition in a one-slot channel; consumers must not require a complete transition history.
@@ -38,4 +38,4 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - Never treat duplicate-key during lease bootstrap as a retryable service failure.
 - Never treat a failed lease operation as proof of ownership or bypass its fail-safe demotion.
 - Never decrement or reuse a fencing term after another instance acquires the lease.
-- Never emit role changes for ordinary same-owner renewals.
+- Never emit role changes for ordinary same-term renewals.

@@ -120,7 +120,8 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger) {
 }
 
 // reconcileRole records the role/term on the member and emits a RoleChange when
-// the role actually transitions. Same-role renewals do not emit.
+// the tenure changes: a role transition, or an ACTIVE renewed at a new term.
+// Same-term renewals do not emit.
 func (m *Membership) reconcileRole(role Role, term Term, lg log.Logger) {
 	if !m.SetRole(role, term) {
 		return
