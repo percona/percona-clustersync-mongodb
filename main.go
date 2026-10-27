@@ -445,6 +445,10 @@ func newResetLeaseCmd(cfg *config.Config) *cobra.Command {
 		Use:    "lease",
 		Hidden: true,
 		Short:  "Reset HA lease state",
+		Long: "Delete the HA lease document only. Lease terms restart at 1, below the term of a " +
+			"surviving checkpoint, so the next instance opens one fenced tenure per term until it " +
+			"reaches the checkpoint's. Use 'pcsm reset' to reset the lease and recovery state " +
+			"together. Stop every instance before running either.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
@@ -709,9 +713,9 @@ type server struct {
 	// term is the last lease term this instance held; advertised with the role.
 	term ha.Term
 	// minTerm is the lowest term a new tenure may open at: above every term a
-	// tenure of this process ran at and above every term that fenced one, so
-	// no two tenures ever write under one term. Ownership below it is advanced
-	// through the lease instead of acted on.
+	// tenure of this process ran at, so no two tenures ever write under one
+	// term. Ownership below it is advanced through the lease instead of acted
+	// on.
 	minTerm ha.Term
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
 	// (the deferred effect of the --start flag). Set at construction, never

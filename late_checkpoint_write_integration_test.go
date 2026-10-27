@@ -20,12 +20,14 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
+// A checkpoint write of an ended tenure that reaches the server after the
+// next tenure claimed the document is rejected, whatever it holds, so a
+// process restarted after that promotion recovers what the promotion
+// restored, never the late write. The write is held before the server by the
+// command monitor, so the race is driven, not waited for.
+//
 //nolint:paralleltest // The recovery integration suite shares one checkpoint document.
-func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
-	// This covers the uncancelled state-change callback, not cancellation of a
-	// periodic write already received by MongoDB.
-	t.Skip("Known checkpoint race deferred.")
-
+func TestLateWriteOfEndedTermCannotRegressTheClaimedCheckpoint(t *testing.T) {
 	target := recoveryTestClient(t)
 	defer func() { require.NoError(t, target.Disconnect(t.Context())) }()
 
@@ -33,11 +35,21 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	defer cancel()
 	require.NoError(t, recoveryColl(target).Drop(ctx))
 
-	// Given: a state-change callback captured a failed pipeline in term 7.
+	// Given: the tenure at term 7 claimed the checkpoint and saved a
+	// finalizing snapshot.
 	pipeline := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
-	failed, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
-	require.NoError(t, err)
-	require.NoError(t, pipeline.Recover(ctx, failed))
+	recoverFrom := func(state pcsm.State) {
+		data, err := bson.Marshal(bson.D{{"state", state}})
+		require.NoError(t, err)
+		require.NoError(t, pipeline.Recover(ctx, data))
+	}
+	recoverFrom(pcsm.StateFinalizing)
+	require.ErrorIs(t, Restore(ctx, target, pipeline, 7, "pcsm-old"), errNoCheckpoint)
+	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 7, "pcsm-old"))
+
+	// And: its next write, a finalized snapshot, has been captured but not
+	// received by the server when the tenure ends; its outcome is unknown.
+	recoverFrom(pcsm.StateFinalized)
 
 	captured := make(chan struct{})
 	released := make(chan struct{})
@@ -51,8 +63,6 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 					return
 				}
 
-				// The BSON snapshot and term have been captured, but MongoDB has
-				// not received this write. Its real predicate runs after release.
 				close(captured)
 				select {
 				case <-released:
@@ -67,10 +77,7 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	var writeErr error
 	go func() {
 		defer close(writeDone)
-		// A historical state-change writer on the server context, not on the
-		// tenure's cancelable one: the race this test keeps is about the
-		// write's ordering on the server, not about who issued it.
-		writeErr = DoCheckpoint(ctx, delayedTarget, pipeline, 7, "same-instance")
+		writeErr = DoCheckpoint(ctx, delayedTarget, pipeline, 7, "pcsm-old")
 	}()
 	defer func() {
 		release()
@@ -87,13 +94,6 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 		require.FailNow(t, "checkpoint snapshot was not captured", "%v", ctx.Err())
 	}
 
-	// Install a later, settled lifecycle snapshot and persist it in the same
-	// term while the earlier callback is outstanding.
-	finalized, err := bson.Marshal(bson.D{{"state", pcsm.StateFinalized}})
-	require.NoError(t, err)
-	require.NoError(t, pipeline.Recover(ctx, finalized))
-	require.NoError(t, DoCheckpoint(ctx, target, pipeline, 7, "same-instance"))
-
 	s := &server{
 		cfg:           &config.Config{RecoveryCheckpointInterval: time.Hour},
 		sourceCluster: target,
@@ -102,13 +102,13 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	}
 	defer closeTenure(ctx, s)
 
-	// When: ownership at term 8 opens a tenure that restores the newer
-	// checkpoint, then the old callback reaches MongoDB before a checkpoint
-	// establishes term 8.
+	// When: ownership at term 8 opens a tenure, which claims the document
+	// and restores the finalizing snapshot, and the held write then reaches
+	// the server.
 	s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 8})
 	promoted := awaitTenure(t, ctx, s)
 	require.Equal(t, ha.Term(8), promoted.term)
-	require.Equal(t, pcsm.State(pcsm.StateFinalized), promoted.pipeline.Status(ctx).State)
+	require.Equal(t, pcsm.State(pcsm.StateFinalizing), promoted.pipeline.Status(ctx).State)
 
 	release()
 	select {
@@ -116,15 +116,15 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	case <-ctx.Done():
 		require.FailNow(t, "delayed checkpoint did not finish", "%v", ctx.Err())
 	}
-	if writeErr != nil {
-		require.ErrorIs(t, writeErr, errCheckpointFenced)
-	}
+
+	// Then: the late write is fenced, and the document is still the tenure's.
+	require.ErrorIs(t, writeErr, errCheckpointFenced)
+	require.Equal(t, int64(8), readCheckpoint(t, ctx, target).Term)
 	promoted.cancel() // Model a crash before the first checkpoint of the new tenure.
 
-	// Then: a fresh process must not recover an older lifecycle state than
-	// the state restored by the successful promotion.
+	// And: a fresh process recovers what the promotion restored.
 	restarted := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
-	require.NoError(t, Restore(ctx, target, restarted, 9))
-	require.Equal(t, pcsm.State(pcsm.StateFinalized), restarted.Status(ctx).State,
-		"late term-7 checkpoint replaced the promoted state; write error: %v", writeErr)
+	require.NoError(t, Restore(ctx, target, restarted, 9, "pcsm-new"))
+	require.Equal(t, pcsm.State(pcsm.StateFinalizing), restarted.Status(ctx).State,
+		"a late write of the ended term replaced the promoted state")
 }

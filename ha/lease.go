@@ -308,10 +308,8 @@ func (m *Membership) releaseLease(ctx context.Context) error {
 // left untouched.
 //
 // It gives a new ACTIVE tenure a term no earlier tenure used: a renewal after
-// a loss keeps the term when nobody else took the lease in between, and a
-// lease document reset while recovery data existed can sit below the
-// checkpoint's fencing term. Both would otherwise let two tenures write under
-// one term.
+// a loss keeps the term when nobody else took the lease in between, which
+// would otherwise let two tenures write under one term.
 func (m *Membership) AdvanceTerm(ctx context.Context, to Term) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, config.HAOperationTimeout)
 	defer cancel()

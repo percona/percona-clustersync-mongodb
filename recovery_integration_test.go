@@ -129,7 +129,7 @@ func dataFieldType(t *testing.T, ctx context.Context, client *mongo.Client) bson
 	return raw.Lookup("data").Type
 }
 
-func TestDoCheckpointBootstrapAndTerm(t *testing.T) {
+func TestRestoreClaimsAndCheckpointWrites(t *testing.T) {
 	ctx := t.Context()
 	client := recoveryTestClient(t)
 	defer func() { _ = client.Disconnect(ctx) }()
@@ -138,25 +138,48 @@ func TestDoCheckpointBootstrapAndTerm(t *testing.T) {
 
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
 
-	// First write bootstraps at term 1 and records the writer's instance id.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
+	// The first claim creates the document at term 1, owned by the claimant,
+	// with nothing to restore.
+	require.ErrorIs(t, Restore(ctx, client, rec, 1, "pcsm-a"), errNoCheckpoint)
 	cp := readCheckpoint(t, ctx, client)
 	assert.Equal(t, int64(1), cp.Term)
 	assert.Equal(t, "pcsm-a", cp.InstanceID)
-	assert.Equal(t, bson.TypeEmbeddedDocument, dataFieldType(t, ctx, client),
-		"bootstrap write must store data as an embedded document")
+	assert.Empty(t, cp.Data)
 
-	// Same term renews.
+	// A write of the claimed term saves the snapshot.
 	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
 	assert.Equal(t, int64(1), readCheckpoint(t, ctx, client).Term)
 	assert.Equal(t, bson.TypeEmbeddedDocument, dataFieldType(t, ctx, client),
-		"update write must store data as an embedded document")
+		"a write must store data as an embedded document")
 
-	// Newer term advances the stored term and the recorded instance id.
-	require.NoError(t, DoCheckpoint(ctx, client, rec, 2, "pcsm-b"))
+	// A claim at a newer term takes the document over, keeping the snapshot,
+	// and the new owner's writes are accepted.
+	require.NoError(t, Restore(ctx, client, rec, 2, "pcsm-b"))
 	cp = readCheckpoint(t, ctx, client)
 	assert.Equal(t, int64(2), cp.Term)
 	assert.Equal(t, "pcsm-b", cp.InstanceID)
+	assert.Equal(t, bson.TypeEmbeddedDocument, dataFieldType(t, ctx, client),
+		"a claim must keep the stored snapshot")
+	require.NoError(t, DoCheckpoint(ctx, client, rec, 2, "pcsm-b"))
+	assert.Equal(t, int64(2), readCheckpoint(t, ctx, client).Term)
+}
+
+// TestDoCheckpointNeverCreatesTheDocument pins that a write only lands on a
+// document a claim created: a tenure writes what it claimed, nothing else.
+func TestDoCheckpointNeverCreatesTheDocument(t *testing.T) {
+	ctx := t.Context()
+	client := recoveryTestClient(t)
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	require.NoError(t, recoveryColl(client).Drop(ctx))
+
+	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
+
+	require.ErrorIs(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"), errCheckpointFenced)
+
+	count, err := recoveryColl(client).CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.Zero(t, count)
 }
 
 func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
@@ -168,24 +191,28 @@ func TestDoCheckpointFencedByNewerTerm(t *testing.T) {
 
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
 
-	// A new active establishes term 2.
+	// A new active claims the document at term 2.
+	require.ErrorIs(t, Restore(ctx, client, rec, 2, "pcsm-b"), errNoCheckpoint)
 	require.NoError(t, DoCheckpoint(ctx, client, rec, 2, "pcsm-b"))
 
-	// A deposed active still on term 1 must be fenced.
-	err := DoCheckpoint(ctx, client, rec, 1, "pcsm-a")
-	require.ErrorIs(t, err, errCheckpointFenced)
+	// A deposed active still on term 1 must be fenced, on a write and on a
+	// claim alike.
+	require.ErrorIs(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"), errCheckpointFenced)
+	require.ErrorIs(t, Restore(ctx, client, rec, 1, "pcsm-a"), errCheckpointFenced)
 
-	// The stored term is unchanged by the fenced write.
-	assert.Equal(t, int64(2), readCheckpoint(t, ctx, client).Term)
+	// The stored term and owner are unchanged by the fenced attempts.
+	cp := readCheckpoint(t, ctx, client)
+	assert.Equal(t, int64(2), cp.Term)
+	assert.Equal(t, "pcsm-b", cp.InstanceID)
 }
 
-// TestDoCheckpointBootstrapCollision pins that losing the bootstrap insert to
-// another writer is settled by the stored term, not by the collision: an
-// older term's late bootstrap does not depose this writer, which still saves
-// its checkpoint; a newer term fences.
+// TestRestoreBootstrapCollision pins that losing the bootstrap insert to
+// another claimant is settled by the stored term, not by the collision: an
+// older term's late bootstrap does not depose this claimant, which still
+// claims the document; a newer term fences.
 //
 //nolint:paralleltest // the cases share the suite's single checkpoint document
-func TestDoCheckpointBootstrapCollision(t *testing.T) {
+func TestRestoreBootstrapCollision(t *testing.T) {
 	tests := []struct {
 		name       string
 		otherTerm  int64
@@ -205,7 +232,7 @@ func TestDoCheckpointBootstrapCollision(t *testing.T) {
 
 			rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
 
-			// The other writer creates the document after this writer's
+			// The other claimant creates the document after this claimant's
 			// term-gated update found none and before its bootstrap insert
 			// reaches the server.
 			var raced atomic.Bool
@@ -217,19 +244,19 @@ func TestDoCheckpointBootstrapCollision(t *testing.T) {
 						return
 					}
 
-					otherErr = DoCheckpoint(opCtx, other, rec, tt.otherTerm, "pcsm-other")
+					otherErr = Restore(opCtx, other, rec, tt.otherTerm, "pcsm-other")
 				},
 			}
 
-			writer, err := mongo.Connect(options.Client().ApplyURI(recoveryMongo(t)).
+			claimant, err := mongo.Connect(options.Client().ApplyURI(recoveryMongo(t)).
 				SetServerSelectionTimeout(5 * time.Second).SetMonitor(mon))
 			require.NoError(t, err)
-			defer func() { _ = writer.Disconnect(ctx) }()
+			defer func() { _ = claimant.Disconnect(ctx) }()
 
-			err = DoCheckpoint(ctx, writer, rec, 2, "pcsm-self")
+			err = Restore(ctx, claimant, rec, 2, "pcsm-self")
 
 			require.True(t, raced.Load(), "the bootstrap insert was never issued")
-			require.NoError(t, otherErr)
+			require.ErrorIs(t, otherErr, errNoCheckpoint)
 
 			cp := readCheckpoint(t, ctx, other)
 			if tt.wantFenced {
@@ -239,7 +266,7 @@ func TestDoCheckpointBootstrapCollision(t *testing.T) {
 				return
 			}
 
-			require.NoError(t, err, "an older-term collision must not read as deposed")
+			require.ErrorIs(t, err, errNoCheckpoint, "an older-term collision must not read as deposed")
 			assert.Equal(t, int64(2), cp.Term)
 			assert.Equal(t, "pcsm-self", cp.InstanceID)
 		})
@@ -254,6 +281,7 @@ func TestDeleteRecoveryData(t *testing.T) {
 	require.NoError(t, recoveryColl(client).Drop(ctx))
 
 	rec := staticRecoverable{data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}}
+	require.ErrorIs(t, Restore(ctx, client, rec, 1, "pcsm-a"), errNoCheckpoint)
 	require.NoError(t, DoCheckpoint(ctx, client, rec, 1, "pcsm-a"))
 
 	require.NoError(t, DeleteRecoveryData(ctx, client))

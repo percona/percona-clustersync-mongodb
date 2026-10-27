@@ -28,14 +28,14 @@ func emptyCursor(ns string) bson.D {
 	}}}
 }
 
-// mockTarget answers every command with an empty cursor, enough for the
-// not_active envelope's members read and for a missing recovery record.
-func mockTarget(t *testing.T, ns string, n int) *mongo.Client {
+// mockTarget answers every command with an empty members cursor, enough for
+// the not_active envelope's members read.
+func mockTarget(t *testing.T, n int) *mongo.Client {
 	t.Helper()
 
 	responses := make([]bson.D, n)
 	for i := range responses {
-		responses[i] = emptyCursor(ns)
+		responses[i] = emptyCursor(config.PCSMDatabase + "." + config.MembersCollection)
 	}
 
 	opts := options.Client()
@@ -47,46 +47,43 @@ func mockTarget(t *testing.T, ns string, n int) *mongo.Client {
 	return target
 }
 
+// TestRestoreReportsMissingCheckpoint pins that a claim on an absent document
+// creates it, at the tenure's term, and restores nothing.
 func TestRestoreReportsMissingCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.RecoveryCollection, 1)
+	opts := options.Client()
+	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment",
+		drivertest.NewMockDeployment(noDocument(), inserted())))
+	target, err := mongo.Connect(opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = target.Disconnect(context.Background()) })
 	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false)
 
-	err := Restore(t.Context(), target, pipeline, 1)
+	err = Restore(t.Context(), target, pipeline, 1, "pcsm-a")
 
 	require.ErrorIs(t, err, errNoCheckpoint)
 	assert.Equal(t, pcsm.State(pcsm.StateIdle), pipeline.Status(t.Context()).State)
 }
 
 // TestRestoreRefusesCheckpointOfNewerTerm pins that a tenure never restores a
-// checkpoint a newer term owns: it is told the owning term instead, before
+// checkpoint a newer term owns: the claim matches nothing, the bootstrap
+// collides with the document, and the claim matches nothing again, before
 // any pipeline state changes.
 func TestRestoreRefusesCheckpointOfNewerTerm(t *testing.T) {
 	t.Parallel()
 
-	data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
-	require.NoError(t, err)
-	record := bson.D{{"_id", recoveryID}, {"term", int64(5)}, {"data", bson.Raw(data)}}
 	opts := options.Client()
-	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", drivertest.NewMockDeployment(
-		bson.D{{"ok", 1}, {"cursor", bson.D{
-			{"id", int64(0)},
-			{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-			{"firstBatch", bson.A{record}},
-		}}},
-	)))
+	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment",
+		drivertest.NewMockDeployment(noDocument(), duplicateKey(), noDocument())))
 	target, err := mongo.Connect(opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = target.Disconnect(context.Background()) })
 	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false)
 
-	err = Restore(t.Context(), target, pipeline, 1)
+	err = Restore(t.Context(), target, pipeline, 1, "pcsm-a")
 
 	require.ErrorIs(t, err, errCheckpointFenced)
-	var fenced fencedError
-	require.ErrorAs(t, err, &fenced)
-	assert.Equal(t, int64(5), fenced.StoredTerm)
 	assert.Equal(t, pcsm.State(pcsm.StateIdle), pipeline.Status(t.Context()).State,
 		"a refused restore must not recover the pipeline")
 }
@@ -110,7 +107,7 @@ func newTestTenure(t *testing.T, target *mongo.Client) *tenure {
 func TestHandlersRefuseWithoutOpenTenure(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 4)
+	target := mockTarget(t, 4)
 	membership := &ha.Membership{}
 	membership.SetRole(ha.RoleActive, 1)
 	s := &server{
@@ -163,7 +160,7 @@ func TestHandlersRefuseWithoutOpenTenure(t *testing.T) {
 func TestAdmitWaitsForRestore(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+	target := mockTarget(t, 1)
 	tn := newTestTenure(t, target)
 	s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
 
@@ -204,7 +201,7 @@ func TestAdmitRefusesWhenRequestExpiresDuringRestore(t *testing.T) {
 		t.Run(map[bool]string{false: "still restoring", true: "ready by then"}[readyByThen], func(t *testing.T) {
 			t.Parallel()
 
-			target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+			target := mockTarget(t, 1)
 			tn := newTestTenure(t, target)
 			s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
 
@@ -228,7 +225,7 @@ func TestAdmitRefusesWhenRequestExpiresDuringRestore(t *testing.T) {
 func TestRefusedNotActive(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+	target := mockTarget(t, 1)
 	s := &server{targetCluster: target, membership: &ha.Membership{}}
 
 	rec := httptest.NewRecorder()

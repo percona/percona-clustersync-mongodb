@@ -27,7 +27,8 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - Bootstrap uses insert, not upsert; duplicate key means another contender won.
 - Advertised role state and term are read and updated through `Membership` synchronization methods; `SetRole` counts a transition only when the role changes.
 - `Release` stops lease competition for shutdown; `RelinquishLease` gives the lease up without stopping the loop, and the next attempt reports the outcome.
-- `AdvanceTerm(ctx, to)` raises the lease term to at least `to` only while this instance owns the lease (`$max`, never lowers). The controller uses it so no two ACTIVE tenures of a process share a term: a renewal after a loss keeps the term when nobody else took the lease, and a lease document reset while recovery data existed sits below the checkpoint's fencing term. The next renewal reports the advanced term.
+- `AdvanceTerm(ctx, to)` raises the lease term to at least `to` only while this instance owns the lease (`$max`, never lowers). The controller uses it so no two ACTIVE tenures of a process share a term: a renewal after a loss keeps the term when nobody else took the lease. The next renewal reports the advanced term.
+- Terms are never reused within one reset generation: lease, recovery and member state are reset together, with every instance stopped. A lease-only reset restarts terms below a surviving checkpoint's, and nothing guards a reset under running instances; the root `AGENTS.md` HA contracts describe what either does.
 
 ## ANTI-PATTERNS
 

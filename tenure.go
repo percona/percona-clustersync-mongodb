@@ -11,10 +11,13 @@ import (
 
 // tenure is one ACTIVE epoch of this process: the lease term it opened at, the
 // context every execution of it derives from, and the pipeline built for it.
-// A tenure ends as a whole, on any loss of ownership or a fenced checkpoint
-// write, and nothing of it is reused: the next tenure builds a new pipeline
-// and restores it from the checkpoint, the one recovery path, the same one a
-// restarted process takes.
+// A tenure ends as a whole, on any loss of ownership or when its checkpoint
+// writer ends, and nothing of it is reused: the next tenure builds a new
+// pipeline and restores it from the checkpoint, the one recovery path, the
+// same one a restarted process takes.
+// Reacquiring the lease in the same process is not permission to resume its
+// old in-memory pipeline: it must recover the persisted state just as another
+// instance would. An interrupted clone therefore needs a new /start.
 type tenure struct {
 	term     ha.Term
 	ctx      context.Context //nolint:containedctx // the epoch is the tenure's identity; see server.tenure
@@ -174,14 +177,12 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 		}
 	})
 
-	err := Restore(ectx, s.targetCluster, t.pipeline, int64(t.term))
+	err := Restore(ectx, s.targetCluster, t.pipeline, int64(t.term), s.membership.InstanceID())
 	switch {
 	case err == nil, errors.Is(err, errNoCheckpoint):
 
 	case errors.Is(err, errCheckpointFenced):
-		var fenced fencedError
-		_ = errors.As(err, &fenced)
-		go s.onFenced(ctx, t, ha.Term(fenced.StoredTerm))
+		go s.onCheckpointLost(ctx, t, err)
 
 		return
 
@@ -195,12 +196,15 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 		return
 	}
 
-	// The tenure's checkpoint writer, fenced by term. A fenced write means the
-	// checkpoint is owned by a newer term: onFenced ends the tenure.
-	go RunCheckpointing(t.ctx, s.targetCluster, t.pipeline, int64(t.term), s.membership.InstanceID(),
-		s.cfg.RecoveryCheckpointInterval, saveNow, func(storedTerm int64) {
-			s.onFenced(ctx, t, ha.Term(storedTerm))
-		})
+	// The tenure's checkpoint writer. It ends on the first write it cannot
+	// account for, and the tenure ends with it.
+	go func() {
+		err := RunCheckpointing(t.ctx, s.targetCluster, t.pipeline, int64(t.term),
+			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval, saveNow)
+		if err != nil {
+			s.onCheckpointLost(ctx, t, err)
+		}
+	}()
 
 	// Apply the deferred --start now that this instance is ACTIVE, before any
 	// request is admitted, so a /start cannot pre-empt the configured options.
@@ -260,28 +264,30 @@ func (s *server) endTenure(ctx context.Context, lg log.Logger) {
 	}
 }
 
-// onFenced handles a checkpoint write of tenure t fenced by storedTerm: the
-// checkpoint is owned by a newer term, so t is over. storedTerm raises minTerm
-// whether or not t is still current. A lease this instance still holds below
-// it was reset while recovery data existed; the next ownership report advances
-// it, and the tenure that follows restores the checkpoint at a term it
-// accepts. A lease another instance took, the genuine takeover, is reported
-// lost by the lease loop.
-func (s *server) onFenced(ctx context.Context, t *tenure, storedTerm ha.Term) {
-	lg := log.New("ha:role").With(log.Int64("term", int64(t.term)), log.Int64("storedTerm", int64(storedTerm)))
+// onCheckpointLost handles the end of tenure t's claim or checkpoint writer:
+// a write of t's term was fenced by a newer term, or returned an error that
+// the writer treats as unsettled. Either way no further write of t's term may
+// be issued, so t is over. A report for a tenure that already ended ends
+// nothing: the current tenure opened above t's term and claimed the
+// checkpoint for itself.
+func (s *server) onCheckpointLost(ctx context.Context, t *tenure, err error) {
+	lg := log.New("ha:role").With(log.Int64("term", int64(t.term)))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.minTerm = max(s.minTerm, storedTerm+1)
-
 	if s.tenure != t {
-		lg.Debug("Ignoring a fenced checkpoint of an ended tenure")
+		lg.Debug("Ignoring the lost checkpoint of an ended tenure")
 
 		return
 	}
 
-	lg.Info("Instance role: STANDBY (demoted: checkpoint fenced by a newer term)")
+	if errors.Is(err, errCheckpointFenced) {
+		lg.Info("Instance role: STANDBY (demoted: checkpoint fenced by a newer term)")
+	} else {
+		lg.Error(err, "Instance role: STANDBY (checkpoint write outcome unknown)")
+	}
+
 	s.endTenure(ctx, lg)
 }
 

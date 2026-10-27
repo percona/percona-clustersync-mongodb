@@ -3,6 +3,7 @@ package main //nolint:testpackage // Exercise the lifecycle controller and its c
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -21,10 +22,12 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
 
-// commandLog records the writes the controller issues: checkpoint terms and
-// lease updates, in command order.
+// commandLog records the writes the controller issues, in command order: the
+// terms of its checkpoint claims and of its checkpoint saves, and the lease
+// updates.
 type commandLog struct {
 	mu          sync.Mutex
+	claims      []int64
 	checkpoints []int64
 	leaseWrites []string
 }
@@ -42,12 +45,23 @@ func (l *commandLog) monitor() *event.CommandMonitor {
 			switch e.Command.Lookup("findAndModify").StringValue() {
 			case config.RecoveryCollection:
 				term, _ := e.Command.Lookup("update", "$set", "term").AsInt64OK()
-				l.checkpoints = append(l.checkpoints, term)
+				if e.Command.Lookup("update", "$set", "data").IsZero() {
+					l.claims = append(l.claims, term)
+				} else {
+					l.checkpoints = append(l.checkpoints, term)
+				}
 			case config.LeaseCollection:
 				l.leaseWrites = append(l.leaseWrites, e.Command.String())
 			}
 		},
 	}
+}
+
+func (l *commandLog) claimTerms() []int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]int64(nil), l.claims...)
 }
 
 func (l *commandLog) checkpointTerms() []int64 {
@@ -64,32 +78,61 @@ func (l *commandLog) leases() []string {
 	return append([]string(nil), l.leaseWrites...)
 }
 
-func recoveryCursor(records ...bson.D) bson.D {
-	batch := make(bson.A, 0, len(records))
-	for _, r := range records {
-		batch = append(batch, r)
-	}
-
-	return bson.D{{"ok", 1}, {"cursor", bson.D{
-		{"id", int64(0)},
-		{"ns", config.PCSMDatabase + "." + config.RecoveryCollection},
-		{"firstBatch", batch},
-	}}}
-}
-
 func failedRecord(t *testing.T, term int64) bson.D {
 	t.Helper()
 
 	data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
 	require.NoError(t, err)
 
-	return bson.D{{"_id", recoveryID}, {"term", term}, {"seq", int64(1)}, {"data", bson.Raw(data)}}
+	return bson.D{{"_id", recoveryID}, {"term", term}, {"data", bson.Raw(data)}}
 }
 
-func mockedTarget(t *testing.T, log *commandLog, responses ...bson.D) *mongo.Client {
+// Mocked replies of the checkpoint document's commands.
+func claimed(record bson.D) bson.D { return bson.D{{"ok", 1}, {"value", record}} }
+func noDocument() bson.D           { return bson.D{{"ok", 1}, {"value", nil}} }
+func inserted() bson.D             { return bson.D{{"ok", 1}, {"n", 1}} }
+
+func duplicateKey() bson.D {
+	return bson.D{{"ok", 1}, {"n", 0}, {"writeErrors", bson.A{
+		bson.D{{"index", 0}, {"code", 11000}, {"errmsg", "E11000 duplicate key error"}},
+	}}}
+}
+
+// holdFirstClaim wraps monitor so the first checkpoint claim blocks before it
+// is sent until release is called: a test can capture the tenure that issued
+// it before that tenure can end on its outcome.
+func holdFirstClaim(t *testing.T, monitor *event.CommandMonitor) (*event.CommandMonitor, func()) {
 	t.Helper()
 
-	opts := options.Client().SetMonitor(log.monitor())
+	var first atomic.Bool
+	released := make(chan struct{})
+	release := sync.OnceFunc(func() { close(released) })
+	t.Cleanup(release)
+
+	return &event.CommandMonitor{
+		Started: func(ctx context.Context, e *event.CommandStartedEvent) {
+			if monitor != nil && monitor.Started != nil {
+				monitor.Started(ctx, e)
+			}
+
+			if e.CommandName == "findAndModify" &&
+				e.Command.Lookup("findAndModify").StringValue() == config.RecoveryCollection &&
+				first.CompareAndSwap(false, true) {
+				select {
+				case <-released:
+				case <-ctx.Done():
+				case <-t.Context().Done():
+				case <-time.After(10 * time.Second):
+				}
+			}
+		},
+	}, release
+}
+
+func mockedTarget(t *testing.T, monitor *event.CommandMonitor, responses ...bson.D) *mongo.Client {
+	t.Helper()
+
+	opts := options.Client().SetMonitor(monitor)
 	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment", drivertest.NewMockDeployment(responses...)))
 	target, err := mongo.Connect(opts)
 	require.NoError(t, err)
@@ -105,10 +148,11 @@ func currentTenure(s *server) *tenure {
 }
 
 // TestOwnershipDrivesTenures pins the controller against the ownership
-// levels the lease loop reports: ownership opens a tenure that restores the
-// checkpoint and checkpoints under its term; the same ownership again is a
-// renewal; ownership at another term ends the tenure, and the next report of
-// it opens one at that term; and a lost lease ends the tenure.
+// levels the lease loop reports: ownership opens a tenure that claims the
+// checkpoint at its term, restores it and checkpoints under that term; the
+// same ownership again is a renewal; ownership at another term ends the
+// tenure, and the next report of it opens one at that term; and a lost lease
+// ends the tenure.
 func TestOwnershipDrivesTenures(t *testing.T) {
 	t.Parallel()
 
@@ -118,10 +162,9 @@ func TestOwnershipDrivesTenures(t *testing.T) {
 
 		var log commandLog
 		record := failedRecord(t, 2)
-		saved := bson.D{{"ok", 1}, {"value", record}}
-		// Responses in command order: the restore and first checkpoint of the
+		// Responses in command order: the claim and first checkpoint of the
 		// tenure at term 3, then those of the tenure at term 4.
-		target := mockedTarget(t, &log, recoveryCursor(record), saved, recoveryCursor(record), saved)
+		target := mockedTarget(t, log.monitor(), claimed(record), claimed(record), claimed(record), claimed(record))
 		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
 
 		s := &server{
@@ -134,11 +177,13 @@ func TestOwnershipDrivesTenures(t *testing.T) {
 		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 3})
 		synctest.Wait()
 
-		// Then: a tenure at term 3 is open for requests, restored, and advertised.
+		// Then: a tenure at term 3 claimed the checkpoint, restored it, and is
+		// open for requests and advertised.
 		first := currentTenure(s)
 		require.NotNil(t, first)
 		require.Equal(t, ha.Term(3), first.term)
 		require.True(t, first.isReady(), "the tenure did not open for requests")
+		require.Equal(t, []int64{3}, log.claimTerms())
 		require.Equal(t, pcsm.State(pcsm.StateFailed), first.pipeline.Status(ctx).State, "the checkpoint was not restored")
 		role, term := s.membership.CurrentRole()
 		require.Equal(t, ha.RoleActive, role)
@@ -169,12 +214,13 @@ func TestOwnershipDrivesTenures(t *testing.T) {
 		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 4})
 		synctest.Wait()
 
-		// Then: a tenure at 4 is open.
+		// Then: a tenure at 4 claimed the checkpoint and is open.
 		second := currentTenure(s)
 		require.NotNil(t, second)
 		require.NotSame(t, first, second)
 		require.Equal(t, ha.Term(4), second.term)
 		require.True(t, second.isReady())
+		require.Equal(t, []int64{3, 4}, log.claimTerms())
 		role, term = s.membership.CurrentRole()
 		require.Equal(t, ha.RoleActive, role)
 		require.Equal(t, ha.Term(4), term)
@@ -195,15 +241,12 @@ func TestOwnershipDrivesTenures(t *testing.T) {
 	})
 }
 
-// TestFencedCheckpointEndsTenureAndRepairsLease pins the whole path for a
-// lease that fell behind the checkpoint's term (the lease document was reset
-// while recovery data existed): the tenure is fenced by the stored term and
-// ends; ownership reported at the stale term is advanced past the fencing
-// term through the owner-only AdvanceTerm, opening nothing; ownership at the
-// advanced term opens a tenure that restores the checkpoint and checkpoints
-// under a term the checkpoint accepts. The driver is mocked and the clock is
-// virtual, so no tick is waited for.
-func TestFencedCheckpointEndsTenureAndRepairsLease(t *testing.T) {
+// TestFencedClaimEndsTenure pins a tenure whose claim finds the checkpoint
+// owned by a newer term: it ends without restoring anything, and the
+// instance stays STANDBY while the lease it still holds is advanced above the
+// tenure's term, by an owner-only write, for the tenure that follows. The
+// driver is mocked and the clock is virtual, so no tick is waited for.
+func TestFencedClaimEndsTenure(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -213,25 +256,27 @@ func TestFencedCheckpointEndsTenureAndRepairsLease(t *testing.T) {
 		const instanceID = "pcsm-stale"
 
 		var log commandLog
-		fenced := failedRecord(t, 5)
 		lease := bson.D{
 			{"_id", ha.LeaseID},
 			{"group", "g"},
 			{"instanceId", instanceID},
-			{"term", int64(6)},
+			{"term", int64(2)},
 			{"electionDate", time.Now()},
 			{"expiresAt", time.Now().Add(config.LeaseTTL)},
 		}
-		// Responses in command order: join, leave, the restore of the tenure
-		// at term 1 (fenced by the stored term), the lease term advance, the
-		// restore of the tenure at term 6 and its first checkpoint.
-		target := mockedTarget(t, &log,
+		// Responses in command order: join, leave, then the claim of the
+		// tenure at term 1: the gated update matches nothing, the bootstrap
+		// insert collides with the existing document, and the update matches
+		// nothing again; then the lease term advance. The claim is held until
+		// the tenure that issues it is captured.
+		monitor, release := holdFirstClaim(t, log.monitor())
+		target := mockedTarget(t, monitor,
 			bson.D{{"ok", 1}, {"n", 1}},
 			bson.D{{"ok", 1}, {"n", 1}},
-			recoveryCursor(fenced),
+			noDocument(),
+			duplicateKey(),
+			noDocument(),
 			bson.D{{"ok", 1}, {"value", lease}},
-			recoveryCursor(fenced),
-			bson.D{{"ok", 1}, {"value", fenced}},
 		)
 		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
 
@@ -246,27 +291,30 @@ func TestFencedCheckpointEndsTenureAndRepairsLease(t *testing.T) {
 			membership:    membership,
 		}
 
-		// When: the lease is held at term 1 while the checkpoint is owned by term 5.
+		// When: the lease is held at term 1 while the checkpoint is owned by a
+		// newer term.
 		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 1})
 		stale := currentTenure(s)
 		require.NotNil(t, stale)
+		release()
 		synctest.Wait()
 
-		// Then: the tenure ended without restoring, the role is STANDBY, and no
-		// tenure may open below term 6.
+		// Then: the tenure ended without restoring, the role is STANDBY, and
+		// the next tenure must open above term 1.
 		require.Nil(t, currentTenure(s), "a tenure fenced by the checkpoint must end")
 		require.ErrorIs(t, stale.ctx.Err(), context.Canceled)
 		require.Equal(t, pcsm.State(pcsm.StateIdle), stale.pipeline.Status(ctx).State)
+		require.Equal(t, []int64{1, 1}, log.claimTerms(), "the claim decides once more after the collision")
 		role, _ := membership.CurrentRole()
 		require.Equal(t, ha.RoleStandby, role)
-		require.Equal(t, ha.Term(6), s.minTerm)
+		require.Equal(t, ha.Term(2), s.minTerm)
 		require.Empty(t, log.leases())
 
-		// When: the next attempt still reports the lease held at the stale term.
+		// When: the next attempt still reports the lease held at term 1.
 		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 1})
 
-		// Then: the lease term is advanced past the fencing term, by an
-		// owner-only write, and nothing opens.
+		// Then: the lease term is advanced, by an owner-only write, and
+		// nothing opens.
 		require.Nil(t, currentTenure(s))
 		advances := log.leases()
 		require.Len(t, advances, 1, "exactly one lease write advances the term")
@@ -274,32 +322,13 @@ func TestFencedCheckpointEndsTenureAndRepairsLease(t *testing.T) {
 		require.Contains(t, advances[0], `"instanceId": "`+instanceID+`"`)
 		role, _ = membership.CurrentRole()
 		require.Equal(t, ha.RoleStandby, role)
-
-		// When: the attempt after that reports the advanced term.
-		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 6})
-		synctest.Wait()
-
-		// Then: a tenure at term 6 restored the checkpoint and checkpoints
-		// under a term the checkpoint accepts.
-		repaired := currentTenure(s)
-		require.NotNil(t, repaired)
-		require.Equal(t, ha.Term(6), repaired.term)
-		require.True(t, repaired.isReady())
-		require.Equal(t, pcsm.State(pcsm.StateFailed), repaired.pipeline.Status(ctx).State)
-		role, term := membership.CurrentRole()
-		require.Equal(t, ha.RoleActive, role)
-		require.Equal(t, ha.Term(6), term)
-
-		time.Sleep(time.Second)
-		synctest.Wait()
-		require.Equal(t, []int64{6}, log.checkpointTerms())
 	})
 }
 
-// TestLateFenceOfEndedTenureIsIgnored pins that a fenced write reported by
-// a tenure that is no longer current ends nothing, while the term that fenced
-// it still raises the floor for the next tenure.
-func TestLateFenceOfEndedTenureIsIgnored(t *testing.T) {
+// TestUnsettledCheckpointWriteEndsTenure pins that a checkpoint write whose
+// outcome the server did not settle ends the tenure: its writer never issues
+// another write under that term, and the next tenure must open above it.
+func TestUnsettledCheckpointWriteEndsTenure(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -307,7 +336,58 @@ func TestLateFenceOfEndedTenureIsIgnored(t *testing.T) {
 		defer cancel()
 
 		var log commandLog
-		target := mockedTarget(t, &log, recoveryCursor(), recoveryCursor())
+		record := failedRecord(t, 1)
+		// Responses in command order: the claim of the tenure at term 2, then
+		// its first checkpoint, which the server fails without a verdict.
+		target := mockedTarget(t, log.monitor(), claimed(record),
+			bson.D{{"ok", 0}, {"code", 1}, {"errmsg", "InternalError"}})
+		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
+
+		s := &server{
+			cfg:           &config.Config{RecoveryCheckpointInterval: time.Second},
+			targetCluster: target,
+			membership:    &ha.Membership{},
+		}
+
+		// Given: a tenure at term 2 is open.
+		s.observeOwnership(ctx, ha.Ownership{Held: true, Term: 2})
+		synctest.Wait()
+		tn := currentTenure(s)
+		require.NotNil(t, tn)
+		require.True(t, tn.isReady())
+
+		// When: its first checkpoint write fails without a settled outcome.
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		// Then: the tenure is over and the instance is STANDBY.
+		require.Equal(t, []int64{2}, log.checkpointTerms())
+		require.Nil(t, currentTenure(s), "an unsettled checkpoint write must end the tenure")
+		require.ErrorIs(t, tn.ctx.Err(), context.Canceled)
+		role, _ := s.membership.CurrentRole()
+		require.Equal(t, ha.RoleStandby, role)
+		require.Equal(t, ha.Term(3), s.minTerm)
+
+		// And: no further write of term 2 is ever issued.
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Equal(t, []int64{2}, log.checkpointTerms())
+	})
+}
+
+// TestLostCheckpointOfEndedTenureIsIgnored pins that a lost checkpoint
+// reported by a tenure that is no longer current ends nothing.
+func TestLostCheckpointOfEndedTenureIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var log commandLog
+		// Responses in command order: the claims of two tenures, each
+		// bootstrapping an absent document.
+		target := mockedTarget(t, log.monitor(), noDocument(), inserted(), noDocument(), inserted())
 		t.Cleanup(func() { require.NoError(t, target.Disconnect(t.Context())) })
 
 		s := &server{
@@ -326,13 +406,13 @@ func TestLateFenceOfEndedTenureIsIgnored(t *testing.T) {
 		current := currentTenure(s)
 		require.NotSame(t, ended, current)
 
-		// When: a fenced write of the ended tenure arrives late.
-		s.onFenced(ctx, ended, 9)
+		// When: a lost checkpoint of the ended tenure is reported late.
+		s.onCheckpointLost(ctx, ended, errCheckpointFenced)
 
-		// Then: the current tenure stands, and the floor moved past the fence.
+		// Then: the current tenure stands.
 		require.Same(t, current, currentTenure(s))
 		require.NoError(t, current.ctx.Err())
-		require.Equal(t, ha.Term(10), s.minTerm)
+		require.Equal(t, ha.Term(5), s.minTerm)
 	})
 }
 
@@ -349,7 +429,7 @@ func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 		data, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
 		require.NoError(t, err)
 		record := bson.D{{"_id", recoveryID}, {"term", int64(1)}, {"data", bson.Raw(data)}}
-		deployment := drivertest.NewMockDeployment(bson.D{{"ok", 1}, {"value", record}})
+		deployment := drivertest.NewMockDeployment(claimed(record))
 		saves := make(chan struct{}, 1)
 		opts := options.Client().SetMonitor(&event.CommandMonitor{
 			Succeeded: func(_ context.Context, e *event.CommandSucceededEvent) {
@@ -369,7 +449,7 @@ func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour, saveNow, nil)
+			_ = RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour, saveNow)
 		}()
 		t.Cleanup(func() {
 			cancel()
