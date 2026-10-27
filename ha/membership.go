@@ -35,9 +35,10 @@ type MembershipOptions struct {
 }
 
 // Membership is this instance's participation in the HA set. It owns the
-// instance identity and refreshes the instance's member document on a timer so
-// other instances can discover it and detect liveness. Election state lives in
-// the lease document.
+// instance identity, refreshes the instance's member document on a timer so
+// other instances can discover it and detect liveness, and runs the lease
+// loop that reports ownership to its observer. The role it advertises is the
+// one the observer derived from that ownership; membership never decides it.
 type Membership struct {
 	target     *mongo.Client
 	instanceID string
@@ -52,12 +53,14 @@ type Membership struct {
 	mu sync.Mutex
 	// leaseCancel cancels the lease loop started by RunLease.
 	leaseCancel context.CancelFunc
-	// role and term change together on a role transition.
+	// role and term are the advertised role and term; see SetRole.
 	role Role
 	term Term
 
-	// leaseDeadline is a conservative, monotonic bound on lease ownership.
-	// Only the lease loop (and FirstLeaseTick before it starts) accesses it.
+	// held is whether the last reported ownership held the lease, and
+	// leaseDeadline a conservative, monotonic bound on that ownership. Only the
+	// lease loop (and FirstLeaseTick before it starts) accesses them.
+	held          bool
 	leaseDeadline time.Time
 	// acquire is set before the lease loop starts; tests inject an in-memory attempt.
 	acquire func(context.Context) (leaseAttempt, error)
@@ -65,10 +68,6 @@ type Membership struct {
 	// beatNow signals the refresh loop to write an immediate heartbeat so a
 	// role change lands in the member document without waiting for the next tick.
 	beatNow chan struct{}
-
-	// roleChangeCh delivers role transitions. Cap-1 and coalescing: a pending
-	// change is replaced by a newer one, so a slow consumer sees the latest.
-	roleChangeCh chan RoleChange
 }
 
 // NewInstanceID returns a fresh random instance identifier.
@@ -91,17 +90,16 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 	}
 
 	m := &Membership{
-		target:       target,
-		instanceID:   instanceID,
-		host:         host,
-		port:         opts.Port,
-		version:      opts.PCSMVersion,
-		group:        opts.Group,
-		startedAt:    time.Now().UTC(),
-		role:         RoleStandby,
-		term:         0,
-		beatNow:      make(chan struct{}, 1),
-		roleChangeCh: make(chan RoleChange, 1),
+		target:     target,
+		instanceID: instanceID,
+		host:       host,
+		port:       opts.Port,
+		version:    opts.PCSMVersion,
+		group:      opts.Group,
+		startedAt:  time.Now().UTC(),
+		role:       RoleStandby,
+		term:       0,
+		beatNow:    make(chan struct{}, 1),
 	}
 	m.acquire = m.tryAcquireOrRenew
 
@@ -126,22 +124,23 @@ func (m *Membership) InstanceID() string { return m.instanceID }
 // Group returns the HA group name this instance joined.
 func (m *Membership) Group() string { return m.group }
 
-// SetRole updates the advertised role and term and triggers an immediate
-// heartbeat so the member document reflects the change without waiting for the
-// next tick. It returns true when the role actually transitioned. Membership is
-// the single source of truth for (role, term); the election layer drives all
-// transitions through here.
+// SetRole publishes the advertised role and term: to the member document,
+// through an immediate heartbeat, and to the HA gauges, under the lock so the
+// gauges never report a transition out of the order it was recorded. It
+// returns true when the role changed, which is what the transition counter
+// counts. The observer of lease ownership is the only caller that decides
+// a role; membership only advertises it.
 func (m *Membership) SetRole(role Role, term Term) bool {
 	m.mu.Lock()
 	transitioned := m.role != role
 	m.role = role
 	m.term = term
-	m.mu.Unlock()
 
 	metrics.SetHARoleAndTerm(role == RoleActive, int64(term))
 	if transitioned {
 		metrics.IncHARoleTransitions()
 	}
+	m.mu.Unlock()
 
 	// Non-blocking nudge; if a beat is already pending, this is a no-op.
 	select {
@@ -157,22 +156,22 @@ func (m *Membership) CurrentRole() (Role, Term) {
 	return m.currentRole()
 }
 
-// RunLease runs the lease loop, through which this member competes to be
-// ACTIVE, until ctx is canceled or Release is called. Role transitions are
-// published to the member document and mirrored on RoleChanges.
-func (m *Membership) RunLease(ctx context.Context) {
+// RunLease runs the lease loop, through which this member competes for the
+// lease, until ctx is canceled or Release is called. The ownership each
+// attempt establishes is reported to observe.
+func (m *Membership) RunLease(ctx context.Context, observe Observer) {
 	loopCtx, cancel := context.WithCancel(ctx)
 
 	m.mu.Lock()
 	m.leaseCancel = cancel
 	m.mu.Unlock()
 
-	m.runLease(loopCtx)
+	m.runLease(loopCtx, observe)
 }
 
-// Release stops the lease loop, best-effort releases the lease (if held) so a
-// standby can take over without waiting for the TTL, and demotes this member.
-// Use it on shutdown; the instance no longer competes afterwards.
+// Release stops the lease loop and best-effort releases the lease (if held)
+// so a standby can take over without waiting for the TTL. Use it on shutdown;
+// the instance no longer competes afterwards.
 func (m *Membership) Release(ctx context.Context) error {
 	m.mu.Lock()
 	cancel := m.leaseCancel
@@ -185,35 +184,12 @@ func (m *Membership) Release(ctx context.Context) error {
 	return m.releaseLease(ctx)
 }
 
-// RelinquishLease gives up the lease (if held) and demotes to STANDBY without
-// stopping the lease loop, so the instance keeps competing. Use it when an
-// instance cannot currently act as ACTIVE (e.g. failed to recover on promotion)
-// but should remain a viable standby.
+// RelinquishLease gives up the lease (if held) without stopping the lease
+// loop, so the instance keeps competing. Use it when an instance cannot
+// currently act as ACTIVE (e.g. failed to restore on promotion) but should
+// remain a viable standby. The next attempt reports the resulting ownership.
 func (m *Membership) RelinquishLease(ctx context.Context) error {
 	return m.releaseLease(ctx)
-}
-
-// RoleChanges returns the channel on which role transitions are delivered.
-// Coalescing (cap 1): the consumer always sees the latest transition.
-func (m *Membership) RoleChanges() <-chan RoleChange { return m.roleChangeCh }
-
-// emitRoleChange delivers a role change, replacing any pending one so the
-// consumer observes the latest transition.
-func (m *Membership) emitRoleChange(rc RoleChange) {
-	for {
-		select {
-		case m.roleChangeCh <- rc:
-			return
-		default:
-			// Drop the stale pending change, then retry. The drain may race
-			// with the consumer; the loop converges because at most one value
-			// is ever buffered.
-			select {
-			case <-m.roleChangeCh:
-			default:
-			}
-		}
-	}
 }
 
 func (m *Membership) currentRole() (Role, Term) {

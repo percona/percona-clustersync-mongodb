@@ -8,67 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/percona/percona-clustersync-mongodb/ha"
-	"github.com/percona/percona-clustersync-mongodb/pcsm"
 )
-
-func TestPromotionPlan(t *testing.T) {
-	t.Parallel()
-
-	type cell struct {
-		state     pcsm.State
-		suspended bool
-		want      promoteAction
-	}
-
-	sameTerm := []cell{
-		{pcsm.StateIdle, false, promoteRestore},
-		{pcsm.StateIdle, true, promoteRestore},
-		{pcsm.StateRunning, false, promoteKeep},
-		{pcsm.StatePaused, false, promoteKeep},
-		{pcsm.StatePaused, true, promoteResume},
-		{pcsm.StateFailed, false, promoteKeep},
-		{pcsm.StateFailed, true, promoteKeep},
-		{pcsm.StateFinalizing, false, promoteKeep},
-		{pcsm.StateFinalizing, true, promoteKeep},
-		{pcsm.StateFinalized, false, promoteKeep},
-	}
-
-	for _, c := range sameTerm {
-		t.Run("same term "+string(c.state)+" suspended="+boolStr(c.suspended), func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, c.want, promotionPlan(c.state, 3, 3, c.suspended))
-		})
-	}
-
-	// A new term restores whatever is in memory, suspended or not.
-	for _, state := range []pcsm.State{
-		pcsm.StateIdle, pcsm.StateRunning, pcsm.StatePaused,
-		pcsm.StateFailed, pcsm.StateFinalizing, pcsm.StateFinalized,
-	} {
-		for _, suspended := range []bool{false, true} {
-			t.Run("new term "+string(state)+" suspended="+boolStr(suspended), func(t *testing.T) {
-				t.Parallel()
-
-				assert.Equal(t, promoteRestore, promotionPlan(state, 4, 3, suspended))
-			})
-		}
-	}
-
-	t.Run("first promotion restores", func(t *testing.T) {
-		t.Parallel()
-
-		assert.Equal(t, promoteRestore, promotionPlan(pcsm.StateIdle, 1, 0, false))
-	})
-}
-
-func boolStr(b bool) string {
-	if b {
-		return "true"
-	}
-
-	return "false"
-}
 
 func TestActiveMemberAddr(t *testing.T) {
 	t.Parallel()

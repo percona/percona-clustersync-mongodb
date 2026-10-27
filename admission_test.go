@@ -1,4 +1,4 @@
-package main //nolint:testpackage // Exercises request admission against the server's epoch directly.
+package main //nolint:testpackage // Exercises request admission against the server's tenure directly.
 
 import (
 	"context"
@@ -28,14 +28,14 @@ func emptyCursor(ns string) bson.D {
 	}}}
 }
 
-// mockTarget answers every command with an empty cursor, enough for the
-// not_active envelope's members read and for a missing recovery record.
-func mockTarget(t *testing.T, ns string, n int) *mongo.Client {
+// mockTarget answers every command with an empty members cursor, enough for
+// the not_active envelope's members read.
+func mockTarget(t *testing.T, n int) *mongo.Client {
 	t.Helper()
 
 	responses := make([]bson.D, n)
 	for i := range responses {
-		responses[i] = emptyCursor(ns)
+		responses[i] = emptyCursor(config.PCSMDatabase + "." + config.MembersCollection)
 	}
 
 	opts := options.Client()
@@ -47,30 +47,72 @@ func mockTarget(t *testing.T, ns string, n int) *mongo.Client {
 	return target
 }
 
+// TestRestoreReportsMissingCheckpoint pins that a claim on an absent document
+// creates it, at the tenure's term, and restores nothing.
 func TestRestoreReportsMissingCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.RecoveryCollection, 1)
+	opts := options.Client()
+	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment",
+		drivertest.NewMockDeployment(noDocument(), inserted())))
+	target, err := mongo.Connect(opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = target.Disconnect(context.Background()) })
 	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false)
 
-	err := Restore(t.Context(), target, pipeline)
+	err = Restore(t.Context(), target, pipeline, 1, "pcsm-a")
 
 	require.ErrorIs(t, err, errNoCheckpoint)
 	assert.Equal(t, pcsm.State(pcsm.StateIdle), pipeline.Status(t.Context()).State)
 }
 
-// TestHandlersRefuseWithoutOpenEpoch pins admission: an ACTIVE role is not
-// enough to launch work; the request must be admitted under an open epoch.
-func TestHandlersRefuseWithoutOpenEpoch(t *testing.T) {
+// TestRestoreRefusesCheckpointOfNewerTerm pins that a tenure never restores a
+// checkpoint a newer term owns: the claim matches nothing, the bootstrap
+// collides with the document, and the claim matches nothing again, before
+// any pipeline state changes.
+func TestRestoreRefusesCheckpointOfNewerTerm(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 4)
+	opts := options.Client()
+	require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment",
+		drivertest.NewMockDeployment(noDocument(), duplicateKey(), noDocument())))
+	target, err := mongo.Connect(opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = target.Disconnect(context.Background()) })
+	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false)
+
+	err = Restore(t.Context(), target, pipeline, 1, "pcsm-a")
+
+	require.ErrorIs(t, err, errCheckpointFenced)
+	assert.Equal(t, pcsm.State(pcsm.StateIdle), pipeline.Status(t.Context()).State,
+		"a refused restore must not recover the pipeline")
+}
+
+func newTestTenure(t *testing.T, target *mongo.Client) *tenure {
+	t.Helper()
+
+	tctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	return &tenure{
+		term: 1, ctx: tctx, cancel: cancel,
+		pipeline: pcsm.New(tctx, nil, target, mdb.ServerVersion{}, false, false),
+		ready:    make(chan struct{}), done: make(chan struct{}),
+	}
+}
+
+// TestHandlersRefuseWithoutOpenTenure pins admission: an ACTIVE role is not
+// enough to launch work; the request must be admitted under a tenure that is
+// open for requests.
+func TestHandlersRefuseWithoutOpenTenure(t *testing.T) {
+	t.Parallel()
+
+	target := mockTarget(t, 4)
 	membership := &ha.Membership{}
 	membership.SetRole(ha.RoleActive, 1)
 	s := &server{
 		cfg:           &config.Config{},
 		targetCluster: target,
-		pcsm:          pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false),
 		membership:    membership,
 	}
 
@@ -82,28 +124,108 @@ func TestHandlersRefuseWithoutOpenEpoch(t *testing.T) {
 		return rec
 	}
 
-	// Given: the role is ACTIVE but no epoch is open (promotion not consumed).
+	// Given: the role is ACTIVE but no tenure is open.
 	rec := post()
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "not_active")
 
-	// And: an epoch that ended since admission is refused the same way.
-	epoch, endEpoch := context.WithCancel(t.Context())
-	s.epochCtx, s.epochCancel = epoch, endEpoch
-	endEpoch()
+	// And: a tenure that ended before its restore finished is refused.
+	failed := newTestTenure(t, target)
+	failed.cancel()
+	close(failed.done)
+	s.tenure = failed
 
 	rec = post()
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "not_active")
 
-	assert.Equal(t, pcsm.State(pcsm.StateIdle), s.pcsm.Status(t.Context()).State,
-		"a refused request must not start the pipeline")
+	// And: a tenure that ended after it opened is refused the same way.
+	ended := newTestTenure(t, target)
+	close(ended.ready)
+	ended.cancel()
+	s.tenure = ended
+
+	rec = post()
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "not_active")
+
+	for _, tn := range []*tenure{failed, ended} {
+		assert.Equal(t, pcsm.State(pcsm.StateIdle), tn.pipeline.Status(t.Context()).State,
+			"a refused request must not start the pipeline")
+	}
+}
+
+// TestAdmitWaitsForRestore pins that a request reaching a tenure still
+// restoring its pipeline is admitted once the restore is done, not bounced.
+func TestAdmitWaitsForRestore(t *testing.T) {
+	t.Parallel()
+
+	target := mockTarget(t, 1)
+	tn := newTestTenure(t, target)
+	s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
+
+	type outcome struct {
+		ok       bool
+		pipeline *pcsm.PCSM
+	}
+	admitted := make(chan outcome, 1)
+	rec := httptest.NewRecorder()
+	go func() {
+		_, pipeline, ok := s.admit(t.Context(), rec)
+		admitted <- outcome{ok: ok, pipeline: pipeline}
+	}()
+
+	// When: the restore finishes.
+	close(tn.ready)
+
+	// Then: the request is admitted to the tenure's pipeline, with no 409.
+	select {
+	case got := <-admitted:
+		assert.True(t, got.ok)
+		assert.Same(t, tn.pipeline, got.pipeline)
+	case <-t.Context().Done():
+		require.FailNow(t, "admit did not return after the restore finished")
+	}
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Body.String())
+}
+
+// TestAdmitRefusesWhenRequestExpiresDuringRestore pins the bound on that wait:
+// a request whose context ended while the restore was in progress is refused
+// with 409, also when the restore has finished by the time the wait returns.
+func TestAdmitRefusesWhenRequestExpiresDuringRestore(t *testing.T) {
+	t.Parallel()
+
+	for _, readyByThen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "still restoring", true: "ready by then"}[readyByThen], func(t *testing.T) {
+			t.Parallel()
+
+			target := mockTarget(t, 1)
+			tn := newTestTenure(t, target)
+			s := &server{targetCluster: target, membership: &ha.Membership{}, tenure: tn}
+
+			reqCtx, cancelReq := context.WithCancel(t.Context())
+			cancelReq()
+			if readyByThen {
+				close(tn.ready)
+			}
+			rec := httptest.NewRecorder()
+
+			_, pipeline, ok := s.admit(reqCtx, rec)
+
+			assert.False(t, ok)
+			assert.Nil(t, pipeline)
+			assert.Equal(t, http.StatusConflict, rec.Code)
+			assert.Contains(t, rec.Body.String(), "not_active")
+		})
+	}
 }
 
 func TestRefusedNotActive(t *testing.T) {
 	t.Parallel()
 
-	target := mockTarget(t, config.PCSMDatabase+"."+config.MembersCollection, 1)
+	target := mockTarget(t, 1)
 	s := &server{targetCluster: target, membership: &ha.Membership{}}
 
 	rec := httptest.NewRecorder()

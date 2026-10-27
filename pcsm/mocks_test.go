@@ -12,7 +12,7 @@ import (
 )
 
 // mockCloner is a test double for the Cloner interface. It records the
-// context of the last Start/Resume so a test can observe its cancellation.
+// context of the last Start so a test can observe its cancellation.
 type mockCloner struct {
 	doneCh           chan struct{}
 	status           clone.Status
@@ -20,10 +20,9 @@ type mockCloner struct {
 	recoverErr       error
 	resetErrorCalled bool
 
-	mu           sync.Mutex
-	startCtx     context.Context //nolint:containedctx // recorded for assertions
-	resumeCalled bool
-	startCalled  chan struct{} // signaled (non-blocking) on each Start/Resume
+	mu          sync.Mutex
+	startCtx    context.Context //nolint:containedctx // recorded for assertions
+	startCalled chan struct{}   // signaled (non-blocking) on each Start
 }
 
 // signalCalled reports a call on an optional, buffered observation channel.
@@ -48,29 +47,11 @@ func (m *mockCloner) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockCloner) Resume(ctx context.Context) error {
-	m.mu.Lock()
-	m.startCtx = ctx
-	m.resumeCalled = true
-	m.mu.Unlock()
-
-	signalCalled(m.startCalled)
-
-	return nil
-}
-
 func (m *mockCloner) lastCtx() context.Context {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.startCtx
-}
-
-func (m *mockCloner) resumed() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.resumeCalled
 }
 
 func (m *mockCloner) Done() <-chan struct{}         { return m.doneCh }
