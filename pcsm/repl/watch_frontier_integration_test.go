@@ -30,7 +30,7 @@ func TestWatchChangeEvents_TickMatchesServerScannedFrontier(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { disconnectReplTestClient(t, writeClient) })
 		require.NoError(t, writeClient.Ping(setupCtx, nil))
-		version, err := mdb.Version(setupCtx, writeClient)
+		version, err := mdb.Version(setupCtx, writeClient, false)
 		require.NoError(t, err)
 		t.Logf("Server under test: %s", version.FullString())
 

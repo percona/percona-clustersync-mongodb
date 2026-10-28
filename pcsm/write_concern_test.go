@@ -32,7 +32,7 @@ func TestRecoverTargetWriteConcern(t *testing.T) {
 
 			data, err := bson.Marshal(checkpoint{State: StatePaused, TargetWriteConcern: tt.stored})
 			require.NoError(t, err)
-			p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
+			p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false, false)
 			require.NoError(t, p.Recover(t.Context(), data))
 			assert.Equal(t, tt.normalized, p.targetWriteConcern)
 

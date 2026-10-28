@@ -343,11 +343,11 @@ func TestDemotedActiveMustNotWriteTargetData(t *testing.T) {
 		_, err = sourceColl.InsertOne(ctx, bson.D{{"_id", "cloned"}})
 		require.NoError(t, err)
 
-		sourceVer, err := mdb.Version(ctx, source)
+		sourceVer, err := mdb.Version(ctx, source, false)
 		require.NoError(t, err)
 
 		// Given: this instance is the ACTIVE of term 1 and is replicating.
-		pipeline := pcsm.New(ctx, source, target, sourceVer, false, false)
+		pipeline := pcsm.New(ctx, source, target, sourceVer, false, false, false)
 		membership := &ha.Membership{}
 		membership.SetRole(ha.RoleActive, 1)
 		s := &server{

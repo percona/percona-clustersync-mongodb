@@ -253,7 +253,7 @@ func TestClone_DoesNotLoseInflightWrite(t *testing.T) {
 	boundaryInserted := insertInflight("boundaryDoc")
 
 	// Run the real clone: clone.go captures startTS, then scans the collection.
-	sourceVer, err := mdb.Version(ctx, source)
+	sourceVer, err := mdb.Version(ctx, source, false)
 	require.NoError(t, err, "source server version")
 
 	cat := catalog.NewCatalog(source, target, sourceVer)

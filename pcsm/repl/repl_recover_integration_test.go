@@ -33,7 +33,7 @@ func TestRepl_Recover_clampsReportedFrontierToCheckpointForInterruptedRun(t *tes
 		})
 		require.NoError(t, client.Ping(setupCtx, nil))
 
-		sourceVersion, err := mdb.Version(setupCtx, client)
+		sourceVersion, err := mdb.Version(setupCtx, client, false)
 		require.NoError(t, err)
 		r := NewRepl(
 			client,
@@ -42,6 +42,7 @@ func TestRepl_Recover_clampsReportedFrontierToCheckpointForInterruptedRun(t *tes
 			sel.AllowAllFilter,
 			&Options{NumWorkers: 1},
 			sourceVersion,
+			false,
 			false,
 			false,
 		)

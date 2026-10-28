@@ -51,7 +51,7 @@ func TestPromotionCheckpointUsesNewTerm(t *testing.T) {
 		target, err := mongo.Connect(opts)
 		require.NoError(t, err)
 
-		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
+		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false, false)
 		require.NoError(t, pipeline.Recover(ctx, data))
 		membership := &ha.Membership{}
 		membership.SetRole(ha.RoleActive, 3)
@@ -122,7 +122,7 @@ func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 		target, err := mongo.Connect(opts)
 		require.NoError(t, err)
 
-		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false)
+		pipeline := pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false, false)
 		require.NoError(t, pipeline.Recover(ctx, data))
 
 		saveNow := make(chan struct{}, 1)
@@ -182,7 +182,7 @@ func TestPromotionJoinsPreviousCheckpointWriter(t *testing.T) {
 		s := &server{
 			cfg:            &config.Config{RecoveryCheckpointInterval: time.Hour},
 			targetCluster:  target,
-			pcsm:           pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false),
+			pcsm:           pcsm.New(ctx, nil, target, mdb.ServerVersion{}, false, false, false),
 			membership:     membership,
 			activeTerm:     1,
 			checkpointDone: previous,

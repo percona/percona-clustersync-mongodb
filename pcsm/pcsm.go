@@ -149,6 +149,8 @@ type execHandle struct {
 
 // PCSM manages the replication process.
 type PCSM struct {
+	ignoreBuildVersion bool // Startup policy, not persisted in checkpoints.
+
 	lifecycleCtx context.Context //nolint:containedctx // Lifecycle context for background operations
 
 	source *mongo.Client // Source MongoDB client
@@ -207,16 +209,18 @@ func New(
 	sourceVer mdb.ServerVersion,
 	sourceIsSharded bool,
 	targetIsSharded bool,
+	ignoreBuildVersion bool,
 ) *PCSM {
 	return &PCSM{
-		lifecycleCtx:    lifecycleCtx,
-		source:          source,
-		target:          target,
-		sourceVer:       sourceVer,
-		sourceIsSharded: sourceIsSharded,
-		targetIsSharded: targetIsSharded,
-		state:           StateIdle,
-		onStateChanged:  func(State) {},
+		ignoreBuildVersion: ignoreBuildVersion,
+		lifecycleCtx:       lifecycleCtx,
+		source:             source,
+		target:             target,
+		sourceVer:          sourceVer,
+		sourceIsSharded:    sourceIsSharded,
+		targetIsSharded:    targetIsSharded,
+		state:              StateIdle,
+		onStateChanged:     func(State) {},
 	}
 }
 
@@ -308,7 +312,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{WriteConcern: wc}, p.targetIsSharded)
 	rpl := repl.NewRepl(
 		p.source, p.target, cat, nsFilter, &repl.Options{WriteConcern: wc},
-		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
+		p.sourceVer, p.sourceIsSharded, p.targetIsSharded, p.ignoreBuildVersion,
 	)
 
 	if cp.Catalog != nil {
@@ -563,7 +567,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &cloneOptions, p.targetIsSharded)
 	p.repl = repl.NewRepl(
 		p.source, p.target, p.catalog, p.nsFilter, &replOptions,
-		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
+		p.sourceVer, p.sourceIsSharded, p.targetIsSharded, p.ignoreBuildVersion,
 	)
 	p.finalizeStatus = nil
 	p.state = StateRunning

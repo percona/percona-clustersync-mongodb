@@ -54,7 +54,7 @@ func TestCloneTargetWriteConcernCommands(t *testing.T) {
 				_, err = source.Database(db).Collection("data").InsertMany(ctx,
 					[]any{bson.D{{"_id", 1}}, bson.D{{"_id", 2}}})
 				require.NoError(t, err)
-				version, err := mdb.Version(ctx, source)
+				version, err := mdb.Version(ctx, source, false)
 				require.NoError(t, err)
 				cat := catalog.NewCatalog(source, target, version)
 				cln := clone.NewClone(source, target, cat, sel.MakeFilter([]string{db + ".*"}, nil),

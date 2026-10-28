@@ -46,7 +46,7 @@ func TestReplicationWriteConcernCommands(t *testing.T) {
 					}))
 				require.NoError(t, err)
 				defer disconnectReplTestClient(t, client)
-				version, err := mdb.Version(ctx, client)
+				version, err := mdb.Version(ctx, client, false)
 				require.NoError(t, err)
 
 				checkCommands := func(minCount int) {

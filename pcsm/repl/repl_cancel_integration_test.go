@@ -156,10 +156,10 @@ func TestRepl_CancelSuspendsAtFloorAndResumeReplays(t *testing.T) {
 		defer gate.releaseAll()
 		target := connectReplTestClient(ctx, t, newReplTestReplicaSet(ctx, t), gate.monitor())
 
-		sourceVersion, err := mdb.Version(ctx, source)
+		sourceVersion, err := mdb.Version(ctx, source, false)
 		require.NoError(t, err)
 		r := NewRepl(source, target, catalog.NewCatalog(source, target, sourceVersion),
-			sel.AllowAllFilter, &Options{NumWorkers: 1}, sourceVersion, false, false)
+			sel.AllowAllFilter, &Options{NumWorkers: 1}, sourceVersion, false, false, false)
 
 		startAt, err := mdb.AdvanceClusterTime(ctx, source)
 		require.NoError(t, err)
