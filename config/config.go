@@ -58,9 +58,11 @@ type LogConfig struct {
 
 // MongoDBConfig holds MongoDB client configuration.
 type MongoDBConfig struct {
-	OperationTimeout  time.Duration `mapstructure:"mongodb-operation-timeout"`
-	SourceCompressors []string      `mapstructure:"source-client-compressors"`
-	TargetCompressors []string      `mapstructure:"target-client-compressors"`
+	// IgnoreBuildVersion discards any build suffix when reading source and target versions.
+	IgnoreBuildVersion bool          `mapstructure:"mongodb-ignore-build-version"`
+	OperationTimeout   time.Duration `mapstructure:"mongodb-operation-timeout"`
+	SourceCompressors  []string      `mapstructure:"source-client-compressors"`
+	TargetCompressors  []string      `mapstructure:"target-client-compressors"`
 }
 
 // ReplConfig holds replication operation configuration.
@@ -166,6 +168,7 @@ func WarnDeprecatedEnvVars(ctx context.Context) {
 }
 
 func bindEnvVars() {
+	_ = viper.BindEnv("mongodb-ignore-build-version", "PCSM_MONGODB_IGNORE_BUILD_VERSION")
 	_ = viper.BindEnv("port", "PCSM_PORT")
 	_ = viper.BindEnv("listen-host", "PCSM_LISTEN_HOST")
 

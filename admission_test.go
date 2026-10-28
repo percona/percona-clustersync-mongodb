@@ -51,7 +51,7 @@ func TestRestoreReportsMissingCheckpoint(t *testing.T) {
 	t.Parallel()
 
 	target := mockTarget(t, config.PCSMDatabase+"."+config.RecoveryCollection, 1)
-	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false)
+	pipeline := pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false, false)
 
 	err := Restore(t.Context(), target, pipeline)
 
@@ -70,7 +70,7 @@ func TestHandlersRefuseWithoutOpenEpoch(t *testing.T) {
 	s := &server{
 		cfg:           &config.Config{},
 		targetCluster: target,
-		pcsm:          pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false),
+		pcsm:          pcsm.New(t.Context(), nil, target, mdb.ServerVersion{}, false, false, false),
 		membership:    membership,
 	}
 

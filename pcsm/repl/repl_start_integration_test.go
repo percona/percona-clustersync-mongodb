@@ -60,7 +60,7 @@ func TestRepl_Start_exposesStartAtImmediately(t *testing.T) {
 		startAt, err := mdb.AdvanceClusterTime(setupCtx, client)
 		require.NoError(t, err)
 		require.False(t, startAt.IsZero())
-		sourceVersion, err := mdb.Version(setupCtx, client)
+		sourceVersion, err := mdb.Version(setupCtx, client, false)
 		require.NoError(t, err)
 		r := NewRepl(
 			client,
@@ -69,6 +69,7 @@ func TestRepl_Start_exposesStartAtImmediately(t *testing.T) {
 			sel.AllowAllFilter,
 			&Options{NumWorkers: 1},
 			sourceVersion,
+			false,
 			false,
 			false,
 		)

@@ -34,7 +34,7 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 	require.NoError(t, recoveryColl(target).Drop(ctx))
 
 	// Given: a state-change callback captured a failed pipeline in term 7.
-	pipeline := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
+	pipeline := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false, false)
 	failed, err := bson.Marshal(bson.D{{"state", pcsm.StateFailed}})
 	require.NoError(t, err)
 	require.NoError(t, pipeline.Recover(ctx, failed))
@@ -132,7 +132,7 @@ func TestPromotionPreservesCheckpointAgainstDelayedStateChange(t *testing.T) {
 
 	// Then: a fresh process must not recover an older lifecycle state than
 	// the state restored by the successful promotion.
-	restarted := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false)
+	restarted := pcsm.New(ctx, target, target, mdb.ServerVersion{}, false, false, false)
 	require.NoError(t, Restore(ctx, target, restarted))
 	require.Equal(t, pcsm.State(pcsm.StateFinalized), restarted.Status(ctx).State,
 		"late term-7 checkpoint replaced the promoted state; write error: %v", writeErr)

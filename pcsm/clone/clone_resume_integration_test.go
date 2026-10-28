@@ -229,7 +229,7 @@ func TestClone_SuspendResumeRedoesOnlyInFlightCollections(t *testing.T) {
 			options.CreateCollection().SetCapped(true).SetSizeInBytes(1<<20)))
 		seedPadded(ctx, t, srcDB.Collection("capped"), 20, 16)
 
-		sourceVer, err := mdb.Version(ctx, source)
+		sourceVer, err := mdb.Version(ctx, source, false)
 		require.NoError(t, err)
 		nsFilter := sel.MakeFilter([]string{dbName + ".*"}, nil)
 		cat := catalog.NewCatalog(source, target, sourceVer)
@@ -378,7 +378,7 @@ func TestClone_RenameBeforeCopyFollowsNewName(t *testing.T) {
 		seedPadded(ctx, t, srcDB.Collection("src"), 200, 1024)
 		seedPadded(ctx, t, srcDB.Collection("other"), 50, 256)
 
-		sourceVer, err := mdb.Version(ctx, source)
+		sourceVer, err := mdb.Version(ctx, source, false)
 		require.NoError(t, err)
 		c := clone.NewClone(source, target, catalog.NewCatalog(source, target, sourceVer),
 			sel.MakeFilter([]string{dbName + ".*"}, nil), &clone.Options{Parallelism: 1}, false)
