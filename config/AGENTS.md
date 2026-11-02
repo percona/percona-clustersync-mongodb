@@ -25,6 +25,7 @@ Score: 8; distinct configuration boundary. Owns defaults, env/flag binding, huma
 - Compressor values are trimmed, allowlisted, and deduplicated.
 - Clone segment/read batch sizes accept human-readable units and zero as auto.
 - `Validate` checks zero port as the default without mutating config; size validators accept zero as auto.
+- `HALeaseTTL` (`ha-lease-ttl`, `PCSM_HA_LEASE_TTL`) accepts zero for the 10s default or a duration of at least 10s; membership truncates it to whole milliseconds.
 
 ## ANTI-PATTERNS
 

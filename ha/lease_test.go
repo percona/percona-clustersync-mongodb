@@ -8,6 +8,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/drivertest"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/xoptions"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
@@ -24,6 +29,7 @@ func newTestLeaseMember() *Membership {
 	m := newTestMembership()
 	m.instanceID = "pcsm-test"
 	m.group = "group-a"
+	m.leaseTTL = config.LeaseTTL
 	m.acquire = func(context.Context) (leaseAttempt, error) {
 		return leaseAttempt{}, nil
 	}
@@ -125,6 +131,45 @@ func TestLeaseTickSuccessfulAttemptAdvancesDeadline(t *testing.T) {
 			assert.True(t, m.leaseDeadline.After(previous))
 			assert.False(t, m.leaseDeadline.Before(before.Add(config.LeaseTTL)))
 			assert.False(t, m.leaseDeadline.After(receivedAt.Add(config.LeaseTTL)))
+		})
+	}
+}
+
+func TestLeaseTTLNormalizationAndDeadline(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		ttl  time.Duration
+		want time.Duration
+	}{
+		{name: "default", want: 10 * time.Second},
+		{name: "configured", ttl: time.Minute, want: time.Minute},
+		{name: "truncated", ttl: 10*time.Second + 900*time.Microsecond, want: 10 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				reply := bson.D{{"ok", 1}, {"n", 1}}
+				opts := options.Client()
+				require.NoError(t, xoptions.SetInternalClientOptions(opts, "deployment",
+					drivertest.NewMockDeployment(reply, reply)))
+				client, err := mongo.Connect(opts)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, client.Disconnect(t.Context())) }()
+
+				m, err := JoinMembership(t.Context(), client, MembershipOptions{LeaseTTL: tc.ttl})
+				require.NoError(t, err)
+				require.NoError(t, m.Stop(t.Context()))
+				require.Equal(t, tc.want, m.leaseTTL)
+				m.acquire = func(context.Context) (leaseAttempt, error) {
+					return leaseAttempt{Acquired: true, Term: 1}, nil
+				}
+				started := time.Now()
+				m.FirstLeaseTick(t.Context(), func(Ownership) {})
+				require.Equal(t, started.Add(tc.want), m.leaseDeadline)
+			})
 		})
 	}
 }

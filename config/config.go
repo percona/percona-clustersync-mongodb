@@ -29,6 +29,10 @@ type Config struct {
 	// recorded and advertised for observability.
 	GroupName string `mapstructure:"group-name"`
 
+	// HALeaseTTL is how long the HA lease stays valid after a renewal. Zero
+	// means LeaseTTL; Validate rejects anything else below it.
+	HALeaseTTL time.Duration `mapstructure:"ha-lease-ttl"`
+
 	Log LogConfig `mapstructure:",squash"`
 
 	MongoDB MongoDBConfig `mapstructure:",squash"`
@@ -173,6 +177,7 @@ func bindEnvVars() {
 	_ = viper.BindEnv("target", "PCSM_TARGET_URI")
 
 	_ = viper.BindEnv("group-name", "PCSM_GROUP_NAME")
+	_ = viper.BindEnv("ha-lease-ttl", "PCSM_HA_LEASE_TTL")
 
 	_ = viper.BindEnv("log-level", "PCSM_LOG_LEVEL")
 	_ = viper.BindEnv("log-json", "PCSM_LOG_JSON")

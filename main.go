@@ -145,6 +145,10 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("group-name", config.DefaultGroup,
 		"HA group name, recorded and advertised for observability "+
 			"(cross-group isolation is not yet enforced)")
+	rootCmd.Flags().Duration("ha-lease-ttl", config.LeaseTTL,
+		"How long the HA lease stays valid after a renewal. "+
+			"The ACTIVE tolerates target outages up to this long before it steps down, "+
+			"a standby takes over after it. Set the same value on every instance.")
 
 	rootCmd.Flags().StringSlice("source-client-compressors", nil,
 		fmt.Sprintf("Compressors for the source MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
@@ -811,12 +815,15 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 
 	membership, err := ha.JoinMembership(ctx, target, ha.MembershipOptions{
 		Group:       groupName,
+		LeaseTTL:    cfg.HALeaseTTL,
 		Port:        cfg.Port,
 		PCSMVersion: buildVersion(),
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "join membership")
 	}
+
+	lg.Infof("Config: HALeaseTTL: %s", membership.LeaseTTL())
 
 	promRegistry := prometheus.NewRegistry()
 	metrics.Init(promRegistry)
