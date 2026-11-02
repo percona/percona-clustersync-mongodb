@@ -47,10 +47,7 @@ const (
 	maxBytesPerSetOp  = 512 * 1024 // 512 KiB
 )
 
-// MongoDB server error codes that indicate a delta update could not be applied
-// because the target document's shape diverged from the source snapshot view
-// against which the delta was computed. Both are recoverable via refetch +
-// upserting replaceOne.
+// MongoDB server error codes with targeted write-recovery paths.
 const (
 	// errCodePathNotViable - "Cannot create field 'X' in element {Y: null}".
 	// Parent path is not a viable container for the requested write.
@@ -58,6 +55,9 @@ const (
 	// errCodeNonExistentPath - a required path does not exist on the target
 	// document (e.g. $rename source missing, certain $pop/$pull cases).
 	errCodeNonExistentPath = 29
+	// errCodeShardKeyNotFound - an upsert filter lacks the target shard key.
+	// A replayed insert can predate sharding already applied on the target.
+	errCodeShardKeyNotFound = 61
 )
 
 // isRecoverableUpdateError reports whether code identifies a delta-update
@@ -179,7 +179,7 @@ func (cbw *clientBulkWrite) doWithRetry(
 		coll := m.Database(write.Database).Collection(write.Collection,
 			options.Collection().SetWriteConcern(cbw.writeConcern))
 
-		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
+		err = replaceWithDeleteInsert(ctx, coll, replacement, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -493,10 +493,10 @@ func (cbw *collectionBulkWrite) doWithRetry(
 		return nil
 	}
 
-	idx, replacement := cbw.extractDuplicateKeyReplacement(bulkErr, bulkWrites)
-	// Try to handle duplicate key error with fallback
+	idx, replacement := cbw.extractReplacementFallback(bulkErr, bulkWrites)
+	// Retry a duplicate key or an insert recorded before target sharding.
 	if replacement != nil {
-		err = handleDuplicateKeyError(ctx, coll, replacement, cbw.useSimpleCollation)
+		err = replaceWithDeleteInsert(ctx, coll, replacement, cbw.useSimpleCollation)
 		if err != nil {
 			return err
 		}
@@ -524,9 +524,11 @@ func (cbw *collectionBulkWrite) doWithRetry(
 	return err //nolint:wrapcheck
 }
 
-// extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
-// operation and returns the index and replacement document. Returns -1, nil if not applicable.
-func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
+// extractReplacementFallback finds a replacement that can be reapplied with
+// delete+insert. ShardKeyNotFound is recoverable only for upserting inserts:
+// their historical documentKey can omit a shard key the target now requires,
+// even when the restored catalog still describes an unsharded collection.
+func (cbw *collectionBulkWrite) extractReplacementFallback(
 	bulkErr error,
 	ops []mongo.WriteModel,
 ) (int, any) {
@@ -536,12 +538,17 @@ func (cbw *collectionBulkWrite) extractDuplicateKeyReplacement(
 	}
 
 	firstErr := bwe.WriteErrors[0]
-	if !mongo.IsDuplicateKeyError(firstErr) || firstErr.Index < 0 || firstErr.Index >= len(ops) {
+	if firstErr.Index < 0 || firstErr.Index >= len(ops) {
 		return -1, nil
 	}
 
 	replaceModel, ok := ops[firstErr.Index].(*mongo.ReplaceOneModel)
 	if !ok {
+		return -1, nil
+	}
+
+	if !mongo.IsDuplicateKeyError(firstErr) &&
+		(firstErr.Code != errCodeShardKeyNotFound || replaceModel.Upsert == nil || !*replaceModel.Upsert) {
 		return -1, nil
 	}
 
@@ -685,8 +692,9 @@ func (cbw *collectionBulkWrite) Delete(ns catalog.Namespace, event *DeleteEvent)
 	cbw.bytes += estimateBytes(event.DocumentKey, nil)
 }
 
-// handleDuplicateKeyError handles a duplicate key error on ReplaceOne by performing delete+insert.
-func handleDuplicateKeyError(
+// replaceWithDeleteInsert reapplies a replacement by deleting its current _id
+// match before inserting the historical document, regardless of its shard key.
+func replaceWithDeleteInsert(
 	ctx context.Context,
 	coll *mongo.Collection,
 	replacement any,
