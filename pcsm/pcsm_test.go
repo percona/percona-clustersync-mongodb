@@ -568,6 +568,39 @@ func TestSetOnStateChanged(t *testing.T) {
 	})
 }
 
+func TestStatus_ReportsComponentFailureBeforeRunStops(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("component failed while stopping")
+	for _, tt := range []struct {
+		name     string
+		state    State
+		cloneErr error
+		replErr  error
+	}{
+		{name: "clone failure", state: StateRunning, cloneErr: cause},
+		{name: "replication failure", state: StateRunning, replErr: cause},
+		{name: "pause drain failure", state: StatePausing, replErr: cause},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &PCSM{
+				source:  unreachableSource(t),
+				state:   tt.state,
+				clone:   &mockCloner{status: clone.Status{Err: tt.cloneErr}},
+				repl:    &mockReplicator{err: tt.replErr},
+				runDone: make(chan struct{}),
+			}
+
+			status := p.Status(t.Context())
+
+			require.ErrorIs(t, status.Error, cause)
+			assert.Equal(t, State(StateFailed), status.State)
+		})
+	}
+}
+
 func TestStatus(t *testing.T) {
 	t.Parallel()
 

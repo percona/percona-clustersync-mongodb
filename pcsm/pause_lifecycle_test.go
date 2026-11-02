@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/util"
@@ -119,6 +120,35 @@ func TestResume_PendingPauseCancellationThenSuccess(t *testing.T) {
 		require.Equal(t, State(StateRunning), state)
 		close(r.doneCh)
 		<-resumedDone
+	})
+}
+
+func TestResume_JoinsReportedFailureBeforeRunStops(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		p, r, done := runningDrainPipeline(t, finishedLifecycleCloner())
+		r.drainError = errors.New("oplog history is lost")
+		r.failureReported.Store(true)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() { result <- p.Resume(ctx, ResumeOptions{ResumeFromFailure: true}) }()
+		synctest.Wait()
+		select {
+		case err := <-result:
+			require.FailNow(t, "failure recovery returned before execution stopped", "%v", err)
+		default:
+		}
+
+		cancel()
+		require.ErrorIs(t, <-result, context.Canceled)
+		r.settled.Store(true)
+		close(r.doneCh)
+		<-done
+		state, err := pipelineState(p)
+		require.Equal(t, State(StateFailed), state)
+		require.ErrorIs(t, err, r.drainError)
 	})
 }
 

@@ -19,16 +19,17 @@ import (
 type drainingReplicator struct {
 	mockReplicator
 
-	resumed      atomic.Bool
-	pausing      atomic.Bool
-	settled      atomic.Bool
-	tailCaptured atomic.Bool
-	lastOp       atomic.Uint32
-	doneObserved chan struct{}
-	observeDone  sync.Once
-	tailObserved chan struct{}
-	releaseTail  chan struct{}
-	drainError   error
+	resumed         atomic.Bool
+	pausing         atomic.Bool
+	settled         atomic.Bool
+	tailCaptured    atomic.Bool
+	failureReported atomic.Bool
+	lastOp          atomic.Uint32
+	doneObserved    chan struct{}
+	observeDone     sync.Once
+	tailObserved    chan struct{}
+	releaseTail     chan struct{}
+	drainError      error
 }
 
 func (r *drainingReplicator) Resume(ctx context.Context) error {
@@ -54,6 +55,9 @@ func (r *drainingReplicator) Status() repl.Status {
 		StartTime:            time.Unix(1, 0),
 		LastReplicatedOpTime: bson.Timestamp{T: max(1, r.lastOp.Load())},
 		Pausing:              r.pausing.Load(),
+	}
+	if r.failureReported.Load() {
+		status.Err = r.drainError
 	}
 	if r.settled.Load() {
 		status.PauseTime = time.Unix(2, 0)
