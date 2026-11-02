@@ -14,21 +14,32 @@ import (
 func TestValidateHALeaseTTL(t *testing.T) {
 	t.Parallel()
 
-	for _, ttl := range []time.Duration{
-		-time.Second, 0, 9 * time.Second, 10 * time.Second, 60 * time.Second,
-		10*time.Second + 900*time.Microsecond,
+	const floorErr = "--ha-lease-ttl must be at least 10s"
+
+	for _, tc := range []struct {
+		name    string
+		ttl     time.Duration
+		wantErr string
+	}{
+		{name: "zero means default", ttl: 0},
+		{name: "negative", ttl: -time.Second, wantErr: floorErr},
+		{name: "below floor", ttl: 9 * time.Second, wantErr: floorErr},
+		{name: "at floor", ttl: 10 * time.Second},
+		{name: "above floor", ttl: 60 * time.Second},
+		{name: "sub-millisecond remainder", ttl: 10*time.Second + 900*time.Microsecond},
 	} {
-		t.Run(ttl.String(), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			err := config.Validate(&config.Config{
-				Source: "mongodb://source", Target: "mongodb://target", HALeaseTTL: ttl,
+				Source: "mongodb://source", Target: "mongodb://target", HALeaseTTL: tc.ttl,
 			})
-			if ttl != 0 && ttl < 10*time.Second {
-				require.ErrorContains(t, err, "--ha-lease-ttl must be at least 10s")
-			} else {
+			if tc.wantErr == "" {
 				require.NoError(t, err)
+
+				return
 			}
+			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }
