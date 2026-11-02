@@ -100,7 +100,9 @@ func TestStop_DuringCloneCancelsAndJoins(t *testing.T) {
 
 	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
 		cln, rpl := newRunMocks()
-		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		p := &PCSM{
+			lifecycleCtx: ctx, source: unreachableSource(ctx, t), clone: cln, repl: rpl, onStateChanged: func(State) {},
+		}
 
 		// Given: the run is inside the clone.
 		done := startRunning(p)
@@ -145,7 +147,9 @@ func TestStop_DuringReplCancelsAndJoins(t *testing.T) {
 				if state == StatePausing {
 					rpl.startTime = time.Unix(1, 0)
 				}
-				p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+				p := &PCSM{
+					lifecycleCtx: ctx, source: unreachableSource(ctx, t), clone: cln, repl: rpl, onStateChanged: func(State) {},
+				}
 
 				// Given: replication is running, optionally with an accepted pause.
 				done := startRunning(p)
@@ -181,7 +185,9 @@ func TestRun_GenuineCloneFailureIsRecorded(t *testing.T) {
 
 	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
 		cln, rpl := newRunMocks()
-		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		p := &PCSM{
+			lifecycleCtx: ctx, source: unreachableSource(ctx, t), clone: cln, repl: rpl, onStateChanged: func(State) {},
+		}
 
 		done := startRunning(p)
 		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
@@ -207,7 +213,9 @@ func TestStop_CanceledJoinKeepsOwnership(t *testing.T) {
 
 	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
 		cln, rpl := newRunMocks()
-		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+		p := &PCSM{
+			lifecycleCtx: ctx, source: unreachableSource(ctx, t), clone: cln, repl: rpl, onStateChanged: func(State) {},
+		}
 
 		done := startRunning(p)
 		awaitEvent(ctx, t, cln.startCalled, "run did not start the clone")
@@ -265,7 +273,7 @@ func TestStop_InterruptedFinalizeIsNotCompletedAndRunsAgain(t *testing.T) {
 
 	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
 		fin := &gatedFinalizer{entered: make(chan struct{})}
-		p := recoveredFinalizingPipeline(t)
+		p := recoveredFinalizingPipeline(ctx, t)
 		p.finalizer = fin
 
 		// Given: catalog finalization is live.
@@ -290,7 +298,7 @@ func TestStop_InterruptedFinalizeIsNotCompletedAndRunsAgain(t *testing.T) {
 		data, err := p.Checkpoint(ctx)
 		require.NoError(t, err)
 
-		next := recoveredFinalizingPipeline(t)
+		next := recoveredFinalizingPipeline(ctx, t)
 		require.NoError(t, next.Recover(ctx, data))
 		next.finalizer = fin
 		finalized := make(chan struct{}, 1)
@@ -327,7 +335,7 @@ func TestFinalize_RefusesWhenEpochDiesDuringDrain(t *testing.T) {
 		rpl.startTime = time.Unix(1, 0)
 		rpl.lastOpTime = bson.Timestamp{T: 2}
 		p := &PCSM{
-			lifecycleCtx: ctx, source: unreachableSource(t), state: StateRunning,
+			lifecycleCtx: ctx, source: unreachableSource(ctx, t), state: StateRunning,
 			clone: cln, repl: rpl, onStateChanged: func(State) {},
 		}
 
@@ -424,7 +432,7 @@ func TestLaunch_RefusesDeadEpochBeforeMutatingState(t *testing.T) {
 	t.Run("finalize", func(t *testing.T) {
 		t.Parallel()
 
-		p := recoveredFinalizingPipeline(t)
+		p := recoveredFinalizingPipeline(ctx, t)
 
 		require.ErrorIs(t, p.Finalize(ctx), ErrNotActive)
 
@@ -445,7 +453,7 @@ func TestRun_PersistsCompletedCloneOnce(t *testing.T) {
 		cln, rpl := newRunMocks()
 		notified := make(chan State, 4)
 		p := &PCSM{
-			lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl,
+			lifecycleCtx: ctx, source: unreachableSource(ctx, t), clone: cln, repl: rpl,
 			onStateChanged: func(s State) { notified <- s },
 		}
 

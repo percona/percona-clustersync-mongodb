@@ -96,9 +96,16 @@ func String(key, val string) AttrFn {
 	}
 }
 
-// New creates a new Logger with the specified scope.
+// New creates a scoped Logger from the process default.
+// Use Ctx when the caller's context fields must be inherited.
 func New(scope string) Logger {
-	log := zerolog.Ctx(context.Background()).With().Logger()
+	base := zerolog.DefaultContextLogger
+	if base == nil {
+		nop := zerolog.Nop()
+		base = &nop
+	}
+
+	log := base.With().Logger()
 	log.UpdateContext(func(logContext zerolog.Context) zerolog.Context {
 		return logContext.Str("s", scope) // replace "s". (With() adds one more "s" to JSON)
 	})

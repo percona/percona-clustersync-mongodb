@@ -596,7 +596,7 @@ func TestStatus_ReportsComponentFailureBeforeRunStops(t *testing.T) {
 			t.Parallel()
 
 			p := &PCSM{
-				source:  unreachableSource(t),
+				source:  unreachableSource(t.Context(), t),
 				state:   tt.state,
 				clone:   &mockCloner{status: clone.Status{Err: tt.cloneErr}},
 				repl:    &mockReplicator{err: tt.replErr},

@@ -275,7 +275,7 @@ func (cm *CopyManager) runReadDispatcher(
 				<-cm.readSem
 				session.activeSegmentsWg.Done()
 
-				err := util.CtxWithTimeout(context.Background(),
+				err := util.CtxWithTimeout(context.WithoutCancel(ctx),
 					config.CloseCursorTimeout, cursor.Close)
 				if err != nil {
 					log.Ctx(ctx).Error(err, "Close cursor")
@@ -383,6 +383,7 @@ func (cm *CopyManager) copyCollection(
 
 	log.Ctx(ctx).Infof("Starting collection copy: %s.%s", namespace.Database, namespace.Collection)
 
+	//nolint:contextcheck // The dispatcher inherits this collection's context through session.ctx.
 	go cm.runReadDispatcher(session, nextSegment, progressUpdateCh)
 	go cm.runInsertDispatcher(session, progressUpdateCh)
 

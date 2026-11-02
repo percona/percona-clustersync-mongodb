@@ -653,7 +653,7 @@ func runServer(cfg *config.Config) error {
 	go func() {
 		<-ctx.Done()
 
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.DisconnectTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), config.DisconnectTimeout)
 		defer cancel()
 
 		err := srv.Close(cleanupCtx)

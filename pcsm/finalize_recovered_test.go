@@ -20,7 +20,7 @@ const finalizeProbeTimeout = 5 * time.Second
 // unreachableSource returns a client that fails server selection immediately.
 // Tests need StateFinalizing, so client is supplied and status treats the lookup
 // failure as "source cluster is lost" and carries on.
-func unreachableSource(t *testing.T) *mongo.Client {
+func unreachableSource(ctx context.Context, t *testing.T) *mongo.Client {
 	t.Helper()
 
 	client, err := mongo.Connect(options.Client().
@@ -28,7 +28,11 @@ func unreachableSource(t *testing.T) *mongo.Client {
 		SetServerSelectionTimeout(10 * time.Millisecond).
 		SetConnectTimeout(10 * time.Millisecond))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizeProbeTimeout)
+		defer cancel()
+		require.NoError(t, client.Disconnect(ctx))
+	})
 
 	return client
 }
@@ -39,12 +43,12 @@ func unreachableSource(t *testing.T) *mongo.Client {
 // Recover restores StateFinalizing and rebuilds a replicator with an open
 // Done channel, but it does not restore an in-process finalizer goroutine.
 // The empty catalog lets resumed finalization complete without MongoDB clients.
-func recoveredFinalizingPipeline(t *testing.T) *PCSM {
+func recoveredFinalizingPipeline(ctx context.Context, t *testing.T) *PCSM {
 	t.Helper()
 
 	return &PCSM{
 		lifecycleCtx: t.Context(),
-		source:       unreachableSource(t),
+		source:       unreachableSource(ctx, t),
 		state:        StateFinalizing,
 		catalog:      catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
 		clone: &mockCloner{status: clone.Status{
@@ -67,7 +71,7 @@ func recoveredFinalizingPipeline(t *testing.T) *PCSM {
 func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	p.state = StateRunning
 	repl := p.repl.(*mockReplicator) //nolint:forcetypeassert // fixture-owned type
 	repl.pauseTime = time.Time{}
@@ -108,7 +112,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 func TestFinalizeAfterPromotionSkipsCompletedPreconditions(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	p.clone = &mockCloner{}
 	p.repl = &mockReplicator{doneCh: make(chan struct{})}
 
@@ -128,7 +132,7 @@ func TestFinalizeAfterPromotionSkipsCompletedPreconditions(t *testing.T) {
 func TestFinalizeAfterPromotionTerminates(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 
 	finalized := make(chan error, 1)
 	go func() { finalized <- p.Finalize(t.Context()) }()
@@ -146,7 +150,7 @@ func TestFinalizeAfterPromotionTerminates(t *testing.T) {
 func TestFinalizeAfterPromotionFromPausedTerminates(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	p.state = StatePaused
 
 	finalized := make(chan error, 1)
@@ -173,7 +177,7 @@ func TestFinalizeAfterPromotionFromPausedTerminates(t *testing.T) {
 func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	finalizedState := make(chan struct{}, 2)
 	p.SetOnStateChanged(func(state State) {
 		if state == StateFinalized {
@@ -223,7 +227,7 @@ func TestFinalizeAgainAfterRecoveredFinalizationTerminates(t *testing.T) {
 func TestStatusReportsResumedFinalizeAfterPromotion(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 
 	finalized := make(chan error, 1)
 	go func() {
@@ -276,7 +280,7 @@ func (f *blockingCatalogFinalizer) Finalize(ctx context.Context) []catalog.Unsuc
 func TestStartFinalizeMarksFinalizerActiveWhileCatalogFinalizeRuns(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	finalizer := &blockingCatalogFinalizer{
 		entered: make(chan struct{}, 1),
 		release: make(chan struct{}),
@@ -326,7 +330,7 @@ func TestStartFinalizeMarksFinalizerActiveWhileCatalogFinalizeRuns(t *testing.T)
 func TestFinalizeRejectsSecondCallWhileFinalizerActive(t *testing.T) {
 	t.Parallel()
 
-	p := recoveredFinalizingPipeline(t)
+	p := recoveredFinalizingPipeline(t.Context(), t)
 	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
 	// startFinalize is the only production writer of this process-local flag.
 	// Set it directly to hold the active window without racing the empty catalog.

@@ -177,6 +177,7 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 		}
 	})
 
+	//nolint:contextcheck // Restore belongs to t.ctx, not the server context used to reconcile ownership.
 	err := Restore(ectx, s.targetCluster, t.pipeline, int64(t.term), s.membership.InstanceID())
 	switch {
 	case err == nil, errors.Is(err, errNoCheckpoint):
@@ -199,6 +200,7 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 	// The tenure's checkpoint writer. It ends on the first write it cannot
 	// account for, and the tenure ends with it.
 	go func() {
+		//nolint:contextcheck // Checkpoint writes must end with this tenure, even while the server stays live.
 		err := RunCheckpointing(t.ctx, s.targetCluster, t.pipeline, int64(t.term),
 			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval, saveNow)
 		if err != nil {
@@ -210,7 +212,7 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 	// request is admitted, so a /start cannot pre-empt the configured options.
 	// Only valid from idle: a restored non-idle pipeline must not be restarted.
 	if s.autoStartOpts != nil {
-		s.autoStart(ectx, t, lg)
+		s.autoStart(ectx, t, lg) //nolint:contextcheck // Replication is owned by the tenure, not the server.
 	}
 
 	close(t.ready)
