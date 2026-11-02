@@ -164,7 +164,9 @@ func (w *worker) runWriter(ctx context.Context) {
 
 		size, err := pb.writer.Do(ctx, w.target)
 		if err != nil {
-			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			// Bulk-write exceptions may not retain the context error. Once
+			// this run is canceled, a returning write is abandonment.
+			if ctx.Err() != nil {
 				w.writerAbandoned = true
 				w.writerErr = errors.Wrap(ctx.Err(), "bulk write abandoned")
 
@@ -384,6 +386,17 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 
 // reportError sends an error to the error channel (non-blocking).
 func (w *worker) reportError(err error) {
+	// Overflow preflight can observe writerDone and wrap its abandonment
+	// error. Read writer state only after joining it, and keep real parse
+	// errors observable even when the writer was canceled meanwhile.
+	select {
+	case <-w.writerDone:
+		if w.writerAbandoned && errors.Is(err, w.writerErr) {
+			return
+		}
+	default:
+	}
+
 	select {
 	case w.errCh <- err:
 	default:
