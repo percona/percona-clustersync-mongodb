@@ -139,13 +139,16 @@ func TestLeaseTTLNormalizationAndDeadline(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name string
-		ttl  time.Duration
-		want time.Duration
+		name    string
+		ttl     time.Duration
+		want    time.Duration
+		wantErr bool
 	}{
 		{name: "default", want: 10 * time.Second},
 		{name: "configured", ttl: time.Minute, want: time.Minute},
 		{name: "truncated", ttl: 10*time.Second + 900*time.Microsecond, want: 10 * time.Second},
+		{name: "negative rejected", ttl: -time.Second, wantErr: true},
+		{name: "sub-millisecond rejected", ttl: 500 * time.Microsecond, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -160,6 +163,11 @@ func TestLeaseTTLNormalizationAndDeadline(t *testing.T) {
 				defer func() { require.NoError(t, client.Disconnect(t.Context())) }()
 
 				m, err := JoinMembership(t.Context(), client, MembershipOptions{LeaseTTL: tc.ttl})
+				if tc.wantErr {
+					require.ErrorContains(t, err, "below the minimum 10s")
+
+					return
+				}
 				require.NoError(t, err)
 				require.NoError(t, m.Stop(t.Context()))
 				require.Equal(t, tc.want, m.leaseTTL)
