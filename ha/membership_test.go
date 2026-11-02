@@ -18,6 +18,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/xoptions"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/errors"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
@@ -49,9 +51,8 @@ func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
 		client, err := mongo.Connect(opts)
 		require.NoError(t, err)
 		defer func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), config.HAOperationTimeout)
-			defer cancel()
-			require.NoError(t, client.Disconnect(ctx))
+			require.NoError(t, util.CtxWithTimeout(
+				context.WithoutCancel(t.Context()), config.HAOperationTimeout, client.Disconnect))
 		}()
 
 		m := newTestMembership()
@@ -69,14 +70,15 @@ func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
 		done := make(chan struct{})
 		defer func() {
 			cancel()
-			cleanupCtx, cleanupCancel := context.WithTimeout(
-				context.WithoutCancel(ctx), config.HAOperationTimeout)
-			defer cleanupCancel()
-			select {
-			case <-done:
-			case <-cleanupCtx.Done():
-				t.Error("membership heartbeat loop did not stop during cleanup")
-			}
+			assert.NoError(t, util.CtxWithTimeout(
+				context.WithoutCancel(ctx), config.HAOperationTimeout, func(cleanupCtx context.Context) error {
+					select {
+					case <-done:
+						return nil
+					case <-cleanupCtx.Done():
+						return errors.Wrap(cleanupCtx.Err(), "membership heartbeat loop did not stop during cleanup")
+					}
+				}))
 		}()
 		go func() {
 			defer close(done)
@@ -87,7 +89,7 @@ func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
 		synctest.Wait()
 		select {
 		case <-commands:
-			t.Fatal("heartbeat emitted before the first periodic tick")
+			require.FailNow(t, "heartbeat emitted before the first periodic tick")
 		default:
 		}
 
@@ -97,13 +99,13 @@ func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
 		select {
 		case <-completed:
 		default:
-			t.Fatal("periodic tick did not complete a heartbeat without SetRole")
+			require.FailNow(t, "periodic tick did not complete a heartbeat without SetRole")
 		}
 		var command bson.Raw
 		select {
 		case command = <-commands:
 		default:
-			t.Fatal("completed heartbeat had no observed update command")
+			require.FailNow(t, "completed heartbeat had no observed update command")
 		}
 		assert.Equal(t, config.PCSMDatabase, command.Lookup("$db").StringValue())
 		assert.Equal(t, config.MembersCollection, command.Lookup("update").StringValue())
@@ -125,7 +127,7 @@ func TestMembershipPeriodicHeartbeatWithoutSetRole(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			t.Fatal("membership heartbeat loop did not exit on cancellation")
+			require.FailNow(t, "membership heartbeat loop did not exit on cancellation")
 		}
 	})
 }

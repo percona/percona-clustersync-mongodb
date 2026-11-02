@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -11,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/percona/percona-clustersync-mongodb/config"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 func TestStartCommandRepeatedNamespaceFlags(t *testing.T) {
@@ -38,9 +39,7 @@ func TestStartCommandRepeatedNamespaceFlags(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		err := json.NewEncoder(w).Encode(startResponse{Ok: true})
-		if err != nil {
-			t.Errorf("encode start response: %v", err)
-		}
+		assert.NoError(t, err, "encode start response")
 	}))
 	defer srv.Close()
 
@@ -56,10 +55,7 @@ func TestStartCommandRepeatedNamespaceFlags(t *testing.T) {
 		"--include-namespaces=db2.third",
 		"--exclude-namespaces=db4.third",
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	require.NoError(t, cmd.ExecuteContext(ctx))
+	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, cmd.ExecuteContext))
 
 	select {
 	case got := <-received:
@@ -68,8 +64,8 @@ func TestStartCommandRepeatedNamespaceFlags(t *testing.T) {
 		require.Equal(t, "/start", got.path)
 		require.Equal(t, []string{"db1.first", "db1.second", "db2.third"}, got.body.IncludeNamespaces)
 		require.Equal(t, []string{"db3.first", "db3.second", "db4.third"}, got.body.ExcludeNamespaces)
-	case <-ctx.Done():
-		t.Fatal("start request was not received")
+	default:
+		require.FailNow(t, "start request was not received")
 	}
 	require.Equal(t, int64(1), requests.Load())
 }
@@ -93,9 +89,7 @@ func TestStartCommandRejectsNamespaceFlagSyntaxBeforeHTTP(t *testing.T) {
 					requests.Add(1)
 					w.Header().Set("Content-Type", "application/json")
 					err := json.NewEncoder(w).Encode(startResponse{Ok: true})
-					if err != nil {
-						t.Errorf("encode start response: %v", err)
-					}
+					assert.NoError(t, err, "encode start response")
 				}))
 				defer srv.Close()
 
@@ -106,10 +100,7 @@ func TestStartCommandRejectsNamespaceFlagSyntaxBeforeHTTP(t *testing.T) {
 				cmd.SetOut(io.Discard)
 				cmd.SetErr(io.Discard)
 				cmd.SetArgs([]string{tt.arg})
-				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-				defer cancel()
-
-				err := cmd.ExecuteContext(ctx)
+				err := util.CtxWithTimeout(t.Context(), 5*time.Second, cmd.ExecuteContext)
 
 				require.Error(t, err)
 				require.ErrorContains(t, err, "--"+flag)

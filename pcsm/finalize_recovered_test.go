@@ -13,6 +13,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 const finalizeProbeTimeout = 5 * time.Second
@@ -29,9 +30,7 @@ func unreachableSource(ctx context.Context, t *testing.T) *mongo.Client {
 		SetConnectTimeout(10 * time.Millisecond))
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizeProbeTimeout)
-		defer cancel()
-		require.NoError(t, client.Disconnect(ctx))
+		require.NoError(t, util.CtxWithTimeout(context.WithoutCancel(ctx), finalizeProbeTimeout, client.Disconnect))
 	})
 
 	return client

@@ -148,15 +148,16 @@ func TestRepl_Start_stopsOnHistoryLost(t *testing.T) {
 				// When: drive the real stream opener, reader, retry loop and terminal status.
 				require.NoError(t, r.Start(runCtx, startAt))
 				started = true
-				guardCtx, cancelGuard := context.WithTimeout(ctx, 30*time.Second)
-				defer cancelGuard()
-				select {
-				case <-r.Done():
-				case retry := <-retried:
-					require.FailNow(t, "retried after history loss", retry)
-				case <-guardCtx.Done():
-					require.FailNow(t, "replication did not terminate after history loss", guardCtx.Err().Error())
-				}
+				require.NoError(t, util.CtxWithTimeout(ctx, 30*time.Second, func(guardCtx context.Context) error {
+					select {
+					case <-r.Done():
+						return nil
+					case retry := <-retried:
+						return errors.Errorf("retried after history loss: %s", retry)
+					case <-guardCtx.Done():
+						return errors.Wrap(guardCtx.Err(), "replication did not terminate after history loss")
+					}
+				}))
 
 				// Then: Done joins the watcher. Neither cancellation nor a timeout ends the run.
 				require.NoError(t, runCtx.Err())
