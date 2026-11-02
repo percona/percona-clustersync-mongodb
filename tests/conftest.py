@@ -121,11 +121,20 @@ def _wait_for_pcsm_ready(pcsm_url: str, timeout: float = 10.0):
     raise TimeoutError(f"PCSM not ready within {timeout}s: {last_err}")
 
 
-def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest):
+def start_pcsm(pcsm_bin: str, request: pytest.FixtureRequest, extra_args: list[str] | None = None):
     source = source_uri(request)
     target = target_uri(request)
     rv = subprocess.Popen(
-        [pcsm_bin, "--source", source, "--target", target, "--reset-state", "--log-level=trace"]
+        [
+            pcsm_bin,
+            "--source",
+            source,
+            "--target",
+            target,
+            "--reset-state",
+            "--log-level=trace",
+            *(extra_args or []),
+        ]
     )
     try:
         _wait_for_pcsm_ready(_pcsm_url(request))
@@ -160,7 +169,7 @@ def manage_pcsm_process(request: pytest.FixtureRequest, pcsm_bin: str):
 
 
 # When True, the session-managed PCSM is intentionally stopped (see
-# suspend_managed_pcsm) and restart_pcsm_on_failure must not resurrect it.
+# suspend_managed_pcsm / managed_pcsm_args) and restart_pcsm_on_failure must not resurrect it.
 _MANAGED_SUSPENDED = False
 
 
@@ -187,6 +196,25 @@ def suspend_managed_pcsm(request: pytest.FixtureRequest, pcsm_bin: str):
         _MANAGED_SUSPENDED = False
         if proc is not None:
             PCSM_PROC = start_pcsm(pcsm_bin, request)
+
+
+@pytest.fixture
+def managed_pcsm_args(
+    request: pytest.FixtureRequest,
+    pcsm_bin: str,
+    suspend_managed_pcsm,
+):
+    """Run the managed server with indirectly parametrized args; restore defaults afterwards."""
+    if not pcsm_bin:
+        pytest.skip("TEST_PCSM_BIN not set; custom server args need a managed binary")
+
+    global PCSM_PROC  # pylint: disable=W0603
+    PCSM_PROC = start_pcsm(pcsm_bin, request, extra_args=request.param)
+    try:
+        yield
+    finally:
+        stop_pcsm(PCSM_PROC)
+        PCSM_PROC = None
 
 
 @pytest.hookimpl(hookwrapper=True)

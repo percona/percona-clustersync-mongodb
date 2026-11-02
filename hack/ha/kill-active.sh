@@ -8,9 +8,9 @@
 #   SECONDS       delay before restarting the killed instance (default 5)
 #   --no-restart  leave the instance stopped
 #
-# Note on timing vs. the lease TTL (10s): a short delay (< TTL) means the killed
-# instance may return before its lease expires; a longer delay lets a standby
-# take over first. Both are valid drills.
+# Takeover can wait up to the lease TTL, 10s by default: a short delay (< TTL)
+# means the killed instance may return before its lease expires; a longer delay
+# lets a standby take over first. Both are valid drills.
 
 set -euo pipefail
 
