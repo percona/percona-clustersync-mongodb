@@ -147,6 +147,7 @@ Runtime flag/environment bindings:
 | `PCSM_PORT` | `--port` (default 2242) |
 | `PCSM_LISTEN_HOST` | `--listen-host` |
 | `PCSM_LOG_LEVEL` | `--log-level` |
+| `PCSM_HA_LEASE_TTL` | `--ha-lease-ttl` (default 10s) |
 | `PCSM_MONGODB_OPERATION_TIMEOUT` | `--mongodb-operation-timeout` |
 | `PCSM_CLONE_SEGMENT_SIZE` | `--clone-segment-size` |
 | `PCSM_CLONE_SKIP_PRESPLIT` | `--clone-skip-presplit` |
@@ -282,7 +283,7 @@ docker logs -f pcsm0
 
 `--reset` stops the old HA group before clearing lease, member, and checkpoint state. Cleanup must stop HA containers before removing their cluster network.
 
-The restarted process gets a new instance ID and rejoins initially as STANDBY, unless it later wins election. A five-second restart does not guarantee that another instance has already taken over because lease TTL is ten seconds. Host clients can target any published port, for example `./bin/pcsm status --port 2243`.
+The restarted process gets a new instance ID and rejoins initially as STANDBY, unless it later wins election. A five-second restart does not guarantee that another instance has already taken over because takeover waits for the lease TTL, 10s by default. Host clients can target any published port, for example `./bin/pcsm status --port 2243`.
 
 HA persistence and fencing contracts:
 
@@ -295,6 +296,17 @@ HA persistence and fencing contracts:
 - `/status` is also ACTIVE-only because a STANDBY has no meaningful pipeline state.
 - The `me`/`role`/`group` envelope appears only when more than one live member is observed. Membership-read failure or degradation to one observed member omits it; a lone instance therefore keeps the pre-HA API byte-for-byte.
 - Group identity is advisory through `--group-name` / `PCSM_GROUP_NAME`. `status-active.sh` and `kill-active.sh` depend on observing the multi-member envelope and can report no ACTIVE when it is omitted.
+
+`--ha-lease-ttl` accepts durations of at least 10s in whole milliseconds. Set the same value on every instance: the owner's value controls both its local deadline and stored expiry.
+
+T denotes the lease TTL. The lease deadline and checkpoint writer run independently; the first deadline or checkpoint-write error ends the tenure. Estimates below are conditional, not guaranteed bounds; an immediate error can end the tenure sooner. Checkpoints run every 15s by default and on state changes, one write at a time.
+
+| Failure | T = 10s (default) | T raised | Notes |
+| --- | --- | --- | --- |
+| No target server selectable (partition, no primary) | 7 to 10s, lease deadline | min(T less up to 3s, checkpoint writer: 30 to 45s for a write issued during the outage, up to the operation timeout for one already on the wire) | Driver server selection timeout is 30s and is not configurable in PCSM; raising T beyond about 30s is limited by selection failures. |
+| Writable primary, majority acknowledgement stalls (secondaries delayed or stopped while the primary keeps its majority view) | 7 to 10s, lease deadline | min(T less up to 3s, operation timeout) | Lease renewals and heartbeats are majority writes with a 5s HA operation timeout; failed attempts report nothing until the lease deadline. Checkpoints use the client operation timeout (5m by default). If the primary loses its majority and steps down, the preceding row applies. |
+| Majority up, data write concern unsatisfiable (`w:3`, one node down) | no transition | no transition | Lease and checkpoint writes succeed. Repl bulk writes retry transient errors without bound; status stays `running`. Clone inserts fail after 3 attempts x operation timeout plus 5s and 10s backoffs; the run becomes `failed`. |
+| ACTIVE process crash | lease takeable after T from the crashed owner's last renewal | same, longer | Only a non-owner reads stored `expiresAt`. Takeover adds up to 3s of polling, the acquisition RPC and checkpoint restore before requests are admitted. A restarted sole instance has a new ID and remains STANDBY until the old lease expires, up to T. |
 
 Reset commands bypass HTTP and connect directly to the target. Version is local:
 
