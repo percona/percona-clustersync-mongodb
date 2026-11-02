@@ -73,6 +73,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	repl.pauseTime = time.Time{}
 	repl.pauseCalled = make(chan struct{}, 1)
 	repl.doneCalled = make(chan struct{}, 1)
+	done := startRunning(p)
 
 	finalized := make(chan error, 1)
 	go func() { finalized <- p.Finalize(t.Context()) }()
@@ -89,11 +90,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 		require.FailNow(t, "Finalize did not wait for the running replicator's Done channel")
 	}
 
-	select {
-	case repl.doneCh <- struct{}{}:
-	case <-time.After(finalizeProbeTimeout):
-		require.FailNow(t, "Finalize called Done but did not wait for it to close")
-	}
+	close(repl.doneCh)
 
 	select {
 	case err := <-finalized:
@@ -101,6 +98,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	case <-time.After(finalizeProbeTimeout):
 		require.FailNow(t, "Finalize did not return even though the replicator had finished")
 	}
+	awaitEvent(t.Context(), t, done, "run did not finish before finalization")
 }
 
 // A recovered "finalizing" pipeline skips checkFinalizePreconditions: it

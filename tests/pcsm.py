@@ -33,6 +33,7 @@ class PCSM:
         FAILED = "failed"
         IDLE = "idle"
         RUNNING = "running"
+        PAUSING = "pausing"
         PAUSED = "paused"
         FINALIZING = "finalizing"
         FINALIZED = "finalized"
@@ -210,7 +211,7 @@ class Runner:
         """Finalize the PCSM service."""
         state = self.pcsm.status()
 
-        if state["state"] == PCSM.State.PAUSED:
+        if state["state"] in (PCSM.State.PAUSING, PCSM.State.PAUSED):
             if state["initialSync"]["cloneCompleted"]:
                 self.pcsm.resume()
                 # After resuming, wait briefly to ensure the replication stream is fully active
