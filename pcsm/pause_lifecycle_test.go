@@ -12,6 +12,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 func runningDrainPipeline(t *testing.T, cln Cloner) (*PCSM, *drainingReplicator, <-chan struct{}) {
@@ -71,7 +72,7 @@ func TestPause_PublishesPausedAfterMonitorCleanup(t *testing.T) {
 		require.Equal(t, State(StatePausing), state, "monitor still owns the execution")
 		select {
 		case <-done:
-			t.Fatal("run completed before monitor cleanup")
+			require.FailNow(t, "run completed before monitor cleanup")
 		default:
 		}
 
@@ -95,7 +96,7 @@ func TestResume_PendingPauseCancellationThenSuccess(t *testing.T) {
 		synctest.Wait()
 		select {
 		case err := <-result:
-			t.Fatalf("resume returned before pause completed: %v", err)
+			require.FailNow(t, "resume returned before pause completed", "%v", err)
 		default:
 		}
 		cancel()
@@ -178,7 +179,7 @@ func TestFinalize_JoinsPauseAndMonitors(t *testing.T) {
 				synctest.Wait()
 				select {
 				case err := <-result:
-					t.Fatalf("finalize returned before monitor cleanup: %v", err)
+					require.FailNow(t, "finalize returned before monitor cleanup", "%v", err)
 				default:
 				}
 				require.Zero(t, fin.calls.Load())
@@ -206,10 +207,8 @@ func TestFinalize_PauseTimeoutHasNoContinuation(t *testing.T) {
 				}
 				fin := &gatedFinalizer{entered: make(chan struct{})}
 				p.finalizer = fin
-				ctx, cancel := context.WithTimeout(t.Context(), time.Nanosecond)
-				defer cancel()
 				result := make(chan error, 1)
-				go func() { result <- p.Finalize(ctx) }()
+				go func() { result <- util.CtxWithTimeout(t.Context(), time.Nanosecond, p.Finalize) }()
 				require.ErrorIs(t, <-result, context.DeadlineExceeded)
 				state, _ := pipelineState(p)
 				require.Equal(t, State(StatePausing), state)
@@ -336,7 +335,7 @@ func TestFinalize_RechecksFailureAfterPreviousRun(t *testing.T) {
 		synctest.Wait()
 		select {
 		case err := <-result:
-			t.Fatalf("finalize returned before run reported its failure: %v", err)
+			require.FailNow(t, "finalize returned before run reported its failure", "%v", err)
 		default:
 		}
 		release()

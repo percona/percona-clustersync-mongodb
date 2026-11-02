@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 )
 
@@ -53,11 +54,11 @@ func TestStopRun_StatusAndCheckpointDuringFinalDrain(t *testing.T) {
 			assert.Equal(t, int64(7), got.status.EventsApplied)
 			assert.Equal(t, int64(7), got.cp.EventsApplied)
 		case <-time.After(barrierTimeout):
-			t.Error("status/checkpoint blocked behind final drain")
+			assert.Fail(t, "status/checkpoint blocked behind final drain")
 		}
 		select {
 		case <-done:
-			t.Error("Done closed before final write completed")
+			assert.Fail(t, "Done closed before final write completed")
 		default:
 		}
 
@@ -65,7 +66,7 @@ func TestStopRun_StatusAndCheckpointDuringFinalDrain(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(barrierTimeout):
-			t.Fatal("final drain did not finish")
+			require.FailNow(t, "final drain did not finish")
 		}
 
 		status := r.Status()
@@ -104,7 +105,7 @@ func TestStopRun_FinalBarrierFailure(t *testing.T) {
 			select {
 			case <-r.Done():
 			default:
-				t.Fatal("Done was not closed after terminal bookkeeping")
+				require.FailNow(t, "Done was not closed after terminal bookkeeping")
 			}
 			wantErr := writeErr
 			if prior != nil {
@@ -181,12 +182,12 @@ func (b *cancelingBulkWriter) Do(context.Context, *mongo.Client) (int, error) {
 	return 0, b.doErr
 }
 
-func TestStopRun_WriterFailureConcurrentWithCancellation(t *testing.T) {
+func TestStopRun_WriteReturningAfterCancellationIsAbandoned(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	writeErr := errors.New("write failed as run canceled")
+	writeErr := errors.New("interrupted write without a wrapped context error")
 	bw := &cancelingBulkWriter{cancel: cancel}
 	bw.doErr = writeErr
 	pool := makeTestPoolLiveWithParent(t, ctx, []bulkWriter{bw},
@@ -200,6 +201,66 @@ func TestStopRun_WriterFailureConcurrentWithCancellation(t *testing.T) {
 
 	r.stopRun(ctx, pool)
 
-	require.ErrorIs(t, r.Status().Err, writeErr)
+	require.NoError(t, r.Status().Err)
 	assert.Equal(t, event.change.ClusterTime, r.Checkpoint().CheckpointOpTime)
+}
+
+type cancelOnOverflowWriter struct {
+	mockBulkWriter
+
+	abandon func()
+}
+
+func (b *cancelOnOverflowWriter) WouldOverflow(int) bool {
+	if b.count == 0 {
+		return false
+	}
+
+	b.abandon()
+
+	return true
+}
+
+func TestStopRun_OverflowAfterWriterAbandonmentIsNotFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	gate := newBlockingGate()
+	var pool *workerPool
+	sealed := 0
+	pool = makeTestPoolLiveWithParent(t, ctx, []bulkWriter{gate.writer()}, func() bulkWriter {
+		sealed++
+		if sealed <= config.WorkerBulkQueueSize {
+			return &mockBulkWriter{fullAt: 1}
+		}
+
+		return &cancelOnOverflowWriter{abandon: func() {
+			cancel()
+			<-pool.workers[0].writerDone
+		}}
+	})
+	r := &Repl{
+		pool: pool, startTime: time.Now(), doneCh: make(chan struct{}),
+		checkpointOpTime: bson.Timestamp{T: 10},
+	}
+	first := makeInsertEventWithTS("parked", bson.Timestamp{T: 20})
+	pool.Route(first.change, first.ns)
+	gate.awaitParked(t)
+
+	// Fill the sealed-bulk queue, then overflow a partial bulk. Cancellation
+	// happens inside WouldOverflow, so the worker cannot select ctx.Done first.
+	// The full queue forces enqueueBulk to observe the abandoned writer.
+	for range config.WorkerBulkQueueSize + 2 {
+		event := makeInsertEventWithTS("overflow", bson.Timestamp{T: 21})
+		pool.Route(event.change, event.ns)
+	}
+	awaitWorkerExit(t, pool.workers[0])
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	r.stopRun(ctx, pool)
+
+	require.NoError(t, r.Status().Err)
+	assert.Equal(t, first.change.ClusterTime, r.Checkpoint().CheckpointOpTime)
+	assert.Zero(t, r.Status().EventsApplied)
 }
