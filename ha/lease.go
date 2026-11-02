@@ -121,7 +121,7 @@ func (m *Membership) leaseTick(ctx context.Context, lg log.Logger, observe Obser
 	}
 
 	if att.Acquired {
-		m.leaseDeadline = sentAt.Add(config.LeaseTTL)
+		m.leaseDeadline = sentAt.Add(m.leaseTTL)
 		m.report(Ownership{Held: true, Term: att.Term}, observe)
 
 		return
@@ -199,7 +199,7 @@ func (m *Membership) tryInsertLease(ctx context.Context) error {
 			{fieldInstanceID, m.instanceID},
 			{fieldTerm, int64(1)},
 			{fieldElectionDate, now},
-			{fieldExpiresAt, now.Add(config.LeaseTTL)},
+			{fieldExpiresAt, now.Add(m.leaseTTL)},
 		})
 
 		return err //nolint:wrapcheck
@@ -213,7 +213,7 @@ func (m *Membership) tryInsertLease(ctx context.Context) error {
 // absent or held by another instance; the caller disambiguates. A match is
 // always an acquisition: the pipeline sets instanceId unconditionally.
 func (m *Membership) tryTakeOrRenewExisting(ctx context.Context) (leaseAttempt, bool, error) {
-	ttlMS := config.LeaseTTL.Milliseconds()
+	ttlMS := m.leaseTTL.Milliseconds()
 
 	// isRenew is true when this instance already owns the lease in the pre-image.
 	isRenew := bson.D{{"$eq", bson.A{"$" + fieldInstanceID, m.instanceID}}}

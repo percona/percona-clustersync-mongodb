@@ -63,7 +63,8 @@ const (
 	StaleMemberDuration = 3 * MemberHeartbeatInterval
 	// LeaseRenewInterval is how often the active instance renews the lease.
 	LeaseRenewInterval = 3 * time.Second
-	// LeaseTTL is how long the lease stays valid after a renewal. An ACTIVE
+	// LeaseTTL is the default lease validity duration, overridable by
+	// --ha-lease-ttl / PCSM_HA_LEASE_TTL. An ACTIVE
 	// tolerates renewal errors only until this duration from its last successful
 	// attempt's start, before a standby may take over.
 	LeaseTTL = 10 * time.Second
