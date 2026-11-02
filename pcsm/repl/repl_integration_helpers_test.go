@@ -53,6 +53,7 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
 				"--wiredTigerCacheSizeGB", "0.5",
 				"--replSet", "rs0", "--port", "27017",
+				"--setParameter", "enableTestCommands=1",
 			},
 			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
 		},
@@ -60,7 +61,7 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, util.CtxWithTimeout(context.Background(), 10*time.Second,
+		require.NoError(t, util.CtxWithTimeout(context.WithoutCancel(ctx), 10*time.Second,
 			func(cleanupCtx context.Context) error {
 				return mongod.Terminate(cleanupCtx)
 			},
@@ -86,6 +87,9 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 			SetServerSelectionTimeout(30 * time.Second),
 	)
 	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, util.CtxWithTimeout(context.WithoutCancel(ctx), 10*time.Second, probe.Disconnect))
+	}()
 	require.NoError(t, probe.Ping(ctx, readpref.Primary()))
 	_, err = probe.Database("pcsm_readiness").Collection("ready").
 		InsertOne(ctx, bson.D{{Key: "_id", Value: "primary"}})
@@ -93,7 +97,6 @@ func newReplTestReplicaSet(ctx context.Context, t *testing.T) string {
 	_, err = mdb.AdvanceClusterTime(ctx, probe)
 	require.NoError(t, err)
 	require.NoError(t, probe.Database("pcsm_readiness").Drop(ctx))
-	disconnectReplTestClient(t, probe)
 
 	return uri
 }
