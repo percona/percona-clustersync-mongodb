@@ -93,11 +93,14 @@ func (s staticRecoverable) Recover(context.Context, []byte) error      { return 
 func recoveryTestClient(t *testing.T) *mongo.Client {
 	t.Helper()
 
+	// Image pulls and container startup must not consume the connection deadline.
+	uri := recoveryMongo(t)
+
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	client, err := mongo.Connect(
-		options.Client().ApplyURI(recoveryMongo(t)).SetServerSelectionTimeout(5 * time.Second))
+		options.Client().ApplyURI(uri).SetServerSelectionTimeout(5 * time.Second))
 	require.NoError(t, err)
 	require.NoError(t, client.Ping(ctx, nil))
 
