@@ -276,6 +276,11 @@ func TestStatusCommandStates(t *testing.T) {
 			expectedInOutput: []string{`"ok": true`, `"state": "running"`, `"lagTimeSeconds": 10`},
 		},
 		{
+			name:             "pausing state",
+			response:         mockResponse{Ok: true, State: "pausing"},
+			expectedInOutput: []string{`"ok": true`, `"state": "pausing"`},
+		},
+		{
 			name:             "paused state",
 			response:         mockResponse{Ok: true, State: "paused"},
 			expectedInOutput: []string{`"ok": true`, `"state": "paused"`},

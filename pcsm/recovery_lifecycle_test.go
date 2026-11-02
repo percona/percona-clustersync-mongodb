@@ -23,7 +23,9 @@ type drainingReplicator struct {
 	pausing      atomic.Bool
 	settled      atomic.Bool
 	tailCaptured atomic.Bool
+	lastOp       atomic.Uint32
 	doneObserved chan struct{}
+	observeDone  sync.Once
 	tailObserved chan struct{}
 	releaseTail  chan struct{}
 	drainError   error
@@ -42,7 +44,7 @@ func (r *drainingReplicator) Pause(context.Context) error {
 }
 
 func (r *drainingReplicator) Done() <-chan struct{} {
-	close(r.doneObserved)
+	r.observeDone.Do(func() { close(r.doneObserved) })
 
 	return r.doneCh
 }
@@ -50,7 +52,7 @@ func (r *drainingReplicator) Done() <-chan struct{} {
 func (r *drainingReplicator) Status() repl.Status {
 	status := repl.Status{
 		StartTime:            time.Unix(1, 0),
-		LastReplicatedOpTime: bson.Timestamp{T: 1},
+		LastReplicatedOpTime: bson.Timestamp{T: max(1, r.lastOp.Load())},
 		Pausing:              r.pausing.Load(),
 	}
 	if r.settled.Load() {
@@ -119,7 +121,7 @@ func TestRecoverCancellationPreservesPreviousRun(t *testing.T) {
 		// Then: cancellation neither replaces components nor abandons ownership.
 		p.lock.Lock()
 		require.Same(t, old, p.repl)
-		require.Equal(t, State(StatePaused), p.state)
+		require.Equal(t, State(StatePausing), p.state)
 		p.lock.Unlock()
 		release()
 		synctest.Wait()

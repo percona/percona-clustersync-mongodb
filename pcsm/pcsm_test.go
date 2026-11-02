@@ -72,6 +72,41 @@ func TestCheckpoint(t *testing.T) {
 		assert.Equal(t, State(StatePaused), cp.State)
 	})
 
+	t.Run("pending pause keeps legacy recovery intent and failure priority", func(t *testing.T) {
+		t.Parallel()
+		for _, cause := range []string{"", "final drain write failed"} {
+			t.Run(cause, func(t *testing.T) {
+				t.Parallel()
+				r := &mockReplicator{checkpoint: &repl.Checkpoint{
+					StartTime: time.Unix(1, 0), Error: cause,
+					CheckpointOpTime: bson.Timestamp{T: 7, I: 3},
+				}}
+				p := &PCSM{
+					state: StatePausing, repl: r, clone: finishedLifecycleCloner(),
+					catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
+					onStateChanged: func(State) {},
+				}
+				data, err := p.Checkpoint(t.Context())
+				require.NoError(t, err)
+				var cp checkpoint
+				require.NoError(t, bson.Unmarshal(data, &cp))
+				if cause == "" {
+					require.Equal(t, State(StatePaused), cp.State)
+					require.Empty(t, cp.Error)
+					p.state = StatePaused
+					legacy, err := p.Checkpoint(t.Context())
+					require.NoError(t, err)
+					require.Equal(t, legacy, data, "pending pause must add no checkpoint fields")
+				} else {
+					require.Equal(t, State(StateFailed), cp.State)
+					require.Contains(t, cp.Error, cause)
+				}
+
+				require.Equal(t, bson.Timestamp{T: 7, I: 3}, cp.Repl.CheckpointOpTime)
+			})
+		}
+	})
+
 	t.Run("includes namespace filters", func(t *testing.T) {
 		t.Parallel()
 
@@ -189,6 +224,7 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 		repl           Replicator
 	}{
 		{name: "fails when running", state: StateRunning},
+		{name: "fails when pausing without a settled execution", state: StatePausing},
 		{name: "fails when finalizing with a live finalizer", state: StateFinalizing, finalizeActive: true},
 		{
 			name:  "fails when paused and still pausing",

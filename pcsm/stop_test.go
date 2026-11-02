@@ -135,30 +135,42 @@ func TestStop_DuringCloneCancelsAndJoins(t *testing.T) {
 func TestStop_DuringReplCancelsAndJoins(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
-		cln, rpl := newRunMocks()
-		cln.status = finishedCloneStatus()
-		p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
+	for _, state := range []State{StateRunning, StatePausing} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
 
-		// Given: replication is running.
-		done := startRunning(p)
-		awaitEvent(ctx, t, rpl.startCalled, "run did not start replication")
+			require.NoError(t, util.CtxWithTimeout(t.Context(), 5*time.Second, func(ctx context.Context) error {
+				cln, rpl := newRunMocks()
+				cln.status = finishedCloneStatus()
+				if state == StatePausing {
+					rpl.startTime = time.Unix(1, 0)
+				}
+				p := &PCSM{lifecycleCtx: ctx, source: unreachableSource(t), clone: cln, repl: rpl, onStateChanged: func(State) {}}
 
-		// When: the tenure ends; replication ends on cancellation alone.
-		res := stopAsync(ctx, p)
-		awaitEvent(ctx, t, rpl.lastCtx().Done(), "Stop did not cancel replication's context")
-		close(rpl.doneCh)
-		awaitEvent(ctx, t, done, "run did not exit after replication stopped")
+				// Given: replication is running, optionally with an accepted pause.
+				done := startRunning(p)
+				awaitEvent(ctx, t, rpl.startCalled, "run did not start replication")
+				if state == StatePausing {
+					require.NoError(t, p.Pause(ctx))
+				}
 
-		// Then: joined, nothing failed.
-		require.NoError(t, awaitStop(ctx, t, res))
+				// When: the tenure ends; replication ends on cancellation alone.
+				res := stopAsync(ctx, p)
+				awaitEvent(ctx, t, rpl.lastCtx().Done(), "Stop did not cancel replication's context")
+				close(rpl.doneCh)
+				awaitEvent(ctx, t, done, "run did not exit after replication stopped")
 
-		state, perr := pipelineState(p)
-		assert.Equal(t, State(StateRunning), state)
-		require.NoError(t, perr)
+				// Then: joined, nothing settled or failed; this pipeline is discarded.
+				require.NoError(t, awaitStop(ctx, t, res))
 
-		return nil
-	}))
+				gotState, perr := pipelineState(p)
+				assert.Equal(t, state, gotState)
+				require.NoError(t, perr)
+
+				return nil
+			}))
+		})
+	}
 }
 
 // TestRun_GenuineCloneFailureIsRecorded pins that a clone error recorded while
@@ -321,6 +333,7 @@ func TestFinalize_RefusesWhenEpochDiesDuringDrain(t *testing.T) {
 
 		epoch, endEpoch := context.WithCancel(ctx)
 		defer endEpoch()
+		done := startRunning(p)
 
 		// Given: /finalize is draining replication under its epoch.
 		result := make(chan error, 1)
@@ -330,6 +343,7 @@ func TestFinalize_RefusesWhenEpochDiesDuringDrain(t *testing.T) {
 		// When: the epoch ends before the drain completes.
 		endEpoch()
 		close(rpl.doneCh)
+		awaitEvent(ctx, t, done, "run did not finish after drain")
 
 		// Then: refused; no finalizer, no finalize status, state untouched.
 		select {
@@ -343,7 +357,7 @@ func TestFinalize_RefusesWhenEpochDiesDuringDrain(t *testing.T) {
 		state, active, status := p.state, p.finalizeActive, p.finalizeStatus
 		p.lock.Unlock()
 
-		assert.Equal(t, State(StateRunning), state)
+		assert.Equal(t, State(StatePaused), state)
 		assert.False(t, active)
 		assert.Nil(t, status)
 

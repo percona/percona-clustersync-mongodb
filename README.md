@@ -30,6 +30,18 @@ PCSM is a CLI tool, but also exposes HTTP API as well.
 
 For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/pcsm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
+### Pausing replication
+
+`POST /pause` and `pcsm pause` acknowledge the pause request immediately.
+Status changes from `running` to `pausing` while queued writes drain, then to
+`paused` once replication has stopped. A drain failure changes status to
+`failed` instead.
+
+Wait for `state: "paused"` before treating the pause as complete. A resume
+request received during `pausing` waits for completion within its request
+deadline; a timeout stops that wait, not the accepted pause. State-aware clients
+must recognize `pausing`, including when `pauseOnInitialSync` is enabled.
+
 ### Target data write concern
 
 Clone inserts and replication data writes default to `majority`. To change their
