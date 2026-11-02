@@ -1082,9 +1082,10 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 
 		done := rpl.Done()
 		p.lock.Unlock()
+		// Pause accepted the finalization request. Its drain and catalog
+		// work now belong to the tenure, not the HTTP request's deadline.
 		select {
 		case <-done:
-		case <-ctx.Done():
 		case <-parent.Done():
 		}
 		p.lock.Lock()
@@ -1094,9 +1095,6 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	// that lost the lease meanwhile must not start catalog work.
 	if parent.Err() != nil {
 		return ErrNotActive
-	}
-	if ctx.Err() != nil {
-		return errors.Wrap(ctx.Err(), "wait for change replication")
 	}
 	if p.repl != rpl || (p.runDone != nil && p.runDone != run) {
 		return errors.New("cannot finalize: replication run changed")

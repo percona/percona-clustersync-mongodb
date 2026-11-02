@@ -12,6 +12,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 func checkpointDrainPipeline(ctx context.Context) (*PCSM, *mockReplicator) {
@@ -73,47 +74,61 @@ func TestFinalizeDrainsPendingCheckpointWithExclusiveReservation(t *testing.T) {
 	})
 }
 
-func TestFinalizeCanceledDrainReleasesReservation(t *testing.T) {
+func TestFinalizeRequestDeadlineDoesNotAbandonAcceptedDrain(t *testing.T) {
 	t.Parallel()
 
-	for _, cause := range []string{"caller", "epoch"} {
-		t.Run(cause, func(t *testing.T) {
-			t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		p, rpl := checkpointDrainPipeline(ctx)
+		result := make(chan error, 1)
+		finalized := make(chan struct{})
+		p.onStateChanged = func(state State) {
+			if state == StateFinalized {
+				close(finalized)
+			}
+		}
+		require.NoError(t, util.CtxWithTimeout(ctx, 5*time.Second, func(caller context.Context) error {
+			go func() { result <- p.Finalize(caller) }()
+			<-rpl.doneCalled
+			<-caller.Done()
+			require.ErrorIs(t, caller.Err(), context.DeadlineExceeded)
 
-			synctest.Test(t, func(t *testing.T) {
-				ctx := t.Context()
-				p, rpl := checkpointDrainPipeline(ctx)
-				caller, cancel := context.WithCancel(ctx)
-				defer cancel()
-				epoch, endEpoch := context.WithCancel(ctx)
-				defer endEpoch()
-				result := make(chan error, 1)
-				go func() { result <- p.Finalize(WithEpoch(caller, epoch)) }()
-				<-rpl.doneCalled
-				synctest.Wait()
+			return nil
+		}))
+		synctest.Wait()
+		require.Empty(t, result, "accepted finalization must outlive the request deadline")
+		p.lock.Lock()
+		require.True(t, p.finalizeActive)
+		p.lock.Unlock()
+		close(rpl.doneCh)
+		require.NoError(t, <-result)
+		<-finalized
+		require.NoError(t, p.Stop(ctx))
+	})
+}
 
-				if cause == "epoch" {
-					endEpoch()
-					require.ErrorIs(t, <-result, ErrNotActive)
-				} else {
-					cancel()
-					require.ErrorIs(t, <-result, context.Canceled)
-				}
-				p.lock.Lock()
-				require.False(t, p.finalizeActive)
-				require.Nil(t, p.finalizeStatus)
-				p.lock.Unlock()
+func TestFinalizeEpochCancellationReleasesReservation(t *testing.T) {
+	t.Parallel()
 
-				// A failed request leaves no reservation behind, and does
-				// not need Done to close to release the lifecycle lock.
-				_, err := p.Checkpoint(ctx)
-				require.NoError(t, err)
-				close(rpl.doneCh)
-				require.NoError(t, p.Finalize(ctx))
-				require.NoError(t, p.Stop(ctx))
-			})
-		})
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		epoch, endEpoch := context.WithCancel(ctx)
+		defer endEpoch()
+		p, rpl := checkpointDrainPipeline(epoch)
+		result := make(chan error, 1)
+		go func() { result <- p.Finalize(WithEpoch(ctx, epoch)) }()
+		<-rpl.doneCalled
+		endEpoch()
+		require.ErrorIs(t, <-result, ErrNotActive)
+		p.lock.Lock()
+		require.False(t, p.finalizeActive)
+		require.Nil(t, p.finalizeStatus)
+		p.lock.Unlock()
+		_, err := p.Checkpoint(ctx)
+		require.NoError(t, err)
+		close(rpl.doneCh)
+		require.NoError(t, p.Stop(ctx))
+	})
 }
 
 func TestFinalizeRevalidatesFailureAfterDrain(t *testing.T) {
