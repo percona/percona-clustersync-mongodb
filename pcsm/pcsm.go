@@ -161,7 +161,8 @@ type PCSM struct {
 	nsExclude []string
 	nsFilter  sel.NSFilter // Namespace filter
 
-	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
+	onStateChanged      OnStateChangedFunc // onStateChanged is invoked on each state change
+	checkpointRequester func(context.Context) error
 
 	pauseOnInitialSync bool
 	targetWriteConcern string
@@ -175,7 +176,7 @@ type PCSM struct {
 
 	// finalizeStatus tracks finalize-stage state. Nil until /finalize is triggered.
 	finalizeStatus *FinalizeStatus
-	// finalizeActive is true only while this process owns a finalizer goroutine.
+	// finalizeActive reserves finalization through the drain and catalog work.
 	finalizeActive bool
 
 	err error
@@ -304,7 +305,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	// Restore data-write concern; clone tuning uses defaults during recovery.
 	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{WriteConcern: wc}, p.targetIsSharded)
 	rpl := repl.NewRepl(
-		p.source, p.target, cat, nsFilter, &repl.Options{WriteConcern: wc},
+		p.source, p.target, cat, nsFilter, &repl.Options{WriteConcern: wc, Checkpoint: p.checkpointRequester},
 		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
 	)
 
@@ -396,11 +397,49 @@ func (p *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 	p.lock.Unlock()
 }
 
+// SetCheckpointRequester installs the tenure's acknowledged checkpoint writer.
+// Set it before Start or Recover constructs the replicator.
+func (p *PCSM) SetCheckpointRequester(f func(context.Context) error) {
+	p.lock.Lock()
+	p.checkpointRequester = f
+	p.lock.Unlock()
+}
+
 // Status returns the current status of the PCSM.
 func (p *PCSM) Status(ctx context.Context) *Status {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	s := p.status()
+	if p.state == StateIdle || p.state == StateFailed {
+		return s
+	}
+
+	sourceTime, err := mdb.ClusterTime(ctx, p.source)
+	if err != nil {
+		// Do not block status if source cluster is lost
+		log.New("pcsm").Error(err, "Status: get source cluster time")
+	} else {
+		switch {
+		case !s.Repl.LastReplicatedOpTime.IsZero():
+			totalLag := int64(sourceTime.T) - int64(s.Repl.LastReplicatedOpTime.T)
+			s.TotalLagTimeSeconds = totalLag
+		case !s.Clone.StartTS.IsZero():
+			totalLag := int64(sourceTime.T) - int64(s.Clone.StartTS.T)
+			s.TotalLagTimeSeconds = totalLag
+		}
+	}
+
+	if !s.InitialSyncCompleted {
+		s.InitialSyncLagTimeSeconds = s.TotalLagTimeSeconds
+	}
+
+	return s
+}
+
+// status captures lifecycle state without querying the source for lag. The
+// caller holds p.lock, including when revalidating a finalization reservation.
+func (p *PCSM) status() *Status {
 	if p.state == StateIdle {
 		return &Status{State: StateIdle}
 	}
@@ -423,29 +462,6 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 
 	if s.Repl.IsStarted() {
 		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
-	}
-
-	if p.state == StateFailed {
-		return s
-	}
-
-	sourceTime, err := mdb.ClusterTime(ctx, p.source)
-	if err != nil {
-		// Do not block status if source cluster is lost
-		log.New("pcsm").Error(err, "Status: get source cluster time")
-	} else {
-		switch {
-		case !s.Repl.LastReplicatedOpTime.IsZero():
-			totalLag := int64(sourceTime.T) - int64(s.Repl.LastReplicatedOpTime.T)
-			s.TotalLagTimeSeconds = totalLag
-		case !s.Clone.StartTS.IsZero():
-			totalLag := int64(sourceTime.T) - int64(s.Clone.StartTS.T)
-			s.TotalLagTimeSeconds = totalLag
-		}
-	}
-
-	if !s.InitialSyncCompleted {
-		s.InitialSyncLagTimeSeconds = s.TotalLagTimeSeconds
 	}
 
 	return s
@@ -546,6 +562,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	cloneOptions.WriteConcern = wc
 	replOptions := options.Repl
 	replOptions.WriteConcern = wc
+	replOptions.Checkpoint = p.checkpointRequester
 
 	p.err = nil
 	p.targetWriteConcern = fmt.Sprint(wc.W)
@@ -578,7 +595,18 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 func (p *PCSM) lockAfterRun(ctx context.Context) error {
 	p.lock.Lock()
 
-	for p.runDone != nil && p.state != StateRunning && p.state != StateFinalizing {
+	for {
+		// A drain reservation has no public state of its own. Once catalog
+		// work starts, callers keep their existing StateFinalizing checks.
+		if p.finalizeActive && p.state != StateFinalizing {
+			p.lock.Unlock()
+
+			return errors.New("cannot change run: finalization is already in progress")
+		}
+		if p.runDone == nil || p.state == StateRunning || p.state == StateFinalizing {
+			return nil
+		}
+
 		done := p.runDone
 		p.lock.Unlock()
 
@@ -591,8 +619,6 @@ func (p *PCSM) lockAfterRun(ctx context.Context) error {
 		p.lock.Lock()
 		// Another caller may have started a run while the lock was released.
 	}
-
-	return nil
 }
 
 // executionParent returns the context new work derives from: the epoch
@@ -660,8 +686,7 @@ func (p *PCSM) notifyStateChanged(state State) {
 // ended tenure are refused by their epoch.
 //
 // Cancellation never waits for a lock: the handles are read under execMu and
-// released before the join, so a Finalize blocked on the drain under p.lock
-// is unblocked by it. On ctx expiry before the join completes it returns an
+// released before the join. On ctx expiry before the join completes it returns an
 // error; the cancellation stands.
 func (p *PCSM) Stop(ctx context.Context) error {
 	for {
@@ -999,8 +1024,6 @@ func (p *PCSM) doResume(parent context.Context, fromFailure bool) error {
 
 // Finalize finalizes the replication process.
 func (p *PCSM) Finalize(ctx context.Context) error {
-	status := p.Status(ctx)
-
 	parent, err := p.executionParent(ctx)
 	if err != nil {
 		return err
@@ -1013,6 +1036,10 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		return errors.New("finalization is already in progress")
 	}
 
+	if ctx.Err() != nil {
+		return errors.Wrap(ctx.Err(), "finalize")
+	}
+
 	lg := log.New("finalize")
 
 	// A recovered "finalizing" pipeline passed these checks in the tenure
@@ -1020,7 +1047,7 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	if p.state == StateFinalizing {
 		lg.Info("Resuming Finalization")
 	} else {
-		err = checkFinalizePreconditions(status)
+		err = checkFinalizePreconditions(p.status())
 		if err != nil {
 			return err
 		}
@@ -1028,30 +1055,57 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		lg.Info("Starting Finalization")
 	}
 
-	// Decide from the live repl status under the lock, not the pre-lock
-	// snapshot above. With PauseOnInitialSync, monitorInitialSync can pause
-	// repl concurrently; a stale "running" snapshot would make us call Pause
-	// on an already-pausing/paused repl and fail. A non-running repl has either
-	// never run in this process or has already closed Done before recording its
-	// pause time, so only a running repl needs to be awaited.
-	replStatus := p.repl.Status()
+	if parent.Err() != nil {
+		return ErrNotActive
+	}
+
+	// Reserve across the unlocked drain. Other finalizers and run replacement
+	// cannot take ownership until this call fails or its catalog work finishes.
+	p.finalizeActive = true
+	launched := false
+	defer func() {
+		if !launched {
+			p.finalizeActive = false
+		}
+	}()
+	rpl, run := p.repl, p.runDone
+	replStatus := rpl.Status()
 	if replStatus.IsRunning() {
 		if !replStatus.Pausing {
 			lg.Info("Pausing Change Replication")
 
-			err = p.repl.Pause(ctx)
+			err = rpl.Pause(ctx)
 			if err != nil {
 				return errors.Wrap(err, "pause change replication")
 			}
 		}
 
-		<-p.repl.Done()
+		done := rpl.Done()
+		p.lock.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		case <-parent.Done():
+		}
+		p.lock.Lock()
 	}
 
 	// The drain may have ended because the epoch was canceled: an instance
 	// that lost the lease meanwhile must not start catalog work.
 	if parent.Err() != nil {
 		return ErrNotActive
+	}
+	if ctx.Err() != nil {
+		return errors.Wrap(ctx.Err(), "wait for change replication")
+	}
+	if p.repl != rpl || (p.runDone != nil && p.runDone != run) {
+		return errors.New("cannot finalize: replication run changed")
+	}
+	if p.state != StateFinalizing {
+		err = checkFinalizePreconditions(p.status())
+		if err != nil {
+			return err
+		}
 	}
 
 	lg.Info("Change Replication is paused")
@@ -1064,6 +1118,7 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	}
 
 	p.startFinalize(parent, lg)
+	launched = true
 
 	return nil
 }

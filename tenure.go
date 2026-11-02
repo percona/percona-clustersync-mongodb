@@ -162,6 +162,18 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 	lg := log.New("ha:role").With(log.Int64("term", int64(t.term)))
 	ectx := pcsm.WithEpoch(t.ctx, t.ctx)
 
+	requests := make(checkpointRequests)
+	writerCtx, stopWriter := context.WithCancel(t.ctx)
+	writerStarted := false
+	defer func() {
+		if !writerStarted {
+			stopWriter()
+		}
+	}()
+	t.pipeline.SetCheckpointRequester(func(ctx context.Context) error {
+		return requests.request(ctx, writerCtx)
+	})
+
 	// A state change signals this tenure's checkpoint writer, coalescing
 	// pending saves. Installed before Restore, which emits transitions; a
 	// signal sent before the writer starts waits for it.
@@ -198,9 +210,11 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 
 	// The tenure's checkpoint writer. It ends on the first write it cannot
 	// account for, and the tenure ends with it.
+	writerStarted = true
 	go func() {
 		err := RunCheckpointing(t.ctx, s.targetCluster, t.pipeline, int64(t.term),
-			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval, saveNow)
+			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval, saveNow, requests)
+		stopWriter()
 		if err != nil {
 			s.onCheckpointLost(ctx, t, err)
 		}

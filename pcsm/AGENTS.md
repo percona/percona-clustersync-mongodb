@@ -21,11 +21,13 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 ## CONVENTIONS
 
 - `PCSM` is the synchronization boundary for lifecycle state; transition checks and mutations stay under `p.lock`.
+- Finalization reserves ownership under `p.lock` but joins replication without holding it, so the checkpoint writer can snapshot the draining pipeline. Revalidate run identity and epoch before launching catalog work.
 - `Cloner` and `Replicator` interfaces are the seams used by orchestration tests.
 - A fresh `Start` builds one catalog shared by clone and repl.
 - `Checkpoint` returns nil while idle and serializes catalog, clone, repl, state, filters, and the current error together under the lifecycle lock. Snapshots carry no sequence number: the checkpoint writer in the root `recovery.go` orders them by lease term and by writing one at a time.
 - Component checkpoint acquisition and BSON marshaling remain one coordinated operation; catalog lock mechanics live in child guidance.
 - Recovery reconstructs catalog, clone, and repl before applying component checkpoints.
+- Install the tenure's checkpoint requester before `Start` or `Recover` constructs the replicator; both paths forward the same tenure-owned dependency.
 - `FinalizeStatus` is absent until finalize starts; copy it before returning status to callers.
 - `lifecycleCtx` is the deliberate `containedctx` exception for background pipeline ownership.
 

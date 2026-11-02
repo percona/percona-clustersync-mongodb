@@ -3,7 +3,9 @@ package repl //nolint
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -656,14 +658,84 @@ func TestAdvanceCheckpoint(t *testing.T) {
 	for _, tt := range advanceCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := &Repl{lastReplicatedOpTime: tt.current, checkpointOpTime: tt.current}
+			token := checkpointToken(t, "exclusive-predecessor")
+			r := &Repl{
+				lastReplicatedOpTime: tt.current, checkpointOpTime: tt.current,
+				checkpointStartAfter: token, startTime: time.Unix(1, 0),
+			}
 			r.lock.Lock()
 			r.advanceCheckpoint(tt.input)
 			r.lock.Unlock()
 			assert.Equal(t, tt.expected, r.lastReplicatedOpTime)
 			assert.Equal(t, tt.expected, r.checkpointOpTime)
+			wantToken := token
+			if tt.input.After(tt.current) {
+				wantToken = nil
+			}
+			assert.Equal(t, wantToken, r.Checkpoint().StartAfter,
+				"only a strictly advancing safe floor clears the exclusive predecessor")
 		})
 	}
+}
+
+func TestResumeOptions_ExactTokenOrLegacyTimestamp(t *testing.T) {
+	t.Parallel()
+
+	for _, exact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exact %t", exact), func(t *testing.T) {
+			t.Parallel()
+			ts := bson.Timestamp{T: 100, I: 1}
+			r := &Repl{checkpointOpTime: ts}
+			var token bson.Raw
+			if exact {
+				token = checkpointToken(t, "predecessor")
+				r.checkpointStartAfter = token
+			}
+			r.lock.Lock()
+			builder := r.resumeOptions()
+			r.advanceCheckpoint(bson.Timestamp{T: 200})
+			r.lock.Unlock()
+
+			opts := resolvedResumeOptions(t, builder)
+
+			if exact {
+				assert.Equal(t, token, opts.StartAfter)
+				assert.Nil(t, opts.StartAtOperationTime)
+			} else {
+				require.NotNil(t, opts.StartAtOperationTime)
+				assert.Equal(t, ts, *opts.StartAtOperationTime, "resume options own their timestamp")
+				assert.Nil(t, opts.StartAfter)
+			}
+			assert.Nil(t, opts.ResumeAfter, "invalidate predecessors require startAfter")
+		})
+	}
+}
+
+func TestCheckpoint_StartAfterSnapshotOwnsBSON(t *testing.T) {
+	t.Parallel()
+	token := checkpointToken(t, "predecessor")
+	r := &Repl{
+		startTime: time.Unix(1, 0), checkpointOpTime: bson.Timestamp{T: 100, I: 1},
+		checkpointStartAfter: token,
+	}
+	snapshot := r.Checkpoint()
+	raw, err := bson.Marshal(snapshot)
+	require.NoError(t, err)
+	var decoded Checkpoint
+	require.NoError(t, bson.Unmarshal(raw, &decoded))
+	assert.Equal(t, token, decoded.StartAfter)
+	assert.Equal(t, snapshot.CheckpointOpTime, decoded.CheckpointOpTime)
+
+	clear(snapshot.StartAfter)
+	assert.Equal(t, token, r.Checkpoint().StartAfter, "snapshot must not alias the live boundary")
+
+	r.lock.Lock()
+	r.advanceCheckpoint(bson.Timestamp{T: 101})
+	r.lock.Unlock()
+	raw, err = bson.Marshal(r.Checkpoint())
+	require.NoError(t, err)
+	_, err = bson.Raw(raw).LookupErr("startAfter")
+	require.Error(t, err, "timestamp-only checkpoints omit startAfter")
 }
 
 func TestIsReplay(t *testing.T) {

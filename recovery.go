@@ -36,6 +36,41 @@ type Recoverable interface {
 	Recover(ctx context.Context, data []byte) error
 }
 
+// checkpointRequests hands each caller's receipt to the single tenure writer.
+// The writer captures a new snapshot after accepting that receipt.
+type checkpointRequests chan chan error
+
+func (r checkpointRequests) request(ctx, writer context.Context) error {
+	err := ctx.Err()
+	if err != nil {
+		return errors.Wrap(err, "request checkpoint")
+	}
+
+	reply := make(chan error, 1)
+	select {
+	case <-ctx.Done():
+		return errors.Wrap(ctx.Err(), "request checkpoint")
+	case <-writer.Done():
+		return errors.Wrap(context.Canceled, "checkpoint writer stopped")
+	case r <- reply:
+	}
+
+	select {
+	case <-ctx.Done():
+		return errors.Wrap(ctx.Err(), "await checkpoint")
+	case <-writer.Done():
+		return errors.Wrap(context.Canceled, "checkpoint writer stopped")
+	case err := <-reply:
+		// Writer errors end the tenure. Classify containment now, even if
+		// the lifecycle controller has not canceled the epoch yet.
+		if err != nil || writer.Err() != nil {
+			return errors.Wrap(context.Canceled, "checkpoint writer stopped")
+		}
+
+		return errors.Wrap(ctx.Err(), "await checkpoint")
+	}
+}
+
 // checkpoint is the recovery document. Its term orders everything written to
 // it: a tenure claims the document at its term before it restores the
 // snapshot, and a write is accepted only at a term no older than the stored
@@ -190,6 +225,7 @@ func RunCheckpointing(
 	instanceID string,
 	interval time.Duration,
 	saveNow <-chan struct{},
+	requests checkpointRequests,
 ) error {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
 
@@ -201,17 +237,27 @@ func RunCheckpointing(
 	defer ticker.Stop()
 
 	for {
+		var reply chan error
 		select {
 		case <-ctx.Done():
 			return nil
 
 		case <-ticker.C:
 		case <-saveNow:
+		case reply = <-requests:
 		}
 
 		err := DoCheckpoint(ctx, m, rec, term, instanceID)
+		if reply != nil {
+			// A canceled caller cannot strand the only writer. Only this
+			// request's own write may authorize the protected operation.
+			reply <- err
+		}
+
 		switch {
-		case err == nil, errors.Is(err, errNoRecoveryData):
+		case err == nil:
+
+		case reply == nil && errors.Is(err, errNoRecoveryData):
 
 		case ctx.Err() != nil:
 			return nil

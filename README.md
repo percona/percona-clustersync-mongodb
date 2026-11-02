@@ -50,6 +50,17 @@ automatic recovery must preserve that guarantee. Lower it only for a controlled
 migration that can tolerate restarting and validating the copy after a target
 failure. Retain the source and verify target consistency before cutover.
 
+### Recovery around index changes
+
+During change replication, PCSM drains preceding writes and saves a checkpoint
+before creating or dropping target indexes. The index change waits for that
+checkpoint to succeed. Recovery can then replay the index change without replaying
+the preceding writes against a newer index definition.
+
+Older checkpoints remain readable, but this protection does not repair a target
+that already advanced past an unprotected checkpoint. The data durability limits
+described under [Target data write concern](#target-data-write-concern) still apply.
+
 ## Submit Bug Report / Feature Request
 
 If you find a bug in Percona ClusterSync for MongoDB, submit a report to the project's [JIRA issue tracker](https://jira.percona.com/projects/PCSM).
