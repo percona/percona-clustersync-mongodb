@@ -13,6 +13,7 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
+	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
 type indexCheckpointCatalog struct {
@@ -95,77 +96,86 @@ func resolvedResumeOptions(t *testing.T, builder *options.ChangeStreamOptionsBui
 	return opts
 }
 
+func runIndexCheckpointTest(t *testing.T, fn func(context.Context)) {
+	t.Helper()
+	require.NoError(t, util.CtxWithTimeout(t.Context(), barrierTimeout, func(ctx context.Context) error {
+		fn(ctx)
+
+		return nil
+	}))
+}
+
 func TestIndexCheckpoint_DrainBeforeAcknowledgementBeforeIndex(t *testing.T) {
 	t.Parallel()
 
 	for _, op := range []OperationType{CreateIndexes, DropIndexes} {
 		t.Run(string(op), func(t *testing.T) {
 			t.Parallel()
-			ctx, cancel := context.WithTimeout(t.Context(), barrierTimeout)
-			defer cancel()
-			gate := newBlockingGate()
-			pool := makeTestPoolLiveWithParent(t, ctx, []bulkWriter{gate.writer()}, func() bulkWriter {
-				return &mockBulkWriter{}
-			})
-			cat := &indexCheckpointCatalog{}
-			ts := bson.Timestamp{T: 100, I: 1}
-			prior := makeInsertEventWithTS("predecessor", ts).change
-			prior.ID = checkpointToken(t, "predecessor")
-			pending := checkpointIndexEvent(t, op, ts)
-			requested := make(chan *Checkpoint, 1)
-			ack := make(chan struct{})
-			r := &Repl{
-				pool: pool, catalog: cat, startTime: time.Unix(1, 0),
-				nsFilter: func(string, string) bool { return true },
-				options:  &Options{},
-			}
-			r.options.Checkpoint = func(ctx context.Context) error {
-				requested <- r.Checkpoint()
-				select {
-				case <-ack:
-					return nil
-				case <-ctx.Done():
-					return errors.Wrap(ctx.Err(), "checkpoint canceled")
+			runIndexCheckpointTest(t, func(ctx context.Context) {
+				gate := newBlockingGate()
+				pool := makeTestPoolLiveWithParent(t, ctx, []bulkWriter{gate.writer()}, func() bulkWriter {
+					return &mockBulkWriter{}
+				})
+				cat := &indexCheckpointCatalog{}
+				ts := bson.Timestamp{T: 100, I: 1}
+				prior := makeInsertEventWithTS("predecessor", ts).change
+				prior.ID = checkpointToken(t, "predecessor")
+				pending := checkpointIndexEvent(t, op, ts)
+				requested := make(chan *Checkpoint, 1)
+				ack := make(chan struct{})
+				r := &Repl{
+					pool: pool, catalog: cat, startTime: time.Unix(1, 0),
+					nsFilter: func(string, string) bool { return true },
+					options:  &Options{},
 				}
-			}
-			queue := changeStreamQueue{
-				events: make(chan *ChangeEvent, 3),
-				resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
-			}
-			queue.events <- prior
-			queue.events <- pending
-			queue.events <- nil // The retry must not capture an older boundary.
-			close(queue.events)
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				r.dispatchChanges(ctx, queue)
-			}()
+				r.options.Checkpoint = func(ctx context.Context) error {
+					requested <- r.Checkpoint()
+					select {
+					case <-ack:
+						return nil
+					case <-ctx.Done():
+						return errors.Wrap(ctx.Err(), "checkpoint canceled")
+					}
+				}
+				queue := changeStreamQueue{
+					events: make(chan *ChangeEvent, 3),
+					resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
+				}
+				queue.events <- prior
+				queue.events <- pending
+				queue.events <- nil // The retry must not capture an older boundary.
+				close(queue.events)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					r.dispatchChanges(ctx, queue)
+				}()
 
-			gate.awaitParked(t)
-			assert.Empty(t, requested, "uncommitted predecessor cannot be checkpointed")
-			gate.releaseAll()
-			var cp *Checkpoint
-			select {
-			case cp = <-requested:
-			case <-ctx.Done():
-				t.Fatal("checkpoint was not requested after drain")
-			}
-			assert.Equal(t, prior.ID, cp.StartAfter)
-			assert.Equal(t, ts, cp.CheckpointOpTime)
-			assert.Equal(t, int64(1), cp.EventsApplied, "pending index is not applied")
-			assert.Zero(t, cat.indexCalls.Load(), "index must wait for its own acknowledgement")
-			assert.Empty(t, queue.resume, "reconnect must wait behind the pending index")
+				gate.awaitParked(t)
+				assert.Empty(t, requested, "uncommitted predecessor cannot be checkpointed")
+				gate.releaseAll()
+				var cp *Checkpoint
+				select {
+				case cp = <-requested:
+				case <-ctx.Done():
+					t.Fatal("checkpoint was not requested after drain")
+				}
+				assert.Equal(t, prior.ID, cp.StartAfter)
+				assert.Equal(t, ts, cp.CheckpointOpTime)
+				assert.Equal(t, int64(1), cp.EventsApplied, "pending index is not applied")
+				assert.Zero(t, cat.indexCalls.Load(), "index must wait for its own acknowledgement")
+				assert.Empty(t, queue.resume, "reconnect must wait behind the pending index")
 
-			close(ack)
-			awaitCheckpointSignal(t, done)
-			assert.Equal(t, int32(1), cat.indexCalls.Load())
-			assert.Equal(t, int64(2), r.Status().EventsApplied)
-			opts := resolvedResumeOptions(t, awaitResumeOptions(t, queue.resume))
-			assert.Equal(t, prior.ID, opts.StartAfter)
-			assert.Nil(t, opts.StartAtOperationTime)
-			assert.False(t, r.shouldSkipReplay(pending), "pending same-timestamp index must replay")
-			assert.False(t, r.shouldSkipReplay(makeInsertEventWithTS("following", ts).change))
+				close(ack)
+				awaitCheckpointSignal(t, done)
+				assert.Equal(t, int32(1), cat.indexCalls.Load())
+				assert.Equal(t, int64(2), r.Status().EventsApplied)
+				opts := resolvedResumeOptions(t, awaitResumeOptions(t, queue.resume))
+				assert.Equal(t, prior.ID, opts.StartAfter)
+				assert.Nil(t, opts.StartAtOperationTime)
+				assert.False(t, r.shouldSkipReplay(pending), "pending same-timestamp index must replay")
+				assert.False(t, r.shouldSkipReplay(makeInsertEventWithTS("following", ts).change))
+			})
 		})
 	}
 }

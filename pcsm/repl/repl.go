@@ -929,6 +929,12 @@ func (r *Repl) dispatchChanges(ctx context.Context, queue changeStreamQueue) {
 			continue
 		}
 
+		// Invalidate has no namespace. Even a filtered event must retain
+		// its token so the reconnect fence can move past the invalidation.
+		if change.OperationType == Invalidate {
+			invalidate = change
+		}
+
 		if change.Namespace.Database == config.PCSMDatabase {
 			if r.poolIdle(lastRoutedTS) {
 				r.lock.Lock()
@@ -972,7 +978,6 @@ func (r *Repl) dispatchChanges(ctx context.Context, queue changeStreamQueue) {
 			}
 
 			lastRoutedTS = bson.Timestamp{}
-			invalidate = change
 
 		default:
 			if !r.applyDDL(ctx, change, predecessor) {

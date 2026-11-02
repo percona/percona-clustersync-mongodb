@@ -2,7 +2,6 @@ package repl //nolint:testpackage // Exercises the run-owned worker progress tra
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/config"
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/mdb"
+	"github.com/percona/percona-clustersync-mongodb/sel"
 	"github.com/percona/percona-clustersync-mongodb/util"
 )
 
@@ -210,72 +210,72 @@ func TestIndexCheckpoint_DispatchPredecessors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			ctx, cancel := context.WithTimeout(t.Context(), barrierTimeout)
-			defer cancel()
-			ts := bson.Timestamp{T: 100, I: 1}
-			done := make(chan struct{})
-			close(done)
-			r := &Repl{
-				pool: makeTestPoolLiveWithParent(t, ctx, []bulkWriter{&mockBulkWriter{}}, func() bulkWriter {
-					return &mockBulkWriter{}
-				}),
-				catalog: &indexCheckpointCatalog{}, options: &Options{}, startTime: time.Unix(1, 0),
-				checkpointOpTime: ts, doneCh: done, pauseCh: make(chan struct{}, 1),
-				nsFilter: func(_, coll string) bool { return coll != "excluded" },
-			}
-			queue := changeStreamQueue{
-				events: make(chan *ChangeEvent, 5),
-				resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
-			}
-			var want bson.Raw
-			switch name {
-			case "first event":
-			case "inherited token":
-				want = checkpointToken(t, "saved-exclusive-predecessor")
-				r.checkpointStartAfter = want
-			default:
-				prior := makeInsertEventWithTS("prior", ts).change
-				prior.ID = checkpointToken(t, name)
-				want = prior.ID
-				switch name {
-				case "filtered":
-					prior.Namespace.Collection = "excluded"
-				case "internal":
-					prior.Namespace.Database = config.PCSMDatabase
-				case "replayed":
-					prior.ClusterTime = bson.Timestamp{T: 99}
-				case "invalidate":
-					prior.OperationType = Invalidate
-					r.sourceIsSharded = true
-					r.sourceVer = mdb.ServerVersion{7, 0, 0, 0}
-					r.expectMovePrimaryInvalidate = true
+			runIndexCheckpointTest(t, func(ctx context.Context) {
+				ts := bson.Timestamp{T: 100, I: 1}
+				done := make(chan struct{})
+				close(done)
+				r := &Repl{
+					pool: makeTestPoolLiveWithParent(t, ctx, []bulkWriter{&mockBulkWriter{}}, func() bulkWriter {
+						return &mockBulkWriter{}
+					}),
+					catalog: &indexCheckpointCatalog{}, options: &Options{}, startTime: time.Unix(1, 0),
+					checkpointOpTime: ts, doneCh: done, pauseCh: make(chan struct{}, 1),
+					nsFilter: func(_, coll string) bool { return coll != "excluded" },
 				}
-				queue.events <- prior
-			}
-			queue.events <- &ChangeEvent{
-				OperationType: advanceTimePseudoEvent, ClusterTime: bson.Timestamp{T: 200},
-				ID: checkpointToken(t, "read-ahead-tick-is-not-a-predecessor"),
-			}
-			first := checkpointIndexEvent(t, CreateIndexes, ts)
-			queue.events <- first
-			queue.events <- checkpointIndexEvent(t, DropIndexes, ts)
-			close(queue.events)
-			var snapshots []*Checkpoint
-			r.options.Checkpoint = func(context.Context) error {
-				snapshots = append(snapshots, r.Checkpoint())
+				queue := changeStreamQueue{
+					events: make(chan *ChangeEvent, 5),
+					resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
+				}
+				var want bson.Raw
+				switch name {
+				case "first event":
+				case "inherited token":
+					want = checkpointToken(t, "saved-exclusive-predecessor")
+					r.checkpointStartAfter = want
+				default:
+					prior := makeInsertEventWithTS("prior", ts).change
+					prior.ID = checkpointToken(t, name)
+					want = prior.ID
+					switch name {
+					case "filtered":
+						prior.Namespace.Collection = "excluded"
+					case "internal":
+						prior.Namespace.Database = config.PCSMDatabase
+					case "replayed":
+						prior.ClusterTime = bson.Timestamp{T: 99}
+					case "invalidate":
+						prior.OperationType = Invalidate
+						r.sourceIsSharded = true
+						r.sourceVer = mdb.ServerVersion{7, 0, 0, 0}
+						r.expectMovePrimaryInvalidate = true
+					}
+					queue.events <- prior
+				}
+				queue.events <- &ChangeEvent{
+					OperationType: advanceTimePseudoEvent, ClusterTime: bson.Timestamp{T: 200},
+					ID: checkpointToken(t, "read-ahead-tick-is-not-a-predecessor"),
+				}
+				first := checkpointIndexEvent(t, CreateIndexes, ts)
+				queue.events <- first
+				queue.events <- checkpointIndexEvent(t, DropIndexes, ts)
+				close(queue.events)
+				var snapshots []*Checkpoint
+				r.options.Checkpoint = func(context.Context) error {
+					snapshots = append(snapshots, r.Checkpoint())
 
-				return nil
-			}
+					return nil
+				}
 
-			r.dispatchChanges(ctx, queue)
+				r.dispatchChanges(ctx, queue)
 
-			require.NoError(t, r.Status().Err)
-			require.Len(t, snapshots, 2)
-			assert.Equal(t, ts, snapshots[0].CheckpointOpTime)
-			assert.Equal(t, want, snapshots[0].StartAfter)
-			assert.Equal(t, first.ID, snapshots[1].StartAfter, "same-timestamp boundary replaces predecessor")
-			assert.Equal(t, ts, snapshots[1].CheckpointOpTime)
-			assert.Equal(t, first.ID, r.Checkpoint().StartAfter, "post-apply snapshot retains exact boundary")
+				require.NoError(t, r.Status().Err)
+				require.Len(t, snapshots, 2)
+				assert.Equal(t, ts, snapshots[0].CheckpointOpTime)
+				assert.Equal(t, want, snapshots[0].StartAfter)
+				assert.Equal(t, first.ID, snapshots[1].StartAfter, "same-timestamp boundary replaces predecessor")
+				assert.Equal(t, ts, snapshots[1].CheckpointOpTime)
+				assert.Equal(t, first.ID, r.Checkpoint().StartAfter, "post-apply snapshot retains exact boundary")
+			})
 		})
 	}
 }
@@ -283,44 +283,55 @@ func TestIndexCheckpoint_DispatchPredecessors(t *testing.T) {
 func TestIndexCheckpoint_ReconnectAfterInvalidate(t *testing.T) {
 	t.Parallel()
 
-	for _, indexBoundary := range []bool{false, true} {
-		t.Run(fmt.Sprintf("index boundary %t", indexBoundary), func(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		indexBoundary bool
+		filtered      bool
+	}{
+		{name: "invalidate token"},
+		{name: "later index boundary", indexBoundary: true},
+		{name: "filtered invalidate", filtered: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ctx, cancel := context.WithTimeout(t.Context(), barrierTimeout)
-			defer cancel()
-			ts := bson.Timestamp{T: 100, I: 1}
-			old := checkpointToken(t, "older-boundary")
-			invalid := checkpointToken(t, "invalidate")
-			r := &Repl{
-				pool: makeTestPoolLiveWithParent(t, ctx, []bulkWriter{&mockBulkWriter{}}, func() bulkWriter {
-					return &mockBulkWriter{}
-				}),
-				catalog: &indexCheckpointCatalog{}, options: &Options{Checkpoint: func(context.Context) error { return nil }},
-				nsFilter:        func(string, string) bool { return true },
-				sourceIsSharded: true, sourceVer: mdb.ServerVersion{8, 0, 0, 0},
-				expectMovePrimaryInvalidate: true, checkpointOpTime: ts, checkpointStartAfter: old,
-			}
-			queue := changeStreamQueue{
-				events: make(chan *ChangeEvent, 4),
-				resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
-			}
-			queue.events <- &ChangeEvent{OperationType: Invalidate, ID: invalid, ClusterTime: ts}
-			want := invalid
-			if indexBoundary {
-				prior := makeInsertEventWithTS("after-invalidate", ts).change
-				prior.ID = checkpointToken(t, "after-invalidate")
-				queue.events <- prior
-				queue.events <- checkpointIndexEvent(t, CreateIndexes, ts)
-				want = prior.ID
-			}
-			queue.events <- nil
-			close(queue.events)
+			runIndexCheckpointTest(t, func(ctx context.Context) {
+				ts := bson.Timestamp{T: 100, I: 1}
+				old := checkpointToken(t, "older-boundary")
+				invalid := checkpointToken(t, "invalidate")
+				r := &Repl{
+					pool: makeTestPoolLiveWithParent(t, ctx, []bulkWriter{&mockBulkWriter{}}, func() bulkWriter {
+						return &mockBulkWriter{}
+					}),
+					catalog: &indexCheckpointCatalog{}, options: &Options{Checkpoint: func(context.Context) error { return nil }},
+					nsFilter:        func(string, string) bool { return true },
+					sourceIsSharded: true, sourceVer: mdb.ServerVersion{8, 0, 0, 0},
+					expectMovePrimaryInvalidate: true, checkpointOpTime: ts, checkpointStartAfter: old,
+				}
+				if tc.filtered {
+					r.nsFilter = sel.MakeFilter([]string{"testdb.testcoll"}, nil)
+				}
+				queue := changeStreamQueue{
+					events: make(chan *ChangeEvent, 4),
+					resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
+				}
+				queue.events <- &ChangeEvent{OperationType: Invalidate, ID: invalid, ClusterTime: ts}
+				want := invalid
+				if tc.indexBoundary {
+					prior := makeInsertEventWithTS("after-invalidate", ts).change
+					prior.ID = checkpointToken(t, "after-invalidate")
+					queue.events <- prior
+					queue.events <- checkpointIndexEvent(t, CreateIndexes, ts)
+					want = prior.ID
+				}
+				queue.events <- nil
+				close(queue.events)
 
-			r.dispatchChanges(ctx, queue)
+				r.dispatchChanges(ctx, queue)
 
-			opts := resolvedResumeOptions(t, awaitResumeOptions(t, queue.resume))
-			assert.Equal(t, want, opts.StartAfter, "a later exact boundary supersedes the invalidate token")
-			assert.Nil(t, opts.StartAtOperationTime)
+				opts := resolvedResumeOptions(t, awaitResumeOptions(t, queue.resume))
+				assert.Equal(t, want, opts.StartAfter, "a later exact boundary supersedes the invalidate token")
+				assert.Nil(t, opts.StartAtOperationTime)
+			})
 		})
 	}
 }
