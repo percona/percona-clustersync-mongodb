@@ -96,6 +96,9 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 	if leaseTTL == 0 {
 		leaseTTL = config.LeaseTTL
 	}
+	if leaseTTL < config.LeaseTTL {
+		return nil, errors.Errorf("lease TTL %s is below the minimum %s", leaseTTL, config.LeaseTTL)
+	}
 	// One millisecond-granular value for both clocks: the local deadline adds
 	// the duration, the stored expiry adds its millisecond count.
 
