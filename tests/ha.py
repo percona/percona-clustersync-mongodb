@@ -13,8 +13,8 @@ import time
 
 from pcsm import PCSM
 
-# Failover budget: lease TTL (10s) plus margin for the new active to renew,
-# recover, and publish its role.
+# Failover budget: default lease TTL (10s, configurable with --ha-lease-ttl)
+# plus margin for the new active to renew, recover, and publish its role.
 FAILOVER_TIMEOUT = 30.0
 
 # Per-instance log directory (for post-mortem when a test fails).
