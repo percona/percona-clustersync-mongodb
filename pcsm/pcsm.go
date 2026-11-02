@@ -432,9 +432,9 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 	case p.err != nil:
 		s.Error = p.err
 	case s.Repl.Err != nil:
-		s.Error = errors.Wrap(s.Repl.Err, "Change Replication")
+		s.Error = errors.Wrap(s.Repl.Err, "change replication")
 	case s.Clone.Err != nil:
-		s.Error = errors.Wrap(s.Clone.Err, "Clone")
+		s.Error = errors.Wrap(s.Clone.Err, "clone")
 	}
 	if s.Error != nil {
 		// A component can fail before its execution finishes draining.
