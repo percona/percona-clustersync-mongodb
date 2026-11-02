@@ -577,10 +577,20 @@ func TestStatus_ReportsComponentFailureBeforeRunStops(t *testing.T) {
 		state    State
 		cloneErr error
 		replErr  error
+		wantErr  string
 	}{
-		{name: "clone failure", state: StateRunning, cloneErr: cause},
-		{name: "replication failure", state: StateRunning, replErr: cause},
-		{name: "pause drain failure", state: StatePausing, replErr: cause},
+		{
+			name: "clone failure", state: StateRunning, cloneErr: cause,
+			wantErr: "clone: component failed while stopping",
+		},
+		{
+			name: "replication failure", state: StateRunning, replErr: cause,
+			wantErr: "change replication: component failed while stopping",
+		},
+		{
+			name: "pause drain failure", state: StatePausing, replErr: cause,
+			wantErr: "change replication: component failed while stopping",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -596,6 +606,7 @@ func TestStatus_ReportsComponentFailureBeforeRunStops(t *testing.T) {
 			status := p.Status(t.Context())
 
 			require.ErrorIs(t, status.Error, cause)
+			require.EqualError(t, status.Error, tt.wantErr)
 			assert.Equal(t, State(StateFailed), status.State)
 		})
 	}
@@ -700,7 +711,7 @@ func TestStatus(t *testing.T) {
 		status := p.Status(context.Background())
 
 		require.Error(t, status.Error)
-		assert.Contains(t, status.Error.Error(), "Change Replication")
+		assert.Contains(t, status.Error.Error(), "change replication")
 		assert.Contains(t, status.Error.Error(), "repl error")
 	})
 
@@ -720,7 +731,7 @@ func TestStatus(t *testing.T) {
 		status := p.Status(context.Background())
 
 		require.Error(t, status.Error)
-		assert.Contains(t, status.Error.Error(), "Clone")
+		assert.Contains(t, status.Error.Error(), "clone")
 		assert.Contains(t, status.Error.Error(), "clone error")
 	})
 
