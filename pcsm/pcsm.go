@@ -436,12 +436,17 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 	case s.Clone.Err != nil:
 		s.Error = errors.Wrap(s.Clone.Err, "Clone")
 	}
+	if s.Error != nil {
+		// A component can fail before its execution finishes draining.
+		// Report the failure without relinquishing that execution's ownership.
+		s.State = StateFailed
+	}
 
 	if s.Repl.IsStarted() {
 		s.InitialSyncCompleted = s.Repl.LastReplicatedOpTime.After(s.Clone.FinishTS)
 	}
 
-	if p.state == StateFailed {
+	if s.State == StateFailed {
 		return s
 	}
 
@@ -590,11 +595,18 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 
 // lockAfterRun returns with p.lock held on success. A stopped run may still be
 // reporting failure or exiting its monitors; let it finish before validating
-// the next transition. Active states are left for the caller to reject.
+// the next transition. A recorded component failure also joins here, even
+// before run publishes its final state. Healthy active states are rejected by
+// the caller.
 func (p *PCSM) lockAfterRun(ctx context.Context) error {
 	p.lock.Lock()
 
-	for p.runDone != nil && p.state != StateRunning && p.state != StateFinalizing {
+	for p.runDone != nil {
+		if p.state == StateFinalizing ||
+			(p.state == StateRunning && p.clone.Status().Err == nil && p.repl.Status().Err == nil) {
+			break
+		}
+
 		done := p.runDone
 		select {
 		case <-done:
