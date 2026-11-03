@@ -213,7 +213,17 @@ func TestServerVersionBuildFallback(t *testing.T) {
 func TestServerVersionInvalidCore(t *testing.T) {
 	t.Parallel()
 
-	for _, input := range []string{"", "8.0", "8..4-custom", "8.a.4-custom", "8.0.x-custom", "256.0.4-custom", "8.256.4-custom", "8.0.256-custom", "8.0.4.1-custom"} {
+	for _, input := range []string{
+		"",
+		"8.0",
+		"8..4-custom",
+		"8.a.4-custom",
+		"8.0.x-custom",
+		"256.0.4-custom",
+		"8.256.4-custom",
+		"8.0.256-custom",
+		"8.0.4.1-custom",
+	} {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 
