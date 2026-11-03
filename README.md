@@ -41,6 +41,7 @@ Wait for `state: "paused"` before treating the pause as complete. A resume
 request received during `pausing` waits for completion within its request
 deadline; a timeout stops that wait, not the accepted pause. State-aware clients
 must recognize `pausing`, including when `pauseOnInitialSync` is enabled.
+A start request during `pausing` is rejected immediately as already running.
 
 `POST /finalize` also waits for replication and monitor cleanup, with a
 five-second HTTP request deadline. If that wait expires, the pause continues,

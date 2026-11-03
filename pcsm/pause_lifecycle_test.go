@@ -85,6 +85,38 @@ func TestPause_PublishesPausedAfterMonitorCleanup(t *testing.T) {
 	})
 }
 
+func TestStart_RejectsPendingPauseWithoutJoining(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		p, r, done := runningDrainPipeline(t, finishedLifecycleCloner())
+		finish := sync.OnceFunc(func() {
+			r.settled.Store(true)
+			close(r.doneCh)
+		})
+		defer finish()
+		require.NoError(t, p.Pause(t.Context()))
+
+		result := make(chan error, 1)
+		go func() { result <- p.Start(t.Context(), nil) }()
+		synctest.Wait()
+		select {
+		case err := <-result:
+			require.ErrorContains(t, err, "already running")
+		default:
+			require.FailNow(t, "start joined the pending pause")
+		}
+		state, err := pipelineState(p)
+		require.Equal(t, State(StatePausing), state)
+		require.NoError(t, err)
+
+		finish()
+		<-done
+		state, err = pipelineState(p)
+		require.Equal(t, State(StatePaused), state)
+		require.NoError(t, err)
+	})
+}
+
 func TestResume_PendingPauseCancellationThenSuccess(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

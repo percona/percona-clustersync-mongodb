@@ -281,7 +281,7 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 }
 
 func (p *PCSM) Recover(ctx context.Context, data []byte) error {
-	err := p.lockAfterRun(ctx)
+	err := p.lockAfterRun(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -516,7 +516,7 @@ type StartOptions struct {
 
 // Start starts the replication process with the given options.
 func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
-	err := p.lockAfterRun(ctx)
+	err := p.lockAfterRun(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -597,12 +597,13 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 // reporting failure or exiting its monitors; let it finish before validating
 // the next transition. A recorded component failure also joins here, even
 // before run publishes its final state. Healthy active states are rejected by
-// the caller.
-func (p *PCSM) lockAfterRun(ctx context.Context) error {
+// the caller. Resume and Recover join a pending pause; Start rejects it without
+// waiting because it admits none of the states that pause can settle into.
+func (p *PCSM) lockAfterRun(ctx context.Context, joinPause bool) error {
 	p.lock.Lock()
 
 	for p.runDone != nil {
-		if p.state == StateFinalizing ||
+		if p.state == StateFinalizing || (p.state == StatePausing && !joinPause) ||
 			(p.state == StateRunning && p.clone.Status().Err == nil && p.repl.Status().Err == nil) {
 			break
 		}
@@ -996,7 +997,7 @@ type ResumeOptions struct {
 
 // Resume resumes the replication process.
 func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
-	err := p.lockAfterRun(ctx)
+	err := p.lockAfterRun(ctx, true)
 	if err != nil {
 		return err
 	}
