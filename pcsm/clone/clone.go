@@ -260,9 +260,8 @@ func (c *Clone) Start(ctx context.Context) error {
 	return nil
 }
 
-// runToCompletion runs the clone and publishes its outcome, including a run
-// ended by cancellation: the clone is never continued, a canceled one is
-// discarded with its pipeline.
+// runToCompletion runs the clone and publishes its outcome. Cancellation leaves
+// the clone interrupted: it is discarded with its pipeline, never continued.
 func (c *Clone) runToCompletion(ctx context.Context) {
 	lg := log.New("clone")
 
@@ -271,23 +270,23 @@ func (c *Clone) runToCompletion(ctx context.Context) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	close(c.doneCh)
+
+	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		lg.With(log.Elapsed(time.Since(c.startTime)), log.Size(c.copiedSize.Load())).
+			Info("Data Clone canceled with its tenure")
+
+		return
+	}
+
 	if err != nil {
 		c.err = err
 	}
 
-	close(c.doneCh)
-
 	c.finishTime = time.Now()
 	elapsed := c.finishTime.Sub(c.startTime)
 
-	switch {
-	case err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()):
-		lg.With(log.Elapsed(elapsed), log.Size(c.copiedSize.Load())).
-			Info("Data Clone canceled with its tenure")
-
-		return
-
-	case err != nil:
+	if err != nil {
 		lg.With(log.Elapsed(elapsed)).
 			Errorf(err, "Data Clone has failed: %s in %s",
 				humanize.Bytes(c.copiedSize.Load()), elapsed.Round(time.Second))
