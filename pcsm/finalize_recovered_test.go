@@ -76,7 +76,7 @@ func TestFinalizeCompletesWhenReplicatorHasRun(t *testing.T) {
 	repl.pauseTime = time.Time{}
 	repl.pauseCalled = make(chan struct{}, 1)
 	repl.doneCalled = make(chan struct{}, 1)
-	done := startRunning(p)
+	done := startRunning(t.Context(), t, p)
 
 	finalized := make(chan error, 1)
 	go func() { finalized <- p.Finalize(t.Context()) }()
