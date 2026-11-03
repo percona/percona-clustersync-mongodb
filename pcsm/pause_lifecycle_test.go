@@ -352,6 +352,46 @@ func TestFinalize_ConcurrentPauseWaitersOwnOneFinalizer(t *testing.T) {
 	})
 }
 
+func TestFinalize_JoinsSelfDrainingFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, duringPause := range []bool{false, true} {
+		t.Run(map[bool]string{false: "already draining", true: "failure during pause"}[duringPause], func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				p, r, done := runningDrainPipeline(t, finishedLifecycleCloner())
+				r.lastOp.Store(2)
+				r.drainError = errors.New("target write rejected")
+				r.failOnPause = duringPause
+				if !duringPause {
+					r.pausing.Store(true)
+					r.failureReported.Store(true)
+				}
+				fin := &gatedFinalizer{entered: make(chan struct{})}
+				p.finalizer = fin
+				result := make(chan error, 1)
+				go func() { result <- p.Finalize(t.Context()) }()
+				synctest.Wait()
+				select {
+				case err := <-result:
+					require.FailNow(t, "finalize returned before failure cleanup", "%v", err)
+				default:
+				}
+				require.Zero(t, fin.calls.Load())
+
+				r.settled.Store(true)
+				close(r.doneCh)
+				<-done
+				require.ErrorIs(t, <-result, r.drainError)
+				state, err := pipelineState(p)
+				require.Equal(t, State(StateFailed), state)
+				require.ErrorIs(t, err, r.drainError)
+				require.Zero(t, fin.calls.Load())
+			})
+		})
+	}
+}
+
 func TestFinalize_RechecksFailureAfterPreviousRun(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
