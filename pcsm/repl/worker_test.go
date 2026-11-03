@@ -368,8 +368,8 @@ func makeTestPoolLive(t *testing.T, bws []bulkWriter) *workerPool {
 }
 
 // makeTestPoolLiveWithParent is makeTestPoolLive with a caller-supplied parent
-// context and bulkWriter factory, so a test can cancel the pool the way a
-// suspended run does and observe the bulks sealed after the first one.
+// context and bulkWriter factory, so a test can cancel the pool the way the
+// end of a tenure does and observe the bulks sealed after the first one.
 func makeTestPoolLiveWithParent(
 	t *testing.T, parent context.Context, bws []bulkWriter, newBW func() bulkWriter,
 ) *workerPool {

@@ -61,6 +61,9 @@ fi
 export PCSM_HA_NETWORK="$NETWORK"
 export PCSM_SOURCE_URI="$SOURCE_URI"
 export PCSM_TARGET_URI="$TARGET_URI"
+if [[ -n "${PCSM_HA_LEASE_TTL:-}" ]]; then
+    export PCSM_HA_LEASE_TTL
+fi
 
 echo "Building pcsm:dev image..."
 docker build -f "$HA_DIR/Dockerfile" -t pcsm:dev "$ROOT"

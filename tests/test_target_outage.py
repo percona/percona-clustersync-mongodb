@@ -16,6 +16,7 @@ import pytest
 import requests
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, PyMongoError
+from test_ha import _seed_clone_dataset
 from testing import Testing
 
 from pcsm import PCSM, Runner
@@ -24,11 +25,11 @@ DB_NAME = "target_outage"
 COLL_NAME = "events"
 ROLE_TRANSITIONS = "percona_clustersync_mongodb_ha_role_transitions_total"
 
-# HA timings from config/const.go: LeaseTTL 10s, LeaseRenewInterval 3s,
-# HAOperationTimeout 5s. The lease deadline is measured from the last
-# successful renewal, up to 3s before the outage starts, so the short outage
-# plus the step-up election must stay under ~7s; the long one must clearly
-# exceed the TTL.
+# HA defaults: lease TTL 10s (configurable with --ha-lease-ttl), renewal
+# interval 3s, operation timeout 5s. The lease deadline starts at the last
+# successful renewal attempt, up to 3s before the outage, so the short outage
+# plus election must stay under ~7s. The long outage exceeds the default TTL
+# but stays below the 60s TTL used by the configured cases.
 SHORT_OUTAGE_SECS = 5
 LONG_OUTAGE_SECS = 15
 RECOVERY_TIMEOUT_SECS = 60
@@ -66,13 +67,17 @@ class _Writer:
         assert not self._thread.is_alive(), "source writer did not stop"
 
 
-def _role_transitions(pcsm: PCSM) -> float:
+def _metric(pcsm: PCSM, name: str) -> float:
     response = requests.get(f"{pcsm.uri}/metrics", timeout=5)
     response.raise_for_status()
     for line in response.text.splitlines():
-        if line.startswith(f"{ROLE_TRANSITIONS} "):
+        if line.startswith(f"{name} "):
             return float(line.split()[1])
-    raise AssertionError(f"{ROLE_TRANSITIONS} missing from /metrics")
+    raise AssertionError(f"{name} missing from /metrics")
+
+
+def _role_transitions(pcsm: PCSM) -> float:
+    return _metric(pcsm, ROLE_TRANSITIONS)
 
 
 def _member(host: str) -> MongoClient:
@@ -103,7 +108,7 @@ def _step_up(host: str):
     raise AssertionError(f"{host} did not step up: {last}")
 
 
-def _force_no_primary(target: MongoClient, secs: int):
+def _force_no_primary(target: MongoClient, secs: int, *, cloning_pcsm: PCSM | None = None):
     hello = target.admin.command("hello")
     primary = hello["primary"]
     secondaries = [h for h in hello["hosts"] if h != primary]
@@ -124,6 +129,10 @@ def _force_no_primary(target: MongoClient, secs: int):
                 logging.getLogger(__name__).info("replSetStepDown disconnected: %s", exc)
 
         time.sleep(secs)  # The outage duration is the behavior under test.
+        if cloning_pcsm is not None:
+            status = cloning_pcsm.status()
+            assert status["state"] == PCSM.State.RUNNING, status
+            assert status["initialSync"]["cloneCompleted"] is False, status
     finally:
         # Unfreeze everything first so a failed step-up cannot leave the set
         # frozen for FREEZE_SECS, then force the election.
@@ -191,6 +200,49 @@ def _check_target_outage(t: Testing, outage_secs: int, expected_transitions: int
     t.compare_all()
 
 
+def _check_clone_target_outage(t: Testing):
+    """Interrupt a proven in-flight clone, then require completion in the same tenure."""
+    hello = t.target.admin.command("hello")
+    if hello.get("msg") == "isdbgrid":
+        pytest.skip("requires a replica-set target to step down its primary")
+
+    _seed_clone_dataset(t.source, DB_NAME, ["c0", "c1", "c2", "c3"])
+    runner = t.run(
+        Runner.Phase.MANUAL,
+        wait_timeout=300,
+        options={
+            "clone_num_parallel_collections": 1,
+            "clone_num_read_workers": 1,
+            "clone_num_insert_workers": 1,
+        },
+    )
+    runner.start()
+    deadline = time.monotonic() + RECOVERY_TIMEOUT_SECS
+    status = None
+    while time.monotonic() < deadline:
+        status = t.pcsm.status()
+        initial_sync = status.get("initialSync", {})
+        assert not initial_sync.get("cloneCompleted"), (
+            f"clone completed before outage; increase seed size: {status}"
+        )
+        if status["state"] == PCSM.State.RUNNING and initial_sync.get("clonedSizeBytes", 0) > 0:
+            break
+    else:
+        raise AssertionError(f"PCSM never reached an in-flight clone: {status}")
+
+    before = _role_transitions(t.pcsm)
+    term = _metric(t.pcsm, "percona_clustersync_mongodb_ha_term")
+    _force_no_primary(t.target, LONG_OUTAGE_SECS, cloning_pcsm=t.pcsm)
+    _wait_for_primary(t.target)
+    _wait_for_running(t.pcsm)
+    runner.wait_for_initial_sync()
+    assert t.pcsm.status()["initialSync"]["completed"] is True
+    assert _role_transitions(t.pcsm) == before
+    assert _metric(t.pcsm, "percona_clustersync_mongodb_ha_term") == term
+    runner.finalize()
+    t.compare_all()
+
+
 @pytest.mark.timeout(180)
 def test_target_outage_shorter_than_lease_ttl(t: Testing):
     """An outage shorter than the lease TTL must not demote the instance."""
@@ -199,5 +251,20 @@ def test_target_outage_shorter_than_lease_ttl(t: Testing):
 
 @pytest.mark.timeout(180)
 def test_target_outage_longer_than_lease_ttl(t: Testing):
-    """An outage longer than the lease TTL demotes and then resumes in place."""
+    """An outage longer than the lease TTL demotes; the next tenure restores from the checkpoint."""
     _check_target_outage(t, outage_secs=LONG_OUTAGE_SECS, expected_transitions=2)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("managed_pcsm_args", [["--ha-lease-ttl=60s"]], indirect=True)
+def test_clone_target_outage_with_raised_lease_ttl(t: Testing, managed_pcsm_args):
+    """A 15s target outage during cloning completes without restarting the run."""
+    _check_clone_target_outage(t)
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("managed_pcsm_args", [["--ha-lease-ttl=60s"]], indirect=True)
+def test_repl_target_outage_with_raised_lease_ttl(t: Testing, managed_pcsm_args):
+    """A 15s target outage during replication keeps the ACTIVE tenure."""
+    _check_target_outage(t, outage_secs=LONG_OUTAGE_SECS, expected_transitions=0)

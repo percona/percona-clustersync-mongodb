@@ -124,7 +124,7 @@ func TestReplicationWriteConcernCommands(t *testing.T) {
 				targetColl := client.Database(db).Collection("fallback",
 					options.Collection().SetWriteConcern(opts.WriteConcern))
 				doc := bson.D{{"_id", "fallback"}, {"value", "source"}}
-				require.NoError(t, handleDuplicateKeyError(ctx, targetColl, doc, false))
+				require.NoError(t, replaceWithDeleteInsert(ctx, targetColl, doc, false))
 				checkCommands(2)
 
 				// Source and target collections differ so the refetch must

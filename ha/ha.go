@@ -1,8 +1,12 @@
 // Package ha provides active-standby high availability for PCSM during the
 // replication phase. Multiple PCSM instances connect to the same target; one
 // holds a MongoDB-backed lease and is ACTIVE while the rest stay STANDBY and
-// take over on failover. The lease term doubles as a fencing token so a deposed
-// active cannot corrupt the target after losing the lease.
+// take over on failover. The lease loop reports the ownership each attempt
+// established to one observer, which derives the role from it. The lease term
+// is stamped on checkpoint writes as a fencing token: a checkpoint owned by a
+// newer term rejects the writes of every older term, whatever the lease says
+// at that moment. Data writes are not fenced: cancellation contains them, and
+// a command already on the wire may still apply.
 package ha
 
 import (
@@ -43,11 +47,15 @@ const (
 	aggNow    = "$$NOW"
 	aggIfNull = "$ifNull"
 	aggAdd    = "$add"
+	aggMax    = "$max"
 )
 
 // Member is the per-instance liveness/identity document in the members
 // collection. Role and Term are informational; the lease document is the
 // source of truth for election state.
+// Group, Host, Port, PCSMVersion and StartedAt describe the instance for
+// discovery and diagnostics; they do not grant ownership or fence writes.
+// LastHeartbeat determines membership liveness, not lease ownership.
 type Member struct {
 	InstanceID    string    `bson:"_id"`
 	Group         string    `bson:"group"`
@@ -63,6 +71,11 @@ type Member struct {
 // Lease is the single lease document used for election and term-based fencing.
 // The active instance renews ExpiresAt on a timer; a standby may take over once
 // ExpiresAt has passed (per the server clock).
+// InstanceID is checked when renewing or releasing ownership, unlike the
+// diagnostic instanceId in a checkpoint. Group is an advisory label, not an
+// election boundary: all instances using this lease document compete together.
+// ElectionDate records acquisition time for diagnostics; ExpiresAt, not
+// ElectionDate, determines whether another instance may acquire the lease.
 type Lease struct {
 	ID           string    `bson:"_id"`
 	Group        string    `bson:"group"`

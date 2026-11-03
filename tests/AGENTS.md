@@ -26,6 +26,7 @@ Score: 9; distinct live-system test domain. Owns source-to-target behavior tests
 - `PCSM.status()` is strict; HA tests use `raw_status()` when a STANDBY 409 body is the assertion target.
 - `Testing.compare_all*` compares namespaces, options, indexes, counts, and raw-batch content hashes; raw batches default to `_id` ascending order.
 - Request `suspend_managed_pcsm` for self-managed HA groups; its teardown restores the suite-owned process.
+- Indirectly parametrize `managed_pcsm_args` with a list of server args to restart the suite-owned process for one test; teardown restores defaults. Requires `TEST_PCSM_BIN` or `--pcsm-bin`.
 - `test_ha.py` is marked slow and needs `--runslow`; its group fixture also requires a PCSM binary.
 
 ## ANTI-PATTERNS

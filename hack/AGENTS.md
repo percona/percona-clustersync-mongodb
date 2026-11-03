@@ -26,6 +26,7 @@ Score: 8; distinct operator-tooling domain. Owns disposable MongoDB topologies, 
 - Side-specific MongoDB version variables override `MONGO_VERSION`.
 - Host and container ports differ for target mongos: host `29017`, container `27017`.
 - HA scripts expect clusters to exist first and publish PCSM APIs on ports 2242-2244.
+- `PCSM_HA_LEASE_TTL` configures all three HA containers; unset or empty uses the server default.
 - `ha/run.sh --reset` stops the old HA group before clearing lease, members, and checkpoints.
 
 ## ANTI-PATTERNS

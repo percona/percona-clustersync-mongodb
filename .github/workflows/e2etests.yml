@@ -9,7 +9,8 @@ permissions:
 jobs:
   replset:
     name: ReplicaSet (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }})
-    runs-on: ubuntu-24.04
+    # Keep MongoDB jobs on the compatible runner documented in ci.yml.
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
@@ -84,7 +85,7 @@ jobs:
 
   sharded:
     name: Sharded (${{ matrix.src_mongo_version }} → ${{ matrix.tgt_mongo_version }}${{ matrix.name_suffix }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false

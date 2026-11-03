@@ -16,6 +16,10 @@ const DefaultGroup = "default"
 
 // Validate validates the Config for required fields and value ranges.
 func Validate(cfg *Config) error {
+	if cfg.HALeaseTTL != 0 && cfg.HALeaseTTL < LeaseTTL {
+		return errors.Errorf("--ha-lease-ttl must be at least %s, got %s", LeaseTTL, cfg.HALeaseTTL)
+	}
+
 	port := cfg.Port
 	if port == 0 {
 		port = DefaultServerPort

@@ -56,6 +56,17 @@ func TestSetRoleRoundTrip(t *testing.T) {
 	assert.Equal(t, Term(8), term)
 }
 
+func TestSetRoleReportsTransition(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMembership()
+
+	assert.True(t, m.SetRole(RoleActive, 1), "STANDBY->ACTIVE is a transition")
+	assert.False(t, m.SetRole(RoleActive, 1), "a renewal is not")
+	assert.False(t, m.SetRole(RoleActive, 2), "nor is a new term while ACTIVE; the role is what transitions")
+	assert.True(t, m.SetRole(RoleStandby, 2), "ACTIVE->STANDBY is a transition")
+}
+
 func TestSetRoleSignalsBeatNow(t *testing.T) {
 	t.Parallel()
 

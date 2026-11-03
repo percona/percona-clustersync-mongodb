@@ -350,6 +350,76 @@ func TestClientBulkWrite_FullByBytes(t *testing.T) {
 		"byte counter must have reached the byte budget")
 }
 
+func TestCollectionBulkWrite_ReplacementFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		code   int
+		index  int
+		upsert *bool
+		update bool
+		want   bool
+	}{
+		{
+			name: "insert replayed after sharding", code: 61, index: 1,
+			upsert: new(true), want: true,
+		},
+		{
+			name: "duplicate key on insert", code: 11000, index: 1,
+			upsert: new(true), want: true,
+		},
+		{
+			name: "duplicate key on replacement", code: 11000, index: 1, want: true,
+		},
+		{
+			name: "missing shard key on replacement", code: 61, index: 1,
+		},
+		{
+			name: "missing shard key with upsert disabled", code: 61, index: 1,
+			upsert: new(false),
+		},
+		{
+			name: "missing shard key on update", code: 61, index: 1,
+			upsert: new(true), update: true,
+		},
+		{
+			name: "unrelated write error", code: 121, index: 1, upsert: new(true),
+		},
+		{
+			name: "invalid index", code: 61, index: 2, upsert: new(true),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			document := bson.D{{"_id", 1}, {"a", 10}, {"b", "hashed_1"}, {"c", 20}}
+			ops := []mongo.WriteModel{
+				&mongo.DeleteOneModel{Filter: bson.D{{"_id", 0}}},
+				&mongo.ReplaceOneModel{Replacement: document, Upsert: tt.upsert},
+			}
+			if tt.update {
+				ops[1] = &mongo.UpdateOneModel{Upsert: tt.upsert}
+			}
+			err := mongo.BulkWriteException{WriteErrors: []mongo.BulkWriteError{
+				{Code: tt.code, Index: tt.index},
+			}}
+
+			cbw := newCollectionBulkWriter(100, false, nil)
+			index, replacement := cbw.extractReplacementFallback(err, ops)
+			if tt.want {
+				assert.Equal(t, 1, index)
+				assert.Equal(t, document, replacement)
+			} else {
+				assert.Equal(t, -1, index)
+				assert.Nil(t, replacement)
+			}
+		})
+	}
+}
+
 // TestCollectionBulkWrite_FullByBytes mirrors the client-bulk byte budget test for the
 // pre-MongoDB-8.0 collection-level bulk write path.
 func TestCollectionBulkWrite_FullByBytes(t *testing.T) {
