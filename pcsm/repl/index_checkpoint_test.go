@@ -66,7 +66,7 @@ func awaitCheckpointSignal(t *testing.T, ch <-chan struct{}) {
 	select {
 	case <-ch:
 	case <-time.After(barrierTimeout):
-		t.Fatal("checkpoint operation did not finish")
+		require.FailNow(t, "checkpoint operation did not finish")
 	}
 }
 
@@ -80,7 +80,7 @@ func awaitResumeOptions(
 	case result := <-ch:
 		return result
 	case <-time.After(barrierTimeout):
-		t.Fatal("resume options were not delivered")
+		require.FailNow(t, "resume options were not delivered")
 
 		return nil
 	}
@@ -158,7 +158,7 @@ func TestIndexCheckpoint_DrainBeforeAcknowledgementBeforeIndex(t *testing.T) {
 				select {
 				case cp = <-requested:
 				case <-ctx.Done():
-					t.Fatal("checkpoint was not requested after drain")
+					require.FailNow(t, "checkpoint was not requested after drain")
 				}
 				assert.Equal(t, prior.ID, cp.StartAfter)
 				assert.Equal(t, ts, cp.CheckpointOpTime)
@@ -241,7 +241,7 @@ func TestIndexCheckpoint_RejectsUnacknowledgedBoundary(t *testing.T) {
 			case applied := <-result:
 				assert.False(t, applied)
 			case <-time.After(barrierTimeout):
-				t.Fatal("index boundary did not stop")
+				require.FailNow(t, "index boundary did not stop")
 			}
 			assert.Zero(t, cat.indexCalls.Load())
 			assert.Zero(t, r.Status().EventsApplied)
