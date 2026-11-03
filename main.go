@@ -139,8 +139,6 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
 	rootCmd.Flags().String("listen-host", "localhost", "Host to bind the HTTP server")
-	rootCmd.Flags().Bool("mongodb-ignore-build-version", false,
-		"Ignore the build suffix in source and target MongoDB versions")
 	rootCmd.Flags().String("mongodb-operation-timeout", config.DefaultMongoDBOperationTimeout.String(),
 		mongoDBOperationTimeoutHelp)
 
@@ -748,7 +746,7 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		}
 	}()
 
-	sourceVersion, err := mdb.Version(ctx, source, cfg.MongoDB.IgnoreBuildVersion)
+	sourceVersion, err := mdb.Version(ctx, source)
 	if err != nil {
 		return nil, errors.Wrap(err, "source version")
 	}
@@ -777,7 +775,7 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		}
 	}()
 
-	targetVersion, err := mdb.Version(ctx, target, cfg.MongoDB.IgnoreBuildVersion)
+	targetVersion, err := mdb.Version(ctx, target)
 	if err != nil {
 		return nil, errors.Wrap(err, "target version")
 	}
@@ -835,8 +833,7 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		return nil, errors.New("target hello response is nil")
 	}
 
-	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos(), tgtHello.IsMongos(),
-		cfg.MongoDB.IgnoreBuildVersion)
+	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos(), tgtHello.IsMongos())
 
 	s := &server{
 		cfg:           cfg,

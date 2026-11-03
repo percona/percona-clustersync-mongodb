@@ -119,8 +119,6 @@ func (o *Options) applyDefaults() {
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
-	ignoreBuildVersion bool // Startup policy, not persisted in checkpoints.
-
 	source *mongo.Client // Source MongoDB client
 	target *mongo.Client // Target MongoDB client
 
@@ -197,7 +195,6 @@ func NewRepl(
 	sourceVer mdb.ServerVersion,
 	sourceIsSharded bool,
 	targetIsSharded bool,
-	ignoreBuildVersion bool,
 ) *Repl {
 	opts.applyDefaults()
 
@@ -213,17 +210,16 @@ func NewRepl(
 	lg.Infof("Config: WorkerBulkQueueSize: %d", opts.WorkerBulkQueueSize)
 
 	return &Repl{
-		ignoreBuildVersion: ignoreBuildVersion,
-		source:             source,
-		target:             target,
-		sourceVer:          sourceVer,
-		nsFilter:           nsFilter,
-		catalog:            cat,
-		options:            opts,
-		pauseCh:            make(chan struct{}),
-		doneCh:             make(chan struct{}),
-		sourceIsSharded:    sourceIsSharded,
-		targetIsSharded:    targetIsSharded,
+		source:          source,
+		target:          target,
+		sourceVer:       sourceVer,
+		nsFilter:        nsFilter,
+		catalog:         cat,
+		options:         opts,
+		pauseCh:         make(chan struct{}),
+		doneCh:          make(chan struct{}),
+		sourceIsSharded: sourceIsSharded,
+		targetIsSharded: targetIsSharded,
 	}
 }
 
@@ -332,7 +328,7 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 		r.lastReplicatedOpTime = r.checkpointOpTime
 	}
 
-	targetVer, err := mdb.Version(ctx, r.target, r.ignoreBuildVersion)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}
@@ -399,7 +395,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 		return errors.New("already started")
 	}
 
-	targetVer, err := mdb.Version(ctx, r.target, r.ignoreBuildVersion)
+	targetVer, err := mdb.Version(ctx, r.target)
 	if err != nil {
 		return errors.Wrap(err, "target version")
 	}

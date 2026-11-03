@@ -14,7 +14,7 @@ func TestServerVersion(t *testing.T) {
 		t.Parallel()
 
 		s := "8.0.4-2"
-		version, err := parseServerVersion(s, false)
+		version, err := parseServerVersion(s)
 		require.NoError(t, err)
 		assert.Equal(t, 8, version.Major())
 		assert.Equal(t, 0, version.Minor())
@@ -28,7 +28,7 @@ func TestServerVersion(t *testing.T) {
 		t.Parallel()
 
 		s := "8.0.4"
-		version, err := parseServerVersion(s, false)
+		version, err := parseServerVersion(s)
 		require.NoError(t, err)
 		assert.Equal(t, 8, version.Major())
 		assert.Equal(t, 0, version.Minor())
@@ -42,7 +42,7 @@ func TestServerVersion(t *testing.T) {
 		t.Parallel()
 
 		s := "255.255.255-255"
-		version, err := parseServerVersion(s, false)
+		version, err := parseServerVersion(s)
 		require.NoError(t, err)
 		assert.Equal(t, 255, version.Major())
 		assert.Equal(t, 255, version.Minor())
@@ -55,7 +55,7 @@ func TestServerVersion(t *testing.T) {
 		t.Parallel()
 
 		s := "0.0.0-1"
-		version, err := parseServerVersion(s, false)
+		version, err := parseServerVersion(s)
 		require.NoError(t, err)
 		assert.Equal(t, s, version.String())
 	})
@@ -64,45 +64,36 @@ func TestServerVersion(t *testing.T) {
 		t.Parallel()
 
 		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("8.0-2", false))
-		assert(parseServerVersion("8.0", false))
+		assert(parseServerVersion("8.0-2"))
+		assert(parseServerVersion("8.0"))
 	})
 
 	t.Run("empty", func(t *testing.T) {
 		t.Parallel()
 
 		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("", false))
-		assert(parseServerVersion(".", false))
-		assert(parseServerVersion("..", false))
-		assert(parseServerVersion(".1.", false))
-		assert(parseServerVersion("..-", false))
+		assert(parseServerVersion(""))
+		assert(parseServerVersion("."))
+		assert(parseServerVersion(".."))
+		assert(parseServerVersion(".1."))
+		assert(parseServerVersion("..-"))
 	})
 
 	t.Run("invalid minor", func(t *testing.T) {
 		t.Parallel()
 
 		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("8..0", false))
-		assert(parseServerVersion("8.a.0", false))
+		assert(parseServerVersion("8..0"))
+		assert(parseServerVersion("8.a.0"))
 	})
 
 	t.Run("invalid patch", func(t *testing.T) {
 		t.Parallel()
 
 		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("8.0.", false))
-		assert(parseServerVersion("8.0.-2", false))
-		assert(parseServerVersion("8.0.a-2", false))
-	})
-
-	t.Run("invalid build", func(t *testing.T) {
-		t.Parallel()
-
-		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("8.0.0-", false))
-		assert(parseServerVersion("8.0.0-", false))
-		assert(parseServerVersion("8.0.0-a", false))
+		assert(parseServerVersion("8.0."))
+		assert(parseServerVersion("8.0.-2"))
+		assert(parseServerVersion("8.0.a-2"))
 	})
 }
 
@@ -160,10 +151,10 @@ func TestCheckVersionCompat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			source, err := parseServerVersion(tt.source, false)
+			source, err := parseServerVersion(tt.source)
 			require.NoError(t, err)
 
-			target, err := parseServerVersion(tt.target, false)
+			target, err := parseServerVersion(tt.target)
 			require.NoError(t, err)
 
 			crossVersion, err := CheckVersionCompat(source, target)
@@ -189,40 +180,32 @@ func assertAs(t *testing.T, expected any) func(any, error) {
 	}
 }
 
-func TestServerVersionIgnoreBuild(t *testing.T) {
+func TestServerVersionBuildFallback(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		input       string
-		want        ServerVersion
-		strictError bool
+		name  string
+		input string
+		want  ServerVersion
 	}{
-		{name: "numeric build", input: "8.0.4-2", want: ServerVersion{8, 0, 4}},
+		{name: "numeric build", input: "8.0.4-2", want: ServerVersion{8, 0, 4, 2}},
 		{name: "no build", input: "8.0.4", want: ServerVersion{8, 0, 4}},
-		{name: "empty build", input: "8.0.4-", want: ServerVersion{8, 0, 4}, strictError: true},
-		{name: "arbitrary build", input: "8.0.4-custom", want: ServerVersion{8, 0, 4}, strictError: true},
-		{name: "overflow build", input: "8.0.4-256", want: ServerVersion{8, 0, 4}, strictError: true},
-		{name: "negative build", input: "8.0.4--1", want: ServerVersion{8, 0, 4}, strictError: true},
+		{name: "empty build", input: "8.0.4-", want: ServerVersion{8, 0, 4}},
+		{name: "arbitrary build", input: "8.0.4-custom", want: ServerVersion{8, 0, 4}},
+		{name: "custom numeric build", input: "8.0.4-2-custom", want: ServerVersion{8, 0, 4}},
+		{name: "overflow build", input: "8.0.4-256", want: ServerVersion{8, 0, 4}},
+		{name: "negative build", input: "8.0.4--1", want: ServerVersion{8, 0, 4}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			version, err := parseServerVersion(tt.input, true)
+			version, err := parseServerVersion(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, version)
-			assert.Zero(t, version.Build())
-			assert.False(t, version.IsPSMDB())
+			assert.Equal(t, tt.want.Build(), version.Build())
+			assert.Equal(t, tt.want.IsPSMDB(), version.IsPSMDB())
 			assert.Equal(t, tt.want.String(), version.String())
-
-			_, err = parseServerVersion(tt.input, false)
-			if tt.strictError {
-				var invalidVersion InvalidVersionError
-				require.ErrorAs(t, err, &invalidVersion)
-			} else {
-				require.NoError(t, err)
-			}
 		})
 	}
 }
@@ -234,11 +217,9 @@ func TestServerVersionInvalidCore(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 
-			for _, ignoreBuild := range []bool{false, true} {
-				_, err := parseServerVersion(input, ignoreBuild)
-				var invalidVersion InvalidVersionError
-				require.ErrorAs(t, err, &invalidVersion)
-			}
+			_, err := parseServerVersion(input)
+			var invalidVersion InvalidVersionError
+			require.ErrorAs(t, err, &invalidVersion)
 		})
 	}
 }

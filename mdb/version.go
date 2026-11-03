@@ -51,7 +51,7 @@ func (v ServerVersion) FullString() string {
 	return fmt.Sprintf("Percona Server for MongoDB %d.%d.%d-%d", v[0], v[1], v[2], v[3])
 }
 
-func Version(ctx context.Context, m *mongo.Client, ignoreBuildVersion bool) (ServerVersion, error) {
+func Version(ctx context.Context, m *mongo.Client) (ServerVersion, error) {
 	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
 		return m.Database("admin").RunCommand(ctx, bson.D{{"buildInfo", 1}}).Raw() //nolint:wrapcheck
 	}, DefaultRetryInterval, DefaultMaxRetries)
@@ -59,7 +59,7 @@ func Version(ctx context.Context, m *mongo.Client, ignoreBuildVersion bool) (Ser
 		return ServerVersion{}, errors.Wrap(err, "$buildInfo")
 	}
 
-	return parseServerVersion(raw.Lookup("version").StringValue(), ignoreBuildVersion)
+	return parseServerVersion(raw.Lookup("version").StringValue())
 }
 
 type InvalidVersionError struct {
@@ -72,8 +72,8 @@ func (e InvalidVersionError) Error() string {
 
 // parseServerVersion parses buildInfo version into ServerVersion.
 // Acceptable pattern: MAJOR.MINOR.PATCH[-BUILD].
-// When ignoreBuildVersion is true, everything after the first hyphen is ignored.
-func parseServerVersion(s string, ignoreBuildVersion bool) (ServerVersion, error) {
+// If BUILD cannot be parsed as a uint8, the suffix is discarded.
+func parseServerVersion(s string) (ServerVersion, error) {
 	var version ServerVersion
 
 	server, build, hasBuildVersion := strings.Cut(s, "-")
@@ -96,13 +96,11 @@ func parseServerVersion(s string, ignoreBuildVersion bool) (ServerVersion, error
 		version[i] = uint8(n)
 	}
 
-	if hasBuildVersion && !ignoreBuildVersion {
+	if hasBuildVersion {
 		n, err := strconv.Atoi(build)
-		if err != nil || n < 0 || n > math.MaxUint8 {
-			return version, InvalidVersionError{s}
+		if err == nil && n >= 0 && n <= math.MaxUint8 {
+			version[3] = uint8(n)
 		}
-
-		version[3] = uint8(n)
 	}
 
 	return version, nil
