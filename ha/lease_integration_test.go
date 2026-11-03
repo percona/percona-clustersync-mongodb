@@ -5,7 +5,6 @@ package ha //nolint:testpackage
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,6 +110,50 @@ func TestLeaseRenewKeepsTerm(t *testing.T) {
 	latest := readLease(t, ctx, client)
 	assert.Equal(t, first.ElectionDate, latest.ElectionDate, "electionDate is preserved across renewals")
 	assert.False(t, latest.ExpiresAt.Before(first.ExpiresAt), "expiresAt should advance on renewal")
+}
+
+// A lease that fell behind the checkpoint's fencing term is repaired by its
+// owner only: a non-owner must not move another instance's term, the owner
+// raises it to the requested floor, never lowers it, and renews at the new
+// term afterwards.
+func TestAdvanceTermOnlyForOwner(t *testing.T) {
+	ctx := t.Context()
+	client := connectToMongoDB(t)
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	cleanLease(t, ctx, client)
+
+	owner := newLeaseMemberForTest(t, ctx, client, "pcsm-owner")
+	other := newLeaseMemberForTest(t, ctx, client, "pcsm-other")
+
+	advanced, err := owner.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.False(t, advanced, "no lease to advance before the first acquisition")
+
+	att, err := owner.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	require.True(t, att.Acquired)
+	require.Equal(t, Term(1), att.Term)
+
+	advanced, err = other.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.False(t, advanced, "a non-owner must not advance the lease")
+	assert.Equal(t, Term(1), readLease(t, ctx, client).Term)
+
+	advanced, err = owner.AdvanceTerm(ctx, 5)
+	require.NoError(t, err)
+	assert.True(t, advanced)
+	assert.Equal(t, Term(5), readLease(t, ctx, client).Term)
+
+	advanced, err = owner.AdvanceTerm(ctx, 3)
+	require.NoError(t, err)
+	assert.True(t, advanced, "already at or past the floor still counts as owned at that term")
+	assert.Equal(t, Term(5), readLease(t, ctx, client).Term, "the term never goes backwards")
+
+	att, err = owner.tryAcquireOrRenew(ctx)
+	require.NoError(t, err)
+	assert.True(t, att.Acquired)
+	assert.Equal(t, Term(5), att.Term, "the owner renews at the advanced term")
 }
 
 func TestLeaseContentionExactlyOneActive(t *testing.T) {
@@ -226,7 +269,7 @@ func TestLeaseLosingContenderDoesNotAcquire(t *testing.T) {
 	assert.Equal(t, "pcsm-owner", lease.InstanceID)
 }
 
-func TestLeaseRunEmitsActive(t *testing.T) {
+func TestLeaseFirstTickReportsOwnership(t *testing.T) {
 	ctx := t.Context()
 	client := connectToMongoDB(t)
 	defer func() { _ = client.Disconnect(ctx) }()
@@ -235,17 +278,10 @@ func TestLeaseRunEmitsActive(t *testing.T) {
 
 	m := newLeaseMemberForTest(t, ctx, client, "pcsm-run")
 
-	// FirstLeaseTick settles the role synchronously, as at startup.
-	m.FirstLeaseTick(ctx)
+	// FirstLeaseTick settles ownership synchronously, as at startup.
+	var reports []Ownership
+	m.FirstLeaseTick(ctx, func(o Ownership) { reports = append(reports, o) })
 
-	select {
-	case rc := <-m.RoleChanges():
-		assert.Equal(t, RoleActive, rc.Role, "the sole instance should become ACTIVE")
-		assert.Equal(t, Term(1), rc.Term)
-	case <-time.After(5 * time.Second):
-		t.Fatal("expected a RoleChange to ACTIVE within timeout")
-	}
-
-	role, _ := m.CurrentRole()
-	assert.Equal(t, RoleActive, role)
+	assert.Equal(t, []Ownership{{Held: true, Term: 1}}, reports, "the sole instance holds the lease at term 1")
+	assert.True(t, m.held)
 }

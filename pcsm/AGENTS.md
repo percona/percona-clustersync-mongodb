@@ -23,7 +23,7 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 - `PCSM` is the synchronization boundary for lifecycle state; transition checks and mutations stay under `p.lock`.
 - `Cloner` and `Replicator` interfaces are the seams used by orchestration tests.
 - A fresh `Start` builds one catalog shared by clone and repl.
-- `Checkpoint` returns nil while idle and serializes catalog, clone, repl, state, filters, and the current error together.
+- `Checkpoint` returns nil while idle and serializes catalog, clone, repl, state, filters, and the current error together under the lifecycle lock. Snapshots carry no sequence number: the checkpoint writer in the root `recovery.go` orders them by lease term and by writing one at a time.
 - Component checkpoint acquisition and BSON marshaling remain one coordinated operation; catalog lock mechanics live in child guidance.
 - Recovery reconstructs catalog, clone, and repl before applying component checkpoints.
 - `FinalizeStatus` is absent until finalize starts; copy it before returning status to callers.
@@ -33,8 +33,8 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 
 - Do not mutate `state`, `err`, component pointers, or finalization status outside the lifecycle lock.
 - Do not add a state transition without matching invalid-state coverage.
-- Do not resume an interrupted initial clone as though its copy workers had persisted their progress. The one exception is in-process: `Suspend` followed by a same-term `Resume` continues the clone from its in-memory inventory (completed collections kept, in-flight ones copied again); a checkpoint-restored clone never qualifies.
-- Do not launch a run or finalizer outside `startRun`/`startFinalize`: they derive the execution from the request's epoch (`WithEpoch`) and publish the handle `Suspend` cancels and joins.
-- Do not persist a suspended state or treat a cancellation-induced component error as a failure; only an error the component recorded is one.
+- Do not resume an interrupted initial clone as though its copy workers had persisted their progress: a checkpoint-restored interrupted clone is a failed state that needs a new `/start`, and a pipeline whose tenure ended is discarded, never continued.
+- Do not launch a run or finalizer outside `startRun`/`startFinalize`: they derive the execution from the request's epoch (`WithEpoch`) and publish the handle `Stop` cancels and joins.
+- Do not treat a component error recorded while the execution was being canceled as a failure: `Stop` settles nothing, and the pipeline it stopped is discarded with its tenure.
 - Do not report finalization complete before `CompletedAt` and unsuccessful-index results are available.
 - Do not make orchestration tests depend on live MongoDB when the local interfaces cover the seam.

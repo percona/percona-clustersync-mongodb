@@ -445,6 +445,10 @@ func newResetLeaseCmd(cfg *config.Config) *cobra.Command {
 		Use:    "lease",
 		Hidden: true,
 		Short:  "Reset HA lease state",
+		Long: "Delete the HA lease document only. Lease terms restart at 1, below the term of a " +
+			"surviving checkpoint, so the next instance opens one fenced tenure per term until it " +
+			"reaches the checkpoint's. Use 'pcsm reset' to reset the lease and recovery state " +
+			"together. Stop every instance before running either.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
@@ -687,38 +691,36 @@ type server struct {
 	sourceCluster *mongo.Client
 	// targetCluster is the MongoDB client for the target cluster.
 	targetCluster *mongo.Client
-	// pcsm is the PCSM instance for cluster replication.
-	pcsm *pcsm.PCSM
+	// sourceVersion and the topology flags build the pipeline of each ACTIVE
+	// tenure; see openTenure.
+	sourceVersion  mdb.ServerVersion
+	sourceIsMongos bool
+	targetIsMongos bool
 	// membership maintains this instance's member document and runs the lease
-	// loop through which this instance competes to be ACTIVE.
+	// loop whose ownership reports drive the lifecycle; see observeOwnership.
 	membership *ha.Membership
 
 	// promRegistry is the Prometheus registry for metrics.
 	promRegistry *prometheus.Registry
 
-	// mu serializes promotion and demotion and guards epochCtx, epochCancel,
-	// autoStartOpts, activeTerm, suspendedOnDemote, and checkpointDone. The authoritative
-	// (role, term) lives in membership; read it via membership.CurrentRole().
+	// mu serializes the lifecycle: ownership reports, fenced checkpoints,
+	// shutdown and request admission. It guards tenure, term and minTerm. The
+	// advertised (role, term) lives in membership; read it via
+	// membership.CurrentRole().
 	mu sync.Mutex
-	// epochCtx is the context of the current ACTIVE tenure. Every execution
-	// the pipeline launches, the checkpointing loop and the state-change
-	// checkpoint derive from it; canceling it is the fence that stops a
-	// deposed instance from writing to the target. nil while STANDBY.
-	epochCtx    context.Context //nolint:containedctx // per-tenure ownership; see onPromote
-	epochCancel context.CancelFunc
+	// tenure is the current ACTIVE tenure, nil while STANDBY.
+	tenure *tenure
+	// term is the last lease term this instance held; advertised with the role.
+	term ha.Term
+	// minTerm is the lowest term a new tenure may open at: above every term a
+	// tenure of this process ran at, so no two tenures ever write under one
+	// term. Ownership below it is advanced through the lease instead of acted
+	// on.
+	minTerm ha.Term
 	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
-	// (the deferred effect of the --start flag). Set at construction, before
-	// the first promotion can be consumed.
+	// (the deferred effect of the --start flag). Set at construction, never
+	// changed.
 	autoStartOpts *pcsm.StartOptions
-	// activeTerm is the term of this process's most recent successful promotion.
-	activeTerm ha.Term
-	// suspendedOnDemote records that demotion suspended running work, as
-	// opposed to an operator pause or a failure; a same-term re-promotion
-	// resumes it in memory.
-	suspendedOnDemote bool
-	// checkpointDone is closed once the latest epoch's checkpoint writer has
-	// exited; a promotion joins it before this tenure saves anything.
-	checkpointDone chan struct{}
 }
 
 // createServer creates a new server with the given options.
@@ -833,36 +835,31 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		return nil, errors.New("target hello response is nil")
 	}
 
-	pcs := pcsm.New(ctx, source, target, sourceVersion, srcHello.IsMongos(), tgtHello.IsMongos())
-
 	s := &server{
-		cfg:           cfg,
-		sourceCluster: source,
-		targetCluster: target,
-		pcsm:          pcs,
-		membership:    membership,
-		promRegistry:  promRegistry,
-		autoStartOpts: autoStart,
+		cfg:            cfg,
+		sourceCluster:  source,
+		targetCluster:  target,
+		sourceVersion:  sourceVersion,
+		sourceIsMongos: srcHello.IsMongos(),
+		targetIsMongos: tgtHello.IsMongos(),
+		membership:     membership,
+		promRegistry:   promRegistry,
+		autoStartOpts:  autoStart,
 	}
 
-	// The state-change checkpoint is installed by onPromote, bound to the
-	// ACTIVE epoch and its term; no pipeline state can change before that.
-
-	// Settle the initial role before the HTTP server serves any request; see
-	// FirstLeaseTick. The transition is consumed by watchRoleChanges below.
-	s.membership.FirstLeaseTick(ctx)
+	// Settle ownership before the HTTP server serves any request; see
+	// FirstLeaseTick. A won lease opens the first tenure.
+	s.membership.FirstLeaseTick(ctx, s.ownershipObserver(ctx))
 
 	s.logInitialRole()
 
-	go s.watchRoleChanges(ctx)
-
-	go s.membership.RunLease(ctx)
+	go s.membership.RunLease(ctx, s.ownershipObserver(ctx))
 
 	return s, nil
 }
 
-// logInitialRole logs the role settled at startup. onPromote/onDemote only log
-// transitions, which never fire for an instance that starts and stays STANDBY.
+// logInitialRole logs the role settled at startup. The lifecycle only logs
+// transitions, which never happen for an instance that starts and stays STANDBY.
 func (s *server) logInitialRole() {
 	role, term := s.membership.CurrentRole()
 	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
@@ -876,14 +873,14 @@ func (s *server) logInitialRole() {
 	lg.Info("Instance role: STANDBY")
 }
 
-// Close ends the ACTIVE epoch and joins the pipeline's work, releases the
+// Close ends the ACTIVE tenure and joins its pipeline's work, releases the
 // lease (so a standby can take over promptly), leaves the membership set, and
-// closes the server connections. The epoch ends before the lease is released,
-// so no pipeline write can outlive the lease.
+// closes the server connections. The tenure ends before the lease is released,
+// so no pipeline execution outlives the lease; a command already on the wire
+// may still apply.
 func (s *server) Close(ctx context.Context) error {
 	s.mu.Lock()
-	s.endEpoch()
-	_, suspendErr := s.pcsm.Suspend(ctx)
+	s.endTenure(ctx, log.New("ha:role"))
 	s.mu.Unlock()
 
 	err0 := s.membership.Release(ctx)
@@ -891,288 +888,7 @@ func (s *server) Close(ctx context.Context) error {
 	err2 := s.sourceCluster.Disconnect(ctx)
 	err3 := s.targetCluster.Disconnect(ctx)
 
-	return errors.Join(suspendErr, err0, err1, err2, err3)
-}
-
-// watchRoleChanges consumes role transitions and drives the replication
-// lifecycle: promotion restores or retains state and starts checkpointing; demotion stops
-// checkpointing and halts the pipeline. Returns when ctx is canceled.
-func (s *server) watchRoleChanges(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case rc := <-s.membership.RoleChanges():
-			switch rc.Role {
-			case ha.RoleActive:
-				s.onPromote(ctx, rc.Term)
-			case ha.RoleStandby:
-				s.onDemote(ctx, rc.Term)
-			}
-		}
-	}
-}
-
-type promoteAction int
-
-const (
-	promoteRestore promoteAction = iota
-	promoteKeep
-	promoteResume
-)
-
-// promotionPlan decides what a promotion does with the in-memory pipeline.
-// An idle pipeline or a new term restores the persisted checkpoint. A pipeline
-// that demotion suspended, re-promoted in the same term, resumes in memory:
-// an unchanged term proves no other instance held the lease meanwhile, so the
-// in-memory state is authoritative. Everything else (an operator pause, a
-// failure, a suspended finalization) is kept as is.
-func promotionPlan(state pcsm.State, term, activeTerm ha.Term, suspendedOnDemote bool) promoteAction {
-	if state == pcsm.StateIdle || term != activeTerm {
-		return promoteRestore
-	}
-	if suspendedOnDemote && state == pcsm.StatePaused {
-		return promoteResume
-	}
-
-	return promoteKeep
-}
-
-// relinquish ends the ACTIVE epoch and gives the lease up after a promotion
-// that cannot complete, so another instance, or this one after a restart,
-// can take over. The caller holds mu.
-func (s *server) relinquish(ctx context.Context, lg log.Logger) {
-	s.endEpoch()
-
-	err := s.membership.RelinquishLease(ctx)
-	if err != nil {
-		lg.Error(err, "relinquish lease")
-	}
-}
-
-// endEpoch cancels the current ACTIVE epoch, if any: checkpointing, the
-// epoch-bound state-change checkpoint and every execution the pipeline
-// launched in it end with it. It takes no pipeline lock, so a Finalize
-// blocked on its drain under the pipeline lock is unblocked by it. The
-// caller holds mu.
-func (s *server) endEpoch() {
-	if s.epochCancel == nil {
-		return
-	}
-
-	s.epochCancel()
-	s.epochCancel = nil
-	s.epochCtx = nil
-}
-
-// onPromote handles a STANDBY->ACTIVE transition. It ends an epoch a coalesced
-// demotion left open and joins its work, opens this tenure's epoch and binds
-// the state-change checkpoint to it, then resumes a pipeline that demotion
-// suspended in the same term, restores the persisted checkpoint for an idle or
-// stale pipeline, or keeps the pipeline as it is. Checkpointing starts for the
-// new epoch even when resuming failed, so the operator can inspect and recover
-// the pipeline without losing the lease.
-//
-// Concurrency: watchRoleChanges serializes role-driven transitions. mu also
-// serializes this method with the out-of-band checkpoint fencing callback and
-// with request admission (admit); it remains held while joining the previous
-// epoch's work, which cancellation makes short.
-func (s *server) onPromote(ctx context.Context, term ha.Term) {
-	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
-	lg.Info("Instance role: ACTIVE (promoted)")
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// RoleChanges may coalesce away the intervening demotion: end the open
-	// epoch and join its work, so no execution of a previous tenure outlives
-	// this point and Restore never meets a live run.
-	s.endEpoch()
-
-	suspended, err := s.pcsm.Suspend(ctx)
-	if err != nil {
-		lg.Error(err, "suspend the previous epoch's work on promotion; relinquishing lease")
-		s.relinquish(ctx, lg)
-
-		return
-	}
-
-	if suspended {
-		s.suspendedOnDemote = true
-	}
-
-	// Join the previous epoch's checkpoint writer, now that the pipeline work
-	// it could wait on is joined too: a snapshot it captured must not land
-	// over this tenure's newer saves of the same term.
-	if s.checkpointDone != nil {
-		<-s.checkpointDone
-		s.checkpointDone = nil
-	}
-
-	s.epochCtx, s.epochCancel = context.WithCancel(ctx)
-	epochCtx := s.epochCtx
-	ectx := pcsm.WithEpoch(epochCtx, epochCtx)
-
-	// A state change is saved by this epoch's checkpointing loop, its only
-	// writer, which the callback signals: a second writer of the same term
-	// could land an older snapshot over a newer one. The callback is bound to
-	// this epoch: once it ends nothing is saved, so a demoted instance never
-	// persists a state it no longer owns. Installed before Restore/Resume,
-	// which emit transitions; a signal sent before the loop starts waits for it.
-	instanceID := s.membership.InstanceID()
-	saveNow := make(chan struct{}, 1)
-	s.pcsm.SetOnStateChanged(func(_ pcsm.State) {
-		if epochCtx.Err() != nil {
-			return
-		}
-
-		select {
-		case saveNow <- struct{}{}:
-		default: // a save is already pending and captures this state too
-		}
-	})
-
-	status := s.pcsm.Status(ctx)
-	action := promotionPlan(status.State, term, s.activeTerm, s.suspendedOnDemote)
-	switch action {
-	case promoteRestore:
-		restoreErr := Restore(ectx, s.targetCluster, s.pcsm)
-		switch {
-		case restoreErr == nil:
-
-		case errors.Is(restoreErr, errNoCheckpoint) && status.State == pcsm.StateIdle:
-			// Nothing to replace; --start, if given, applies below.
-
-		case errors.Is(restoreErr, errNoCheckpoint):
-			// A pipeline is in memory, the lease was lost to another term and
-			// there is nothing to restore over it: it cannot be trusted and
-			// cannot be replaced. Only a restart gets out.
-			message := "lost the lease with no checkpoint to restore; restart required; relinquishing lease"
-			lg.Error(restoreErr, message)
-			s.relinquish(ctx, lg)
-
-			return
-
-		default:
-			message := "restore on promotion; relinquishing lease"
-			if status.State != pcsm.StateIdle {
-				message = "stale pipeline cannot be replaced; restart required; relinquishing lease"
-			}
-			lg.Error(restoreErr, message)
-			s.relinquish(ctx, lg)
-
-			return
-		}
-
-	case promoteResume:
-		resumeErr := s.pcsm.Resume(ectx, pcsm.ResumeOptions{})
-		if resumeErr != nil {
-			lg.Error(resumeErr, "resume on promotion; staying ACTIVE for operator recovery")
-		}
-
-	case promoteKeep:
-		// An operator pause or a failed pipeline needs no automatic resume.
-		if s.suspendedOnDemote && status.State == pcsm.StateFinalizing {
-			lg.Info("Finalization was suspended by demotion; reissue /finalize")
-		}
-	}
-
-	// The lease loop kept running meanwhile. If it demoted this instance
-	// again, the pending STANDBY transition is consumed right after this
-	// returns and ends the epoch; do not start checkpointing for it.
-	role, currentTerm := s.membership.CurrentRole()
-	if role != ha.RoleActive || currentTerm != term {
-		lg.Info("Demoted during promotion; not starting checkpointing")
-
-		return
-	}
-
-	s.activeTerm = term
-	s.suspendedOnDemote = false
-	// Checkpointing loop scoped to this ACTIVE epoch, fenced by term. A fenced
-	// write means this instance was deposed: onFenced ends the epoch and
-	// suspends the pipeline immediately instead of waiting for the next lease
-	// tick.
-	checkpointDone := make(chan struct{})
-	s.checkpointDone = checkpointDone
-
-	go func() {
-		defer close(checkpointDone)
-
-		RunCheckpointing(epochCtx, s.targetCluster, s.pcsm, int64(term), instanceID,
-			s.cfg.RecoveryCheckpointInterval, saveNow, func() {
-				// Off this goroutine: a promotion joins it while holding mu.
-				go s.onDemote(ctx, term)
-			})
-	}()
-
-	autoStartOpts := s.autoStartOpts
-	if autoStartOpts == nil {
-		return
-	}
-
-	// Apply the deferred --start now that this instance is ACTIVE. Only valid
-	// from idle: a retained or restored non-idle pipeline must not be restarted.
-	state := s.pcsm.Status(ctx).State
-	if state != pcsm.StateIdle {
-		lg.With(log.String("state", string(state))).
-			Info("Skipping --start on promotion: replication already in progress")
-
-		return
-	}
-
-	err = s.pcsm.Start(ectx, autoStartOpts)
-	if err != nil {
-		lg.Error(err, "auto-start on promotion")
-	}
-}
-
-// onDemote handles an ACTIVE->STANDBY transition for the given term. It ends
-// the ACTIVE epoch, which cancels checkpointing, the epoch-bound state-change
-// checkpoint and every execution the pipeline launched in it, then suspends
-// the pipeline: its work is joined and settles as paused (or finalizing),
-// unpersisted. A same-term re-promotion resumes it in memory; a new term
-// restores the checkpoint over it. Nothing queued or retrying drains to the
-// target: cancellation is the fence. Term fencing on checkpoint writes remains
-// the guarantee for the recovery document itself.
-//
-// Concurrency: watchRoleChanges is the only in-band caller and processes role
-// changes one at a time, so onPromote and a role-driven onDemote never overlap.
-// The out-of-band caller is the checkpointing fence callback (onFenced), which
-// fires only when a newer term owns the checkpoint; the guard below drops it
-// once membership has advanced past term. Suspend joins only the pipeline's
-// run and finalizer, never the checkpoint goroutine that invoked onFenced.
-func (s *server) onDemote(ctx context.Context, term ha.Term) {
-	lg := log.New("ha:role").With(log.Int64("term", int64(term)))
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	_, currentTerm := s.membership.CurrentRole()
-	if currentTerm > term {
-		lg.With(log.Int64("currentTerm", int64(currentTerm))).
-			Debug("Ignoring stale demotion for an older term")
-
-		return
-	}
-
-	lg.Info("Instance role: STANDBY (demoted)")
-
-	// The fence first, without any pipeline lock: a Finalize blocked on its
-	// drain under the pipeline lock is unblocked by this.
-	s.endEpoch()
-
-	suspended, err := s.pcsm.Suspend(ctx)
-	if err != nil {
-		lg.Error(err, "suspend pipeline on demotion")
-
-		return
-	}
-
-	if suspended {
-		s.suspendedOnDemote = true
-	}
+	return errors.Join(err0, err1, err2, err3)
 }
 
 // Handler returns the HTTP handler for the server.
@@ -1224,13 +940,14 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Status is a read on the active pipeline. A STANDBY has no meaningful
+	// Status is a read on the tenure's pipeline. A STANDBY has no meaningful
 	// repl state.
-	if !s.isActive(ctx, w) {
+	_, pipeline, ok := s.admit(ctx, w)
+	if !ok {
 		return
 	}
 
-	status := s.pcsm.Status(ctx)
+	status := pipeline.Status(ctx)
 
 	res := statusResponse{
 		ResponseEnvelope: s.buildEnvelope(ctx),
@@ -1452,11 +1169,7 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isActive(ctx, w) {
-		return
-	}
-
-	ctx, ok := s.admit(ctx, w)
+	ctx, pipeline, ok := s.admit(ctx, w)
 	if !ok {
 		return
 	}
@@ -1490,7 +1203,7 @@ func (s *server) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.pcsm.Start(ctx, options)
+	err = pipeline.Start(ctx, options)
 	if err != nil {
 		if s.refusedNotActive(ctx, w, err) {
 			return
@@ -1525,16 +1238,12 @@ func (s *server) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isActive(ctx, w) {
-		return
-	}
-
-	ctx, ok := s.admit(ctx, w)
+	ctx, pipeline, ok := s.admit(ctx, w)
 	if !ok {
 		return
 	}
 
-	err := s.pcsm.Finalize(ctx)
+	err := pipeline.Finalize(ctx)
 	if err != nil {
 		if s.refusedNotActive(ctx, w, err) {
 			return
@@ -1569,11 +1278,12 @@ func (s *server) HandlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isActive(ctx, w) {
+	_, pipeline, ok := s.admit(ctx, w)
+	if !ok {
 		return
 	}
 
-	err := s.pcsm.Pause(ctx)
+	err := pipeline.Pause(ctx)
 	if err != nil {
 		writeResponse(w, pauseResponse{ResponseEnvelope: s.buildEnvelope(ctx), Err: err.Error()})
 
@@ -1604,11 +1314,7 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isActive(ctx, w) {
-		return
-	}
-
-	ctx, ok := s.admit(ctx, w)
+	ctx, pipeline, ok := s.admit(ctx, w)
 	if !ok {
 		return
 	}
@@ -1639,7 +1345,7 @@ func (s *server) HandleResume(w http.ResponseWriter, r *http.Request) {
 		ResumeFromFailure: params.FromFailure,
 	}
 
-	err := s.pcsm.Resume(ctx, *options)
+	err := pipeline.Resume(ctx, *options)
 	if err != nil {
 		if s.refusedNotActive(ctx, w, err) {
 			return
@@ -1770,37 +1476,36 @@ type notActiveResponse struct {
 	*ResponseEnvelope
 }
 
-// isActive rejects requests on a non-ACTIVE instance with HTTP 409. It
-// returns true when the caller may proceed, false when it has already written
-// the 409 response.
-func (s *server) isActive(ctx context.Context, w http.ResponseWriter) bool {
-	role, _ := s.membership.CurrentRole()
-	if role == ha.RoleActive {
-		return true
-	}
-
-	s.writeNotActive(ctx, w, role)
-
-	return false
-}
-
-// admit binds a lifecycle request to the current ACTIVE epoch: work it
-// launches ends with the tenure and is refused once the tenure has ended. With
-// no epoch open (the role can read ACTIVE before promotion opens it, or after
-// it ended) it answers 409 not_active and reports false.
-func (s *server) admit(ctx context.Context, w http.ResponseWriter) (context.Context, bool) {
+// admit binds a request to the current ACTIVE tenure and hands out its
+// pipeline: work the request launches ends with the tenure and is refused
+// once the tenure has ended. A tenure still restoring its pipeline admits the
+// request once the restore is done, within the request's context, so a client
+// that reached a just-promoted instance is served rather than bounced. With
+// no tenure open for requests (STANDBY, or a tenure that has ended) it
+// answers 409 not_active and reports false.
+func (s *server) admit(ctx context.Context, w http.ResponseWriter) (context.Context, *pcsm.PCSM, bool) {
 	s.mu.Lock()
-	epoch := s.epochCtx
+	t := s.tenure
 	s.mu.Unlock()
 
-	if epoch == nil || epoch.Err() != nil {
+	if t != nil {
+		select {
+		case <-t.ready:
+		case <-t.ctx.Done():
+		case <-ctx.Done():
+		}
+	}
+
+	// A request that expired while waiting is refused even if the tenure is
+	// ready by now: nothing may launch for a caller that has gone away.
+	if t == nil || t.ctx.Err() != nil || !t.isReady() || ctx.Err() != nil {
 		role, _ := s.membership.CurrentRole()
 		s.writeNotActive(ctx, w, role)
 
-		return ctx, false
+		return ctx, nil, false
 	}
 
-	return pcsm.WithEpoch(ctx, epoch), true
+	return pcsm.WithEpoch(ctx, t.ctx), t.pipeline, true
 }
 
 // refusedNotActive answers 409 not_active when the pipeline refused a launch

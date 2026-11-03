@@ -199,5 +199,5 @@ def test_target_outage_shorter_than_lease_ttl(t: Testing):
 
 @pytest.mark.timeout(180)
 def test_target_outage_longer_than_lease_ttl(t: Testing):
-    """An outage longer than the lease TTL demotes and then resumes in place."""
+    """An outage longer than the lease TTL demotes; the next tenure restores from the checkpoint."""
     _check_target_outage(t, outage_secs=LONG_OUTAGE_SECS, expected_transitions=2)
