@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +56,9 @@ type barrierController interface {
 
 // Options configures the replication behavior.
 type Options struct {
+	// Checkpoint returns only after this request's snapshot is persisted.
+	// Cancellation means the checkpoint writer or its tenure has ended.
+	Checkpoint func(context.Context) error
 	// WriteConcern applies to replicated documents only; nil defaults to majority.
 	WriteConcern *writeconcern.WriteConcern
 	// UseCollectionBulkWrite indicates whether to use collection-level bulk write
@@ -131,6 +135,7 @@ type Repl struct {
 
 	lastReplicatedOpTime bson.Timestamp
 	checkpointOpTime     bson.Timestamp // inclusive resume floor: all events before it are applied; never tick-driven
+	checkpointStartAfter bson.Raw       // exclusive predecessor at a drained index boundary
 
 	lock sync.Mutex
 	err  error
@@ -260,6 +265,7 @@ type Checkpoint struct {
 	EventsApplied        int64          `bson:"events,omitempty"`
 	LastReplicatedOpTime bson.Timestamp `bson:"lastOpTS,omitempty"`
 	CheckpointOpTime     bson.Timestamp `bson:"checkpointOpTS,omitempty"`
+	StartAfter           bson.Raw       `bson:"startAfter,omitempty"`
 	Error                string         `bson:"error,omitempty"`
 	UseClientBulkWrite   bool           `bson:"clientBulk,omitempty"`
 }
@@ -284,6 +290,7 @@ func (r *Repl) Checkpoint() *Checkpoint {
 		EventsApplied:        applied,
 		LastReplicatedOpTime: r.lastReplicatedOpTime,
 		CheckpointOpTime:     r.checkpointOpTime,
+		StartAfter:           slices.Clone(r.checkpointStartAfter),
 		UseClientBulkWrite:   !r.useCollectionBulk,
 	}
 
@@ -318,6 +325,7 @@ func (r *Repl) Recover(ctx context.Context, cp *Checkpoint) error {
 	r.eventsRead.Store(cp.EventsApplied)
 	r.lastReplicatedOpTime = cp.LastReplicatedOpTime
 	r.checkpointOpTime = cp.CheckpointOpTime
+	r.checkpointStartAfter = slices.Clone(cp.StartAfter)
 	// Fall back to the legacy single-optime field for checkpoints persisted
 	// before checkpointOpTS existed. Pre-split, lastReplicatedOpTime was the
 	// resume frontier, so using it here preserves prior behavior on upgrade.
@@ -416,6 +424,7 @@ func (r *Repl) Start(ctx context.Context, startAt bson.Timestamp) error {
 
 	r.lastReplicatedOpTime = startAt
 	r.checkpointOpTime = startAt
+	r.checkpointStartAfter = nil
 	// Scope the movePrimary-invalidate expectation to this run; clear any stale
 	// arming left over from a prior failed or paused run.
 	r.expectMovePrimaryInvalidate = false
@@ -515,7 +524,7 @@ func (r *Repl) Resume(ctx context.Context) error {
 		ctx, r.options, r.source, r.target, r.useCollectionBulk, r.useSimpleCollation,
 	)
 
-	go r.run(ctx, options.ChangeStream().SetStartAtOperationTime(&r.checkpointOpTime))
+	go r.run(ctx, r.resumeOptions())
 
 	log.New("repl").With(log.OpTime(r.checkpointOpTime.T, r.checkpointOpTime.I)).
 		Info("Change Replication resumed")
@@ -523,43 +532,61 @@ func (r *Repl) Resume(ctx context.Context) error {
 	return nil
 }
 
+// resumeOptions captures an owned resume position. Caller must hold r.lock.
+func (r *Repl) resumeOptions() *options.ChangeStreamOptionsBuilder {
+	if len(r.checkpointStartAfter) > 0 {
+		return options.ChangeStream().SetStartAfter(slices.Clone(r.checkpointStartAfter))
+	}
+
+	ts := r.checkpointOpTime
+
+	return options.ChangeStream().SetStartAtOperationTime(&ts)
+}
+
+// A nil event is a reconnect fence. The reader waits for the dispatcher to
+// consume preceding events before choosing its next resume position; otherwise
+// a queued index boundary could become durable after a stale retry was opened.
+type changeStreamQueue struct {
+	events chan *ChangeEvent
+	resume chan *options.ChangeStreamOptionsBuilder
+}
+
 func (r *Repl) watchWithRetry(
 	ctx context.Context,
 	opts *options.ChangeStreamOptionsBuilder,
-	changeCh chan<- *ChangeEvent,
+	queue changeStreamQueue,
 ) error {
 	currentOpts := opts
-	var startAfter bson.Raw
 
 	return mdb.RetryWithBackoff( //nolint:wrapcheck
 		ctx, func() error {
-			err := r.watchChangeEvents(ctx, currentOpts, changeCh)
+			err := r.watchChangeEvents(ctx, currentOpts, queue.events)
 			if err == nil {
 				return nil
 			}
 
+			if isChangeStreamUnrecoverable(err) {
+				return err
+			}
+
 			var invalidateErr changeStreamInvalidateError
 			if r.sourceIsSharded && errors.As(err, &invalidateErr) && len(invalidateErr.invalidEventID) > 0 {
-				startAfter = append(bson.Raw(nil), invalidateErr.invalidEventID...)
-				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
 				log.New("repl:watch").With(
 					log.OpTime(invalidateErr.clusterTime.T, invalidateErr.clusterTime.I),
 				).Warn("change stream invalidated; reconnecting with startAfter")
-
-				return err
 			}
 
-			if len(startAfter) > 0 {
-				currentOpts = options.ChangeStream().SetStartAfter(startAfter)
-
-				return err
+			select {
+			case queue.events <- nil:
+			case <-ctx.Done():
+				return errors.Wrap(ctx.Err(), "queue reconnect")
 			}
 
-			r.lock.Lock()
-			lastOpTime := r.checkpointOpTime
-			r.lock.Unlock()
-
-			currentOpts = options.ChangeStream().SetStartAtOperationTime(&lastOpTime)
+			select {
+			case currentOpts = <-queue.resume:
+			case <-ctx.Done():
+				return errors.Wrap(ctx.Err(), "await reconnect")
+			}
 
 			return err
 		}, isChangeStreamUnrecoverable,
@@ -740,6 +767,7 @@ func isChangeStreamTerminationError(invalidateErr *changeStreamInvalidateError, 
 }
 
 func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder) {
+	watchCtx, cancelWatch := context.WithCancel(ctx)
 	pool := r.pool // Start/Resume initialized it; the pointer is stable for this run.
 	progressTicker := time.NewTicker(poolProgressInterval)
 	stopProgress := make(chan struct{})
@@ -751,6 +779,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 	watchDone := make(chan struct{})
 
 	defer func() {
+		cancelWatch()
 		progressTicker.Stop()
 		close(stopProgress)
 		// Join before taking r.lock or stopping the pool: the tracker uses both.
@@ -787,15 +816,17 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		close(r.doneCh)
 	}()
 
-	changeEventCh := make(chan *ChangeEvent, r.options.EventQueueSize)
+	queue := changeStreamQueue{
+		events: make(chan *ChangeEvent, r.options.EventQueueSize),
+		resume: make(chan *options.ChangeStreamOptionsBuilder, 1),
+	}
 
 	go func() {
 		defer close(watchDone)
-		defer close(changeEventCh)
+		defer close(queue.events)
 
 		// A pause cancels only the watch; the run ctx stays alive so the
 		// pool drains. Run cancellation reaches the watch through the parent.
-		watchCtx, cancelWatch := context.WithCancel(ctx)
 		defer cancelWatch()
 
 		go func() {
@@ -806,7 +837,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			}
 		}()
 
-		err := r.watchWithRetry(watchCtx, opts, changeEventCh)
+		err := r.watchWithRetry(watchCtx, opts, queue)
 		if err != nil && watchCtx.Err() == nil && !errors.Is(err, context.Canceled) {
 			if mdb.IsChangeStreamHistoryLost(err) || mdb.IsCappedPositionLost(err) {
 				err = ErrOplogHistoryLost
@@ -816,9 +847,21 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		}
 	}()
 
+	r.dispatchChanges(ctx, queue)
+}
+
+func (r *Repl) dispatchChanges(ctx context.Context, queue changeStreamQueue) {
 	uuidMap := r.catalog.UUIDMap()
 
 	lg := log.New("repl")
+
+	r.lock.Lock()
+	predecessor := slices.Clone(r.checkpointStartAfter)
+	r.lock.Unlock()
+
+	// An expected invalidate needs startAfter until a later safe floor or
+	// protected boundary supersedes it. Only the dispatcher accounts for it.
+	var invalidate *ChangeEvent
 
 	// lastRoutedTS tracks the ClusterTime of the last event routed to the pool.
 	// Used by poolIdle to detect that no events were routed since the last barrier.
@@ -830,7 +873,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		var ok bool
 
 		select {
-		case change, ok = <-changeEventCh:
+		case change, ok = <-queue.events:
 			if !ok {
 				return
 			}
@@ -846,7 +889,26 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			return
 		}
 
-		metrics.SetReplEventQueueSize(len(changeEventCh))
+		metrics.SetReplEventQueueSize(len(queue.events))
+
+		if change == nil {
+			r.lock.Lock()
+			opts := r.resumeOptions()
+			predecessor = slices.Clone(r.checkpointStartAfter)
+			if invalidate != nil && !r.checkpointOpTime.After(invalidate.ClusterTime) {
+				predecessor = slices.Clone(invalidate.ID)
+				opts = options.ChangeStream().SetStartAfter(predecessor)
+			}
+			r.lock.Unlock()
+
+			select {
+			case queue.resume <- opts:
+			case <-ctx.Done():
+				return
+			}
+
+			continue
+		}
 
 		if change.OperationType == advanceTimePseudoEvent {
 			lg.With(log.OpTime(change.ClusterTime.T, change.ClusterTime.I)).Trace("tick")
@@ -862,7 +924,15 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				log.OpTime(change.ClusterTime.T, change.ClusterTime.I),
 			).Trace("replayed event skipped")
 
+			predecessor = change.ID
+
 			continue
+		}
+
+		// Invalidate has no namespace. Even a filtered event must retain
+		// its token so the reconnect fence can move past the invalidation.
+		if change.OperationType == Invalidate {
+			invalidate = change
 		}
 
 		if change.Namespace.Database == config.PCSMDatabase {
@@ -874,6 +944,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 				metrics.AddEventsApplied(1)
 			}
+
+			predecessor = change.ID
 
 			continue
 		}
@@ -887,6 +959,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 
 				metrics.AddEventsApplied(1)
 			}
+
+			predecessor = change.ID
 
 			continue
 		}
@@ -906,13 +980,18 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lastRoutedTS = bson.Timestamp{}
 
 		default:
-			if !r.applyDDL(ctx, change) {
+			if !r.applyDDL(ctx, change, predecessor) {
 				return
 			}
 
+			if change.OperationType == CreateIndexes || change.OperationType == DropIndexes {
+				invalidate = nil
+			}
 			uuidMap = r.catalog.UUIDMap()
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 		}
+
+		predecessor = change.ID
 	}
 }
 
@@ -921,7 +1000,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 // returns false when the run must stop. Failures are recorded with setFailed
 // unless the run was canceled; a cancellation observed after the drain
 // releases the barrier without applying or advancing past the DDL.
-func (r *Repl) applyDDL(ctx context.Context, change *ChangeEvent) bool {
+func (r *Repl) applyDDL(ctx context.Context, change *ChangeEvent, predecessor bson.Raw) bool {
 	defer r.pool.ReleaseBarrier()
 
 	err := r.pool.Barrier()
@@ -949,6 +1028,29 @@ func (r *Repl) applyDDL(ctx context.Context, change *ChangeEvent) bool {
 		r.setFailed(err, "Parse DDL event")
 
 		return false
+	}
+
+	if change.OperationType == CreateIndexes || change.OperationType == DropIndexes {
+		r.lock.Lock()
+		r.advanceCheckpoint(change.ClusterTime)
+		r.checkpointStartAfter = slices.Clone(predecessor)
+		r.lock.Unlock()
+
+		if r.options.Checkpoint == nil {
+			r.setFailed(errors.New("missing checkpoint writer for index change"), "Checkpoint index boundary")
+
+			return false
+		}
+
+		err = r.options.Checkpoint(ctx)
+		if err != nil && ctx.Err() == nil &&
+			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			r.setFailed(err, "Checkpoint index boundary")
+		}
+
+		if err != nil || ctx.Err() != nil {
+			return false
+		}
 	}
 
 	err = mdb.RetryWithBackoff(ctx, func() error {
@@ -1129,6 +1231,7 @@ func (r *Repl) advanceReportedOpTime(ts bson.Timestamp) {
 func (r *Repl) advanceCheckpoint(ts bson.Timestamp) {
 	if ts.After(r.checkpointOpTime) {
 		r.checkpointOpTime = ts
+		r.checkpointStartAfter = nil
 	}
 
 	r.advanceReportedOpTime(ts)
