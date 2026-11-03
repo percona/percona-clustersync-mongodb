@@ -191,14 +191,20 @@ curl -s -X POST http://localhost:2242/start \
 curl -s http://localhost:2242/status | jq .
 until curl -s http://localhost:2242/status | jq -e \
   '.initialSync.completed == true' >/dev/null; do sleep 1; done
-curl -s -X POST http://localhost:2242/finalize \
+curl -s -X POST http://localhost:2242/pause \
   -H 'Content-Type: application/json' -d '{}'
+until curl -s http://localhost:2242/status | jq -e \
+  '.state == "paused"' >/dev/null; do sleep 1; done
+curl -s -X POST http://localhost:2242/finalize \
+  -H 'Content-Type: application/json' -d '{}' | jq -e '.ok'
 until curl -s http://localhost:2242/status | jq -e \
   '.finalization.completed == true' >/dev/null; do sleep 1; done
 # Stop foreground PCSM, then clean Docker environments.
 ```
 
-Manual run order: clean previous Docker environments; start one topology; verify health; build; start foreground PCSM; POST `/start`; wait for initial sync; POST `/finalize`; wait for finalization; stop PCSM; run `./hack/cleanup.sh`.
+For the Finalize deadline and retry contract, see `README.md#pausing-replication`.
+
+Manual run order: clean previous Docker environments; start one topology; verify health; build; start foreground PCSM; POST `/start`; wait for initial sync; POST `/pause`; wait for `paused`; POST `/finalize`; wait for finalization; stop PCSM; run `./hack/cleanup.sh`.
 
 ### Focused Checks and Code Patterns
 

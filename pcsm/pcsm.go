@@ -1060,13 +1060,9 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		return errors.New("clone is not completed")
 	}
 
-	lg := log.New("finalize")
-
 	// A recovered "finalizing" pipeline passed these checks in the tenure
 	// that started it; only catalog finalization is left to run again.
-	if p.state == StateFinalizing {
-		lg.Info("Resuming Finalization")
-	} else {
+	if p.state != StateFinalizing {
 		status := &Status{
 			State: p.state, Error: p.err,
 			Clone: p.clone.Status(), Repl: p.repl.Status(),
@@ -1077,8 +1073,6 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-
-		lg.Info("Starting Finalization")
 	}
 
 	if p.state == StateRunning {
@@ -1126,8 +1120,6 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		return errors.Wrap(p.err, "failed state")
 	}
 
-	lg.Info("Change Replication is paused")
-
 	err = p.repl.Status().Err
 	if err != nil {
 		// no need to set the PCSM failed status here.
@@ -1138,6 +1130,12 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 		return errors.Errorf("cannot finalize: invalid PCSM state %s", p.state)
 	}
 
+	lg := log.New("finalize")
+	if p.state == StateFinalizing {
+		lg.Info("Resuming Finalization")
+	} else {
+		lg.Info("Starting Finalization")
+	}
 	p.startFinalize(parent, lg)
 
 	return nil
