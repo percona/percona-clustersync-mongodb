@@ -20,6 +20,7 @@ Score: 8; distinct election domain. Owns membership liveness, MongoDB-backed lea
 - The lease document is election truth; `Member.Role` and `Member.Term` are informational.
 - `Term` increases on takeover and is passed downstream as the checkpoint fencing token.
 - Lease expiry and renewal use MongoDB server time (`$$NOW`), not client clocks.
+- Lease TTL is configured per instance by `--ha-lease-ttl` / `PCSM_HA_LEASE_TTL`, defaults to 10s, and is truncated to whole milliseconds for both the local deadline and stored expiry. Set the same value on every instance. A contender reads the stored expiry, not its own TTL, to decide when it may take over.
 - Startup performs `FirstLeaseTick` before serving HTTP so ownership is settled.
 - The lease loop reports `Ownership` (held or not, and at which term) to its `Observer` after every attempt that settles it, synchronously and as a level: an unchanged outcome is reported again, and the observer reconciles against the latest report rather than tracking transitions. A canceled attempt, or a failed one while the lease is held within its deadline, reports nothing. The observer (the server's lifecycle controller) derives the role from it; membership only advertises what it is told through `SetRole`.
 - A non-cancellation acquire/renew error keeps the lease within its local deadline and reports nothing; past the deadline, or when not held, it reports the lease lost. `context.Canceled` reports nothing.

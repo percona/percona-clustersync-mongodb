@@ -23,6 +23,8 @@ x-pcsm-common: &pcsm-common
     PCSM_TARGET_URI: ${PCSM_TARGET_URI}
     PCSM_LISTEN_HOST: "0.0.0.0"
     PCSM_LOG_LEVEL: debug
+    # Empty is unset for the server (viper.AutomaticEnv without AllowEmptyEnv), so the binary default applies.
+    PCSM_HA_LEASE_TTL: ${PCSM_HA_LEASE_TTL:-}
   restart: unless-stopped
 
 services:

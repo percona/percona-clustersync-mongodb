@@ -32,6 +32,8 @@ type MembershipOptions struct {
 	PCSMVersion string
 	// Group is the logical name of the active-standby group this instance joins.
 	Group string
+	// LeaseTTL is the lease validity duration. Zero uses config.LeaseTTL.
+	LeaseTTL time.Duration
 }
 
 // Membership is this instance's participation in the HA set. It owns the
@@ -46,6 +48,7 @@ type Membership struct {
 	port       int
 	version    string
 	group      string
+	leaseTTL   time.Duration
 	startedAt  time.Time
 	cancel     context.CancelFunc
 
@@ -89,6 +92,16 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 		host, _ = os.Hostname()
 	}
 
+	leaseTTL := opts.LeaseTTL
+	if leaseTTL == 0 {
+		leaseTTL = config.LeaseTTL
+	}
+	if leaseTTL < config.LeaseTTL {
+		return nil, errors.Errorf("lease TTL %s is below the minimum %s", leaseTTL, config.LeaseTTL)
+	}
+	// One millisecond-granular value for both clocks: the local deadline adds
+	// the duration, the stored expiry adds its millisecond count.
+
 	m := &Membership{
 		target:     target,
 		instanceID: instanceID,
@@ -96,6 +109,7 @@ func JoinMembership(ctx context.Context, target *mongo.Client, opts MembershipOp
 		port:       opts.Port,
 		version:    opts.PCSMVersion,
 		group:      opts.Group,
+		leaseTTL:   leaseTTL.Truncate(time.Millisecond),
 		startedAt:  time.Now().UTC(),
 		role:       RoleStandby,
 		term:       0,
@@ -123,6 +137,9 @@ func (m *Membership) InstanceID() string { return m.instanceID }
 
 // Group returns the HA group name this instance joined.
 func (m *Membership) Group() string { return m.group }
+
+// LeaseTTL returns the effective lease validity duration, in whole milliseconds.
+func (m *Membership) LeaseTTL() time.Duration { return m.leaseTTL }
 
 // SetRole publishes the advertised role and term: to the member document,
 // through an immediate heartbeat, and to the HA gauges, under the lock so the
