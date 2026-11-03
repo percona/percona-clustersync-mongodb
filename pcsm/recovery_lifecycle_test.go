@@ -30,6 +30,7 @@ type drainingReplicator struct {
 	tailObserved    chan struct{}
 	releaseTail     chan struct{}
 	drainError      error
+	failOnPause     bool
 }
 
 func (r *drainingReplicator) Resume(ctx context.Context) error {
@@ -39,6 +40,14 @@ func (r *drainingReplicator) Resume(ctx context.Context) error {
 }
 
 func (r *drainingReplicator) Pause(context.Context) error {
+	if r.failOnPause {
+		r.failureReported.Store(true)
+	}
+	if r.failureReported.Load() {
+		r.pausing.Store(true)
+
+		return errors.New("already pausing")
+	}
 	r.pausing.Store(true)
 
 	return nil

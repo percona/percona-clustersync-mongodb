@@ -42,6 +42,12 @@ request received during `pausing` waits for completion within its request
 deadline; a timeout stops that wait, not the accepted pause. State-aware clients
 must recognize `pausing`, including when `pauseOnInitialSync` is enabled.
 
+`POST /finalize` also waits for replication and monitor cleanup, with a
+five-second HTTP request deadline. If that wait expires, the pause continues,
+but no catalog finalization is scheduled. Wait for `paused` and retry
+`/finalize`, or inspect the error if the state becomes `failed`. Once
+`/finalize` succeeds, catalog finalization proceeds asynchronously.
+
 ### Target data write concern
 
 Clone inserts and replication data writes default to `majority`. To change their

@@ -1082,9 +1082,14 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	}
 
 	if p.state == StateRunning {
-		err = p.doPause(ctx)
-		if err != nil {
-			return err
+		replStatus := p.repl.Status()
+		if !replStatus.Pausing && replStatus.Err == nil {
+			err = p.doPause(ctx)
+			// Failure can start draining between the status read and Pause.
+			// Join below rather than hide its cause behind a pause rejection.
+			if err != nil && p.repl.Status().Err == nil {
+				return err
+			}
 		}
 	}
 
