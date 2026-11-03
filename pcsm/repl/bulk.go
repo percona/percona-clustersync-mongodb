@@ -212,6 +212,8 @@ func (cbw *clientBulkWrite) doWithRetry(
 
 // extractDuplicateKeyReplacement checks if the error is a duplicate key error on a ReplaceOne
 // operation and returns the index and replacement document. Returns -1, nil if not applicable.
+// This writer requires MongoDB 8.0+, which routes single-document upserts without
+// a full shard key; the pre-8.0 ShardKeyNotFound fallback belongs to collectionBulkWrite.
 func (cbw *clientBulkWrite) extractDuplicateKeyReplacement(
 	bulkErr error,
 	writes []mongo.ClientBulkWrite,
