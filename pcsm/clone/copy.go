@@ -275,7 +275,7 @@ func (cm *CopyManager) runReadDispatcher(
 				<-cm.readSem
 				session.activeSegmentsWg.Done()
 
-				// Cursor cleanup must outlive collection cancellation while retaining context values.
+				//nolint:contextcheck // Cursor cleanup must outlive collection cancellation while retaining context values.
 				err := util.CtxWithTimeout(context.WithoutCancel(ctx),
 					config.CloseCursorTimeout, cursor.Close)
 				if err != nil {

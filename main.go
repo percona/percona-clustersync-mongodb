@@ -653,7 +653,7 @@ func runServer(cfg *config.Config) error {
 	go func() {
 		<-ctx.Done()
 
-		// Cleanup must outlive the shutdown signal while retaining the parent context's values.
+		//nolint:contextcheck // Cleanup must outlive shutdown cancellation while retaining context values.
 		err := util.CtxWithTimeout(context.WithoutCancel(ctx), config.DisconnectTimeout, srv.Close)
 		if err != nil {
 			log.New("server").Error(err, "Close server")
