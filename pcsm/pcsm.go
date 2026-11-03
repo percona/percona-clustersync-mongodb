@@ -356,6 +356,17 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		finalizeStatus = &FinalizeStatus{Completed: true}
 	}
 
+	cloneStatus := cln.Status()
+	interruptedClone := cp.State == StateRunning && cloneStatus.IsRunning()
+	execCtx := parent
+	var execution *execHandle
+	if cp.State == StateRunning && !interruptedClone {
+		execCtx, execution, err = p.admitExecution(parent, &p.runExec)
+		if err != nil {
+			return err
+		}
+	}
+
 	p.nsInclude = cp.NSInclude
 	p.targetWriteConcern = fmt.Sprint(wc.W)
 	p.nsExclude = cp.NSExclude
@@ -375,8 +386,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		// The initial clone is not resumable. If it was interrupted mid-flight
 		// (started but not finished), fail with a clear reason. Recovery is a
 		// fresh /start, which re-clones from scratch.
-		cloneStatus := cln.Status()
-		if cloneStatus.IsRunning() {
+		if interruptedClone {
 			err := errors.New(
 				"initial clone interrupted by failover and is not resumable; " +
 					"start a new run to re-clone from scratch",
@@ -394,10 +404,6 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		// run(), not doResume: it handles both a checkpoint persisted at /start
 		// time (repl not yet started) and one persisted after. doResume would
 		// reject the not-yet-started case.
-		execCtx, execution, err := p.admitExecution(parent, &p.runExec)
-		if err != nil {
-			return err
-		}
 		p.startRun(execCtx, execution)
 		go p.onStateChanged(StateRunning)
 	}
