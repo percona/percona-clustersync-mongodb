@@ -3,7 +3,6 @@ version: "2"
 linters:
   default: all
   disable:
-    - contextcheck
     - cyclop
     - depguard
     - dupl

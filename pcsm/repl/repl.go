@@ -622,7 +622,8 @@ func (r *Repl) watchChangeEvents(
 	}
 
 	defer func() {
-		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		//nolint:contextcheck // Cursor cleanup must outlive stream cancellation while retaining context values.
+		err := util.CtxWithTimeout(context.WithoutCancel(ctx), config.CloseCursorTimeout, cur.Close)
 		if err != nil {
 			log.New("repl:watch").Error(err, "Close change stream cursor")
 		}

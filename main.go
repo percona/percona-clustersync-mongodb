@@ -653,10 +653,8 @@ func runServer(cfg *config.Config) error {
 	go func() {
 		<-ctx.Done()
 
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.DisconnectTimeout)
-		defer cancel()
-
-		err := srv.Close(cleanupCtx)
+		//nolint:contextcheck // Cleanup must outlive shutdown cancellation while retaining context values.
+		err := util.CtxWithTimeout(context.WithoutCancel(ctx), config.DisconnectTimeout, srv.Close)
 		if err != nil {
 			log.New("server").Error(err, "Close server")
 		}

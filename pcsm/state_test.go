@@ -475,7 +475,7 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 				onStateChanged: func(State) {},
 			}
 			if tt.unreachableSource {
-				p.source = unreachableSource(t)
+				p.source = unreachableSource(t.Context(), t)
 			}
 
 			err := p.Finalize(context.Background())

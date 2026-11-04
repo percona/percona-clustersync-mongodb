@@ -356,6 +356,17 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		finalizeStatus = &FinalizeStatus{Completed: true}
 	}
 
+	cloneStatus := cln.Status()
+	interruptedClone := cp.State == StateRunning && cloneStatus.IsRunning()
+	execCtx := parent
+	var execution *execHandle
+	if cp.State == StateRunning && !interruptedClone {
+		execCtx, execution, err = p.admitExecution(parent, &p.runExec)
+		if err != nil {
+			return err
+		}
+	}
+
 	p.nsInclude = cp.NSInclude
 	p.targetWriteConcern = fmt.Sprint(wc.W)
 	p.nsExclude = cp.NSExclude
@@ -375,8 +386,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		// The initial clone is not resumable. If it was interrupted mid-flight
 		// (started but not finished), fail with a clear reason. Recovery is a
 		// fresh /start, which re-clones from scratch.
-		cloneStatus := cln.Status()
-		if cloneStatus.IsRunning() {
+		if interruptedClone {
 			err := errors.New(
 				"initial clone interrupted by failover and is not resumable; " +
 					"start a new run to re-clone from scratch",
@@ -394,7 +404,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		// run(), not doResume: it handles both a checkpoint persisted at /start
 		// time (repl not yet started) and one persisted after. doResume would
 		// reject the not-yet-started case.
-		p.startRun(parent)
+		p.startRun(execCtx, execution)
 		go p.onStateChanged(StateRunning)
 	}
 
@@ -568,6 +578,11 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	replOptions := options.Repl
 	replOptions.WriteConcern = wc
 
+	execCtx, execution, err := p.admitExecution(parent, &p.runExec)
+	if err != nil {
+		return err
+	}
+
 	p.err = nil
 	p.targetWriteConcern = fmt.Sprint(wc.W)
 
@@ -584,7 +599,7 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.finalizeStatus = nil
 	p.state = StateRunning
 
-	p.startRun(parent)
+	p.startRun(execCtx, execution)
 
 	// Persist idle->running immediately: a crash before the first periodic
 	// checkpoint would otherwise leave no recovery data to resume from.
@@ -645,22 +660,36 @@ func (p *PCSM) executionParent(ctx context.Context) (context.Context, error) {
 	return epoch, nil
 }
 
-// startRun registers ownership before launching the goroutine. The caller holds
-// p.lock and has joined any previous run through lockAfterRun. The run derives
-// from parent, so canceling the epoch ends it; its handle is published before
-// launch and cleared only by its own generation.
-func (p *PCSM) startRun(parent context.Context) {
-	done := make(chan struct{})
-	p.runDone = done
+// admitExecution checks the epoch and publishes ownership atomically with
+// Stop's handle read. The caller holds p.lock and must launch the execution
+// after preparing its state, with no fallible work left after admission.
+// Stop can cancel and join this handle even before its goroutine is launched.
+func (p *PCSM) admitExecution(
+	parent context.Context,
+	slot **execHandle,
+) (context.Context, *execHandle, error) {
+	p.execMu.Lock()
+	defer p.execMu.Unlock()
+
+	if parent.Err() != nil {
+		return nil, nil, ErrNotActive
+	}
 
 	execCtx, cancel := context.WithCancel(parent)
+	execution := &execHandle{cancel: cancel, done: make(chan struct{})}
+	*slot = execution
 
-	p.execMu.Lock()
-	p.runExec = &execHandle{cancel: cancel, done: done}
-	p.execMu.Unlock()
+	return execCtx, execution, nil
+}
+
+// startRun launches an admitted execution after the caller prepared its state.
+// The caller holds p.lock and has joined any previous run through lockAfterRun.
+func (p *PCSM) startRun(execCtx context.Context, execution *execHandle) {
+	done := execution.done
+	p.runDone = done
 
 	go func() {
-		defer cancel()
+		defer execution.cancel()
 
 		p.run(execCtx)
 
@@ -1035,10 +1064,15 @@ func (p *PCSM) doResume(parent context.Context, fromFailure bool) error {
 		return errors.New("cannot resume: replication is not paused or not resuming from failure")
 	}
 
+	execCtx, execution, err := p.admitExecution(parent, &p.runExec)
+	if err != nil {
+		return err
+	}
+
 	p.state = StateRunning
 	p.resetError()
 
-	p.startRun(parent)
+	p.startRun(execCtx, execution)
 	go p.onStateChanged(StateRunning)
 
 	return nil
@@ -1137,9 +1171,8 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 	} else {
 		lg.Info("Starting Finalization")
 	}
-	p.startFinalize(parent, lg)
 
-	return nil
+	return p.startFinalize(parent, lg)
 }
 
 // checkFinalizePreconditions reports why the pipeline cannot start finalization.
@@ -1167,7 +1200,12 @@ func checkFinalizePreconditions(status *Status) error {
 // parent. The caller must hold p.lock. A finalizer ended by cancellation did
 // not finish: Completed stays false and the state stays finalizing, so an
 // explicit /finalize after a promotion runs it again.
-func (p *PCSM) startFinalize(parent context.Context, lg log.Logger) {
+func (p *PCSM) startFinalize(parent context.Context, lg log.Logger) error {
+	execCtx, execution, err := p.admitExecution(parent, &p.finalizeExec)
+	if err != nil {
+		return err
+	}
+
 	p.finalizeStatus = &FinalizeStatus{StartedAt: time.Now()}
 	p.finalizeActive = true
 	p.state = StateFinalizing
@@ -1177,16 +1215,11 @@ func (p *PCSM) startFinalize(parent context.Context, lg log.Logger) {
 		finalizer = p.catalog
 	}
 
-	execCtx, cancel := context.WithCancel(parent)
-	done := make(chan struct{})
-
-	p.execMu.Lock()
-	p.finalizeExec = &execHandle{cancel: cancel, done: done}
-	p.execMu.Unlock()
+	done := execution.done
 
 	go func() {
 		defer func() {
-			cancel()
+			execution.cancel()
 
 			p.execMu.Lock()
 			if p.finalizeExec != nil && p.finalizeExec.done == done {
@@ -1226,4 +1259,6 @@ func (p *PCSM) startFinalize(parent context.Context, lg log.Logger) {
 	lg.Info("Finalizing")
 
 	go p.onStateChanged(StateFinalizing)
+
+	return nil
 }
