@@ -70,8 +70,9 @@ func (e InvalidVersionError) Error() string {
 	return "invalid version: " + e.value
 }
 
-// parseServerVersion parse buildInfo version into ServerVersion.
-// accaptable pattern: MAJOR.MINOR.PATCH[-BUILD].
+// parseServerVersion parses buildInfo version into ServerVersion.
+// Acceptable pattern: MAJOR.MINOR.PATCH[-BUILD].
+// If BUILD cannot be parsed as a uint8, the suffix is discarded.
 func parseServerVersion(s string) (ServerVersion, error) {
 	var version ServerVersion
 
@@ -97,11 +98,9 @@ func parseServerVersion(s string) (ServerVersion, error) {
 
 	if hasBuildVersion {
 		n, err := strconv.Atoi(build)
-		if err != nil || n < 0 || n > math.MaxUint8 {
-			return version, InvalidVersionError{s}
+		if err == nil && n >= 0 && n <= math.MaxUint8 {
+			version[3] = uint8(n)
 		}
-
-		version[3] = uint8(n)
 	}
 
 	return version, nil

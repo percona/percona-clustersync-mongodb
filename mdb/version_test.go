@@ -95,15 +95,6 @@ func TestServerVersion(t *testing.T) {
 		assert(parseServerVersion("8.0.-2"))
 		assert(parseServerVersion("8.0.a-2"))
 	})
-
-	t.Run("invalid build", func(t *testing.T) {
-		t.Parallel()
-
-		assert := assertAs(t, &InvalidVersionError{})
-		assert(parseServerVersion("8.0.0-"))
-		assert(parseServerVersion("8.0.0-"))
-		assert(parseServerVersion("8.0.0-a"))
-	})
 }
 
 func TestCheckVersionCompat(t *testing.T) {
@@ -186,5 +177,59 @@ func assertAs(t *testing.T, expected any) func(any, error) {
 		t.Helper()
 
 		require.ErrorAs(t, err, expected)
+	}
+}
+
+func TestServerVersionBuildFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  ServerVersion
+	}{
+		{name: "numeric build", input: "8.0.4-2", want: ServerVersion{8, 0, 4, 2}},
+		{name: "no build", input: "8.0.4", want: ServerVersion{8, 0, 4}},
+		{name: "empty build", input: "8.0.4-", want: ServerVersion{8, 0, 4}},
+		{name: "arbitrary build", input: "8.0.4-custom", want: ServerVersion{8, 0, 4}},
+		{name: "custom numeric build", input: "8.0.4-2-custom", want: ServerVersion{8, 0, 4}},
+		{name: "overflow build", input: "8.0.4-256", want: ServerVersion{8, 0, 4}},
+		{name: "negative build", input: "8.0.4--1", want: ServerVersion{8, 0, 4}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			version, err := parseServerVersion(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, version)
+			assert.Equal(t, tt.want.Build(), version.Build())
+			assert.Equal(t, tt.want.IsPSMDB(), version.IsPSMDB())
+			assert.Equal(t, tt.want.String(), version.String())
+		})
+	}
+}
+
+func TestServerVersionInvalidCore(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"",
+		"8.0",
+		"8..4-custom",
+		"8.a.4-custom",
+		"8.0.x-custom",
+		"256.0.4-custom",
+		"8.256.4-custom",
+		"8.0.256-custom",
+		"8.0.4.1-custom",
+	} {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseServerVersion(input)
+			var invalidVersion InvalidVersionError
+			require.ErrorAs(t, err, &invalidVersion)
+		})
 	}
 }
