@@ -72,6 +72,11 @@ func TestStart_FailsFromInvalidState(t *testing.T) {
 			errorContains: "already running",
 		},
 		{
+			name:          "fails from pausing state",
+			initialState:  StatePausing,
+			errorContains: "already running",
+		},
+		{
 			name:          "fails from paused state",
 			initialState:  StatePaused,
 			errorContains: "paused",
@@ -147,12 +152,13 @@ func TestPause_Success(t *testing.T) {
 	err := p.Pause(context.Background())
 
 	require.NoError(t, err)
-	assert.Equal(t, State(StatePaused), p.state, "state should transition to paused")
+	assert.Equal(t, State(StatePausing), p.state, "acceptance must not certify completed pause")
+	require.NoError(t, p.Pause(context.Background()), "duplicate pending pause is accepted")
 
 	// Wait for goroutine to call onStateChanged
 	select {
 	case newState := <-stateChangeCh:
-		assert.Equal(t, State(StatePaused), newState, "onStateChanged should be called with StatePaused")
+		assert.Equal(t, State(StatePausing), newState)
 	case <-time.After(100 * time.Millisecond):
 		t.Error("onStateChanged was not called within timeout")
 	}
@@ -394,6 +400,11 @@ func TestFinalize_FailsFromInvalidState(t *testing.T) {
 		unreachableSource bool
 		errorContains     string
 	}{
+		{
+			name:          "fails from idle state",
+			initialState:  StateIdle,
+			errorContains: "clone is not completed",
+		},
 		{
 			name:         "fails from failed state",
 			initialState: StateFailed,

@@ -72,6 +72,41 @@ func TestCheckpoint(t *testing.T) {
 		assert.Equal(t, State(StatePaused), cp.State)
 	})
 
+	t.Run("pending pause keeps legacy recovery intent and failure priority", func(t *testing.T) {
+		t.Parallel()
+		for _, cause := range []string{"", "final drain write failed"} {
+			t.Run(cause, func(t *testing.T) {
+				t.Parallel()
+				r := &mockReplicator{checkpoint: &repl.Checkpoint{
+					StartTime: time.Unix(1, 0), Error: cause,
+					CheckpointOpTime: bson.Timestamp{T: 7, I: 3},
+				}}
+				p := &PCSM{
+					state: StatePausing, repl: r, clone: finishedLifecycleCloner(),
+					catalog:        catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
+					onStateChanged: func(State) {},
+				}
+				data, err := p.Checkpoint(t.Context())
+				require.NoError(t, err)
+				var cp checkpoint
+				require.NoError(t, bson.Unmarshal(data, &cp))
+				if cause == "" {
+					require.Equal(t, State(StatePaused), cp.State)
+					require.Empty(t, cp.Error)
+					p.state = StatePaused
+					legacy, err := p.Checkpoint(t.Context())
+					require.NoError(t, err)
+					require.Equal(t, legacy, data, "pending pause must add no checkpoint fields")
+				} else {
+					require.Equal(t, State(StateFailed), cp.State)
+					require.Contains(t, cp.Error, cause)
+				}
+
+				require.Equal(t, bson.Timestamp{T: 7, I: 3}, cp.Repl.CheckpointOpTime)
+			})
+		}
+	})
+
 	t.Run("includes namespace filters", func(t *testing.T) {
 		t.Parallel()
 
@@ -189,6 +224,7 @@ func TestRecover_QuiescentPipeline(t *testing.T) {
 		repl           Replicator
 	}{
 		{name: "fails when running", state: StateRunning},
+		{name: "fails when pausing without a settled execution", state: StatePausing},
 		{name: "fails when finalizing with a live finalizer", state: StateFinalizing, finalizeActive: true},
 		{
 			name:  "fails when paused and still pausing",
@@ -532,6 +568,50 @@ func TestSetOnStateChanged(t *testing.T) {
 	})
 }
 
+func TestStatus_ReportsComponentFailureBeforeRunStops(t *testing.T) {
+	t.Parallel()
+
+	cause := errors.New("component failed while stopping")
+	for _, tt := range []struct {
+		name     string
+		state    State
+		cloneErr error
+		replErr  error
+		wantErr  string
+	}{
+		{
+			name: "clone failure", state: StateRunning, cloneErr: cause,
+			wantErr: "clone: component failed while stopping",
+		},
+		{
+			name: "replication failure", state: StateRunning, replErr: cause,
+			wantErr: "change replication: component failed while stopping",
+		},
+		{
+			name: "pause drain failure", state: StatePausing, replErr: cause,
+			wantErr: "change replication: component failed while stopping",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &PCSM{
+				source:  unreachableSource(t),
+				state:   tt.state,
+				clone:   &mockCloner{status: clone.Status{Err: tt.cloneErr}},
+				repl:    &mockReplicator{err: tt.replErr},
+				runDone: make(chan struct{}),
+			}
+
+			status := p.Status(t.Context())
+
+			require.ErrorIs(t, status.Error, cause)
+			require.EqualError(t, status.Error, tt.wantErr)
+			assert.Equal(t, State(StateFailed), status.State)
+		})
+	}
+}
+
 func TestStatus(t *testing.T) {
 	t.Parallel()
 
@@ -631,7 +711,7 @@ func TestStatus(t *testing.T) {
 		status := p.Status(context.Background())
 
 		require.Error(t, status.Error)
-		assert.Contains(t, status.Error.Error(), "Change Replication")
+		assert.Contains(t, status.Error.Error(), "change replication")
 		assert.Contains(t, status.Error.Error(), "repl error")
 	})
 
@@ -651,7 +731,7 @@ func TestStatus(t *testing.T) {
 		status := p.Status(context.Background())
 
 		require.Error(t, status.Error)
-		assert.Contains(t, status.Error.Error(), "Clone")
+		assert.Contains(t, status.Error.Error(), "clone")
 		assert.Contains(t, status.Error.Error(), "clone error")
 	})
 

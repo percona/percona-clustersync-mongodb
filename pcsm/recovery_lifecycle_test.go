@@ -19,14 +19,18 @@ import (
 type drainingReplicator struct {
 	mockReplicator
 
-	resumed      atomic.Bool
-	pausing      atomic.Bool
-	settled      atomic.Bool
-	tailCaptured atomic.Bool
-	doneObserved chan struct{}
-	tailObserved chan struct{}
-	releaseTail  chan struct{}
-	drainError   error
+	resumed         atomic.Bool
+	pausing         atomic.Bool
+	settled         atomic.Bool
+	tailCaptured    atomic.Bool
+	failureReported atomic.Bool
+	lastOp          atomic.Uint32
+	doneObserved    chan struct{}
+	observeDone     sync.Once
+	tailObserved    chan struct{}
+	releaseTail     chan struct{}
+	drainError      error
+	failOnPause     bool
 }
 
 func (r *drainingReplicator) Resume(ctx context.Context) error {
@@ -36,13 +40,21 @@ func (r *drainingReplicator) Resume(ctx context.Context) error {
 }
 
 func (r *drainingReplicator) Pause(context.Context) error {
+	if r.failOnPause {
+		r.failureReported.Store(true)
+	}
+	if r.failureReported.Load() {
+		r.pausing.Store(true)
+
+		return errors.New("already pausing")
+	}
 	r.pausing.Store(true)
 
 	return nil
 }
 
 func (r *drainingReplicator) Done() <-chan struct{} {
-	close(r.doneObserved)
+	r.observeDone.Do(func() { close(r.doneObserved) })
 
 	return r.doneCh
 }
@@ -50,8 +62,11 @@ func (r *drainingReplicator) Done() <-chan struct{} {
 func (r *drainingReplicator) Status() repl.Status {
 	status := repl.Status{
 		StartTime:            time.Unix(1, 0),
-		LastReplicatedOpTime: bson.Timestamp{T: 1},
+		LastReplicatedOpTime: bson.Timestamp{T: max(1, r.lastOp.Load())},
 		Pausing:              r.pausing.Load(),
+	}
+	if r.failureReported.Load() {
+		status.Err = r.drainError
 	}
 	if r.settled.Load() {
 		status.PauseTime = time.Unix(2, 0)
@@ -119,7 +134,7 @@ func TestRecoverCancellationPreservesPreviousRun(t *testing.T) {
 		// Then: cancellation neither replaces components nor abandons ownership.
 		p.lock.Lock()
 		require.Same(t, old, p.repl)
-		require.Equal(t, State(StatePaused), p.state)
+		require.Equal(t, State(StatePausing), p.state)
 		p.lock.Unlock()
 		release()
 		synctest.Wait()

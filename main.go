@@ -1009,6 +1009,8 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		res.Info = "Initial Sync: Replicating Changes"
 	case status.State == pcsm.StateRunning:
 		res.Info = "Replicating Changes"
+	case status.State == pcsm.StatePausing:
+		res.Info = "Pausing Change Replication"
 	case status.State == pcsm.StateFinalizing:
 		res.Info = "Finalizing"
 	case status.State == pcsm.StateFinalized:

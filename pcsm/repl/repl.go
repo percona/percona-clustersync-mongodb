@@ -480,7 +480,9 @@ func (r *Repl) setFailed(err error, msg string) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	r.err = err
+	if r.err == nil {
+		r.err = err
+	}
 
 	log.New("repl").Error(err, msg)
 
@@ -758,33 +760,7 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 		// Join the watch so no change-stream read or setFailed outlives Done.
 		<-watchDone
 
-		r.lock.Lock()
-		r.eventsApplied += r.pool.TotalEventsApplied()
-
-		// With a canceled run ctx the pool abandons its bulks; with a live one
-		// (operator pause) it drains. Either way the floor below is inclusive.
-		r.pool.Stop()
-		r.advanceCheckpoint(r.pool.Checkpoint())
-
-		r.pool = nil
-
-		// Clear the movePrimary-invalidate expectation so arming never leaks
-		// past the run that set it.
-		r.expectMovePrimaryInvalidate = false
-
-		// The run is the sole publisher of its terminal state: a graceful
-		// pause, a cancellation and a failure all end here, so nothing can
-		// mark a later resumed run as paused.
-		r.pauseTime = time.Now()
-		r.pausing = false
-		optime := r.lastReplicatedOpTime
-		r.lock.Unlock()
-
-		log.New("repl").
-			With(log.OpTime(optime.T, optime.I)).
-			Info("Change Replication paused")
-
-		close(r.doneCh)
+		r.stopRun(ctx, pool)
 	}()
 
 	changeEventCh := make(chan *ChangeEvent, r.options.EventQueueSize)
@@ -835,10 +811,8 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 				return
 			}
 		case err := <-r.pool.Err():
-			// A worker error caused by run cancellation is not a failure.
-			if ctx.Err() == nil {
-				r.setFailed(err, "Worker error")
-			}
+			// Workers report actual failures only, never abandonment.
+			r.setFailed(err, "Worker error")
 
 			return
 		case <-ctx.Done():
@@ -914,6 +888,40 @@ func (r *Repl) run(ctx context.Context, opts *options.ChangeStreamOptionsBuilder
 			lastRoutedTS = bson.Timestamp{} // barrier flushed everything
 		}
 	}
+}
+
+// stopRun settles the run after its watch and progress tracker have joined.
+// Leave the pool visible while Stop drains so status and checkpoints can read
+// live counters without waiting for target writes.
+func (r *Repl) stopRun(ctx context.Context, pool *workerPool) {
+	err := pool.Stop(ctx)
+
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	r.eventsApplied += pool.TotalEventsApplied()
+	r.advanceCheckpoint(pool.Checkpoint())
+	r.pool = nil
+	if r.err == nil && err != nil {
+		r.err = err
+		log.New("repl").Error(err, "Stop change replication")
+	}
+
+	r.expectMovePrimaryInvalidate = false
+	r.pauseTime = time.Now()
+	r.pausing = false
+
+	lg := log.New("repl").With(log.OpTime(r.lastReplicatedOpTime.T, r.lastReplicatedOpTime.I))
+	switch {
+	case r.err != nil:
+		lg.Debug("Change Replication stopped after failure")
+	case ctx.Err() != nil:
+		lg.Debug("Change Replication stopped after cancellation")
+	default:
+		lg.Info("Change Replication paused")
+	}
+
+	close(r.doneCh)
 }
 
 // applyDDL applies a DDL change behind a worker barrier: every routed DML is

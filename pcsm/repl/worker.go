@@ -71,6 +71,7 @@ type worker struct {
 	pendingBulkCh    chan *pendingBulk // buffered queue of sealed bulks for the writer goroutine
 	writerDone       chan struct{}     // closed when the writer goroutine exits
 	writerErr        error             // set by runWriter on failure, read after <-writerDone
+	writerAbandoned  bool              // writerErr describes run cancellation, not a recorded failure
 
 	// Factory for creating fresh bulkWriters after each enqueueBulk/restart.
 	bulkQueueSize int
@@ -153,6 +154,7 @@ func (w *worker) runWriter(ctx context.Context) {
 
 	for pb := range w.pendingBulkCh {
 		if ctx.Err() != nil {
+			w.writerAbandoned = true
 			w.writerErr = errors.Wrap(ctx.Err(), "bulk write abandoned")
 
 			return
@@ -162,7 +164,10 @@ func (w *worker) runWriter(ctx context.Context) {
 
 		size, err := pb.writer.Do(ctx, w.target)
 		if err != nil {
+			// Bulk-write exceptions may not retain the context error. Once
+			// this run is canceled, a returning write is abandonment.
 			if ctx.Err() != nil {
+				w.writerAbandoned = true
 				w.writerErr = errors.Wrap(ctx.Err(), "bulk write abandoned")
 
 				return
@@ -207,6 +212,7 @@ func (w *worker) stopWriter() {
 // goroutine. Called after a barrier+resume cycle to resume async writing.
 func (w *worker) restartWriter(ctx context.Context) {
 	w.writerErr = nil
+	w.writerAbandoned = false
 	w.pendingBulkCh = make(chan *pendingBulk, w.bulkQueueSize)
 	w.writerDone = make(chan struct{})
 	w.currentBulkWrite = w.newBulkWriter()
@@ -380,6 +386,17 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 
 // reportError sends an error to the error channel (non-blocking).
 func (w *worker) reportError(err error) {
+	// Overflow preflight can observe writerDone and wrap its abandonment
+	// error. Read writer state only after joining it, and keep real parse
+	// errors observable even when the writer was canceled meanwhile.
+	select {
+	case <-w.writerDone:
+		if w.writerAbandoned && errors.Is(err, w.writerErr) {
+			return
+		}
+	default:
+	}
+
 	select {
 	case w.errCh <- err:
 	default:
@@ -735,24 +752,40 @@ func (p *workerPool) TotalEventsApplied() int64 {
 	return total
 }
 
-// Stop gracefully shuts down all workers.
-func (p *workerPool) Stop() {
+// Stop joins all workers and returns recorded failures, including failures first
+// raised by the final barrier. Cancellation abandonment is not a worker failure.
+func (p *workerPool) Stop(ctx context.Context) error {
 	// Flush all workers via barrier before canceling context.
-	// Errors are best-effort — we're shutting down.
-	_ = p.Barrier()
+	barrierErr := p.Barrier()
+	abandoned := ctx.Err() != nil
 
 	p.cancel()
-
-	// Close all worker event channels to signal them to exit
-	for _, w := range p.workers {
-		close(w.routedEventCh)
-	}
 
 	p.ReleaseBarrier()
 
 	p.wg.Wait()
 
 	log.New("repl:pool").Debug("Worker pool stopped")
+
+	// The dispatcher may already have consumed an earlier failure. Preserve
+	// whichever recorded cause remains, preferring it to a generic dead worker.
+	select {
+	case err := <-p.errCh:
+		return errors.Wrap(err, "stop worker pool")
+	default:
+	}
+
+	for _, w := range p.workers {
+		if w.writerErr != nil && !w.writerAbandoned {
+			return errors.Wrap(w.writerErr, "stop worker pool")
+		}
+	}
+
+	if abandoned {
+		barrierErr = nil
+	}
+
+	return errors.Wrap(barrierErr, "stop worker pool")
 }
 
 // Err returns the error channel for receiving worker errors.
