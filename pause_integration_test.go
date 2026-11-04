@@ -140,6 +140,10 @@ func TestPauseHTTPReportsDrainingUntilTargetWriteCompletes(t *testing.T) {
 		require.Equal(t, pcsm.State(pcsm.StatePausing), status.State)
 		require.True(t, request(http.MethodPost, "/pause").Ok, "a pending pause is idempotent")
 
+		start := request(http.MethodPost, "/start")
+		require.False(t, start.Ok)
+		require.Contains(t, start.Err, "already running")
+
 		// The HTTP deadline bounds an early resume, not the accepted pause.
 		// This deliberately tests the deadline itself; no sleep orders the run.
 		resume := request(http.MethodPost, "/resume")
