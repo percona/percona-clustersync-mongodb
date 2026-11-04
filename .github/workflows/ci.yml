@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        psmdb: ["6.0.29-23", "7.0.40-22", "8.0.29-13"]
+        psmdb: ["6.0", "7.0", "8.0", "8.3"]
         shard: [0, 1, 2, 3, 4]
     env:
       PCSM_BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.event.inputs.pcsm_branch || 'main' }}
