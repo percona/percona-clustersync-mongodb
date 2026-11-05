@@ -16,6 +16,9 @@ Score 6 (code ratio 2, Go package 2, 21 exports 2; 2 files, 27 symbols, 7 import
 | Report HA state | `metrics.go:SetHARoleAndTerm`, `SetHAInfo` | Role/term gauges and identity metadata |
 | Update dashboard consumers | `../hack/metrics/grafana-board.json` | Shipped visualization of metric names |
 
+Read [HA monitoring](../ha/README.md#monitoring) before changing HA collectors
+or dashboard behavior.
+
 ## CONVENTIONS
 
 - Application metric namespace is `percona_clustersync_mongodb`.
@@ -28,8 +31,7 @@ Score 6 (code ratio 2, Go package 2, 21 exports 2; 2 files, 27 symbols, 7 import
 - Worker applied-event counters are separate from the aggregate applied counter; do not substitute queue depth or flush batch size for completed operations.
 - `ha_active` is 1 or 0; `ha_info` publishes a constant 1 with identity labels.
 - `SetHARoleAndTerm` updates gauges; transition counting is a separate caller action (`ha.Membership.SetRole`). `SetHAInfo` is called once in root `createServer`.
-- Dashboard replication/clone panels append `and on(instance) (percona_clustersync_mongodb_ha_active == 1)` to hide frozen gauges of a demoted former ACTIVE. Rate panels keep per-instance series instead of summing.
-- The High Availability row has Instance Roles (per-scrape timeline), Lease Term (ACTIVE-only `max`), and Role Transitions (`increase` over range; 3+ means flapping). Capacity lines are fixed thresholds, not runtime queue sizes.
+- Preserve ACTIVE filtering and per-instance rate identity when changing dashboard queries; their operational meaning lives in the HA reference.
 
 ## ANTI-PATTERNS
 

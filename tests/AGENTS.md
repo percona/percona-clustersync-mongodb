@@ -17,6 +17,9 @@ Score 5 (26 files 3, code ratio 2; Python, so symbol/export counts unmeasured; n
 | Add opt-in slow coverage | `test_slow.py` | Requires `--runslow` |
 | Work on Go benchmarks | `perf_test.go` | Separate from pytest discovery; uses MongoDB helpers |
 
+Setup, environment/CLI precedence, and CI selection:
+[CONTRIBUTING.md](../CONTRIBUTING.md#python-e2e-tests).
+
 ## CONVENTIONS
 
 - Required connection inputs are `TEST_SOURCE_URI`, `TEST_TARGET_URI`, and `TEST_PCSM_URL`; pytest options override env values.
@@ -29,8 +32,7 @@ Score 5 (26 files 3, code ratio 2; Python, so symbol/export counts unmeasured; n
 - Indirectly parametrize `managed_pcsm_args` with a list of server args to restart the suite-owned process for one test; teardown restores defaults. Requires `TEST_PCSM_BIN` or `--pcsm-bin`.
 - `test_ha.py` is marked slow and needs `--runslow`; its group fixture also requires a PCSM binary.
 - `test_hack_clis.py` overrides the autouse database-drop fixture.
-- Unqualified local `pytest` discovers all of `tests/` (sharded modules included) and differs from CI scope (`.github/workflows/e2etests.yml`). RS jobs run an explicit eight-file list. Sharded jobs run everything except one RS-only deselection. The 8.0 3v2-shard entry runs only `test_presplit_sharded.py`.
-- After a Python version change, Poetry can fail with `bad interpreter`; call `.venv/bin/pytest` directly.
+- Keep CI scope in the contributing guide aligned with `.github/workflows/e2etests.yml` when test selection changes.
 - `perf_test.go` benchmarks: `go test -run='^$' -bench=. -benchmem ./tests/`; `TEST_TARGET_URI` is required and copy benchmarks also need `TEST_SOURCE_URI`.
 
 ## ANTI-PATTERNS

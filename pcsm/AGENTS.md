@@ -30,14 +30,14 @@ Score 8 (code ratio 2, Go package 2, 43 top-level symbols 2, 21 exports 2; 12 fi
 - `lifecycleCtx` is the deliberate `containedctx` exception for background pipeline ownership.
 - Lock order is `lock -> execMu`; `execMu` guards execution handles only.
 
-## STATE MACHINE
+## LIFECYCLE CONTRACTS
 
-`idle -> running -> pausing -> paused -> running` (resume); `running -> finalizing -> finalized`; any execution error -> `failed`. Constants: `pcsm.go` `State*`.
+Read [states and status](../README.md#states-and-status) before changing `State*`,
+and [pause/finalize deadlines](../README.md#pausing-replication) before changing
+request completion. For tenure cancellation and recovery, read [HA](../ha/README.md).
 
-- `Pause` publishes `pausing` on acceptance and `paused` only after the run and monitors stop; a drain failure becomes `failed`. `Checkpoint` persists a pending `pausing` as `paused`.
-- `Finalize` requires clone completion, started replication, and completed initial sync (`initialSync.completed`, not `cloneCompleted`); from `running` it pauses and joins the captured run before catalog finalization. HTTP timeout semantics: `README.md#pausing-replication`.
-- `finalized` excludes source writes made after pause; a new `Start` returns to `running`. Recovered finalized state keeps completion but not timestamps or unsuccessful-index reports.
-- `failed` resumes only through `ResumeOptions` from-failure for eligible replication-phase failures; an interrupted clone needs a new `Start`.
+- `Checkpoint` persists a pending `pausing` as `paused`; HTTP status must keep reporting the live drain.
+- `Finalize` joins the captured run outside the lifecycle lock and rechecks the execution before scheduling catalog work.
 - Non-majority target data write concern is stored in the checkpoint and restored into clone/repl options; checkpoints, HA, and DDL stay majority.
 
 ## ANTI-PATTERNS
