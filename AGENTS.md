@@ -27,42 +27,42 @@ Percona ClusterSync for MongoDB (PCSM): Go service for initial clone plus contin
 
 Deeper guidance owns local invariants; read it before changing that domain.
 
-| Task | Location | Notes |
-| --- | --- | --- |
-| CLI, HTTP routing, startup | `main.go` | `startRequest` defines `/start` body |
-| Checkpoint fencing, tenures | `recovery.go`, `tenure.go`; `ha/AGENTS.md` | Contract summary in NOTES |
-| Flags, env bindings, defaults | `config/AGENTS.md` | Hidden/deprecated flags there |
-| Lease, membership, failure timing | `ha/AGENTS.md` | |
-| Driver policy, retry, compat | `mdb/AGENTS.md` | |
-| States, pause/finalize, recovery | `pcsm/AGENTS.md` | Includes `pausing` |
-| Target collections, indexes | `pcsm/catalog/AGENTS.md` | |
-| Initial copy, presplit | `pcsm/clone/AGENTS.md` | |
-| Ordered replay, frontier | `pcsm/repl/AGENTS.md` | |
-| Logging | `log/AGENTS.md` | |
-| Metrics, Grafana panels | `metrics/AGENTS.md` | |
-| Hosts, topologies, cleanup, HA drill | `hack/AGENTS.md` | |
-| E2E fixtures, CI vs local scope | `tests/AGENTS.md` | |
-| CI, packaging | `.github/workflows/{go,e2etests,ci}.yml`, `packaging/` | No child guide |
+| Task                                 | Location                                               | Notes                                |
+| ------------------------------------ | ------------------------------------------------------ | ------------------------------------ |
+| CLI, HTTP routing, startup           | `main.go`                                              | `startRequest` defines `/start` body |
+| Checkpoint fencing, tenures          | `recovery.go`, `tenure.go`; `ha/AGENTS.md`             | Contract summary in NOTES            |
+| Flags, env bindings, defaults        | `config/AGENTS.md`                                     | Hidden/deprecated flags there        |
+| Lease, membership, failure timing    | `ha/AGENTS.md`                                         |                                      |
+| Driver policy, retry, compat         | `mdb/AGENTS.md`                                        |                                      |
+| States, pause/finalize, recovery     | `pcsm/AGENTS.md`                                       | Includes `pausing`                   |
+| Target collections, indexes          | `pcsm/catalog/AGENTS.md`                               |                                      |
+| Initial copy, presplit               | `pcsm/clone/AGENTS.md`                                 |                                      |
+| Ordered replay, frontier             | `pcsm/repl/AGENTS.md`                                  |                                      |
+| Logging                              | `log/AGENTS.md`                                        |                                      |
+| Metrics, Grafana panels              | `metrics/AGENTS.md`                                    |                                      |
+| Hosts, topologies, cleanup, HA drill | `hack/AGENTS.md`                                       |                                      |
+| E2E fixtures, CI vs local scope      | `tests/AGENTS.md`                                      |                                      |
+| CI, packaging                        | `.github/workflows/{go,e2etests,ci}.yml`, `packaging/` | No child guide                       |
 
 ## CODE MAP
 
 Refs unmeasured: reference centrality not measured with LSP/ast-grep.
 
-| Symbol | Type | Location | Refs | Role |
-| --- | --- | --- | --- | --- |
-| `pcsm.PCSM` / `pcsm.New` | struct/func | `pcsm/pcsm.go` | unmeasured | Pipeline, fresh per tenure |
-| `createServer` | func | `main.go` | unmeasured | Connect both sides, version compat, join membership, first lease tick |
-| `runServer` | func | `main.go` | unmeasured | Serves HTTP |
-| `server.Handler` | method | `main.go` | unmeasured | Routes API, `/metrics`, pprof |
-| `server.admit` / `writeNotActive` | method | `main.go` | unmeasured | 409 `not_active` gate |
-| `startRequest` | struct | `main.go` | unmeasured | `/start` body; pointer fields = omitted vs zero |
-| `Restore` | func | `recovery.go` | unmeasured | Claim checkpoint at term, then recover |
-| `RunCheckpointing` / `observeOwnership` | func/method | `recovery.go`, `tenure.go` | unmeasured | Single writer / lifecycle controller |
-| `openTenure` / `endTenure` / `onCheckpointLost` | method | `tenure.go` | unmeasured | ACTIVE epoch; `minTerm = term+1` |
-| `mdb.CheckVersionCompat` | func | `mdb/version.go` | unmeasured | Source major must not exceed target |
-| `Membership.SetRole` | method | `ha/membership.go` | unmeasured | Role/term gauges, transition counter |
-| `errors.Wrap*` | func | `errors/errors.go` | unmeasured | Project error wrapping |
-| `util.CtxWithTimeout` | func | `util/context.go` | unmeasured | Bounded op; nil parent -> Background |
+| Symbol                                          | Type        | Location                   | Refs       | Role                                                                  |
+| ----------------------------------------------- | ----------- | -------------------------- | ---------- | --------------------------------------------------------------------- |
+| `pcsm.PCSM` / `pcsm.New`                        | struct/func | `pcsm/pcsm.go`             | unmeasured | Pipeline, fresh per tenure                                            |
+| `createServer`                                  | func        | `main.go`                  | unmeasured | Connect both sides, version compat, join membership, first lease tick |
+| `runServer`                                     | func        | `main.go`                  | unmeasured | Serves HTTP                                                           |
+| `server.Handler`                                | method      | `main.go`                  | unmeasured | Routes API, `/metrics`, pprof                                         |
+| `server.admit` / `writeNotActive`               | method      | `main.go`                  | unmeasured | 409 `not_active` gate                                                 |
+| `startRequest`                                  | struct      | `main.go`                  | unmeasured | `/start` body; pointer fields = omitted vs zero                       |
+| `Restore`                                       | func        | `recovery.go`              | unmeasured | Claim checkpoint at term, then recover                                |
+| `RunCheckpointing` / `observeOwnership`         | func/method | `recovery.go`, `tenure.go` | unmeasured | Single writer / lifecycle controller                                  |
+| `openTenure` / `endTenure` / `onCheckpointLost` | method      | `tenure.go`                | unmeasured | ACTIVE epoch; `minTerm = term+1`                                      |
+| `mdb.CheckVersionCompat`                        | func        | `mdb/version.go`           | unmeasured | Source major must not exceed target                                   |
+| `Membership.SetRole`                            | method      | `ha/membership.go`         | unmeasured | Role/term gauges, transition counter                                  |
+| `errors.Wrap*`                                  | func        | `errors/errors.go`         | unmeasured | Project error wrapping                                                |
+| `util.CtxWithTimeout`                           | func        | `util/context.go`          | unmeasured | Bounded op; nil parent -> Background                                  |
 
 ## CONVENTIONS
 
@@ -119,3 +119,309 @@ make metrics-up; make metrics-down
 - QA branch: `tests_ver`, then PR-title `PCSM-N` branch in <https://github.com/Percona-QA/psmdb-testing> if it exists, then `main`; push fixes straight to that branch.
 - Jenkins `hetzner-pcsm-functional-tests` (<https://psmdb.cd.percona.com/view/PCSM/>, unverified from repo): Hetzner preferred; retry capacity-stuck builds on AWS.
 - Docs: <https://docs.percona.com/percona-clustersync-for-mongodb/> (source <https://github.com/percona/pcsm-docs>).
+
+## OPERATIONAL REFERENCE
+
+Use these details when running PCSM locally or diagnosing CI. Generated material above remains the navigation layer; current-source contracts below supersede shorter summaries where they are more precise.
+
+### Local Environment
+
+Add Docker-advertised MongoDB names to `/etc/hosts`:
+
+```text
+127.0.0.1 rs00 rs01 rs02 rs10 rs11 rs12
+127.0.0.1 src-rs00 src-rs10 src-rs20 src-cfg0 src-mongos
+127.0.0.1 tgt-rs00 tgt-rs10 tgt-rs20 tgt-cfg0 tgt-mongos
+```
+
+Topology image and shard controls:
+
+| Variable            | Default     | Purpose                                             |
+| ------------------- | ----------- | --------------------------------------------------- |
+| `MONGO_VERSION`     | `8.0.29-13` | Fallback image for both clusters and testcontainers |
+| `SRC_MONGO_VERSION` | unset       | Source-side image override                          |
+| `TGT_MONGO_VERSION` | unset       | Target-side image override                          |
+| `SRC_SHARDS`        | `2`         | Source shard count; maximum 3                       |
+| `TGT_SHARDS`        | `2`         | Target shard count; maximum 3                       |
+
+Per-side image precedence is side override, `MONGO_VERSION`, then `8.0.29-13`. Hidden `PCSM_RECOVERY_CHECKPOINT_INTERVAL` uses 15 seconds for any nonpositive value.
+
+Runtime flag/environment bindings:
+
+| Environment variable                | Flag                                      |
+| ----------------------------------- | ----------------------------------------- |
+| `PCSM_SOURCE_URI`                   | `--source`                                |
+| `PCSM_TARGET_URI`                   | `--target`                                |
+| `PCSM_PORT`                         | `--port` (default 2242)                   |
+| `PCSM_LISTEN_HOST`                  | `--listen-host`                           |
+| `PCSM_LOG_LEVEL`                    | `--log-level`                             |
+| `PCSM_HA_LEASE_TTL`                 | `--ha-lease-ttl` (default 10s)            |
+| `PCSM_MONGODB_OPERATION_TIMEOUT`    | `--mongodb-operation-timeout`             |
+| `PCSM_CLONE_SEGMENT_SIZE`           | `--clone-segment-size`                    |
+| `PCSM_CLONE_SKIP_PRESPLIT`          | `--clone-skip-presplit`                   |
+| `PCSM_RECOVERY_CHECKPOINT_INTERVAL` | `--recovery-checkpoint-interval` (hidden) |
+
+Configuration-backed options support `PCSM_*` variables; not every CLI flag does. Namespace filters and `resume --from-failure` are read directly from flags. Config fields and environment bindings live in `config/config.go`; flag declarations, defaults, and command-only options live in `main.go`.
+
+MongoDB compatibility compares major versions only: source major must not exceed target major. There is no runtime version allowlist.
+
+### Cluster Health and Local Server
+
+```bash
+# Sharded
+docker exec src-mongos mongosh --port 27017 --quiet --eval "db.adminCommand('ping')"
+docker exec tgt-mongos mongosh --port 27017 --quiet --eval "db.adminCommand('ping')"
+
+# Replica sets
+docker exec rs00 mongosh --port 30000 --quiet --eval "rs.status().ok"
+docker exec rs10 mongosh --port 30100 --quiet --eval "rs.status().ok"
+```
+
+After starting one topology and building:
+
+```bash
+# Sharded
+./bin/pcsm --source="mongodb://src-mongos:27017" \
+  --target="mongodb://tgt-mongos:29017" --reset-state --log-level=debug
+
+# Replica sets
+./bin/pcsm --source="mongodb://rs00:30000" \
+  --target="mongodb://rs10:30100" --reset-state --log-level=debug
+```
+
+Use these URI pairs exactly. Server startup connects to both clusters, creates the `pcsm.PCSM` pipeline, settles the initial HA role, then starts HTTP. Foreground startup logs `Starting HTTP server at http://localhost:2242`; that line is emitted before successful socket binding and is not by itself a readiness signal.
+
+Use another terminal for lifecycle requests:
+
+```bash
+curl -s -X POST http://localhost:2242/start \
+  -H 'Content-Type: application/json' -d '{}'
+curl -s http://localhost:2242/status | jq .
+until curl -s http://localhost:2242/status | jq -e \
+  '.initialSync.completed == true' >/dev/null; do sleep 1; done
+curl -s -X POST http://localhost:2242/pause \
+  -H 'Content-Type: application/json' -d '{}'
+until curl -s http://localhost:2242/status | jq -e \
+  '.state == "paused"' >/dev/null; do sleep 1; done
+curl -s -X POST http://localhost:2242/finalize \
+  -H 'Content-Type: application/json' -d '{}' | jq -e '.ok'
+until curl -s http://localhost:2242/status | jq -e \
+  '.finalization.completed == true' >/dev/null; do sleep 1; done
+# Stop foreground PCSM, then clean Docker environments.
+```
+
+For the Finalize deadline and retry contract, see `README.md#pausing-replication`.
+
+Manual run order: clean previous Docker environments; start one topology; verify health; build; start foreground PCSM; POST `/start`; wait for initial sync; POST `/pause`; wait for `paused`; POST `/finalize`; wait for finalization; stop PCSM; run `./hack/cleanup.sh`.
+
+### Focused Checks and Code Patterns
+
+```bash
+go test -v -tags integration -run TestName ./pcsm/catalog/...
+.venv/bin/pytest tests/test_documents.py::test_insert_one
+
+./hack/cleanup.sh             # Default order: pcsm-ha, rs, sh, optional sh-ha.
+./hack/cleanup.sh rs
+./hack/cleanup.sh sh
+./hack/cleanup.sh pcsm-ha
+docker ps -a  # Diagnose orphan containers when cleanup does not release ports.
+```
+
+Exercise the binary directly from `./bin` when no automated test covers the changed behavior.
+
+`make lint` runs `golangci-lint run`. `make lint-py` runs Ruff check plus format-check over `tests/` and `hack/`; `make fmt-py` applies Ruff fixes and formatting to those paths. `make clean` removes `bin/*` plus Go build and test caches. `make test-integration` covers catalog, clone, repl, mdb, and ha with the integration tag, uncached runs, and a five-minute timeout.
+
+No-argument cleanup stops HA before cluster environments. Explicit arguments retain caller order, so put `pcsm-ha` before `rs` or `sh`. Cleanup is best-effort and suppresses teardown failures; inspect remaining containers, volumes, and overlapping host port 30000 when `port already allocated` persists.
+
+| Directive          | Accepted use                                                      |
+| ------------------ | ----------------------------------------------------------------- |
+| `wrapcheck`        | Intentionally returning a driver error for caller classification  |
+| `gochecknoglobals` | Build metadata and package-level compressor allowlist             |
+| `err113`           | Project error constructors such as `errors.New` and `Errorf`      |
+| `gosec`            | Bounds-checked integer conversions or a documented false positive |
+
+Keep exceptions narrow and justified as a review convention; `nolintlint` is disabled and does not enforce justifications automatically.
+
+### HA Group Drill
+
+`hack/ha/` builds `pcsm:dev` and runs `pcsm0`, `pcsm1`, and `pcsm2` against an existing topology. Containers join that topology's Docker network and use the same MongoDB hostnames as the host. APIs bind host loopback ports 2242-2244; Prometheus reaches the instances through shared `pcsm-metrics`.
+
+```bash
+./hack/ha/run.sh rs --reset       # Or: ./hack/ha/run.sh sh --reset
+./hack/ha/status-group.sh         # PORT | INSTANCE_ID | HOST | ROLE | STATE | TERM
+./hack/ha/kill-active.sh          # Hard-kill ACTIVE; restart after 5s.
+./hack/ha/kill-active.sh 15       # Override restart delay.
+./hack/ha/kill-active.sh --no-restart
+./hack/ha/status-active.sh        # Full status of observed ACTIVE.
+docker logs -f pcsm0
+./hack/ha/stop.sh
+```
+
+`--reset` stops the old HA group before clearing lease, member, and checkpoint state. Cleanup must stop HA containers before removing their cluster network.
+
+The restarted process gets a new instance ID and rejoins initially as STANDBY, unless it later wins election. A five-second restart does not guarantee that another instance has already taken over because takeover waits for the lease TTL, 10s by default. Host clients can target any published port, for example `./bin/pcsm status --port 2243`.
+
+HA persistence and fencing contracts:
+
+- Exactly one instance owns target lease `percona_clustersync_mongodb.lease`, becomes ACTIVE, and drives replication; other live members are STANDBY and can take over. Per-instance liveness documents live in `percona_clustersync_mongodb.members`.
+- Startup performs one synchronous lease attempt before serving HTTP, so a sole instance becomes ACTIVE without a transient STANDBY API window.
+- Every instance connects to source and target before election. Startup performs version and hello reads; after that, STANDBY source connections carry driver monitoring traffic but no replication reads. Unreachable or incompatible sources fail startup rather than failover, and promotion avoids connection setup latency.
+- Lease terms are monotonic fencing tokens on the checkpoint document, and the only ordering of its writes. A tenure claims the document at its term in `Restore` (creating it when absent) before restoring the snapshot the claim returns, so from then on every write of an older term is rejected: a write a previous tenure left on the wire either landed before the claim, and is what the tenure restored, or lands after it and is fenced. Within a tenure one writer (`RunCheckpointing`) saves snapshots one at a time and stops at the first write it cannot account for, fenced or failed without a settled outcome; the tenure ends with it (`onCheckpointLost`), so no later snapshot of that term is ever written. Snapshots carry no sequence number, and a write never creates the document. The lease loop reports the ownership each attempt established (`ha.Ownership`: held or not, and at which term) to one lifecycle controller in `tenure.go` (`observeOwnership`), which owns the role, the term and the ACTIVE tenure and reconciles against that level rather than consuming transition events. Every ACTIVE tenure builds a fresh `pcsm.PCSM`, restores it from the checkpoint, and owns one epoch context: pipeline executions, the checkpointing loop and the state-change checkpoint derive from it; lifecycle requests are admitted under it once the restore and the deferred `--start` finished (a request that reaches a tenure still restoring waits for that, within its own context, so a client that found a just-promoted ACTIVE is served rather than bounced) and refused with 409 `not_active` otherwise. A tenure ends as a whole on any loss of ownership (lease lost, lease deadline passed, ownership reported at another term) or when its checkpoint writer ends (`onCheckpointLost`): its epoch is canceled, its executions joined and its pipeline discarded, never resumed. The next tenure restores the checkpoint, the same path a restarted process takes; an interrupted clone therefore restores as failed and needs a new `/start`. No two tenures of a process write under one term: a tenure opens only at or above `minTerm` (above every term a tenure of this process ran at); ownership reported below it is raised through the owner-only `AdvanceTerm` and the tenure opens on the next report. Cancellation is containment, not server-side fencing: a command already on the wire at the instant the tenure ends may still apply.
+- The fence assumes terms are never reused, which holds within one reset generation: lease, recovery and member state are reset together (`pcsm reset`, or `--reset-state` at startup) with every instance stopped. A lease-only reset (`pcsm reset lease`, hidden) restarts terms at 1 below a surviving checkpoint's term even with every instance stopped: the next instance opens one tenure per term, each fenced by its claim, advancing one term per two lease reports until it reaches the checkpoint's term; use the full reset instead. Nothing guards a reset under running instances, and nothing is designed to: a running instance's tenure ends on the ownership report at the new term and re-opens above its `minTerm`, another instance that takes the reset lease climbs as above, and a checkpoint write still on the wire from a pre-reset tenure outranks a post-reset claim at a lower term and brings the cleared snapshot back. Treat every reset as a stopped-system procedure, as the reset commands document.
+- The five operational endpoints reject otherwise valid STANDBY requests with HTTP 409 and JSON `error: "not_active"`. Optional envelope fields include the responder's `role` and `group.members[]`, which may locate ACTIVE.
+- `/status` is also ACTIVE-only because a STANDBY has no meaningful pipeline state.
+- The `me`/`role`/`group` envelope appears only when more than one live member is observed. Membership-read failure or degradation to one observed member omits it; a lone instance therefore keeps the pre-HA API byte-for-byte.
+- Group identity is advisory through `--group-name` / `PCSM_GROUP_NAME`. `status-active.sh` and `kill-active.sh` depend on observing the multi-member envelope and can report no ACTIVE when it is omitted.
+
+`--ha-lease-ttl` accepts durations of at least 10s in whole milliseconds. Set the same value on every instance: the owner's value controls both its local deadline and stored expiry.
+
+T denotes the lease TTL. The lease deadline and checkpoint writer run independently; the first deadline or checkpoint-write error ends the tenure. Estimates below are conditional, not guaranteed bounds; an immediate error can end the tenure sooner. Checkpoints run every 15s by default and on state changes, one write at a time.
+
+| Failure                                                                                                                      | T = 10s (default)                                            | T raised                                                                                                                                         | Notes                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No target server selectable (partition, no primary)                                                                          | 7 to 10s, lease deadline                                     | min(T less up to 3s, checkpoint writer: 30 to 45s for a write issued during the outage, up to the operation timeout for one already on the wire) | Driver server selection timeout is 30s and is not configurable in PCSM; raising T beyond about 30s is limited by selection failures.                                                                                                                                                  |
+| Writable primary, majority acknowledgement stalls (secondaries delayed or stopped while the primary keeps its majority view) | 7 to 10s, lease deadline                                     | min(T less up to 3s, operation timeout)                                                                                                          | Lease renewals and heartbeats are majority writes with a 5s HA operation timeout; failed attempts report nothing until the lease deadline. Checkpoints use the client operation timeout (5m by default). If the primary loses its majority and steps down, the preceding row applies. |
+| Majority up, data write concern unsatisfiable (`w:3`, one node down)                                                         | no transition                                                | no transition                                                                                                                                    | Lease and checkpoint writes succeed. Repl bulk writes retry transient errors without bound; status stays `running`. Clone inserts fail after 3 attempts x operation timeout plus 5s and 10s backoffs; the run becomes `failed`.                                                       |
+| ACTIVE process crash                                                                                                         | lease takeable after T from the crashed owner's last renewal | same, longer                                                                                                                                     | Only a non-owner reads stored `expiresAt`. Takeover adds up to 3s of polling, the acquisition RPC and checkpoint restore before requests are admitted. A restarted sole instance has a new ID and remains STANDBY until the old lease expires, up to T.                               |
+
+Reset commands bypass HTTP and connect directly to the target. Version is local:
+
+| Command               | Effect                            |
+| --------------------- | --------------------------------- |
+| `pcsm reset`          | Clear persisted replication state |
+| `pcsm reset recovery` | Clear persisted recovery state    |
+| `pcsm reset members`  | Clear HA membership state         |
+| `pcsm version`        | Print local build metadata        |
+
+Stop every server before running reset commands.
+
+For 0.9-to-0.10 migration, startup rejects a sufficiently recent legacy heartbeat as evidence of a live pre-0.10 instance; stale heartbeat markers are accepted. Stop old servers and run the full reset before upgrading. Do not describe this as universal checkpoint-format rejection: a missing checkpoint term decodes as term zero.
+
+### State and Status Semantics
+
+```text
+idle --start--> running --finalize--> finalizing --> finalized
+                   |  ^
+                   |  `--resume-- paused
+                   `-----error----> failed
+```
+
+| State        | Meaning                                                                                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idle`       | Server is waiting for `/start`                                                                                                                              |
+| `running`    | Clone or change replication is active                                                                                                                       |
+| `paused`     | Replication is paused and can resume                                                                                                                        |
+| `finalizing` | Replication has paused; catalog/index completion is in progress                                                                                             |
+| `finalized`  | Catalog finalization finished; this does not cover source writes made after replication paused. `/start` begins a new run and returns to `running`          |
+| `failed`     | Check logs first. Resume eligible replication-phase failures with `{"fromFailure":true}`; restart an unfinished interrupted clone with `/start` to re-clone |
+
+`/start` accepts optional namespace include/exclude lists, clone tuning, replication tuning, and a bulk-write override. `startRequest` in `main.go` defines the HTTP body and matching CLI flags.
+
+Operational API contract:
+
+| Endpoint         | Method             | Purpose                                                           |
+| ---------------- | ------------------ | ----------------------------------------------------------------- |
+| `/status`        | GET                | Pipeline status                                                   |
+| `/start`         | POST               | Resolve options and start a run                                   |
+| `/pause`         | POST               | Pause running change replication, not an in-flight clone          |
+| `/resume`        | POST               | Resume paused replication or eligible explicit failure recovery   |
+| `/finalize`      | POST               | Initiate asynchronous catalog finalization after initial sync     |
+| `/metrics`       | GET scrape surface | Prometheus metrics on every role                                  |
+| `/debug/pprof/*` | Go handlers        | Profiling/debugging on every role; PCSM delegates method handling |
+
+Wrong-method checks run before HA role checks. A malformed-method request need not return `not_active`.
+
+Status response contract:
+
+| Field                                 | Type   | Meaning                                                                                            |
+| ------------------------------------- | ------ | -------------------------------------------------------------------------------------------------- |
+| `ok`                                  | bool   | Request success                                                                                    |
+| `error`                               | string | Error text when `ok=false`                                                                         |
+| `state`                               | string | Current pipeline state                                                                             |
+| `info`                                | string | Human-readable state detail                                                                        |
+| `lagTimeSeconds`                      | int64  | Logical source-to-target lag                                                                       |
+| `eventsRead`                          | int64  | Change-stream events read, excluding tick events                                                   |
+| `eventsApplied`                       | int64  | Events applied to target                                                                           |
+| `lastReplicatedOpTime.ts`             | string | Reported replication frontier timestamp; ticks may advance it without a real apply                 |
+| `lastReplicatedOpTime.isoDate`        | string | Reported frontier time in RFC3339                                                                  |
+| `initialSync.completed`               | bool   | Clone and catch-up completed                                                                       |
+| `initialSync.cloneCompleted`          | bool   | Bulk clone completed                                                                               |
+| `initialSync.lagTimeSeconds`          | int64  | Initial-sync logical lag                                                                           |
+| `initialSync.estimatedCloneSizeBytes` | uint64 | Estimated clone size                                                                               |
+| `initialSync.clonedSizeBytes`         | uint64 | Bytes cloned                                                                                       |
+| `finalization.completed`              | bool   | Finalize completed successfully                                                                    |
+| `finalization.startedAt`              | time   | Finalize start, when available                                                                     |
+| `finalization.completedAt`            | time   | Finalize completion, when available                                                                |
+| `finalization.unsuccessfulIndexes[]`  | array  | Index reports with namespace, name, failed/incomplete/inconsistent type, optional keys, and reason |
+
+Idle status omits initial-sync, optime, and finalization objects while numeric counters remain zero. Recovered finalized state retains completion but not finalization timestamps or unsuccessful-index reports.
+
+### E2E and Diagnostics
+
+Pytest CLI options override matching environment variables:
+
+| Environment variable | Pytest option  |
+| -------------------- | -------------- |
+| `TEST_SOURCE_URI`    | `--source-uri` |
+| `TEST_TARGET_URI`    | `--target-uri` |
+| `TEST_PCSM_URL`      | `--pcsm_url`   |
+| `TEST_PCSM_BIN`      | `--pcsm-bin`   |
+
+If Poetry fails with `"bad interpreter"` after a Python version change because its interpreter path is stale, invoke `.venv/bin/pytest` directly. Unqualified local pytest discovers the full `tests/` tree, including sharded modules, while skipping slow tests by default. For CI-comparable scope:
+
+- RS runs an explicit eight-file selection (`test_collections`, `test_documents`, `test_indexes`, `test_selective`, `test_transactions`, `test_pipeline_updates`, `test_idle_index_build`, `test_target_outage`).
+- Normal sharded jobs discover broadly with one deselection.
+- The 8.0 unequal-shard matrix entry runs only `tests/test_presplit_sharded.py`.
+
+Live-system tests use default non-system database cleanup; `tests/test_hack_clis.py` overrides it. Existing polling and fixed waits are legacy behavior, not patterns to copy into new async tests.
+
+```bash
+.venv/bin/pytest --runslow
+```
+
+```bash
+hack/change_stream.py -u "mongodb://src-mongos:27017"
+hack/change_stream.py -u "mongodb://tgt-mongos:29017" --show-checkpoints
+hack/change_stream.py -u "mongodb://rs00:30000"
+hack/monitor_writes.py -u "mongodb://src-mongos:27017"
+```
+
+### Metrics and CI Operations
+
+- `make metrics-up` and `hack/ha/run.sh` independently create external `pcsm-metrics`; metrics and HA can therefore start in either order. MongoDB clusters must still start before HA. `make metrics-down` stops monitoring but keeps the network.
+- Bundled Prometheus reaches `pcsm0:2242`, `pcsm1:2243`, and `pcsm2:2244` through Docker DNS. Targets remain down until HA starts. It does not scrape a host PCSM bound to loopback because that listener is unreachable from the Prometheus container.
+- Only ACTIVE drives replication. Replication and clone gauge/rate panels filter with `<metric> and on(instance) (percona_clustersync_mongodb_ha_active == 1)` so frozen gauges from a demoted former ACTIVE do not render. Rate panels retain instance identity rather than summing across instances; historical increments can remain in `rate()` until the window moves past them, after which a demoted instance's rate becomes zero.
+
+Every role exports the HA metrics:
+
+| Metric                                                  | Type    | Meaning                                          |
+| ------------------------------------------------------- | ------- | ------------------------------------------------ |
+| `percona_clustersync_mongodb_ha_active`                 | Gauge   | 1 for ACTIVE, 0 for STANDBY                      |
+| `percona_clustersync_mongodb_ha_term`                   | Gauge   | Current lease term                               |
+| `percona_clustersync_mongodb_ha_role_transitions_total` | Counter | Per-instance role transitions                    |
+| `percona_clustersync_mongodb_ha_info`                   | Gauge   | Constant 1 with `instance_id` and `group` labels |
+
+`ha_info` is published once during startup in `main.go`. Grafana's **High Availability** row contains:
+
+- **Instance Roles**: per-scrape-instance state timeline; this is a scrape-series roster, not a membership-collection query.
+- **Lease Term**: ACTIVE-only `max(...)` stat retaining the last nonnull sample through a brief gap and excluding STANDBY's initial term-zero value.
+- **Role Transitions**: per-instance `increase(...[$__range])`; 0 is stable, 1 is warning, and 3 or more indicates flapping.
+
+Dashboard capacity lines are fixed reference thresholds, not values discovered from runtime queue configuration.
+
+CI workflows and operations:
+
+- `.github/workflows/go.yml` runs race-enabled unit tests, formatter suggestions, golangci-lint, and integration tests for catalog, clone, repl, mdb, and ha across MongoDB 6/7/8.
+- `.github/workflows/e2etests.yml` runs local RS/sharded E2E across the version matrix.
+- `.github/workflows/ci.yml` runs the external functional suite `Percona-QA/psmdb-testing` against PSMDB 6.0, 7.0, and 8.0 in five pytest partitions; this `shard` is test partitioning, not MongoDB shard count.
+- `ci.yml` ignores PR changes confined to `tests/**` and `packaging/**`.
+- `ci.yml` does not run for draft PRs (its job is gated on `github.event.pull_request.draft == false`); it runs when the PR is marked ready for review. For a draft, dispatch it manually: `gh workflow run ci.yml --ref <branch> -f pcsm_branch=<branch>`; the run attaches to the branch head commit.
+- QA branch precedence is `tests_ver`, then the first case-sensitive PR-title `PCSM-[0-9]+` branch (for example `PCSM-286`) found through the GitHub branch API, then `main`. A later eligible PCSM CI run consumes that branch; a QA-only push is not a trigger declared here.
+- Jenkins `hetzner-pcsm-functional-tests` is operationally known at <https://psmdb.cd.percona.com/view/PCSM/> but not verified from this repo. Hetzner is preferred for cost; cancel capacity-stuck builds and retry with AWS, the first cloud option in job parameters.
+
+External references:
+
+| Project       | Repository                                    | Documentation                                               |
+| ------------- | --------------------------------------------- | ----------------------------------------------------------- |
+| PCSM Docs     | <https://github.com/percona/pcsm-docs>        | <https://docs.percona.com/percona-clustersync-for-mongodb/> |
+| PSMDB Testing | <https://github.com/Percona-QA/psmdb-testing> | External functional-test repository                         |
