@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 9; distinct live-system test domain. Owns source-to-target behavior tests, optional PCSM process management, HA drills, and equivalence assertions.
+Score 5; retained below the creation threshold for the distinct live-system test domain: behavior tests, managed PCSM, HA drills, and assertions.
 
 ## WHERE TO LOOK
 
@@ -28,12 +28,22 @@ Score: 9; distinct live-system test domain. Owns source-to-target behavior tests
 - Request `suspend_managed_pcsm` for self-managed HA groups; its teardown restores the suite-owned process.
 - Indirectly parametrize `managed_pcsm_args` with a list of server args to restart the suite-owned process for one test; teardown restores defaults. Requires `TEST_PCSM_BIN` or `--pcsm-bin`.
 - `test_ha.py` is marked slow and needs `--runslow`; its group fixture also requires a PCSM binary.
+- `test_hack_clis.py` overrides the autouse database-drop fixture.
+- Keep CI scope in the contributing guide aligned with `.github/workflows/e2etests.yml` when test selection changes.
+- `perf_test.go` benchmarks: `go test -run='^$' -bench=. -benchmem ./tests/`; `TEST_TARGET_URI` is required and copy benchmarks also need `TEST_SOURCE_URI`.
 
 ## ANTI-PATTERNS
 
-- Do not assume `/status` succeeds on every HA member; STANDBY is intentionally HTTP 409.
 - Do not leave the managed PCSM suspended after an HA test.
 - Do not compare documents without deterministic ordering or raw-batch hashing.
 - Do not add unbounded waits; every state/data wait needs a diagnostic timeout.
 - Do not copy legacy polling sleeps into new async tests; subscribe before triggering an action and await its exact state/event signal with a bounded timeout.
 - Do not include slow tests in default scope without the `slow` marker and `--runslow`.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Setup, environment/CLI precedence, and CI selection:
+[CONTRIBUTING.md](../CONTRIBUTING.md#python-e2e-tests).
+Read [the STANDBY API contract](../ha/README.md#api-on-standby) when testing HA responses.

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct telemetry-schema domain. Owns Prometheus collectors shared by copy, replication, and HA, including their exported names and labels.
+Score 6; retained below the creation threshold for the telemetry schema contract shared with the dashboard.
 
 ## WHERE TO LOOK
 
@@ -27,7 +27,8 @@ Score: 8; distinct telemetry-schema domain. Owns Prometheus collectors shared by
 - Reader-to-dispatcher, worker input, and pending sealed-bulk queues are separate measurements.
 - Worker applied-event counters are separate from the aggregate applied counter; do not substitute queue depth or flush batch size for completed operations.
 - `ha_active` is 1 or 0; `ha_info` publishes a constant 1 with identity labels.
-- `SetHARoleAndTerm` updates gauges; transition counting is a separate caller action.
+- `SetHARoleAndTerm` updates gauges; transition counting is a separate caller action (`ha.Membership.SetRole`). `SetHAInfo` is called once in root `createServer`.
+- Preserve ACTIVE filtering and per-instance rate identity when changing dashboard queries; their operational meaning lives in the HA reference.
 
 ## ANTI-PATTERNS
 
@@ -35,3 +36,10 @@ Score: 8; distinct telemetry-schema domain. Owns Prometheus collectors shared by
 - Do not rename metric strings or labels without updating dashboard consumers.
 - Do not combine read and inserted counters; they expose different copy-pipeline stages.
 - Do not count ordinary lease renewals as HA role transitions.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [HA monitoring](../ha/README.md#monitoring) before changing HA collectors
+or dashboard behavior.

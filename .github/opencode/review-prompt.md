@@ -11,6 +11,8 @@ Perform an expert-level Go review of the current PR diff. Go beyond surface lint
 3. Produce one aggregate markdown review per the rules below.
 4. Write the review body to `$REVIEW_BODY_FILE`. A follow-up workflow job posts that file as the PR review. Your text reply must be one short line confirming the file was written; do not echo the review body in your reply.
 
+Keep the review body at or below 60000 bytes. Omit or redact opaque secret-like material, including long hexadecimal or base64-like blobs, rather than copying it into the review.
+
 ## Environment
 
 Your shell has these variables pre-set by the workflow:

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 14; distinct pipeline-orchestration domain. Owns the replication state machine and coordinates catalog, clone, repl, recovery, and finalization.
+Score 8; distinct orchestration domain. Owns the state machine and composes catalog, clone, repl, checkpoint, and finalization.
 
 ## WHERE TO LOOK
 
@@ -28,13 +28,26 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 - Recovery reconstructs catalog, clone, and repl before applying component checkpoints.
 - `FinalizeStatus` is absent until finalize starts; copy it before returning status to callers.
 - `lifecycleCtx` is the deliberate `containedctx` exception for background pipeline ownership.
+- Lock order is `lock -> execMu`; `execMu` guards execution handles only.
 
 ## ANTI-PATTERNS
 
 - Do not mutate `state`, `err`, component pointers, or finalization status outside the lifecycle lock.
 - Do not add a state transition without matching invalid-state coverage.
-- Do not resume an interrupted initial clone as though its copy workers had persisted their progress: a checkpoint-restored interrupted clone is a failed state that needs a new `/start`, and a pipeline whose tenure ended is discarded, never continued.
+- Do not restore clone workers from an interrupted run; their progress is not persisted.
 - Do not launch a run or finalizer outside `startRun`/`startFinalize`: they derive the execution from the request's epoch (`WithEpoch`) and publish the handle `Stop` cancels and joins.
 - Do not treat a component error recorded while the execution was being canceled as a failure: `Stop` settles nothing, and the pipeline it stopped is discarded with its tenure.
 - Do not report finalization complete before `CompletedAt` and unsuccessful-index results are available.
 - Do not make orchestration tests depend on live MongoDB when the local interfaces cover the seam.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [states and status](README.md#states-and-status) before changing `State*`,
+and [pause/finalize deadlines](README.md#pausing-replication) before changing
+request completion. For tenure cancellation and recovery, read [HA](../ha/README.md).
+
+- `Checkpoint` persists a pending `pausing` as `paused`; HTTP status must keep reporting the live drain.
+- `Finalize` joins the captured run outside the lifecycle lock and rechecks the execution before scheduling catalog work.
+- Non-majority target data write concern is stored in the checkpoint and restored into clone/repl options; checkpoints, HA, and DDL stay majority.

@@ -30,44 +30,14 @@ PCSM is a CLI tool, but also exposes HTTP API as well.
 
 For reference see [PCSM commands](https://docs.percona.com/percona-clustersync-for-mongodb/pcsm-commands.html) and [HTTP API](https://docs.percona.com/percona-clustersync-for-mongodb/api.html) docs.
 
-### Pausing replication
+For pipeline states, status fields, pause/finalize behavior, and target write
+concern, see the [pipeline and API reference](pcsm/README.md).
 
-`POST /pause` and `pcsm pause` acknowledge the pause request immediately.
-Status changes from `running` to `pausing` while queued writes drain, then to
-`paused` once replication has stopped. A drain failure changes status to
-`failed` instead.
+## High availability
 
-Wait for `state: "paused"` before treating the pause as complete. A resume
-request received during `pausing` waits for completion within its request
-deadline; a timeout stops that wait, not the accepted pause. State-aware clients
-must recognize `pausing`, including when `pauseOnInitialSync` is enabled.
-A start request during `pausing` is rejected immediately as already running.
-
-`POST /finalize` also waits for replication and monitor cleanup, with a
-five-second HTTP request deadline. If that wait expires, the pause continues,
-but no catalog finalization is scheduled. Wait for `paused` and retry
-`/finalize`, or inspect the error if the state becomes `failed`. Once
-`/finalize` succeeds, catalog finalization proceeds asynchronously.
-
-### Target data write concern
-
-Clone inserts and replication data writes default to `majority`. To change their
-acknowledgment requirement for a run, pass `--target-write-concern=1` to
-`pcsm start` (or set `PCSM_TARGET_WRITE_CONCERN=1` for it), or send
-`{"targetWriteConcern":"1"}` to `/start`. Values are `majority` or a positive
-integer. Unacknowledged writes (`0`) are not supported. The server has no write
-concern setting, so a run started without one uses `majority`. The value is
-stored with the run and retained during checkpoint recovery and HA takeover.
-Start a new run to change it. Checkpoints, HA state, and catalog DDL always use
-majority write concern.
-
-Using `1` can reduce stalls when target secondaries lag, but acknowledgment from
-the primary alone does not make data majority-durable. A target primary failure
-can roll back acknowledged data, and a majority checkpoint does not guarantee
-that earlier data writes on other shards are durable. Keep `majority` when
-automatic recovery must preserve that guarantee. Lower it only for a controlled
-migration that can tolerate restarting and validating the copy after a target
-failure. Retain the source and verify target consistency before cutover.
+See [HA architecture and operations](ha/README.md) for election, tenure and
+checkpoint fencing, failover timing, reset and upgrade procedures, monitoring,
+and local failover drills.
 
 ## Submit Bug Report / Feature Request
 
@@ -83,7 +53,7 @@ As a general rule of thumb, please try to create bug reports that are:
 When submitting a bug report or a feature, please attach the following information:
 
 - The output of the `pcsm status` command
-- The output of the `pcsm logs` command
+- The server log output (use `--log-level=debug`, optionally `--log-json`)
 
 ## Licensing
 

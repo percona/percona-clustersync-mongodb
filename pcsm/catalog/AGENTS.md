@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct target-schema domain. Owns collection/index metadata, DDL application, checkpoint state, and unsuccessful-index finalization.
+Score 11; distinct target-schema domain. Owns collection/index metadata, DDL, checkpoint locking, and index finalization.
 
 ## WHERE TO LOOK
 
@@ -34,3 +34,5 @@ Score: 8; distinct target-schema domain. Owns collection/index metadata, DDL app
 - Never collapse unsuccessful-index categories; API status exposes their distinct meanings.
 - Never treat source probes and target recreation as atomic; source DDL is not fenced during finalize.
 - Never create timeseries support by passing bucket namespaces through existing collection logic.
+
+<!-- End of init-deep baseline. -->

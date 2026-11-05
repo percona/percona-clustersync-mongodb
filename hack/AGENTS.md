@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct operator-tooling domain. Owns disposable MongoDB topologies, HA drills, metrics tooling, and diagnostics.
+Score 6; retained below the creation threshold for the distinct operator-tooling domain: local topologies, HA drills, monitoring, and diagnostics.
 
 ## WHERE TO LOOK
 
@@ -23,17 +23,23 @@ Score: 8; distinct operator-tooling domain. Owns disposable MongoDB topologies, 
 - Shell topology scripts source `hack/util` for Docker Compose and mongosh helpers.
 - Sharded topology uses Compose project `s1` and network `s1_default`; RS uses `rs_default`. HA joins the selected existing network.
 - `SRC_SHARDS` and `TGT_SHARDS` select one to three shards independently.
-- Side-specific MongoDB version variables override `MONGO_VERSION`.
+- Keep image precedence and advertised hostnames consistent with the local setup reference.
 - Host and container ports differ for target mongos: host `29017`, container `27017`.
-- HA scripts expect clusters to exist first and publish PCSM APIs on ports 2242-2244.
 - `PCSM_HA_LEASE_TTL` configures all three HA containers; unset or empty uses the server default.
-- `ha/run.sh --reset` stops the old HA group before clearing lease, members, and checkpoints.
+- Changes to cleanup ordering must preserve HA shutdown before cluster network removal.
+- Keep scrape targets, host bindings, and drill behavior aligned with the HA reference.
 
 ## ANTI-PATTERNS
 
-- Never switch RS and sharded topologies without running `./hack/cleanup.sh`.
 - Never remove a cluster network before stopping PCSM HA containers attached to it.
 - Never use host port `29017` from inside the target mongos container.
 - Never reset target state while an old HA group is still running.
 - Never raise shard counts beyond the three configured service/port slots.
-- Never treat `hack/reference.md` snippets as canonical when scripts or Make targets disagree.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [local setup and diagnostics](../CONTRIBUTING.md#running-pcsm-locally)
+before running topology tools. Read [HA operations](../ha/README.md) before
+changing HA drills or monitoring.
