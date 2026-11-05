@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct initial-copy domain. Owns collection sizing, segmentation, parallel reads/inserts, sharded presplitting, and recovery state.
+Score 8 (code ratio 2, Go package 2, 92 top-level symbols 2, 34 exports 2; 13 files, 10 importing files below threshold); distinct initial-copy domain. Owns collection sizing, segmentation, parallel reads/inserts, sharded presplitting, and recovery state.
 
 ## WHERE TO LOOK
 
@@ -29,6 +29,9 @@ Score: 8; distinct initial-copy domain. Owns collection sizing, segmentation, pa
 - Any hashed shard-key field disables ranged presplitting; equal shard counts mirror sorted source/target pairing.
 - Unequal shard counts place largest chunks on the lightest target; failed placement reconciles reservations to last-known owners.
 - Collection workers run under an error group so one failure cancels the clone operation.
+- Clone anchors its scan with `mdb.AdvanceClusterTime` before collecting the namespace inventory.
+- A non-cancellation presplit error is logged and cloning continues with native chunks.
+- `config.Clone*` sizes accept human-readable units; zero means auto (validation in `config/validate.go`).
 
 ## ANTI-PATTERNS
 

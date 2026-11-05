@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct operator-tooling domain. Owns disposable MongoDB topologies, HA drills, metrics tooling, and diagnostics.
+Score 6 (58 recursive files 3, code ratio 77% 2, own Compose/mongod config 1; 4 subdirs, no Go package, symbols/refs n/a); retained below threshold as the single guide for topology, HA-drill, and monitoring operations. Children `rs/`, `sh/`, `ha/`, `metrics/` score under 8 and are covered here. Distinct operator-tooling domain. Owns disposable MongoDB topologies, HA drills, metrics tooling, and diagnostics.
 
 ## WHERE TO LOOK
 
@@ -23,11 +23,16 @@ Score: 8; distinct operator-tooling domain. Owns disposable MongoDB topologies, 
 - Shell topology scripts source `hack/util` for Docker Compose and mongosh helpers.
 - Sharded topology uses Compose project `s1` and network `s1_default`; RS uses `rs_default`. HA joins the selected existing network.
 - `SRC_SHARDS` and `TGT_SHARDS` select one to three shards independently.
-- Side-specific MongoDB version variables override `MONGO_VERSION`.
+- Image precedence per side: `SRC_MONGO_VERSION`/`TGT_MONGO_VERSION`, then `MONGO_VERSION`, then `8.0.29-13` (Compose defaults).
+- Host `/etc/hosts` must map `rs00-02`, `rs10-12`, `src-*`/`tgt-*` (`rs00/10/20`, `cfg0`, `mongos`) to 127.0.0.1; HA containers reuse those names on the cluster network.
 - Host and container ports differ for target mongos: host `29017`, container `27017`.
 - HA scripts expect clusters to exist first and publish PCSM APIs on ports 2242-2244.
 - `PCSM_HA_LEASE_TTL` configures all three HA containers; unset or empty uses the server default.
-- `ha/run.sh --reset` stops the old HA group before clearing lease, members, and checkpoints.
+- `ha/run.sh --reset` stops the old HA group before clearing lease, members, and checkpoints (`pcsm reset` in a `pcsm:dev` container).
+- `cleanup.sh` with no args runs `pcsm-ha rs sh sh-ha`; explicit args keep caller order. `sh-ha` is skipped because its compose file is absent. Teardown errors are suppressed; inspect `docker ps -a` when ports stay allocated.
+- `make metrics-up` and `ha/run.sh` each create external network `pcsm-metrics`, so either can start first; `metrics-down` keeps the network.
+- Prometheus scrapes `pcsm0:2242`, `pcsm1:2243`, `pcsm2:2244` every 5s via Docker DNS; a host PCSM on loopback is never scraped. Grafana runs with anonymous Admin on loopback.
+- `kill-active.sh [SECONDS] [--no-restart]` hard-kills ACTIVE and restarts it after 5s by default. Takeover still waits for the lease TTL. `status-active.sh` and `kill-active.sh` need the multi-member response envelope.
 
 ## ANTI-PATTERNS
 

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 9; distinct live-system test domain. Owns source-to-target behavior tests, optional PCSM process management, HA drills, and equivalence assertions.
+Score 5 (26 files 3, code ratio 2; Python, so symbol/export counts unmeasured; no package boundary or importers); retained below threshold as the distinct live-system test domain. Owns source-to-target behavior tests, optional PCSM process management, HA drills, and equivalence assertions.
 
 ## WHERE TO LOOK
 
@@ -28,6 +28,10 @@ Score: 9; distinct live-system test domain. Owns source-to-target behavior tests
 - Request `suspend_managed_pcsm` for self-managed HA groups; its teardown restores the suite-owned process.
 - Indirectly parametrize `managed_pcsm_args` with a list of server args to restart the suite-owned process for one test; teardown restores defaults. Requires `TEST_PCSM_BIN` or `--pcsm-bin`.
 - `test_ha.py` is marked slow and needs `--runslow`; its group fixture also requires a PCSM binary.
+- `test_hack_clis.py` overrides the autouse database-drop fixture.
+- Unqualified local `pytest` discovers all of `tests/` (sharded modules included) and differs from CI scope (`.github/workflows/e2etests.yml`). RS jobs run an explicit eight-file list. Sharded jobs run everything except one RS-only deselection. The 8.0 3v2-shard entry runs only `test_presplit_sharded.py`.
+- After a Python version change, Poetry can fail with `bad interpreter`; call `.venv/bin/pytest` directly.
+- `perf_test.go` benchmarks: `go test -run='^$' -bench=. -benchmem ./tests/`; `TEST_TARGET_URI` is required and copy benchmarks also need `TEST_SOURCE_URI`.
 
 ## ANTI-PATTERNS
 

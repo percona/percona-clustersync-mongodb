@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 14; distinct pipeline-orchestration domain. Owns the replication state machine and coordinates catalog, clone, repl, recovery, and finalization.
+Score 8 (code ratio 2, Go package 2, 43 top-level symbols 2, 21 exports 2; 12 files, 3 subdirs, 10 importing files below threshold); kept as the distinct orchestration domain. Owns the state machine and composes catalog, clone, repl, checkpoint, and finalization.
 
 ## WHERE TO LOOK
 
@@ -28,6 +28,17 @@ Score: 14; distinct pipeline-orchestration domain. Owns the replication state ma
 - Recovery reconstructs catalog, clone, and repl before applying component checkpoints.
 - `FinalizeStatus` is absent until finalize starts; copy it before returning status to callers.
 - `lifecycleCtx` is the deliberate `containedctx` exception for background pipeline ownership.
+- Lock order is `lock -> execMu`; `execMu` guards execution handles only.
+
+## STATE MACHINE
+
+`idle -> running -> pausing -> paused -> running` (resume); `running -> finalizing -> finalized`; any execution error -> `failed`. Constants: `pcsm.go` `State*`.
+
+- `Pause` publishes `pausing` on acceptance and `paused` only after the run and monitors stop; a drain failure becomes `failed`. `Checkpoint` persists a pending `pausing` as `paused`.
+- `Finalize` requires clone completion, started replication, and completed initial sync (`initialSync.completed`, not `cloneCompleted`); from `running` it pauses and joins the captured run before catalog finalization. HTTP timeout semantics: `README.md#pausing-replication`.
+- `finalized` excludes source writes made after pause; a new `Start` returns to `running`. Recovered finalized state keeps completion but not timestamps or unsuccessful-index reports.
+- `failed` resumes only through `ResumeOptions` from-failure for eligible replication-phase failures; an interrupted clone needs a new `Start`.
+- Non-majority target data write concern is stored in the checkpoint and restored into clone/repl options; checkpoints, HA, and DDL stay majority.
 
 ## ANTI-PATTERNS
 

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct driver-policy boundary. Centralizes URI sanitization, topology/version discovery, schema helpers, and transient retries.
+Score 11 (code ratio 2, Go package 2, 78 top-level symbols 2, 66 exports 2, 43 importing files 3; 17 files below threshold); distinct driver-policy boundary. Centralizes URI sanitization, topology/version discovery, schema helpers, and transient retries.
 
 ## WHERE TO LOOK
 
@@ -27,7 +27,8 @@ Score: 8; distinct driver-policy boundary. Centralizes URI sanitization, topolog
 - Ping failure triggers a bounded disconnect before returning the connection error.
 - `RunWithRetry` retries only transient errors and stops on context cancellation.
 - `RetryWithBackoff` supports bounded attempts or context-bounded unlimited retries.
-- Compatibility compares major versions only; source major greater than target is a downgrade error.
+- Compatibility compares major versions only; source major greater than target is a downgrade error. The returned bool marks lower-to-higher runs; `Support.ClientBulkWrite` gates on major 8+.
+- Integration tests here use testcontainers with `MONGO_VERSION` selecting the image.
 
 ## ANTI-PATTERNS
 

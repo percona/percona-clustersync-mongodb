@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 11; distinct ordered-replay domain. Owns change-stream consumption, event routing, bulk application, barriers, and the safe resume frontier.
+Score 11 (25 files 3, code ratio 2, Go package 2, 159 top-level symbols 2, 69 exports 2; 6 importing files below threshold); distinct ordered-replay domain. Owns change-stream consumption, event routing, bulk application, barriers, and the safe resume frontier.
 
 ## WHERE TO LOOK
 
@@ -29,6 +29,9 @@ Score: 11; distinct ordered-replay domain. Owns change-stream consumption, event
 - `@tick` carries the server's postBatchResumeToken timestamp from an empty change-stream batch. That the source has no undelivered events before it is inferred from the token's documented resume purpose, not stated by the spec. `run()` applies it to `lastReplicatedOpTime` only when the worker pool is idle. `appendOplogNote` only stimulates the oplog and is never the tick value.
 - A barrier drains routed events, seals pending work, waits for the writer, then waits for explicit resume.
 - Worker completion and errors use owned channels; dead workers must remain observable to barrier callers.
+- Worker idleness compares event counts, not timestamps: transaction/applyOps events can share one timestamp.
+- Bulks are ordered; update documents are bounded (512 KiB, 100 fields) and aggregate size by `config.MaxWriteBatchSizeBytes`; an empty bulk may carry one oversized event.
+- Client-level bulk write needs target major 8+ (`mdb.Support.ClientBulkWrite`); `use-collection-bulk-write` forces collection-level bulks.
 
 ## ANTI-PATTERNS
 

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct telemetry-schema domain. Owns Prometheus collectors shared by copy, replication, and HA, including their exported names and labels.
+Score 6 (code ratio 2, Go package 2, 21 exports 2; 2 files, 27 symbols, 7 importing files below threshold); retained below threshold because its names and labels are a contract with `hack/metrics/grafana-board.json`. Distinct telemetry-schema domain. Owns Prometheus collectors shared by copy, replication, and HA, including their exported names and labels.
 
 ## WHERE TO LOOK
 
@@ -27,7 +27,9 @@ Score: 8; distinct telemetry-schema domain. Owns Prometheus collectors shared by
 - Reader-to-dispatcher, worker input, and pending sealed-bulk queues are separate measurements.
 - Worker applied-event counters are separate from the aggregate applied counter; do not substitute queue depth or flush batch size for completed operations.
 - `ha_active` is 1 or 0; `ha_info` publishes a constant 1 with identity labels.
-- `SetHARoleAndTerm` updates gauges; transition counting is a separate caller action.
+- `SetHARoleAndTerm` updates gauges; transition counting is a separate caller action (`ha.Membership.SetRole`). `SetHAInfo` is called once in root `createServer`.
+- Dashboard replication/clone panels append `and on(instance) (percona_clustersync_mongodb_ha_active == 1)` to hide frozen gauges of a demoted former ACTIVE. Rate panels keep per-instance series instead of summing.
+- The High Availability row has Instance Roles (per-scrape timeline), Lease Term (ACTIVE-only `max`), and Role Transitions (`increase` over range; 3+ means flapping). Capacity lines are fixed thresholds, not runtime queue sizes.
 
 ## ANTI-PATTERNS
 

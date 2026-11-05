@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct target-schema domain. Owns collection/index metadata, DDL application, checkpoint state, and unsuccessful-index finalization.
+Score 11 (code ratio 2, Go package 2, 64 top-level symbols 2, 40 exports 2, 27 importing files 3); distinct target-schema domain. Owns collection/index metadata, DDL application, checkpoint state, and unsuccessful-index finalization.
 
 ## WHERE TO LOOK
 

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score: 8; distinct structured-log boundary. Owns zerolog initialization, stable attributes, context propagation, and MongoDB driver log adaptation.
+Score 11 (code ratio 2, Go package 2, 32 top-level symbols 2, 31 exports 2, 21 importing files 3; 4 files below threshold); distinct structured-log boundary. Owns zerolog initialization, stable attributes, context propagation, and MongoDB driver log adaptation.
 
 ## WHERE TO LOOK
 
