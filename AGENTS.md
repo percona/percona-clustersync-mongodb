@@ -26,13 +26,11 @@ Percona ClusterSync for MongoDB (PCSM): Go service for initial clone plus contin
 ## WHERE TO LOOK
 
 Deeper guidance owns local invariants; read it before changing that domain.
-Read [ha/README.md](ha/README.md) before changing election, tenure, recovery,
-HA-facing HTTP behavior, or failover tooling, including files outside `ha/`.
 
 | Task                                 | Location                                               | Notes                                |
 | ------------------------------------ | ------------------------------------------------------ | ------------------------------------ |
 | CLI, HTTP routing, startup           | `main.go`                                              | `startRequest` defines `/start` body |
-| Checkpoint fencing, tenures          | `recovery.go`, `tenure.go`; `ha/AGENTS.md`             | Read `ha/README.md`            |
+| Checkpoint fencing, tenures          | `recovery.go`, `tenure.go`; `ha/AGENTS.md`             | Read `ha/README.md`                   |
 | Flags, env bindings, defaults        | `config/AGENTS.md`                                     | Hidden/deprecated flags there        |
 | Lease, membership, failure timing    | `ha/AGENTS.md`                                         |                                      |
 | Driver policy, retry, compat         | `mdb/AGENTS.md`                                        |                                      |
@@ -45,6 +43,7 @@ HA-facing HTTP behavior, or failover tooling, including files outside `ha/`.
 | Hosts, topologies, cleanup, HA drill | `hack/AGENTS.md`                                       |                                      |
 | E2E fixtures, CI vs local scope      | `tests/AGENTS.md`                                      |                                      |
 | CI, packaging                        | `.github/workflows/{go,e2etests,ci}.yml`, `packaging/` | No child guide                       |
+| PR/issue automation | `.github/opencode/*.md`, `.github/workflows/opencode*.yml`, `.github/workflows/jira-*.yml` | Agent artifacts; workflows publish |
 
 ## CODE MAP
 
@@ -71,7 +70,7 @@ Refs unmeasured: reference centrality not measured with LSP/ast-grep.
 - Use project `errors.Wrap`/`Wrapf`/`Join`, not stdlib; `Wrap(nil, ...)` returns nil.
 - Bound MongoDB ops with `util.CtxWithTimeout(ctx, <op-specific const>, fn)`, e.g. `config.DisconnectTimeout`.
 - Format: `goimports -local github.com/percona` plus `gofumpt -extra` (CI suggests).
-- Go tests: `-race`, testify `assert`/`require`, table-driven; `t.Parallel()` only for independent cases.
+- Go unit tests: `-race`, testify `assert`/`require`, table-driven; `t.Parallel()` only for independent cases.
 - `nolint` narrow and justified (`wrapcheck` for intentional driver errors, `gochecknoglobals`, `err113`, `gosec`); `nolintlint` disabled, so review enforces it.
 - Code changes: run `make lint`, `make test`, `make test-integration`, `make pytest` where prerequisites exist; report blocked checks.
 
@@ -82,16 +81,15 @@ Refs unmeasured: reference centrality not measured with LSP/ast-grep.
 - Never switch RS/sharded topologies without `./hack/cleanup.sh`: host ports overlap.
 - Never probe health with `/status`: STANDBY returns 409 `not_active`. Use `/metrics`.
 - Never require the `me`/`role`/`group` envelope: present only with >1 observed live member.
-- Never change metrics schema without updating `hack/metrics/grafana-board.json`.
+- Never change telemetry without checking `metrics/AGENTS.md` and its dashboard contract.
 - Never infer Go coverage from packaging builds or equate local E2E scope with CI selection.
 
 ## UNIQUE STYLES
 
 - Server on localhost:2242 by default; `status/start/pause/resume/finalize` subcommands are HTTP clients; reset/version bypass HTTP.
 - `/status` GET; `/start`, `/pause`, `/resume`, `/finalize` POST; `/metrics`, `/debug/pprof/*` on every role. Wrong-method check precedes role check.
-- `Starting HTTP server at ...` logs before socket bind: not a readiness signal.
 - Pause lifecycle: `running -> pausing -> paused`. `pausing` means the request was accepted and work is draining; only `paused` confirms the stop.
-- Finalize after `initialSync.completed` and a completed pause: `paused -> finalizing -> finalized`. API deadlines and recovery behavior: [README.md](README.md#states-and-status).
+- Finalize needs `initialSync.completed`; a running pipeline pauses first. Deadline and retry behavior: [pipeline reference](pcsm/README.md#pausing-replication).
 - Failed replication resumes only explicitly: `--from-failure` / `{"fromFailure":true}`; interrupted clone restores as failed, needs new `/start`.
 - Local topology and exact URI/hosts setup: [CONTRIBUTING.md](CONTRIBUTING.md#running-pcsm-locally).
 
@@ -110,15 +108,37 @@ make pytest             # live-cluster E2E; slow skipped unless --runslow
 make metrics-up; make metrics-down
 ```
 
-## REFERENCE OWNERS
+## NOTES
+
+- `Starting HTTP server at ...` logs before socket bind: not a readiness signal.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+### Regeneration
+
+Regenerate the baseline above the marker; preserve and reconcile this tail separately.
+The marker is a project convention, not built-in `init-deep` protection. Before any
+`--create-new` run, retain authored tails; afterward compare them before accepting
+the result. Existing whole-file line limits still include these short supplements.
+The generated header records the baseline scan, not later authored-note revisions.
+
+### Reference owners
+
+Read [HA](ha/README.md) before changing election, tenure, recovery, HA-facing HTTP,
+or failover tooling, including files outside `ha/`.
 
 | Topic | Canonical reference |
 | --- | --- |
-| Public states, status fields, pause/finalize, target write concern | [README.md](README.md#states-and-status) |
-| Service-wide HA, fencing, failover, resets/upgrades, monitoring, drills | [ha/README.md](ha/README.md) |
-| Topologies, exact URIs, hosts, health checks, lifecycle commands, cleanup | [CONTRIBUTING.md](CONTRIBUTING.md#running-pcsm-locally) |
-| Runtime flag/env bindings and diagnostics | [CONTRIBUTING.md](CONTRIBUTING.md#runtime-configuration) |
-| Unit/integration/E2E checks, CI matrix, external QA and Jenkins | [CONTRIBUTING.md](CONTRIBUTING.md#running-tests-locally) |
+| States, status, pause/finalize, target write concern | [Pipeline/API](pcsm/README.md) |
+| HA, fencing, failover, resets/upgrades, monitoring, drills | [HA](ha/README.md) |
+| Local setup, configuration, diagnostics | [Contributing](CONTRIBUTING.md#running-pcsm-locally) |
+| Tests, CI matrix and QA branch selection | [Contributing](CONTRIBUTING.md#running-tests-locally) |
 
-Keep detailed contracts in these references. Agent guides hold task routing and
-change invariants; update the owning reference when behavior changes.
+### Maintainer context
+
+These practices require maintainer access and explicit authorization; verify current
+external policy and availability before acting. They are not public contributor requirements.
+- Existing QA practice pushes approved fixes directly to the selected ticket branch in `Percona-QA/psmdb-testing`, without a QA PR.
+- Jenkins entry: `hetzner-pcsm-functional-tests` at <https://psmdb.cd.percona.com/view/PCSM/> (not verified by this repository). Existing hosting preference is Hetzner for cost, with AWS for capacity-stuck builds.

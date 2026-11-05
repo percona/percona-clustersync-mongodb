@@ -6,7 +6,9 @@ You are editing a GitHub pull request description. The author has written some i
 
 1. Read the current PR body, commits, and file patches from the pre-fetched JSON files (paths in Environment below). Do not call `gh api`.
 2. Produce the new body per the rules below.
-3. Write the new body to `$NEW_BODY_FILE`. A follow-up workflow step PATCHes the PR with that file. Your text reply must be one short line confirming the file was written; do not echo the body in your reply.
+3. Write the new body to `$NEW_BODY_FILE`. A follow-up workflow job PATCHes the PR with that file. Your text reply must be one short line confirming the file was written; do not echo the body in your reply.
+
+Keep the new body at or below 60000 bytes. Omit or redact opaque secret-like material, including long hexadecimal or base64-like blobs, rather than copying it into the body.
 
 ## Environment
 

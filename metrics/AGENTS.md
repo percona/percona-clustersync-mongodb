@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 6 (code ratio 2, Go package 2, 21 exports 2; 2 files, 27 symbols, 7 importing files below threshold); retained below threshold because its names and labels are a contract with `hack/metrics/grafana-board.json`. Distinct telemetry-schema domain. Owns Prometheus collectors shared by copy, replication, and HA, including their exported names and labels.
+Score 6; retained below the creation threshold for the telemetry schema contract shared with the dashboard.
 
 ## WHERE TO LOOK
 
@@ -15,9 +15,6 @@ Score 6 (code ratio 2, Go package 2, 21 exports 2; 2 files, 27 symbols, 7 import
 | Observe bulk flushes | `metrics.go:ObserveReplWorkerFlush*` | Batch-size and duration histograms |
 | Report HA state | `metrics.go:SetHARoleAndTerm`, `SetHAInfo` | Role/term gauges and identity metadata |
 | Update dashboard consumers | `../hack/metrics/grafana-board.json` | Shipped visualization of metric names |
-
-Read [HA monitoring](../ha/README.md#monitoring) before changing HA collectors
-or dashboard behavior.
 
 ## CONVENTIONS
 
@@ -39,3 +36,10 @@ or dashboard behavior.
 - Do not rename metric strings or labels without updating dashboard consumers.
 - Do not combine read and inserted counters; they expose different copy-pipeline stages.
 - Do not count ordinary lease renewals as HA role transitions.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [HA monitoring](../ha/README.md#monitoring) before changing HA collectors
+or dashboard behavior.

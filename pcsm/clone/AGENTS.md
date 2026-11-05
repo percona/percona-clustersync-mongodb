@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 8 (code ratio 2, Go package 2, 92 top-level symbols 2, 34 exports 2; 13 files, 10 importing files below threshold); distinct initial-copy domain. Owns collection sizing, segmentation, parallel reads/inserts, sharded presplitting, and recovery state.
+Score 8; distinct initial-copy domain. Owns sizing, segmentation, parallel reads/inserts, presplitting, and recovery state.
 
 ## WHERE TO LOOK
 
@@ -42,3 +42,5 @@ Score 8 (code ratio 2, Go package 2, 92 top-level symbols 2, 34 exports 2; 13 fi
 - Do not leave failed presplit reservations as phantom shard load; unknown placement releases the reservation.
 - Do not persist worker-local state that cannot be reconstructed from the clone checkpoint.
 - Do not assume recovered size estimates were recalculated; current recovery restores checkpoint values.
+
+<!-- End of init-deep baseline. -->

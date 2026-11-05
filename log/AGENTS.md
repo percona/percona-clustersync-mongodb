@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 11 (code ratio 2, Go package 2, 32 top-level symbols 2, 31 exports 2, 21 importing files 3; 4 files below threshold); distinct structured-log boundary. Owns zerolog initialization, stable attributes, context propagation, and MongoDB driver log adaptation.
+Score 11; distinct structured-log boundary. Owns zerolog setup, stable attributes, context propagation, and driver log adaptation.
 
 ## WHERE TO LOOK
 
@@ -34,3 +34,5 @@ Score 11 (code ratio 2, Go package 2, 32 top-level symbols 2, 31 exports 2, 21 i
 - Do not promote all driver informational events to application info level.
 - Do not hardcode stdout in this adapter; client command output must stay separable from logs.
 - Do not change attribute units independently of their `_secs` and `_bytes` names.
+
+<!-- End of init-deep baseline. -->

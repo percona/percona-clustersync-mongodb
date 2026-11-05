@@ -26,7 +26,7 @@ Your shell has these variables pre-set by the workflow:
 - `$ISSUE_COMMENTS_FILE` — path to the pre-fetched GitHub issue-comments JSON.
 - `$TICKET_KEY_FILE` — path you must write the new Jira ticket key to.
 
-No other secrets are available. **No GitHub API token is exposed to you.** Do not call `gh api`, do not invoke any GitHub REST endpoint, and do not attempt to authenticate to GitHub. Read the pre-fetched JSON files instead.
+Model-provider credentials may be present. Do not inspect, print, or transmit them. Use only the supplied `$JIRA_AUTH` for Jira requests. **No GitHub API token is exposed to you.** Do not call `gh api`, do not invoke any GitHub REST endpoint, and do not attempt to authenticate to GitHub. Read the pre-fetched JSON files instead.
 
 ## Allowed issue types for PCSM
 

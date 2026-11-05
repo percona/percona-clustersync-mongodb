@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 10 (code ratio 2, own defaults/bindings 1, Go package 2, 19 exports 2, 32 importing files 3; 10 files, 30 top-level symbols below threshold); distinct configuration boundary. Owns defaults, env/flag binding, human-size parsing, compressor filtering, and validation.
+Score 10; distinct configuration boundary. Owns defaults, env/flag binding, size parsing, compressor filtering, and validation.
 
 ## WHERE TO LOOK
 
@@ -23,7 +23,7 @@ Score 10 (code ratio 2, own defaults/bindings 1, Go package 2, 19 exports 2, 32 
 - Every runtime flag requiring env support is bound explicitly in `bindEnvVars`.
 - Deprecated env names remain accepted only where `WarnDeprecatedEnvVars` names the replacement (`PLM_MONGODB_CLI_OPERATION_TIMEOUT`, `PCSM_NO_COLOR`).
 - Only `bindEnvVars` keys have `PCSM_*` support. Namespace filters and `resume --from-failure` are command flags read in `main.go`, not config.
-- Hidden flags (`recovery-checkpoint-interval`, `start`, `reset-state`, `pause-on-initial-sync`) are declared and hidden in `main.go`; the checkpoint interval falls back to `RecoveryCheckpointingInternal` (15s).
+- Hidden flags (`recovery-checkpoint-interval`, `start`, `reset-state`, `pause-on-initial-sync`, `clone-read-batch-size`) are declared and hidden in `main.go`; the checkpoint interval falls back to `RecoveryCheckpointingInternal` (15s).
 - Target write concern (`write_concern.go`) accepts empty/`majority` or a positive int32 `w`; empty keeps majority for legacy checkpoints.
 - Compressor values are trimmed, allowlisted, and deduplicated.
 - Clone segment/read batch sizes accept human-readable units and zero as auto.
@@ -38,3 +38,11 @@ Score 10 (code ratio 2, own defaults/bindings 1, Go package 2, 19 exports 2, 32 
 - Do not bypass clone size bounds after human-readable parsing.
 - Do not preserve unknown compressor names.
 - Do not introduce another env prefix or undocumented deprecated alias.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [target write concern](../pcsm/README.md#target-data-write-concern) before
+changing its parsing or recovery defaults. Human configuration entry points live
+in [CONTRIBUTING.md](../CONTRIBUTING.md#runtime-configuration).

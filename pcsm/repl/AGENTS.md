@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 11 (25 files 3, code ratio 2, Go package 2, 159 top-level symbols 2, 69 exports 2; 6 importing files below threshold); distinct ordered-replay domain. Owns change-stream consumption, event routing, bulk application, barriers, and the safe resume frontier.
+Score 11; distinct ordered-replay domain. Owns change streams, routing, bulk application, barriers, and the safe resume frontier.
 
 ## WHERE TO LOOK
 
@@ -42,3 +42,5 @@ Score 11 (25 files 3, code ratio 2, Go package 2, 159 top-level symbols 2, 69 ex
 - Never change routing without preserving per-document operation order.
 - Never treat a writer error as a successful drain.
 - Never count operations after the first ordered-bulk failure as executed.
+
+<!-- End of init-deep baseline. -->

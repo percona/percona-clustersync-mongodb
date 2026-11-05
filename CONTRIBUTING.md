@@ -15,7 +15,7 @@ Percona ClusterSync for MongoDB (PCSM) is a tool for cloning and replicating dat
 
 You can contribute in one of the following ways:
 
-1. Reach us on our [Forums](https://forums.percona.com/c/mongodb/percona-clustersync-for-mongodb).
+1. Reach us on our [community forum](README.md#contact).
 2. [Submit a bug report or a feature request](https://jira.percona.com/projects/PCSM)
 3. Submit a pull request (PR) with the code patch
 4. Contribute to documentation
@@ -32,7 +32,7 @@ Before you can contribute, we kindly ask you to sign our [Contributor License Ag
 
 ### 2. Code of Conduct
 
-Please make sure to read and agree to our [Code of Conduct](https://github.com/percona/community/blob/main/content/contribute/coc.md).
+Please make sure to read and agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Submitting a pull request
 
@@ -197,7 +197,7 @@ curl -fsS http://localhost:2242/status | jq .
 
 Wait for `finalization.completed: true` before stopping PCSM. Pause acceptance,
 draining, failure, and finalize retry rules are in
-[Pausing replication](README.md#pausing-replication).
+[Pausing replication](pcsm/README.md#pausing-replication).
 
 ### 6. Clean up
 
@@ -214,6 +214,8 @@ Missing Compose files are skipped. Teardown failures are suppressed; inspect
 port 30000 if a later start reports `port already allocated`.
 
 ### Runtime configuration
+
+Common options:
 
 | Environment variable | Flag | Scope |
 | --- | --- | --- |
@@ -246,6 +248,13 @@ hack/change_stream.py -u "mongodb://src-mongos:27017"
 hack/change_stream.py -u "mongodb://tgt-mongos:29017" --show-checkpoints
 hack/change_stream.py -u "mongodb://rs00:30000"
 hack/monitor_writes.py -u "mongodb://src-mongos:27017"
+```
+
+Connect `mongosh` to a replica-set member to inspect command entries in its
+local oplog (not to mongos):
+
+```javascript
+db.getSiblingDB("local").oplog.rs.find({ op: "c" }).sort({ wall: 1 }).limit(10)
 ```
 
 ## Running tests locally
@@ -353,7 +362,7 @@ poetry run pytest
 Run a single test:
 
 ```sh
-poetry run pytest tests/test_collections.py::test_clone_collection
+poetry run pytest tests/test_collections.py::test_rename
 ```
 
 Run tests including slow tests (disabled by default):
@@ -405,13 +414,7 @@ gh workflow run ci.yml --ref <branch> -f pcsm_branch=<branch>
 The QA repository is [Percona-QA/psmdb-testing](https://github.com/Percona-QA/psmdb-testing).
 Branch selection is explicit `tests_ver`, then the first case-sensitive
 `PCSM-[0-9]+` ticket in the PR title if that branch exists, then `main`.
-Push approved QA fixes directly to the selected ticket branch; no QA PR is
-required. A QA-only push does not trigger this repository's workflow.
-
-The operational Jenkins entry is `hetzner-pcsm-functional-tests` at
-<https://psmdb.cd.percona.com/view/PCSM/>. Its current parameters and availability
-are not verified by this repository. Existing operational guidance prefers
-Hetzner for cost, with AWS as the fallback for capacity-stuck builds.
+A QA-only push does not trigger this repository's workflow.
 
 ## Contributing to documentation
 

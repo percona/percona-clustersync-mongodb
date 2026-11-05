@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 5 (26 files 3, code ratio 2; Python, so symbol/export counts unmeasured; no package boundary or importers); retained below threshold as the distinct live-system test domain. Owns source-to-target behavior tests, optional PCSM process management, HA drills, and equivalence assertions.
+Score 5; retained below the creation threshold for the distinct live-system test domain: behavior tests, managed PCSM, HA drills, and assertions.
 
 ## WHERE TO LOOK
 
@@ -16,9 +16,6 @@ Score 5 (26 files 3, code ratio 2; Python, so symbol/export counts unmeasured; n
 | Add sharded-only coverage | `test_*_sharded.py` | Shard metadata and sharded DDL cases |
 | Add opt-in slow coverage | `test_slow.py` | Requires `--runslow` |
 | Work on Go benchmarks | `perf_test.go` | Separate from pytest discovery; uses MongoDB helpers |
-
-Setup, environment/CLI precedence, and CI selection:
-[CONTRIBUTING.md](../CONTRIBUTING.md#python-e2e-tests).
 
 ## CONVENTIONS
 
@@ -37,9 +34,16 @@ Setup, environment/CLI precedence, and CI selection:
 
 ## ANTI-PATTERNS
 
-- Do not assume `/status` succeeds on every HA member; STANDBY is intentionally HTTP 409.
 - Do not leave the managed PCSM suspended after an HA test.
 - Do not compare documents without deterministic ordering or raw-batch hashing.
 - Do not add unbounded waits; every state/data wait needs a diagnostic timeout.
 - Do not copy legacy polling sleeps into new async tests; subscribe before triggering an action and await its exact state/event signal with a bounded timeout.
 - Do not include slow tests in default scope without the `slow` marker and `--runslow`.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Setup, environment/CLI precedence, and CI selection:
+[CONTRIBUTING.md](../CONTRIBUTING.md#python-e2e-tests).
+Read [the STANDBY API contract](../ha/README.md#api-on-standby) when testing HA responses.

@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Score 11 (code ratio 2, Go package 2, 78 top-level symbols 2, 66 exports 2, 43 importing files 3; 17 files below threshold); distinct driver-policy boundary. Centralizes URI sanitization, topology/version discovery, schema helpers, and transient retries.
+Score 11; distinct driver-policy boundary. Owns URI sanitization, topology/version discovery, schema helpers, and retries.
 
 ## WHERE TO LOOK
 
@@ -38,3 +38,5 @@ Score 11 (code ratio 2, Go package 2, 78 top-level symbols 2, 66 exports 2, 43 i
 - Do not continue retry waits after context cancellation.
 - Do not add minor/patch compatibility rejection to the major-only contract.
 - Do not wrap driver errors when callers intentionally classify them; use a justified `wrapcheck` exception.
+
+<!-- End of init-deep baseline. -->

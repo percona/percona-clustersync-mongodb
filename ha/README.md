@@ -2,7 +2,7 @@
 
 Service-wide HA spans three places: [`ha/`](.) (lease, membership, ownership reports), [`../tenure.go`](../tenure.go) (ACTIVE tenure lifecycle), and [`../recovery.go`](../recovery.go) (checkpoint claim, restore, single writer). HA is always on. A lone instance is a group of one.
 
-For pause/finalize deadlines and the target data write concern, see the root README: [Pausing replication](../README.md#pausing-replication) and [Target data write concern](../README.md#target-data-write-concern).
+For pause/finalize deadlines and the target data write concern, see the pipeline reference: [Pausing replication](../pcsm/README.md#pausing-replication) and [Target data write concern](../pcsm/README.md#target-data-write-concern).
 
 ## Roles and persistence
 
@@ -52,9 +52,9 @@ Stop every old server and run the full reset before upgrading. Startup rejects a
 
 `--ha-lease-ttl` / `PCSM_HA_LEASE_TTL` defaults to 10s, must be at least 10s, and is truncated to whole milliseconds. Set the same value on every instance, because the owner's value sets both its local deadline and the stored expiry.
 
-Fixed inputs from [`../config/const.go`](../config/const.go): lease renew and member heartbeat every 3s, `HAOperationTimeout` 5s per lease or member operation, stale member after 9s. Checkpointing defaults to every 15s plus state changes; `--recovery-checkpoint-interval` overrides the interval.
+Fixed inputs from [`../config/const.go`](../config/const.go): lease renew and member heartbeat every 3s, `HAOperationTimeout` 5s for lease attempts, releases, term advances, and member heartbeats, stale member after 9s. Checkpointing defaults to every 15s plus state changes; `--recovery-checkpoint-interval` overrides the interval.
 
-HA and checkpoint writes inherit the client's majority write concern without a `wtimeout` ([`../mdb/connect.go`](../mdb/connect.go)). Checkpoint operations obey tenure cancellation and `--mongodb-operation-timeout` (5m default); server selection can fail earlier. Clone and replication data writes use the run's [target write concern](../README.md#target-data-write-concern).
+HA and checkpoint writes inherit the client's majority write concern without a `wtimeout` ([`../mdb/connect.go`](../mdb/connect.go)). Checkpoint operations obey tenure cancellation and `--mongodb-operation-timeout` (5m default); server selection can fail earlier. Clone and replication data writes use the run's [target write concern](../pcsm/README.md#target-data-write-concern).
 
 T is the lease TTL. The lease deadline and the checkpoint writer run independently, and whichever fails first ends the tenure. These are conditional estimates, not guarantees, and an immediate error can end a tenure sooner.
 
@@ -62,7 +62,7 @@ T is the lease TTL. The lease deadline and the checkpoint writer run independent
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No target server selectable (partition, no primary)                                   | 7 to 10s, lease deadline                                  | min(T less up to 3s, checkpoint writer: 30 to 45s with default intervals for a write issued during the outage, up to the operation timeout for one already on the wire) | The driver defaults to 30s server selection; PCSM does not expose an override. A shorter operation deadline can end selection earlier. |
 | Writable primary, majority acknowledgement stalls (primary keeps its majority view)   | 7 to 10s, lease deadline                                  | min(T less up to 3s, operation timeout)                                                                               | Failed lease attempts report nothing until the deadline. If the primary loses its majority and steps down, the row above applies.                            |
-| Majority up, data write concern unsatisfiable (`w:3`, one node down)                  | no transition                                             | no transition                                                                                                         | Lease and checkpoint writes still succeed. Data-write behavior is in [Target data write concern](../README.md#target-data-write-concern).                      |
+| Majority up, data write concern unsatisfiable (`w:3`, one node down)                  | no transition                                             | no transition                                                                                                         | Lease and checkpoint writes still succeed. Data-write behavior is in [Target data write concern](../pcsm/README.md#target-data-write-concern).                      |
 | ACTIVE process crash                                                                  | lease takeable T after the crashed owner's last renewal   | same, longer                                                                                                          | Takeover adds up to 3s of polling, the acquisition RPC and checkpoint restore before requests are admitted. A restarted sole instance stays STANDBY up to T. |
 
 The 30 to 45s estimate combines the driver's 30s server-selection timeout with

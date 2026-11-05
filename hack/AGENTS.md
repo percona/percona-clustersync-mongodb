@@ -2,11 +2,7 @@
 
 ## OVERVIEW
 
-Score 6 (58 recursive files 3, code ratio 77% 2, own Compose/mongod config 1; 4 subdirs, no Go package, symbols/refs n/a); retained below threshold as the single guide for topology, HA-drill, and monitoring operations. Children `rs/`, `sh/`, `ha/`, `metrics/` score under 8 and are covered here. Distinct operator-tooling domain. Owns disposable MongoDB topologies, HA drills, metrics tooling, and diagnostics.
-
-Read [local setup and diagnostics](../CONTRIBUTING.md#running-pcsm-locally)
-before running topology tools. Read [HA operations](../ha/README.md) before
-changing HA drills or monitoring.
+Score 6; retained below the creation threshold for the distinct operator-tooling domain: local topologies, HA drills, monitoring, and diagnostics.
 
 ## WHERE TO LOOK
 
@@ -35,9 +31,15 @@ changing HA drills or monitoring.
 
 ## ANTI-PATTERNS
 
-- Never switch RS and sharded topologies without running `./hack/cleanup.sh`.
 - Never remove a cluster network before stopping PCSM HA containers attached to it.
 - Never use host port `29017` from inside the target mongos container.
 - Never reset target state while an old HA group is still running.
 - Never raise shard counts beyond the three configured service/port slots.
-- Never treat `hack/reference.md` snippets as canonical when scripts or Make targets disagree.
+
+<!-- End of init-deep baseline. -->
+
+## PROJECT NOTES
+
+Read [local setup and diagnostics](../CONTRIBUTING.md#running-pcsm-locally)
+before running topology tools. Read [HA operations](../ha/README.md) before
+changing HA drills or monitoring.
