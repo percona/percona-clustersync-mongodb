@@ -283,6 +283,17 @@ func TestIsTransient_WrappedServerErrors(t *testing.T) {
 		// Write errors never carry labels, so the driver does not retry them.
 		{"bulk write: write error", wrap(bulkWriteErr(189)), true},
 		{"bulk write: duplicate key", wrap(bulkWriteErr(11000)), false},
+		// A transient write concern error retries the whole batch even with a
+		// duplicate key: the writes before it may be rolled back, and recovery
+		// resumes after the duplicate.
+		{
+			"bulk write: duplicate key and transient write concern error",
+			wrap(mongo.BulkWriteException{
+				WriteErrors:       []mongo.BulkWriteError{{Code: 11000}},
+				WriteConcernError: &mongo.WriteConcernError{Code: 189},
+			}),
+			true,
+		},
 		// ClientBulkWriteException carries no labels and is not a ServerError.
 		{
 			"client bulk write: write error",
@@ -298,6 +309,14 @@ func TestIsTransient_WrappedServerErrors(t *testing.T) {
 			"client bulk write: duplicate key",
 			wrap(mongo.ClientBulkWriteException{WriteErrors: map[int]mongo.WriteError{0: {Code: 11000}}}),
 			false,
+		},
+		{
+			"client bulk write: duplicate key and transient write concern error",
+			wrap(mongo.ClientBulkWriteException{
+				WriteErrors:        map[int]mongo.WriteError{0: {Code: 11000}},
+				WriteConcernErrors: []mongo.WriteConcernError{{Code: 189}},
+			}),
+			true,
 		},
 	}
 
