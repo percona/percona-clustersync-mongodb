@@ -3,6 +3,7 @@ package mdb
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -91,7 +92,7 @@ func isMongoCommandError(err error, name string) bool {
 // IsTransient reports whether an error is expected to clear on retry.
 // Context cancellation is never transient — it signals intentional shutdown.
 func IsTransient(err error) bool {
-	if errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 
@@ -137,47 +138,44 @@ func IsTransient(err error) bool {
 		10107: {}, // NotWritablePrimary
 		13435: {}, // NotPrimaryNoSecondaryOk
 	}
+	isTransientCode := func(code int) bool {
+		_, ok := transientErrorCodes[code]
 
-	var wEx mongo.WriteException
-	if errors.As(err, &wEx) {
-		for _, we := range wEx.WriteErrors {
-			if _, ok := transientErrorCodes[we.Code]; ok {
-				return true
-			}
-		}
-
-		if wEx.WriteConcernError != nil {
-			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
-				return true
-			}
-		}
+		return ok
 	}
 
-	var cmdErr mongo.CommandError
-	if errors.As(err, &cmdErr) {
-		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
-			return true
-		}
+	// ServerError covers CommandError, WriteException, BulkWriteException and
+	// WriteError, and ErrorCodes includes their write errors and write concern
+	// error. The driver retries only labeled errors, so an unlabeled transient
+	// code reaches the caller.
+	var srvErr mongo.ServerError
+	if errors.As(err, &srvErr) && slices.ContainsFunc(srvErr.ErrorCodes(), isTransientCode) {
+		return true
+	}
+
+	// ClientBulkWrite, used against 8.0+ targets, returns
+	// ClientBulkWriteException, which is not a ServerError.
+	var cbwErr mongo.ClientBulkWriteException
+	if errors.As(err, &cbwErr) && slices.ContainsFunc(cbwErr.ErrorCodes(), isTransientCode) {
+		return true
 	}
 
 	// Collection.Drop and Database.CreateCollection return through the
 	// driver's wrapErrors, which has no driver.WriteCommandError branch, so a
 	// writeConcernError on those paths arrives as the raw driver type and
-	// misses the WriteException branch above. RunCommand and IndexView convert
+	// misses the ServerError branch above. RunCommand and IndexView convert
 	// via processWriteError, so PCSM's collMod and createIndexes are
 	// unaffected; this branch also covers them if that ever changes.
 	var wcErr driver.WriteCommandError
 	if errors.As(err, &wcErr) {
 		for _, we := range wcErr.WriteErrors {
-			if _, ok := transientErrorCodes[int(we.Code)]; ok {
+			if isTransientCode(int(we.Code)) {
 				return true
 			}
 		}
 
-		if wcErr.WriteConcernError != nil {
-			if _, ok := transientErrorCodes[int(wcErr.WriteConcernError.Code)]; ok {
-				return true
-			}
+		if wcErr.WriteConcernError != nil && isTransientCode(int(wcErr.WriteConcernError.Code)) {
+			return true
 		}
 	}
 
