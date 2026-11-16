@@ -801,6 +801,29 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
+	sourceFCV, err := mdb.GetFCV(ctx, source)
+	if err != nil {
+		return nil, errors.Wrap(err, "source FCV")
+	}
+
+	targetFCV, err := mdb.GetFCV(ctx, target)
+	if err != nil {
+		return nil, errors.Wrap(err, "target FCV")
+	}
+
+	err = mdb.CheckFCVCompat(sourceFCV, targetFCV)
+	if err != nil {
+		return nil, errors.Wrap(err, "FCV check")
+	}
+
+	lg.Infof("FCV: source %s, target %s", sourceFCV, targetFCV)
+
+	if sourceFCV.Compare(targetFCV) < 0 {
+		lg.Warnf("Source FCV %[1]s is lower than target FCV %[2]s: reversing the replication "+
+			"direction (target to source) will not be possible unless the source FCV is raised to %[2]s",
+			sourceFCV, targetFCV)
+	}
+
 	err = checkNoLegacyInstance(ctx, target)
 	if err != nil {
 		return nil, err

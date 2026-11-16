@@ -111,9 +111,16 @@ MONGO_VERSION="8.0.29-13" ./hack/rs/run.sh
 | `TGT_SHARDS` | `2` | Target shard count, up to 3 |
 
 Per-side image precedence is side override, `MONGO_VERSION`, then the Compose
-default. Runtime version compatibility compares major versions only: the source
-major must not exceed the target major. Acceptance outside the CI matrix is not
-validation.
+default. Runtime version compatibility compares binary major versions only: the
+source major must not exceed the target major. At startup PCSM also reads
+`featureCompatibilityVersion` (via `getParameter`, so the user needs that
+privilege) from both clusters and refuses to start if the source FCV is higher
+than the target FCV, for example a source at FCV 8.0 and a target on 8.0
+binaries still at FCV 7.0. Startup is also rejected while an FCV upgrade or
+downgrade is in progress on either cluster. When the source FCV is lower than
+the target FCV, PCSM starts but logs a warning: reversing the replication
+direction later will not be possible unless the source FCV is raised to the
+target FCV. Acceptance outside the CI matrix is not validation.
 
 ### 2. Update /etc/hosts
 

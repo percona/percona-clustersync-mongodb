@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestServerVersion(t *testing.T) {
@@ -232,4 +233,187 @@ func TestServerVersionInvalidCore(t *testing.T) {
 			require.ErrorAs(t, err, &invalidVersion)
 		})
 	}
+}
+
+func TestParseFCV(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseFCV("8.0")
+	require.NoError(t, err)
+	assert.Equal(t, FCV{8, 0}, got)
+	assert.Equal(t, "8.0", got.String())
+
+	got, err = parseFCV("8.10")
+	require.NoError(t, err)
+	assert.Equal(t, FCV{8, 10}, got)
+
+	for _, input := range []string{"", "8", "8.", ".0", "a.b", "8.x", "-1.0", "8.-1", "8.0.1"} {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFCV(input)
+			var invalid InvalidFCVError
+			require.ErrorAs(t, err, &invalid)
+		})
+	}
+}
+
+func TestFCVFromRaw(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		doc     bson.D
+		want    FCV
+		wantErr bool
+	}{
+		{
+			name: "document",
+			doc:  bson.D{{"featureCompatibilityVersion", bson.D{{"version", "8.0"}}}},
+			want: FCV{8, 0},
+		},
+		{
+			name: "legacy string",
+			doc:  bson.D{{"featureCompatibilityVersion", "4.2"}},
+			want: FCV{4, 2},
+		},
+		{name: "missing", doc: bson.D{{"ok", 1}}, wantErr: true},
+		{name: "wrong type", doc: bson.D{{"featureCompatibilityVersion", 8}}, wantErr: true},
+		{
+			name:    "document without version",
+			doc:     bson.D{{"featureCompatibilityVersion", bson.D{{"targetVersion", "8.0"}}}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid value",
+			doc:     bson.D{{"featureCompatibilityVersion", bson.D{{"version", "eight"}}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := bson.Marshal(tt.doc)
+			require.NoError(t, err)
+
+			got, err := fcvFromRaw(raw)
+			if tt.wantErr {
+				require.Error(t, err)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCheckFCVCompat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  FCV
+		target  FCV
+		wantErr bool
+	}{
+		{name: "equal", source: FCV{8, 0}, target: FCV{8, 0}},
+		{name: "source lower", source: FCV{7, 0}, target: FCV{8, 0}},
+		{name: "source lower minor", source: FCV{8, 0}, target: FCV{8, 2}},
+		{name: "numeric not lexical", source: FCV{8, 2}, target: FCV{8, 10}},
+		{name: "source higher major", source: FCV{8, 0}, target: FCV{7, 0}, wantErr: true},
+		{name: "source higher minor", source: FCV{8, 2}, target: FCV{8, 0}, wantErr: true},
+		{name: "numeric not lexical, higher", source: FCV{8, 10}, target: FCV{8, 2}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := CheckFCVCompat(tt.source, tt.target)
+			if !tt.wantErr {
+				require.NoError(t, err)
+
+				return
+			}
+
+			var fcvErr FCVDowngradeError
+			require.ErrorAs(t, err, &fcvErr)
+			assert.Equal(t, tt.source, fcvErr.Source)
+			assert.Equal(t, tt.target, fcvErr.Target)
+			assert.Contains(t, err.Error(), "source FCV "+tt.source.String()+
+				" is higher than target FCV "+tt.target.String())
+		})
+	}
+}
+
+func TestFCVFromRawTransition(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		doc  bson.D
+		want FCVTransitionError
+	}{
+		{
+			name: "upgrading",
+			doc: bson.D{{"featureCompatibilityVersion", bson.D{
+				{"version", "7.0"}, {"targetVersion", "8.0"},
+			}}},
+			want: FCVTransitionError{Version: "7.0", Target: "8.0"},
+		},
+		{
+			name: "downgrading",
+			doc: bson.D{{"featureCompatibilityVersion", bson.D{
+				{"version", "7.0"}, {"targetVersion", "7.0"}, {"previousVersion", "8.0"},
+			}}},
+			want: FCVTransitionError{Version: "7.0", Target: "7.0", Previous: "8.0"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := bson.Marshal(tt.doc)
+			require.NoError(t, err)
+
+			_, err = fcvFromRaw(raw)
+
+			var transition FCVTransitionError
+			require.ErrorAs(t, err, &transition)
+			assert.Equal(t, tt.want, transition)
+			assert.Contains(t, err.Error(), "change in progress")
+		})
+	}
+}
+
+func TestFCVFromDoc(t *testing.T) {
+	t.Parallel()
+
+	raw, err := bson.Marshal(bson.D{{"_id", "featureCompatibilityVersion"}, {"version", "7.0"}})
+	require.NoError(t, err)
+
+	got, err := fcvFromDoc(raw)
+	require.NoError(t, err)
+	assert.Equal(t, FCV{7, 0}, got)
+
+	raw, err = bson.Marshal(bson.D{
+		{"_id", "featureCompatibilityVersion"}, {"version", "7.0"}, {"targetVersion", "8.0"},
+	})
+	require.NoError(t, err)
+
+	_, err = fcvFromDoc(raw)
+	var transition FCVTransitionError
+	require.ErrorAs(t, err, &transition)
+
+	raw, err = bson.Marshal(bson.D{{"_id", "featureCompatibilityVersion"}})
+	require.NoError(t, err)
+
+	_, err = fcvFromDoc(raw)
+	var invalid InvalidFCVError
+	require.ErrorAs(t, err, &invalid)
 }

@@ -95,3 +95,35 @@ func TestConnect_MaxPoolSize(t *testing.T) {
 
 	require.NoError(t, client.Ping(ctx, nil), "ping should succeed with maxPoolSize set")
 }
+
+// TestGetFCV verifies getParameter works through the Stable API client and that
+// a freshly started deployment reports an FCV matching its binary major version.
+func TestGetFCV(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{Source: integrationURI}
+	cfg.MongoDB.OperationTimeout = 10 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := Connect(ctx, integrationURI, cfg)
+	require.NoError(t, err)
+
+	defer func() {
+		_ = client.Disconnect(ctx)
+	}()
+
+	version, err := Version(ctx, client)
+	require.NoError(t, err)
+
+	fcv, err := GetFCV(ctx, client)
+	require.NoError(t, err)
+	require.Equal(t, version.Major(), fcv.Major)
+	require.NoError(t, CheckFCVCompat(fcv, fcv))
+
+	// The admin.system.version fallback used for mongos < 8.0 must agree.
+	fallback, err := fcvFromSystemVersion(ctx, client)
+	require.NoError(t, err)
+	require.Equal(t, fcv, fallback)
+}

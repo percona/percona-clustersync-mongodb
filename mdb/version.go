@@ -119,6 +119,185 @@ func CheckVersionCompat(source, target ServerVersion) (bool, error) {
 	return source.Major() < target.Major(), nil
 }
 
+// FCV is a featureCompatibilityVersion value (MAJOR.MINOR).
+type FCV struct {
+	Major int
+	Minor int
+}
+
+func (f FCV) String() string {
+	return fmt.Sprintf("%d.%d", f.Major, f.Minor)
+}
+
+// Compare returns -1, 0 or 1 if f is lower than, equal to or higher than other.
+// Components are compared numerically, so 8.10 is higher than 8.2.
+func (f FCV) Compare(other FCV) int {
+	if f.Major != other.Major {
+		if f.Major < other.Major {
+			return -1
+		}
+
+		return 1
+	}
+
+	switch {
+	case f.Minor < other.Minor:
+		return -1
+	case f.Minor > other.Minor:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// InvalidFCVError is returned when the featureCompatibilityVersion value
+// cannot be parsed.
+type InvalidFCVError struct {
+	value string
+}
+
+func (e InvalidFCVError) Error() string {
+	return "invalid featureCompatibilityVersion: " + e.value
+}
+
+// parseFCV parses a featureCompatibilityVersion string. Acceptable pattern: MAJOR.MINOR.
+func parseFCV(s string) (FCV, error) {
+	majorStr, minorStr, ok := strings.Cut(s, ".")
+	if !ok {
+		return FCV{}, InvalidFCVError{s}
+	}
+
+	major, err := strconv.Atoi(majorStr)
+	if err != nil || major < 0 {
+		return FCV{}, InvalidFCVError{s}
+	}
+
+	minor, err := strconv.Atoi(minorStr)
+	if err != nil || minor < 0 {
+		return FCV{}, InvalidFCVError{s}
+	}
+
+	return FCV{Major: major, Minor: minor}, nil
+}
+
+// FCVTransitionError is returned when the deployment is in the middle of an FCV
+// upgrade or downgrade, so its effective FCV is not settled.
+type FCVTransitionError struct {
+	Version  string
+	Target   string
+	Previous string
+}
+
+func (e FCVTransitionError) Error() string {
+	msg := "featureCompatibilityVersion change in progress (version " + e.Version
+	if e.Target != "" {
+		msg += ", targetVersion " + e.Target
+	}
+
+	if e.Previous != "" {
+		msg += ", previousVersion " + e.Previous
+	}
+
+	return msg + "); wait for it to finish and retry"
+}
+
+// GetFCV returns the featureCompatibilityVersion of the deployment.
+// Returns FCVTransitionError while an FCV upgrade or downgrade is in progress.
+//
+// mongos before 8.0 rejects the getParameter option with InvalidOptions; in
+// that case the FCV document is read from admin.system.version, which mongos
+// routes to the config server.
+func GetFCV(ctx context.Context, m *mongo.Client) (FCV, error) {
+	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return m.Database("admin").RunCommand(ctx, bson.D{
+			{"getParameter", 1},
+			{"featureCompatibilityVersion", 1},
+		}).Raw() //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err == nil {
+		return fcvFromRaw(raw)
+	}
+
+	if !IsInvalidOptions(err) {
+		return FCV{}, errors.Wrap(err, "getParameter featureCompatibilityVersion")
+	}
+
+	return fcvFromSystemVersion(ctx, m)
+}
+
+// fcvFromSystemVersion reads the FCV document from admin.system.version.
+func fcvFromSystemVersion(ctx context.Context, m *mongo.Client) (FCV, error) {
+	doc, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return m.Database("admin").Collection("system.version").
+			FindOne(ctx, bson.D{{"_id", "featureCompatibilityVersion"}}).Raw() //nolint:wrapcheck
+	}, DefaultRetryInterval, DefaultMaxRetries)
+	if err != nil {
+		return FCV{}, errors.Wrap(err, "read featureCompatibilityVersion from admin.system.version")
+	}
+
+	return fcvFromDoc(doc)
+}
+
+// fcvFromRaw extracts the FCV from a getParameter response.
+func fcvFromRaw(raw bson.Raw) (FCV, error) {
+	val, err := raw.LookupErr("featureCompatibilityVersion")
+	if err != nil {
+		return FCV{}, errors.Wrap(err, "lookup featureCompatibilityVersion")
+	}
+
+	// 4.4+ returns a document {version: "X.Y"}; older servers return a string.
+	s, ok := val.StringValueOK()
+	if ok {
+		return parseFCV(s)
+	}
+
+	doc, ok := val.DocumentOK()
+	if !ok {
+		return FCV{}, InvalidFCVError{val.String()}
+	}
+
+	return fcvFromDoc(doc)
+}
+
+// fcvFromDoc extracts the FCV from a {version, targetVersion?, previousVersion?}
+// document, rejecting one that describes a transition in progress.
+func fcvFromDoc(doc bson.Raw) (FCV, error) {
+	s, ok := doc.Lookup("version").StringValueOK()
+	if !ok {
+		return FCV{}, InvalidFCVError{doc.String()}
+	}
+
+	target, _ := doc.Lookup("targetVersion").StringValueOK()
+	previous, _ := doc.Lookup("previousVersion").StringValueOK()
+
+	if target != "" || previous != "" {
+		return FCV{}, FCVTransitionError{Version: s, Target: target, Previous: previous}
+	}
+
+	return parseFCV(s)
+}
+
+// FCVDowngradeError is returned when the source FCV is higher than the target FCV.
+type FCVDowngradeError struct {
+	Source FCV
+	Target FCV
+}
+
+func (e FCVDowngradeError) Error() string {
+	return fmt.Sprintf("source FCV %s is higher than target FCV %s; replication is not supported",
+		e.Source, e.Target)
+}
+
+// CheckFCVCompat validates source and target featureCompatibilityVersion.
+// Returns FCVDowngradeError if source FCV > target FCV.
+func CheckFCVCompat(source, target FCV) error {
+	if source.Compare(target) > 0 {
+		return FCVDowngradeError{Source: source, Target: target}
+	}
+
+	return nil
+}
+
 type Support ServerVersion
 
 func (s Support) ClientBulkWrite() bool {
