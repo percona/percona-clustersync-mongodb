@@ -113,14 +113,26 @@ MONGO_VERSION="8.0.29-13" ./hack/rs/run.sh
 Per-side image precedence is side override, `MONGO_VERSION`, then the Compose
 default. Runtime version compatibility compares binary major versions only: the
 source major must not exceed the target major. At startup PCSM also reads
-`featureCompatibilityVersion` (via `getParameter`, so the user needs that
-privilege) from both clusters and refuses to start if the source FCV is higher
+`featureCompatibilityVersion` from both clusters and refuses to start if the source FCV is higher
 than the target FCV, for example a source at FCV 8.0 and a target on 8.0
 binaries still at FCV 7.0. Startup is also rejected while an FCV upgrade or
 downgrade is in progress on either cluster. When the source FCV is lower than
 the target FCV, PCSM starts but logs a warning: reversing the replication
 direction later will not be possible unless the source FCV is raised to the
 target FCV. Acceptance outside the CI matrix is not validation.
+
+Reading the FCV needs extra privileges for the source and target users:
+
+- On both clusters: the `getParameter` cluster action. Built-in roles that grant
+  it: `clusterMonitor`, `backup`, `restore`, and roles that include them
+  (`clusterAdmin`, `root`).
+- When connecting through a mongos older than 8.0, which rejects `getParameter`
+  for FCV: also `find` on `admin.system.version`, which PCSM reads instead.
+  Built-in roles that grant it: `backup`, `restore`, `userAdminAnyDatabase`,
+  `root`. `clusterMonitor` alone is not enough here.
+
+Without these, PCSM fails at startup with an authorization error from the
+`source FCV` or `target FCV` check.
 
 ### 2. Update /etc/hosts
 

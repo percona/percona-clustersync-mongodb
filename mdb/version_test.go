@@ -417,3 +417,41 @@ func TestFCVFromDoc(t *testing.T) {
 	var invalid InvalidFCVError
 	require.ErrorAs(t, err, &invalid)
 }
+
+func TestFCVMalformedTransitionFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		field bson.E
+	}{
+		{name: "targetVersion not a string", field: bson.E{"targetVersion", 8}},
+		{name: "targetVersion empty", field: bson.E{"targetVersion", ""}},
+		{name: "targetVersion null", field: bson.E{"targetVersion", nil}},
+		{name: "previousVersion not a string", field: bson.E{"previousVersion", bson.D{{"v", "8.0"}}}},
+		{name: "previousVersion empty", field: bson.E{"previousVersion", ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fcvDoc := bson.D{{"version", "7.0"}, tt.field}
+
+			// getParameter shape.
+			raw, err := bson.Marshal(bson.D{{"featureCompatibilityVersion", fcvDoc}})
+			require.NoError(t, err)
+
+			_, err = fcvFromRaw(raw)
+			var invalid InvalidFCVError
+			require.ErrorAs(t, err, &invalid)
+
+			// admin.system.version shape.
+			raw, err = bson.Marshal(append(bson.D{{"_id", "featureCompatibilityVersion"}}, fcvDoc...))
+			require.NoError(t, err)
+
+			_, err = fcvFromDoc(raw)
+			require.ErrorAs(t, err, &invalid)
+		})
+	}
+}

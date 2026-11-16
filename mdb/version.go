@@ -212,7 +212,7 @@ func GetFCV(ctx context.Context, m *mongo.Client) (FCV, error) {
 		return m.Database("admin").RunCommand(ctx, bson.D{
 			{"getParameter", 1},
 			{"featureCompatibilityVersion", 1},
-		}).Raw() //nolint:wrapcheck
+		}).Raw() //nolint:wrapcheck // raw: retry and IsInvalidOptions (mongos fallback) classify it
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err == nil {
 		return fcvFromRaw(raw)
@@ -229,7 +229,7 @@ func GetFCV(ctx context.Context, m *mongo.Client) (FCV, error) {
 func fcvFromSystemVersion(ctx context.Context, m *mongo.Client) (FCV, error) {
 	doc, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
 		return m.Database("admin").Collection("system.version").
-			FindOne(ctx, bson.D{{"_id", "featureCompatibilityVersion"}}).Raw() //nolint:wrapcheck
+			FindOne(ctx, bson.D{{"_id", "featureCompatibilityVersion"}}).Raw() //nolint:wrapcheck // raw for retry; wrapped below
 	}, DefaultRetryInterval, DefaultMaxRetries)
 	if err != nil {
 		return FCV{}, errors.Wrap(err, "read featureCompatibilityVersion from admin.system.version")
@@ -267,14 +267,38 @@ func fcvFromDoc(doc bson.Raw) (FCV, error) {
 		return FCV{}, InvalidFCVError{doc.String()}
 	}
 
-	target, _ := doc.Lookup("targetVersion").StringValueOK()
-	previous, _ := doc.Lookup("previousVersion").StringValueOK()
+	target, err := optionalFCVField(doc, "targetVersion")
+	if err != nil {
+		return FCV{}, err
+	}
+
+	previous, err := optionalFCVField(doc, "previousVersion")
+	if err != nil {
+		return FCV{}, err
+	}
 
 	if target != "" || previous != "" {
 		return FCV{}, FCVTransitionError{Version: s, Target: target, Previous: previous}
 	}
 
 	return parseFCV(s)
+}
+
+// optionalFCVField returns the value of a transition field of the FCV document,
+// or "" when the field is absent. A present field must be a nonempty string,
+// so a malformed document is never mistaken for a settled FCV.
+func optionalFCVField(doc bson.Raw, key string) (string, error) {
+	val := doc.Lookup(key)
+	if val.IsZero() {
+		return "", nil
+	}
+
+	s, ok := val.StringValueOK()
+	if !ok || s == "" {
+		return "", InvalidFCVError{doc.String()}
+	}
+
+	return s, nil
 }
 
 // FCVDowngradeError is returned when the source FCV is higher than the target FCV.
