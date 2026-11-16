@@ -947,17 +947,28 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			lg.With(log.Elapsed(elapsed)).
 				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
 
+			// The pause happens once. Its flag is cleared with the pause, under
+			// one lock, so the checkpoint of the pause records it as done: a
+			// restored run can find the initial sync incomplete again, since
+			// ticks don't move the resume checkpoint, and must not pause twice.
 			p.lock.Lock()
-			pauseOnInitialSync := p.pauseOnInitialSync
-			p.lock.Unlock()
-
-			if pauseOnInitialSync {
+			var err error
+			paused := false
+			if p.pauseOnInitialSync {
 				lg.Info("Pausing [PauseOnInitialSync]")
 
-				err := p.Pause(ctx)
-				if err != nil {
-					lg.Error(err, "PauseOnInitialSync")
+				err = p.doPause(ctx)
+				if err == nil {
+					p.pauseOnInitialSync = false
+					paused = true
 				}
+			}
+			p.lock.Unlock()
+
+			if err != nil {
+				lg.Error(err, "PauseOnInitialSync")
+			} else if paused {
+				log.New("pcsm").Info("Cluster Replication pause accepted")
 			}
 
 			return

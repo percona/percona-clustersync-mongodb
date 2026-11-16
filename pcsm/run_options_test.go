@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 
 	"github.com/percona/percona-clustersync-mongodb/mdb"
+	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/clone"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/repl"
 )
@@ -117,6 +119,49 @@ func TestStatusReportsPauseOnInitialSync(t *testing.T) {
 	p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
 	require.NoError(t, p.Recover(t.Context(), data))
 	assert.True(t, p.Status(t.Context()).PauseOnInitialSync)
+}
+
+// The pause on initial sync happens once. The checkpoint written for the pause
+// records it as done: a restored run can find the initial sync incomplete again,
+// since ticks don't move the persisted resume checkpoint, and must not pause
+// a second time.
+func TestPauseOnInitialSyncPausesOnce(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		r := &drainingReplicator{}
+		p := &PCSM{
+			state: StateRunning, pauseOnInitialSync: true,
+			catalog: catalog.NewCatalog(nil, nil, mdb.ServerVersion{}),
+			clone:   finishedLifecycleCloner(), repl: r,
+			runDone: make(chan struct{}),
+		}
+		saved := make(chan []byte, 1)
+		p.onStateChanged = func(State) {
+			data, err := p.Checkpoint(t.Context())
+			if err == nil {
+				select {
+				case saved <- data:
+				default:
+				}
+			}
+		}
+
+		monitorDone := make(chan struct{})
+		go func() {
+			p.monitorInitialSync(t.Context())
+			close(monitorDone)
+		}()
+		synctest.Wait()
+		r.lastOp.Store(2) // the frontier passes the clone's finish
+		<-monitorDone
+		synctest.Wait()
+
+		cp := bson.Raw(<-saved)
+		assert.Equal(t, string(StatePaused), cp.Lookup("state").StringValue())
+		_, err := cp.LookupErr("options", "pauseOnInitialSync")
+		require.ErrorIs(t, err, bsoncore.ErrElementNotFound, "the checkpoint of the pause must record it as done")
+	})
 }
 
 // Every tuning option survives the checkpoint. An option added to

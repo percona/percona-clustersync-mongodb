@@ -52,3 +52,4 @@ request completion. For tenure cancellation and recovery, read [HA](../ha/README
 - `Finalize` joins the captured run outside the lifecycle lock and rechecks the execution before scheduling catalog work.
 - Non-majority target data write concern is stored in the checkpoint and restored into clone/repl options; checkpoints, HA, and DDL stay majority.
 - `pauseOnInitialSync` and clone/repl tuning are stored as requested (zero stays auto, never the resolved values) and restored by `Recover`; a checkpoint without them falls back to `SetRecoveryDefaults`, the server's configured options.
+- The initial-sync pause happens once: `monitorInitialSync` clears `pauseOnInitialSync` with the pause, under one lock. A restored run can find the initial sync incomplete again (ticks don't move the resume checkpoint), so don't infer "already paused" from the frontier.
