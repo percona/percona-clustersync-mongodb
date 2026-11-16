@@ -723,6 +723,10 @@ type server struct {
 	// (the deferred effect of the --start flag). Set at construction, never
 	// changed.
 	autoStartOpts *pcsm.StartOptions
+	// recoveryDefaults are the configured StartOptions. A restore uses them for
+	// a checkpoint written before run options were persisted. Set at
+	// construction, never changed.
+	recoveryDefaults *pcsm.StartOptions
 }
 
 // createServer creates a new server with the given options.
@@ -733,6 +737,11 @@ type server struct {
 // source connection carries only driver monitoring traffic.
 func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.StartOptions) (*server, error) {
 	lg := log.Ctx(ctx)
+
+	recoveryDefaults, err := buildStartOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	source, err := mdb.Connect(ctx, cfg.Source, cfg)
 	if err != nil {
@@ -841,15 +850,16 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 	}
 
 	s := &server{
-		cfg:            cfg,
-		sourceCluster:  source,
-		targetCluster:  target,
-		sourceVersion:  sourceVersion,
-		sourceIsMongos: srcHello.IsMongos(),
-		targetIsMongos: tgtHello.IsMongos(),
-		membership:     membership,
-		promRegistry:   promRegistry,
-		autoStartOpts:  autoStart,
+		cfg:              cfg,
+		sourceCluster:    source,
+		targetCluster:    target,
+		sourceVersion:    sourceVersion,
+		sourceIsMongos:   srcHello.IsMongos(),
+		targetIsMongos:   tgtHello.IsMongos(),
+		membership:       membership,
+		promRegistry:     promRegistry,
+		autoStartOpts:    autoStart,
+		recoveryDefaults: recoveryDefaults,
 	}
 
 	// Settle ownership before the HTTP server serves any request; see
@@ -971,6 +981,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	res.PauseOnInitialSync = status.PauseOnInitialSync
 	res.EventsRead = status.Repl.EventsRead
 	res.EventsApplied = status.Repl.EventsApplied
 	res.LagTimeSeconds = status.TotalLagTimeSeconds
@@ -1641,7 +1652,8 @@ func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
-	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	// PauseOnInitialSync indicates whether the run pauses once the initial
+	// sync completes.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 
 	// Ok indicates if the operation was successful.

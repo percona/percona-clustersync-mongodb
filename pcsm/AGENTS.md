@@ -51,3 +51,4 @@ request completion. For tenure cancellation and recovery, read [HA](../ha/README
 - `Checkpoint` persists a pending `pausing` as `paused`; HTTP status must keep reporting the live drain.
 - `Finalize` joins the captured run outside the lifecycle lock and rechecks the execution before scheduling catalog work.
 - Non-majority target data write concern is stored in the checkpoint and restored into clone/repl options; checkpoints, HA, and DDL stay majority.
+- `pauseOnInitialSync` and clone/repl tuning are stored as requested (zero stays auto, never the resolved values) and restored by `Recover`; a checkpoint without them falls back to `SetRecoveryDefaults`, the server's configured options.
