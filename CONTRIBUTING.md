@@ -123,13 +123,13 @@ target FCV. Acceptance outside the CI matrix is not validation.
 
 Reading the FCV needs extra privileges for the source and target users:
 
-- On both clusters: the `getParameter` cluster action. Built-in roles that grant
-  it: `clusterMonitor`, `backup`, `restore`, and roles that include them
-  (`clusterAdmin`, `root`).
-- When connecting through a mongos older than 8.0, which rejects `getParameter`
-  for FCV: also `find` on `admin.system.version`, which PCSM reads instead.
-  Built-in roles that grant it: `backup`, `restore`, `userAdminAnyDatabase`,
-  `root`. `clusterMonitor` alone is not enough here.
+- Replica sets and mongos 8.0 or newer: the `getParameter` cluster action.
+  Built-in roles that grant it: `clusterMonitor`, `backup`, `restore`, and roles
+  that include them (`clusterAdmin`, `root`).
+- mongos older than 8.0, which does not support `getParameter` for FCV: `find`
+  on `admin.system.version`, which PCSM reads instead. Built-in roles that grant
+  it: `backup`, `restore`, `userAdminAnyDatabase`, `root`. `clusterMonitor`
+  alone is not enough here.
 
 Without these, PCSM fails at startup with an authorization error from the
 `source FCV` or `target FCV` check.

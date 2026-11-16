@@ -138,12 +138,12 @@ func TestGetFCV(t *testing.T) {
 		version, err := Version(ctx, client)
 		require.NoError(t, err)
 
-		fcv, err := GetFCV(ctx, client)
+		fcv, err := GetFCV(ctx, client, false, version)
 		require.NoError(t, err)
 		require.Equal(t, version.Major(), fcv.Major)
 		require.NoError(t, CheckFCVCompat(fcv, fcv))
 
-		// The admin.system.version fallback used for mongos < 8.0 must agree.
+		// The admin.system.version path used for mongos < 8.0 must agree.
 		fallback, err := fcvFromSystemVersion(ctx, client)
 		require.NoError(t, err)
 		require.Equal(t, fcv, fallback)
@@ -213,7 +213,7 @@ func TestGetFCV_LoweredAndTransition(t *testing.T) {
 		requireTransition := func() {
 			var transition FCVTransitionError
 
-			_, err := GetFCV(ctx, client)
+			_, err := GetFCV(ctx, client, false, version)
 			require.ErrorAs(t, err, &transition)
 
 			_, err = fcvFromSystemVersion(ctx, client)
@@ -221,7 +221,7 @@ func TestGetFCV_LoweredAndTransition(t *testing.T) {
 		}
 
 		requireFCV := func(want FCV) {
-			got, err := GetFCV(ctx, client)
+			got, err := GetFCV(ctx, client, false, version)
 			require.NoError(t, err)
 			require.Equal(t, want, got)
 

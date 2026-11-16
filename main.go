@@ -801,12 +801,20 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		lg.Infof("Cross-version replication: source %s → target %s", sourceVersion, targetVersion)
 	}
 
-	sourceFCV, err := mdb.GetFCV(ctx, source)
+	if srcHello == nil {
+		return nil, errors.New("source hello response is nil")
+	}
+
+	if tgtHello == nil {
+		return nil, errors.New("target hello response is nil")
+	}
+
+	sourceFCV, err := mdb.GetFCV(ctx, source, srcHello.IsMongos(), sourceVersion)
 	if err != nil {
 		return nil, errors.Wrap(err, "source FCV")
 	}
 
-	targetFCV, err := mdb.GetFCV(ctx, target)
+	targetFCV, err := mdb.GetFCV(ctx, target, tgtHello.IsMongos(), targetVersion)
 	if err != nil {
 		return nil, errors.Wrap(err, "target FCV")
 	}
@@ -854,14 +862,6 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 	metrics.SetHAInfo(membership.InstanceID(), membership.Group())
 	initialRole, initialTerm := membership.CurrentRole()
 	metrics.SetHARoleAndTerm(initialRole == ha.RoleActive, int64(initialTerm))
-
-	if srcHello == nil {
-		return nil, errors.New("source hello response is nil")
-	}
-
-	if tgtHello == nil {
-		return nil, errors.New("target hello response is nil")
-	}
 
 	s := &server{
 		cfg:            cfg,

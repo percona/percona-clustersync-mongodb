@@ -350,6 +350,31 @@ func TestCheckFCVCompat(t *testing.T) {
 	}
 }
 
+func TestFCVFromSystemVersionRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		isMongos bool
+		version  ServerVersion
+		want     bool
+	}{
+		{name: "mongos 6.0", isMongos: true, version: ServerVersion{6, 0, 29, 23}, want: true},
+		{name: "mongos 7.0", isMongos: true, version: ServerVersion{7, 0, 40, 22}, want: true},
+		{name: "mongos 8.0", isMongos: true, version: ServerVersion{8, 0, 29, 13}},
+		{name: "replica set 6.0", version: ServerVersion{6, 0, 29, 23}},
+		{name: "replica set 8.0", version: ServerVersion{8, 0, 29, 13}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, fcvFromSystemVersionRequired(tt.isMongos, tt.version))
+		})
+	}
+}
+
 func TestFCVFromRawTransition(t *testing.T) {
 	t.Parallel()
 

@@ -204,25 +204,31 @@ func (e FCVTransitionError) Error() string {
 // GetFCV returns the featureCompatibilityVersion of the deployment.
 // Returns FCVTransitionError while an FCV upgrade or downgrade is in progress.
 //
-// mongos before 8.0 rejects the getParameter option with InvalidOptions; in
-// that case the FCV document is read from admin.system.version, which mongos
-// routes to the config server.
-func GetFCV(ctx context.Context, m *mongo.Client) (FCV, error) {
+// mongos before 8.0 does not support the featureCompatibilityVersion
+// getParameter option, so for it the FCV document is read from
+// admin.system.version, which mongos routes to the config server.
+func GetFCV(ctx context.Context, m *mongo.Client, isMongos bool, version ServerVersion) (FCV, error) {
+	if fcvFromSystemVersionRequired(isMongos, version) {
+		return fcvFromSystemVersion(ctx, m)
+	}
+
 	raw, err := RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
 		return m.Database("admin").RunCommand(ctx, bson.D{
 			{"getParameter", 1},
 			{"featureCompatibilityVersion", 1},
-		}).Raw() //nolint:wrapcheck // raw: retry and IsInvalidOptions (mongos fallback) classify it
+		}).Raw() //nolint:wrapcheck // raw for retry; wrapped below
 	}, DefaultRetryInterval, DefaultMaxRetries)
-	if err == nil {
-		return fcvFromRaw(raw)
-	}
-
-	if !IsInvalidOptions(err) {
+	if err != nil {
 		return FCV{}, errors.Wrap(err, "getParameter featureCompatibilityVersion")
 	}
 
-	return fcvFromSystemVersion(ctx, m)
+	return fcvFromRaw(raw)
+}
+
+// fcvFromSystemVersionRequired reports whether the FCV must be read from
+// admin.system.version instead of getParameter: true for mongos before 8.0.
+func fcvFromSystemVersionRequired(isMongos bool, version ServerVersion) bool {
+	return isMongos && version.Major() < 8 //nolint:mnd // mongos getParameter FCV added in 8.0
 }
 
 // fcvFromSystemVersion reads the FCV document from admin.system.version.
