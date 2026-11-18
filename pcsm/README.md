@@ -58,6 +58,7 @@ HA role checks and the optional response envelope are documented in
 | `error` | string | Error text, omitted when empty |
 | `state` | string | Current pipeline state |
 | `info` | string | Human-readable detail, omitted when empty |
+| `pauseOnInitialSync` | bool | Automatic pause on initial sync is still pending, omitted once accepted or when not requested |
 | `lagTimeSeconds` | int64 | Logical source-to-target lag |
 | `eventsRead` | int64 | Change-stream events read, excluding tick events |
 | `eventsApplied` | int64 | Events applied to target |

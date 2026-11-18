@@ -971,6 +971,7 @@ func (s *server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	res.PauseOnInitialSync = status.PauseOnInitialSync
 	res.EventsRead = status.Repl.EventsRead
 	res.EventsApplied = status.Repl.EventsApplied
 	res.LagTimeSeconds = status.TotalLagTimeSeconds
@@ -1641,7 +1642,8 @@ func (r finalizeResponse) GetError() string { return r.Err }
 
 // statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
-	// PauseOnInitialSync indicates if the replication is paused on initial sync.
+	// PauseOnInitialSync indicates whether the run pauses once the initial
+	// sync completes.
 	PauseOnInitialSync bool `json:"pauseOnInitialSync,omitempty"`
 
 	// Ok indicates if the operation was successful.
