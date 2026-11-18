@@ -4,11 +4,13 @@ package repl //nolint:testpackage // Exercises the worker's bulk writers.
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -24,7 +26,18 @@ import (
 func TestBulkWriteRetriesUnlabeledTransientError(t *testing.T) {
 	runReplIntegrationTest(t, func(ctx context.Context) {
 		uri := newReplTestReplicaSet(ctx, t)
-		client, err := mongo.Connect(options.Client().ApplyURI(uri).SetServerSelectionTimeout(30 * time.Second))
+		// Counts the write commands, to prove the fail point fired and the
+		// writer retried.
+		var attempts atomic.Int32
+		client, err := mongo.Connect(options.Client().ApplyURI(uri).
+			SetServerSelectionTimeout(30 * time.Second).
+			SetMonitor(&event.CommandMonitor{
+				Started: func(_ context.Context, e *event.CommandStartedEvent) {
+					if e.CommandName == "update" || e.CommandName == "bulkWrite" {
+						attempts.Add(1)
+					}
+				},
+			}))
 		require.NoError(t, err)
 		defer disconnectReplTestClient(t, client)
 
@@ -75,9 +88,11 @@ func TestBulkWriteRetriesUnlabeledTransientError(t *testing.T) {
 				bw.Insert(catalog.Namespace{Database: db, Collection: "data"},
 					&InsertEvent{DocumentKey: bson.D{{"_id", id}}, FullDocument: raw})
 
+				attempts.Store(0)
 				size, err := bw.Do(ctx, client)
 				require.NoError(t, err)
 				require.Equal(t, 1, size)
+				require.EqualValues(t, 2, attempts.Load(), "fail point must fire and the writer must retry")
 			})
 		}
 	})

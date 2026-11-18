@@ -251,7 +251,7 @@ func TestIsTransient_DDLWriteConcernError(t *testing.T) {
 func TestIsTransient_WrappedServerErrors(t *testing.T) {
 	t.Parallel()
 
-	wrap := func(err error) error { return errors.Wrap(err, "drop collection a.b") }
+	wrap := func(err error) error { return errors.Wrap(err, "apply batch") }
 	bulkWriteErr := func(code int) mongo.BulkWriteException {
 		return mongo.BulkWriteException{WriteErrors: []mongo.BulkWriteError{{Code: code}}}
 	}
@@ -263,6 +263,7 @@ func TestIsTransient_WrappedServerErrors(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"wrapped context canceled", wrap(context.Canceled), false},
+		{"wrapped no documents", wrap(mongo.ErrNoDocuments), false},
 		{"wrapped primary stepped down", wrap(mongo.CommandError{Code: 189, Name: "PrimarySteppedDown"}), true},
 		{
 			"wrapped write concern error",
@@ -284,8 +285,10 @@ func TestIsTransient_WrappedServerErrors(t *testing.T) {
 		{"bulk write: write error", wrap(bulkWriteErr(189)), true},
 		{"bulk write: duplicate key", wrap(bulkWriteErr(11000)), false},
 		// A transient write concern error retries the whole batch even with a
-		// duplicate key: the writes before it may be rolled back, and recovery
-		// resumes after the duplicate.
+		// duplicate key. Duplicate-key recovery resumes from the next write and
+		// never resends the earlier ones, which aren't majority-committed and can
+		// be rolled back. Once the write concern error clears, the duplicate comes
+		// back on its own and takes the recovery path.
 		{
 			"bulk write: duplicate key and transient write concern error",
 			wrap(mongo.BulkWriteException{
