@@ -20,8 +20,13 @@ import (
 
 // componentOptions returns the options held by a reconstructed clone or repl,
 // without adding production getters solely for tests.
-func componentOptions(component any) reflect.Value {
-	return reflect.ValueOf(component).Elem().FieldByName("options").Elem()
+func componentOptions(t *testing.T, component any) reflect.Value {
+	t.Helper()
+
+	f := reflect.ValueOf(component).Elem().FieldByName("options")
+	require.True(t, f.IsValid(), "%T has no options field", component)
+
+	return f.Elem()
 }
 
 // A restore keeps the tuning and pauseOnInitialSync the run was started with.
@@ -48,11 +53,11 @@ func TestRecoverRunOptions(t *testing.T) {
 
 	assert.True(t, p.pauseOnInitialSync)
 
-	cln := componentOptions(p.clone)
+	cln := componentOptions(t, p.clone)
 	assert.Equal(t, int64(3), cln.FieldByName("ReadWorkers").Int())
 	assert.True(t, cln.FieldByName("SkipPresplit").Bool())
 
-	rpl := componentOptions(p.repl)
+	rpl := componentOptions(t, p.repl)
 	assert.True(t, rpl.FieldByName("UseCollectionBulkWrite").Bool())
 	assert.Equal(t, int64(2), rpl.FieldByName("NumWorkers").Int())
 	assert.Equal(t, int64(100), rpl.FieldByName("BulkOpsSize").Int())
@@ -69,39 +74,19 @@ func TestRecoverRunOptions(t *testing.T) {
 	assert.Equal(t, int32(100), opts.Document().Lookup("repl", "bulkOpsSize").Int32())
 }
 
-// A checkpoint written before run options were persisted falls back to the
-// server's configured options, then to built-in defaults.
-func TestRecoverOldCheckpointUsesRecoveryDefaults(t *testing.T) {
+// A checkpoint written before run options were persisted restores with
+// built-in defaults, as before.
+func TestRecoverOldCheckpointUsesDefaults(t *testing.T) {
 	t.Parallel()
 
 	data, err := bson.Marshal(bson.D{{"state", StatePaused}})
 	require.NoError(t, err)
 
-	t.Run("server config", func(t *testing.T) {
-		t.Parallel()
+	p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
+	require.NoError(t, p.Recover(t.Context(), data))
 
-		p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
-		p.SetRecoveryDefaults(&StartOptions{
-			PauseOnInitialSync: true,
-			Clone:              clone.Options{ReadWorkers: 3},
-			Repl:               repl.Options{NumWorkers: 2},
-		})
-		require.NoError(t, p.Recover(t.Context(), data))
-
-		assert.True(t, p.pauseOnInitialSync)
-		assert.Equal(t, int64(3), componentOptions(p.clone).FieldByName("ReadWorkers").Int())
-		assert.Equal(t, int64(2), componentOptions(p.repl).FieldByName("NumWorkers").Int())
-	})
-
-	t.Run("built-in defaults", func(t *testing.T) {
-		t.Parallel()
-
-		p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
-		require.NoError(t, p.Recover(t.Context(), data))
-
-		assert.False(t, p.pauseOnInitialSync)
-		assert.Equal(t, int64(runtime.NumCPU()), componentOptions(p.repl).FieldByName("NumWorkers").Int())
-	})
+	assert.False(t, p.pauseOnInitialSync)
+	assert.Equal(t, int64(runtime.NumCPU()), componentOptions(t, p.repl).FieldByName("NumWorkers").Int())
 }
 
 // Status reports whether the run pauses once the initial sync completes.
@@ -217,7 +202,7 @@ func TestCheckpointKeepsAutoTuning(t *testing.T) {
 	p := New(t.Context(), nil, nil, mdb.ServerVersion{}, false, false)
 	require.NoError(t, p.Recover(t.Context(), data))
 	assert.False(t, p.pauseOnInitialSync)
-	assert.Equal(t, int64(runtime.NumCPU()), componentOptions(p.repl).FieldByName("NumWorkers").Int())
+	assert.Equal(t, int64(runtime.NumCPU()), componentOptions(t, p.repl).FieldByName("NumWorkers").Int())
 
 	data, err = p.Checkpoint(t.Context())
 	require.NoError(t, err)

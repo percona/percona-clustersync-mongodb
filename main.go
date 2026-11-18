@@ -723,10 +723,6 @@ type server struct {
 	// (the deferred effect of the --start flag). Set at construction, never
 	// changed.
 	autoStartOpts *pcsm.StartOptions
-	// recoveryDefaults are the configured StartOptions. A restore uses them for
-	// a checkpoint written before run options were persisted. Set at
-	// construction, never changed.
-	recoveryDefaults *pcsm.StartOptions
 }
 
 // createServer creates a new server with the given options.
@@ -737,11 +733,6 @@ type server struct {
 // source connection carries only driver monitoring traffic.
 func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.StartOptions) (*server, error) {
 	lg := log.Ctx(ctx)
-
-	recoveryDefaults, err := buildStartOptions(cfg)
-	if err != nil {
-		return nil, err
-	}
 
 	source, err := mdb.Connect(ctx, cfg.Source, cfg)
 	if err != nil {
@@ -850,16 +841,15 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 	}
 
 	s := &server{
-		cfg:              cfg,
-		sourceCluster:    source,
-		targetCluster:    target,
-		sourceVersion:    sourceVersion,
-		sourceIsMongos:   srcHello.IsMongos(),
-		targetIsMongos:   tgtHello.IsMongos(),
-		membership:       membership,
-		promRegistry:     promRegistry,
-		autoStartOpts:    autoStart,
-		recoveryDefaults: recoveryDefaults,
+		cfg:            cfg,
+		sourceCluster:  source,
+		targetCluster:  target,
+		sourceVersion:  sourceVersion,
+		sourceIsMongos: srcHello.IsMongos(),
+		targetIsMongos: tgtHello.IsMongos(),
+		membership:     membership,
+		promRegistry:   promRegistry,
+		autoStartOpts:  autoStart,
 	}
 
 	// Settle ownership before the HTTP server serves any request; see

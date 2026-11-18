@@ -174,9 +174,6 @@ type PCSM struct {
 	// zero values still auto, so a checkpoint never pins the resolved values.
 	cloneOptions clone.Options
 	replOptions  repl.Options
-	// recoveryDefaults stand in for the run options of a checkpoint written
-	// before they were persisted. Nil means built-in defaults.
-	recoveryDefaults *StartOptions
 
 	state State // Current state of the PCSM
 
@@ -329,12 +326,7 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	}
 
 	runOpts := cp.Options
-	switch {
-	case runOpts != nil:
-	case p.recoveryDefaults != nil:
-		d := p.recoveryDefaults
-		runOpts = newRunOptions(d.PauseOnInitialSync, &d.Clone, &d.Repl)
-	default:
+	if runOpts == nil {
 		runOpts = &runOptions{}
 	}
 
@@ -450,15 +442,6 @@ func (p *PCSM) SetOnStateChanged(f OnStateChangedFunc) {
 
 	p.lock.Lock()
 	p.onStateChanged = f
-	p.lock.Unlock()
-}
-
-// SetRecoveryDefaults sets the options a restore uses for a checkpoint that
-// carries none, written before run options were persisted. Nil means
-// built-in defaults.
-func (p *PCSM) SetRecoveryDefaults(options *StartOptions) {
-	p.lock.Lock()
-	p.recoveryDefaults = options
 	p.lock.Unlock()
 }
 
@@ -947,29 +930,7 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			lg.With(log.Elapsed(elapsed)).
 				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
 
-			// The pause happens once. Its flag is cleared with the pause, under
-			// one lock, so the checkpoint of the pause records it as done: a
-			// restored run can find the initial sync incomplete again, since
-			// ticks don't move the resume checkpoint, and must not pause twice.
-			p.lock.Lock()
-			var err error
-			paused := false
-			if p.pauseOnInitialSync {
-				lg.Info("Pausing [PauseOnInitialSync]")
-
-				err = p.doPause(ctx)
-				if err == nil {
-					p.pauseOnInitialSync = false
-					paused = true
-				}
-			}
-			p.lock.Unlock()
-
-			if err != nil {
-				lg.Error(err, "PauseOnInitialSync")
-			} else if paused {
-				log.New("pcsm").Info("Cluster Replication pause accepted")
-			}
+			p.pauseOnInitialSyncOnce(ctx, lg)
 
 			return
 		}
@@ -983,6 +944,33 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			lastPrintAt = now
 		}
 	}
+}
+
+// pauseOnInitialSyncOnce pauses a run started with pauseOnInitialSync. The
+// flag is cleared with the pause, under one lock, so the checkpoint of the
+// pause records it as done: a restored run can find the initial sync
+// incomplete again, since ticks don't move the resume checkpoint, and must not
+// pause twice.
+func (p *PCSM) pauseOnInitialSyncOnce(ctx context.Context, lg log.Logger) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if !p.pauseOnInitialSync {
+		return
+	}
+
+	lg.Info("Pausing [PauseOnInitialSync]")
+
+	err := p.doPause(ctx)
+	if err != nil {
+		lg.Error(err, "PauseOnInitialSync")
+
+		return
+	}
+
+	p.pauseOnInitialSync = false
+
+	log.New("pcsm").Info("Cluster Replication pause accepted")
 }
 
 func (p *PCSM) monitorLagTime(ctx context.Context) {

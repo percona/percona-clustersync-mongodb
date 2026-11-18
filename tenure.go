@@ -142,7 +142,6 @@ func (s *server) openTenure(ctx context.Context, term ha.Term, lg log.Logger) {
 		ready: make(chan struct{}),
 		done:  make(chan struct{}),
 	}
-	t.pipeline.SetRecoveryDefaults(s.recoveryDefaults)
 
 	s.tenure = t
 	s.minTerm = term + 1
