@@ -198,17 +198,18 @@ func (e FCVTransitionError) Error() string {
 		msg += ", previousVersion " + e.Previous
 	}
 
-	return msg + "); wait for it to finish and retry"
+	return msg + "); complete the FCV change before restarting PCSM; " +
+		"if setFeatureCompatibilityVersion failed, resolve its error and rerun it"
 }
 
 // GetFCV returns the featureCompatibilityVersion of the deployment.
 // Returns FCVTransitionError while an FCV upgrade or downgrade is in progress.
 //
-// mongos before 8.0 does not support the featureCompatibilityVersion
-// getParameter option, so for it the FCV document is read from
+// mongos has no FCV of its own, so its getParameter value is not the cluster's
+// (and 8.3+ removes it). For mongos the FCV document is read from
 // admin.system.version, which mongos routes to the config server.
-func GetFCV(ctx context.Context, m *mongo.Client, isMongos bool, version ServerVersion) (FCV, error) {
-	if fcvFromSystemVersionRequired(isMongos, version) {
+func GetFCV(ctx context.Context, m *mongo.Client, isMongos bool) (FCV, error) {
+	if isMongos {
 		return fcvFromSystemVersion(ctx, m)
 	}
 
@@ -223,12 +224,6 @@ func GetFCV(ctx context.Context, m *mongo.Client, isMongos bool, version ServerV
 	}
 
 	return fcvFromRaw(raw)
-}
-
-// fcvFromSystemVersionRequired reports whether the FCV must be read from
-// admin.system.version instead of getParameter: true for mongos before 8.0.
-func fcvFromSystemVersionRequired(isMongos bool, version ServerVersion) bool {
-	return isMongos && version.Major() < 8 //nolint:mnd // mongos getParameter FCV added in 8.0
 }
 
 // fcvFromSystemVersion reads the FCV document from admin.system.version.

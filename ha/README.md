@@ -48,6 +48,10 @@ Reset commands bypass HTTP and connect straight to the target.
 
 Stop every old server and run the full reset before upgrading. Startup rejects a legacy heartbeat younger than `StaleHeartbeatDuration` (35s) as evidence of a live pre-0.10 instance and accepts a stale marker. The full reset removes the legacy heartbeat collection. A checkpoint without a term decodes as term zero; startup does not universally reject that format.
 
+### FCV changes
+
+PCSM compares the source and target `featureCompatibilityVersion` only when a process starts. Running instances are not re-checked, and promotion of a standby does not repeat the check. If the source FCV is raised above the target's, any instance that restarts is rejected until the target FCV catches up, so raise the target FCV first.
+
 ## Lease TTL and failure timing
 
 `--ha-lease-ttl` / `PCSM_HA_LEASE_TTL` defaults to 10s, must be at least 10s, and is truncated to whole milliseconds. Set the same value on every instance, because the owner's value sets both its local deadline and the stored expiry.
