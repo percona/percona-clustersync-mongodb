@@ -6,6 +6,11 @@
 #   SRC_SHARDS=1 ./run.sh         # Custom source shards, default target
 #   TGT_SHARDS=3 ./run.sh         # Default source, custom target shards
 #   SRC_SHARDS=3 TGT_SHARDS=1 ./run.sh  # Custom both
+#   TGT_DEDICATED_CONFIGSVR=1 ./run.sh  # Keep a dedicated target config server (8.x)
+#
+# On 8.x, clusters are converted to a config shard unless the matching
+# SRC_DEDICATED_CONFIGSVR / TGT_DEDICATED_CONFIGSVR is set to 1. A config shard
+# cannot be downgraded, so tests that lower the FCV need a dedicated config server.
 #
 # Limits: Max 3 shards each for source and target
 # Services are named: src-rs{N}0 and tgt-rs{N}0 where N is the shard index (0-based)
@@ -27,6 +32,8 @@ export compose=$SDIR/compose.yml
 # Can be overridden with environment variables: SRC_SHARDS=2 TGT_SHARDS=1 ./run.sh
 SRC_SHARDS="${SRC_SHARDS:-2}"
 TGT_SHARDS="${TGT_SHARDS:-2}"
+SRC_DEDICATED_CONFIGSVR="${SRC_DEDICATED_CONFIGSVR:-0}"
+TGT_DEDICATED_CONFIGSVR="${TGT_DEDICATED_CONFIGSVR:-0}"
 
 # Port mappings for each shard (must match compose.yml)
 # Source shards: rs0=30000, rs1=30100, rs2=30200
@@ -81,7 +88,7 @@ for i in $(seq 0 $((SRC_SHARDS - 1))); do
 done
 msh "src-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
-if [[ "${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* ]]; then
+if [[ "${SRC_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* && "$SRC_DEDICATED_CONFIGSVR" != "1" ]]; then
     msh "src-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 fi
 
@@ -114,6 +121,6 @@ for i in $(seq 0 $((TGT_SHARDS - 1))); do
 done
 msh "tgt-mongos:27017" --eval "$ADD_SHARDS_CMD"
 
-if [[ "${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* ]]; then
+if [[ "${TGT_MONGO_VERSION:-${MONGO_VERSION:-8.0}}" == 8.* && "$TGT_DEDICATED_CONFIGSVR" != "1" ]]; then
     msh "tgt-mongos:27017" --eval "db.adminCommand('transitionFromDedicatedConfigServer');"
 fi

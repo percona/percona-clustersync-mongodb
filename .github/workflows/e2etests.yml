@@ -111,12 +111,20 @@ jobs:
             tgt_shards: "2"
             name_suffix: " 3v2 shards"
             pytest_args: "tests/test_presplit_sharded.py"
+          # A config shard cannot be downgraded, so the FCV startup test needs a
+          # dedicated target config server to lower the target FCV behind mongos.
+          - src_mongo_version: "8.0.29-13"
+            tgt_mongo_version: "8.0.29-13"
+            tgt_dedicated_configsvr: "1"
+            name_suffix: " FCV"
+            pytest_args: "tests/test_fcv_sharded.py"
 
     env:
       SRC_MONGO_VERSION: ${{ matrix.src_mongo_version }}
       TGT_MONGO_VERSION: ${{ matrix.tgt_mongo_version }}
       SRC_SHARDS: ${{ matrix.src_shards }}
       TGT_SHARDS: ${{ matrix.tgt_shards }}
+      TGT_DEDICATED_CONFIGSVR: ${{ matrix.tgt_dedicated_configsvr }}
       PYTEST_TIMEOUT: 60
 
     steps:

@@ -109,6 +109,8 @@ MONGO_VERSION="8.0.29-13" ./hack/rs/run.sh
 | `TGT_MONGO_VERSION` | unset | Target image override |
 | `SRC_SHARDS` | `2` | Source shard count, up to 3 |
 | `TGT_SHARDS` | `2` | Target shard count, up to 3 |
+| `SRC_DEDICATED_CONFIGSVR` | `0` | `1` keeps a dedicated source config server on 8.x instead of converting it to a config shard |
+| `TGT_DEDICATED_CONFIGSVR` | `0` | Same for the target; required to lower its FCV |
 
 Per-side image precedence is side override, `MONGO_VERSION`, then the Compose
 default. Runtime version compatibility compares binary major versions only: the
@@ -399,7 +401,7 @@ If Poetry reports `bad interpreter` after a Python change, use
 | Workflow | Scope |
 | --- | --- |
 | [`go.yml`](.github/workflows/go.yml) | Race unit tests, formatter suggestions, lint, and integration on MongoDB 6.0/7.0/8.0 |
-| [`e2etests.yml`](.github/workflows/e2etests.yml) | Same-major and lower-to-higher RS/sharded E2E, plus the 8.0 unequal-shard case |
+| [`e2etests.yml`](.github/workflows/e2etests.yml) | Same-major and lower-to-higher RS/sharded E2E, plus the 8.0 unequal-shard and FCV startup cases |
 | [`ci.yml`](.github/workflows/ci.yml) | External `Percona-QA/psmdb-testing` suite on PSMDB 6.0/7.0/8.0/8.3, split into five pytest partitions |
 
 The external workflow's `shard` is test partitioning, not MongoDB shard count.
@@ -414,6 +416,9 @@ For scope comparable to `e2etests.yml`:
   `tests/test_documents.py::test_clone_auto_segment_size_not_byte_count`.
 - The 8.0 three-source/two-target-shard case runs only
   `tests/test_presplit_sharded.py`.
+- The 8.0 FCV case uses a dedicated target config server
+  (`TGT_DEDICATED_CONFIGSVR=1`) and runs only `tests/test_fcv_sharded.py`, which
+  lowers the target FCV behind mongos. The test skips on the default topology.
 
 `ci.yml` ignores PR changes confined to `tests/**` and `packaging/**`, and skips
 draft PRs. Mark a PR ready for review or dispatch explicitly:
