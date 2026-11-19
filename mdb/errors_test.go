@@ -1,6 +1,7 @@
 package mdb_test
 
 import (
+	"context"
 	"crypto/x509"
 	"net"
 	"slices"
@@ -233,6 +234,93 @@ func TestIsTransient_DDLWriteConcernError(t *testing.T) {
 		{"not writable primary", wce(10107, "NotWritablePrimary"), true},
 		{"write error code", driver.WriteCommandError{WriteErrors: driver.WriteErrors{{Code: 189}}}, true},
 		{"unsatisfiable write concern", wce(100, "UnsatisfiableWriteConcern"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, mdb.IsTransient(tt.err))
+		})
+	}
+}
+
+// TestIsTransient_WrappedServerErrors covers the server error shapes a caller
+// sees after wrapping a driver error with project context, including the bulk
+// write exceptions the replication writers get back.
+func TestIsTransient_WrappedServerErrors(t *testing.T) {
+	t.Parallel()
+
+	wrap := func(err error) error { return errors.Wrap(err, "apply batch") }
+	bulkWriteErr := func(code int) mongo.BulkWriteException {
+		return mongo.BulkWriteException{WriteErrors: []mongo.BulkWriteError{{Code: code}}}
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil", nil, false},
+		{"wrapped context canceled", wrap(context.Canceled), false},
+		{"wrapped no documents", wrap(mongo.ErrNoDocuments), false},
+		{"wrapped primary stepped down", wrap(mongo.CommandError{Code: 189, Name: "PrimarySteppedDown"}), true},
+		{
+			"wrapped write concern error",
+			wrap(mongo.WriteException{WriteConcernError: &mongo.WriteConcernError{Code: 11602}}),
+			true,
+		},
+		{
+			"wrapped retryable-write label",
+			wrap(mongo.CommandError{Code: 1, Labels: []string{"RetryableWriteError"}}),
+			true,
+		},
+		{"wrapped duplicate key", wrap(mongo.CommandError{Code: 11000, Name: "DuplicateKey"}), false},
+		{
+			"bulk write: write concern error",
+			wrap(mongo.BulkWriteException{WriteConcernError: &mongo.WriteConcernError{Code: 91}}),
+			true,
+		},
+		// Write errors never carry labels, so the driver does not retry them.
+		{"bulk write: write error", wrap(bulkWriteErr(189)), true},
+		{"bulk write: duplicate key", wrap(bulkWriteErr(11000)), false},
+		// A transient write concern error retries the whole batch even with a
+		// duplicate key. Duplicate-key recovery resumes from the next write and
+		// never resends the earlier ones, which aren't majority-committed and can
+		// be rolled back. Once the write concern error clears, the duplicate comes
+		// back on its own and takes the recovery path.
+		{
+			"bulk write: duplicate key and transient write concern error",
+			wrap(mongo.BulkWriteException{
+				WriteErrors:       []mongo.BulkWriteError{{Code: 11000}},
+				WriteConcernError: &mongo.WriteConcernError{Code: 189},
+			}),
+			true,
+		},
+		// ClientBulkWriteException carries no labels and is not a ServerError.
+		{
+			"client bulk write: write error",
+			wrap(mongo.ClientBulkWriteException{WriteErrors: map[int]mongo.WriteError{0: {Code: 10107}}}),
+			true,
+		},
+		{
+			"client bulk write: write concern error",
+			wrap(mongo.ClientBulkWriteException{WriteConcernErrors: []mongo.WriteConcernError{{Code: 189}}}),
+			true,
+		},
+		{
+			"client bulk write: duplicate key",
+			wrap(mongo.ClientBulkWriteException{WriteErrors: map[int]mongo.WriteError{0: {Code: 11000}}}),
+			false,
+		},
+		{
+			"client bulk write: duplicate key and transient write concern error",
+			wrap(mongo.ClientBulkWriteException{
+				WriteErrors:        map[int]mongo.WriteError{0: {Code: 11000}},
+				WriteConcernErrors: []mongo.WriteConcernError{{Code: 189}},
+			}),
+			true,
+		},
 	}
 
 	for _, tt := range tests {

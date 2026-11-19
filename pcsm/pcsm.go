@@ -91,6 +91,9 @@ type Status struct {
 	InitialSyncLagTimeSeconds int64
 	// InitialSyncCompleted indicates if the initial sync is completed.
 	InitialSyncCompleted bool
+	// PauseOnInitialSync indicates whether the run pauses once the initial
+	// sync completes.
+	PauseOnInitialSync bool
 
 	// Repl is the status of the replication process.
 	Repl repl.Status
@@ -167,6 +170,10 @@ type PCSM struct {
 
 	pauseOnInitialSync bool
 	targetWriteConcern string
+	// cloneOptions and replOptions are the run's tuning as requested, with
+	// zero values still auto, so a checkpoint never pins the resolved values.
+	cloneOptions clone.Options
+	replOptions  repl.Options
 
 	state State // Current state of the PCSM
 
@@ -220,6 +227,8 @@ type checkpoint struct {
 	TargetWriteConcern string   `bson:"targetWriteConcern,omitempty"`
 	NSInclude          []string `bson:"nsInclude,omitempty"`
 	NSExclude          []string `bson:"nsExclude,omitempty"`
+	// Options is absent in a checkpoint written before it was persisted.
+	Options *runOptions `bson:"options,omitempty"`
 
 	Catalog *catalog.Checkpoint `bson:"catalog,omitempty"`
 	Clone   *clone.Checkpoint   `bson:"clone,omitempty"`
@@ -248,6 +257,7 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	cp := &checkpoint{
 		NSInclude: p.nsInclude,
 		NSExclude: p.nsExclude,
+		Options:   newRunOptions(p.pauseOnInitialSync, &p.cloneOptions, &p.replOptions),
 
 		Catalog: p.catalog.Checkpoint(),
 		Clone:   p.clone.Checkpoint(),
@@ -315,12 +325,22 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 		return errors.Wrap(err, "recover target write concern")
 	}
 
+	runOpts := cp.Options
+	if runOpts == nil {
+		runOpts = &runOptions{}
+	}
+
 	nsFilter := sel.MakeFilter(cp.NSInclude, cp.NSExclude)
 	cat := catalog.NewCatalog(p.source, p.target, p.sourceVer)
-	// Restore data-write concern; clone tuning uses defaults during recovery.
-	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &clone.Options{WriteConcern: wc}, p.targetIsSharded)
+	// Restore the run's data-write concern and requested tuning. The
+	// components resolve auto values in place, so they get their own copies.
+	cloneOptions := runOpts.cloneOptions()
+	cloneOptions.WriteConcern = wc
+	replOptions := runOpts.replOptions()
+	replOptions.WriteConcern = wc
+	cln := clone.NewClone(p.source, p.target, cat, nsFilter, &cloneOptions, p.targetIsSharded)
 	rpl := repl.NewRepl(
-		p.source, p.target, cat, nsFilter, &repl.Options{WriteConcern: wc},
+		p.source, p.target, cat, nsFilter, &replOptions,
 		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
 	)
 
@@ -371,6 +391,9 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 	p.targetWriteConcern = fmt.Sprint(wc.W)
 	p.nsExclude = cp.NSExclude
 	p.nsFilter = nsFilter
+	p.pauseOnInitialSync = runOpts.PauseOnInitialSync
+	p.cloneOptions = runOpts.cloneOptions()
+	p.replOptions = runOpts.replOptions()
 	p.catalog = cat
 	p.clone = cln
 	p.repl = rpl
@@ -432,10 +455,11 @@ func (p *PCSM) Status(ctx context.Context) *Status {
 	}
 
 	s := &Status{
-		State:          p.state,
-		Clone:          p.clone.Status(),
-		Repl:           p.repl.Status(),
-		FinalizeStatus: copyFinalizeStatus(p.finalizeStatus),
+		State:              p.state,
+		Clone:              p.clone.Status(),
+		Repl:               p.repl.Status(),
+		FinalizeStatus:     copyFinalizeStatus(p.finalizeStatus),
+		PauseOnInitialSync: p.pauseOnInitialSync,
 	}
 
 	switch {
@@ -590,6 +614,9 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 	p.nsExclude = options.ExcludeNamespaces
 	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
 	p.pauseOnInitialSync = options.PauseOnInitialSync
+	// Requested, before NewRepl resolves auto values in its copy.
+	p.cloneOptions = options.Clone
+	p.replOptions = options.Repl
 	p.catalog = catalog.NewCatalog(p.source, p.target, p.sourceVer)
 	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &cloneOptions, p.targetIsSharded)
 	p.repl = repl.NewRepl(
@@ -903,18 +930,7 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			lg.With(log.Elapsed(elapsed)).
 				Infof("Initial Sync completed in %s", elapsed.Round(time.Second))
 
-			p.lock.Lock()
-			pauseOnInitialSync := p.pauseOnInitialSync
-			p.lock.Unlock()
-
-			if pauseOnInitialSync {
-				lg.Info("Pausing [PauseOnInitialSync]")
-
-				err := p.Pause(ctx)
-				if err != nil {
-					lg.Error(err, "PauseOnInitialSync")
-				}
-			}
+			p.pauseOnInitialSyncOnce(ctx, lg)
 
 			return
 		}
@@ -928,6 +944,33 @@ func (p *PCSM) monitorInitialSync(ctx context.Context) {
 			lastPrintAt = now
 		}
 	}
+}
+
+// pauseOnInitialSyncOnce pauses a run started with pauseOnInitialSync. The
+// flag is cleared with the pause, under one lock, so the checkpoint of the
+// pause records it as done: a restored run can find the initial sync
+// incomplete again, since ticks don't move the resume checkpoint, and must not
+// pause twice.
+func (p *PCSM) pauseOnInitialSyncOnce(ctx context.Context, lg log.Logger) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if !p.pauseOnInitialSync {
+		return
+	}
+
+	lg.Info("Pausing [PauseOnInitialSync]")
+
+	err := p.doPause(ctx)
+	if err != nil {
+		lg.Error(err, "PauseOnInitialSync")
+
+		return
+	}
+
+	p.pauseOnInitialSync = false
+
+	log.New("pcsm").Info("Cluster Replication pause accepted")
 }
 
 func (p *PCSM) monitorLagTime(ctx context.Context) {
