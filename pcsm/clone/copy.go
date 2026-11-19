@@ -64,7 +64,8 @@ type CopyProgressUpdate struct {
 	Err error
 	// SizeBytes is the size of documents inserted in bytes.
 	SizeBytes uint64
-	// Count is the number of documents inserted.
+	// Count is the number of documents processed. A successful batch counts all
+	// its documents, including those that were already on the target.
 	Count int
 }
 
@@ -397,8 +398,9 @@ func (cm *CopyManager) copyCollection(
 }
 
 // insertBatch inserts a batch of documents into the target collection.
-// It handles duplicate key errors gracefully, counting only successfully inserted documents.
-// The result of the insertion is sent back via the OnDone callback.
+// Duplicate key errors do not fail the batch, and a successful batch reports
+// all its documents as processed. The result of the insertion is sent back via
+// the OnDone callback.
 func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 	zl := log.Ctx(ctx).Unwrap()
 
@@ -429,15 +431,15 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 
 				return
 			}
-
-			count-- // doc already inserted
 		}
 
+		// The duplicates were on the target before the copy or were inserted by
+		// an earlier attempt of this batch. The two can't be told apart.
 		zl.Trace().
 			Str("err", err.Error()).
 			Uint32("id", task.ID).
 			Int("size_bytes", task.SizeBytes).
-			Int("count", count).
+			Int("duplicates", len(bulkError.WriteErrors)).
 			Dur("elapsed", time.Since(startedAt).Round(time.Millisecond)).
 			Msgf("insert batch %d", task.ID)
 	}
