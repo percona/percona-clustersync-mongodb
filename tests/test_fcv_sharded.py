@@ -70,7 +70,12 @@ def _wait_for_idle(proc: subprocess.Popen, pcsm: PCSM):
 
 
 @pytest.fixture
-def lowered_target_fcv(source_conn: MongoClient, target_conn: MongoClient, pcsm_bin: str):
+def lowered_target_fcv(
+    source_conn: MongoClient,
+    target_conn: MongoClient,
+    pcsm_bin: str,
+    suspend_managed_pcsm,
+):
     if not pcsm_bin:
         pytest.skip("TEST_PCSM_BIN not set; the test runs its own PCSM process")
 
