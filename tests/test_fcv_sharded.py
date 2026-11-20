@@ -46,7 +46,7 @@ def _binary_version(client: MongoClient) -> str:
 
 def _run_pcsm(pcsm_bin: str, source: str, target: str):
     return subprocess.Popen(
-        [pcsm_bin, "--source", source, "--target", target, "--log-level=debug"],
+        [pcsm_bin, "--source", source, "--target", target, "--reset-state", "--log-level=debug"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
