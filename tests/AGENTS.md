@@ -14,6 +14,7 @@ Score 5; retained below the creation threshold for the distinct live-system test
 | Change HA orchestration | `ha.py` | Multi-instance role and failover helpers |
 | Add general E2E coverage | `test_*.py` | Feature-focused source operations and target assertions |
 | Add sharded-only coverage | `test_*_sharded.py` | Shard metadata and sharded DDL cases |
+| Change the sharded FCV startup test | `test_fcv_sharded.py` | Needs `TGT_DEDICATED_CONFIGSVR=1`; skips otherwise |
 | Add opt-in slow coverage | `test_slow.py` | Requires `--runslow` |
 | Work on Go benchmarks | `perf_test.go` | Separate from pytest discovery; uses MongoDB helpers |
 

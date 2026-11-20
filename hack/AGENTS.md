@@ -23,6 +23,7 @@ Score 6; retained below the creation threshold for the distinct operator-tooling
 - Shell topology scripts source `hack/util` for Docker Compose and mongosh helpers.
 - Sharded topology uses Compose project `s1` and network `s1_default`; RS uses `rs_default`. HA joins the selected existing network.
 - `SRC_SHARDS` and `TGT_SHARDS` select one to three shards independently.
+- On 8.x, `hack/sh/run.sh` converts each config server to a config shard; `SRC_DEDICATED_CONFIGSVR=1` / `TGT_DEDICATED_CONFIGSVR=1` skips that so the FCV can be lowered.
 - Keep image precedence and advertised hostnames consistent with the local setup reference.
 - Host and container ports differ for target mongos: host `29017`, container `27017`.
 - `PCSM_HA_LEASE_TTL` configures all three HA containers; unset or empty uses the server default.

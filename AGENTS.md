@@ -60,7 +60,7 @@ Refs unmeasured: reference centrality not measured with LSP/ast-grep.
 | `Restore`                                       | func        | `recovery.go`              | unmeasured | Claim checkpoint at term, then recover                                |
 | `RunCheckpointing` / `observeOwnership`         | func/method | `recovery.go`, `tenure.go` | unmeasured | Single writer / lifecycle controller                                  |
 | `openTenure` / `endTenure` / `onCheckpointLost` | method      | `tenure.go`                | unmeasured | ACTIVE epoch; `minTerm = term+1`                                      |
-| `mdb.CheckVersionCompat`                        | func        | `mdb/version.go`           | unmeasured | Source major must not exceed target                                   |
+| `mdb.CheckVersionCompat`                        | func        | `mdb/version.go`           | unmeasured | Source major must not exceed target; FCV check: `GetFCV`/`CheckFCVCompat` |
 | `Membership.SetRole`                            | method      | `ha/membership.go`         | unmeasured | Role/term gauges, transition counter                                  |
 | `errors.Wrap*`                                  | func        | `errors/errors.go`         | unmeasured | Project error wrapping                                                |
 | `util.CtxWithTimeout`                           | func        | `util/context.go`          | unmeasured | Bounded op; nil parent -> Background                                  |
