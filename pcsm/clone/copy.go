@@ -62,7 +62,7 @@ type CopyGetCollSpecFunc func(ctx context.Context) (*mdb.CollectionSpecification
 type CopyProgressUpdate struct {
 	// Err is the error encountered during the operation, if any.
 	Err error
-	// SizeBytes is the size of documents inserted in bytes.
+	// SizeBytes is the size of documents processed in bytes.
 	SizeBytes uint64
 	// Count is the number of documents processed. A successful batch counts all
 	// its documents, including those that were already on the target.
@@ -433,8 +433,10 @@ func (cm *CopyManager) insertBatch(ctx context.Context, task insertTask) {
 			}
 		}
 
-		// The duplicates were on the target before the copy or were inserted by
-		// an earlier attempt of this batch. The two can't be told apart.
+		// The duplicates were on the target before the copy, were inserted by
+		// an earlier attempt of this batch, or were inserted by another batch:
+		// within an _id type range, a segment's first document is also the
+		// previous segment's last. They can't be told apart.
 		zl.Trace().
 			Str("err", err.Error()).
 			Uint32("id", task.ID).
