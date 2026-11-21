@@ -722,7 +722,7 @@ func (c *Clone) doCollectionClone(
 				log.Size(copiedSizeBytesSinceLastLog),
 				log.Count(copiedCountSinceLastLog),
 				log.Elapsed(now.Sub(lastLogAt)),
-			).Debugf("copied %s (%d documents) for %q",
+			).Debugf("copied %s (%d documents processed) for %q",
 				humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
 
 			copiedSizeBytesSinceLastLog = 0
@@ -735,7 +735,7 @@ func (c *Clone) doCollectionClone(
 			log.Size(copiedSizeBytesSinceLastLog),
 			log.Count(copiedCountSinceLastLog),
 			log.Elapsed(time.Since(lastLogAt)),
-		).Debugf("copied %s (%d documents) for %q",
+		).Debugf("copied %s (%d documents processed) for %q",
 			humanize.Bytes(copiedSizeBytesSinceLastLog), copiedCountSinceLastLog, ns)
 	}
 
@@ -752,7 +752,7 @@ func (c *Clone) doCollectionClone(
 		log.Size(totalCopiedSizeBytes),
 		log.Count(totalCopiedCount),
 		log.Elapsed(elapsed),
-	).Infof("Collection %q cloned: %s in %s (%d documents)",
+	).Infof("Collection %q cloned: %s in %s (%d documents processed)",
 		ns, humanize.Bytes(totalCopiedSizeBytes),
 		elapsed.Round(time.Second), totalCopiedCount)
 
