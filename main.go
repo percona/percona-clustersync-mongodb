@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -626,7 +627,7 @@ func dropLegacyHeartbeat(ctx context.Context, target *mongo.Client) error {
 
 // runServer starts the HTTP server with the provided configuration.
 func runServer(cfg *config.Config) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Auto-start (--start) is deferred to promotion: replication may only
