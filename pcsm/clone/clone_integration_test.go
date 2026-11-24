@@ -60,7 +60,8 @@ func TestMain(m *testing.M) {
 	}
 
 	// Target: standalone mongod. The clone copies into the same namespace as the
-	// source, so the target must be a separate deployment.
+	// source, so the target must be a separate deployment. Test commands enable
+	// the failCommand failpoint for insert errors.
 	target, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        image,
@@ -68,6 +69,7 @@ func TestMain(m *testing.M) {
 			Cmd: []string{
 				"mongod", "--quiet", "--bind_ip_all", "--dbpath", "/data/db",
 				"--wiredTigerCacheSizeGB", "0.5", "--port", "27017",
+				"--setParameter", "enableTestCommands=1",
 			},
 			WaitingFor: wait.ForLog("Waiting for connections").WithStartupTimeout(60 * time.Second),
 		},
