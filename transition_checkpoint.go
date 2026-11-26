@@ -79,10 +79,11 @@ func (r transitionCheckpoint) save(ctx context.Context, persist func(context.Con
 	switch {
 	case err == nil:
 		// Publish before the writer can take its next periodic snapshot.
+		// If publication fails, stop rather than overwrite a committed transition.
 		err = r.settle(true)
 		r.result <- err
 	case errors.Is(err, errCheckpointFenced):
-		r.result <- err
+		r.result <- pcsm.ErrNotActive
 	default:
 		r.result <- pcsm.ErrCheckpointUnconfirmed
 	}

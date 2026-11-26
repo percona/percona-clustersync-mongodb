@@ -48,7 +48,7 @@ func checkStartCheckpoint(t *testing.T, hold time.Duration, fence bool) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	issued := make(chan bson.Raw, 1)
+	issued := make(chan bson.Raw, 4)
 	release := make(chan struct{})
 	cloneCalled := make(chan struct{}, 1)
 	target := gatedStartTarget(t, ctx, issued, release, fence)
@@ -81,18 +81,13 @@ func checkStartCheckpoint(t *testing.T, hold time.Duration, fence bool) {
 	t.Cleanup(func() { require.NoError(t, members.Disconnect(t.Context())) })
 	api := &server{cfg: s.cfg, tenure: tn, targetCluster: members, membership: s.membership}
 
-	done := make(chan startResponse, 1)
+	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/start",
 			strings.NewReader(`{"includeNamespaces":["chosen"],"targetWriteConcern":"1"}`))
 		api.HandleStart(rec, req)
-		var response startResponse
-		err := json.Unmarshal(rec.Body.Bytes(), &response)
-		if err != nil {
-			t.Error(err)
-		}
-		done <- response
+		done <- rec
 	}()
 	synctest.Wait()
 	require.Len(t, issued, 1, "initial checkpoint should be in flight")
@@ -108,7 +103,7 @@ func checkStartCheckpoint(t *testing.T, hold time.Duration, fence bool) {
 		time.Sleep(hold) // Advance the virtual clock past the HTTP wait.
 		synctest.Wait()
 		require.Len(t, done, 1)
-		response := <-done
+		response := decodeCheckpointStartResponse(t, <-done)
 		require.False(t, response.Ok)
 		require.Contains(t, response.Err, "could not be confirmed")
 
@@ -127,8 +122,10 @@ func checkStartCheckpoint(t *testing.T, hold time.Duration, fence bool) {
 	if fence {
 		require.Len(t, done, 1)
 		response := <-done
-		require.False(t, response.Ok)
-		require.Contains(t, response.Err, "fenced")
+		require.Equal(t, http.StatusConflict, response.Code)
+		body := decodeCheckpointStartResponse(t, response)
+		require.False(t, body.Ok)
+		require.Equal(t, "not_active", body.Err)
 		require.Empty(t, cloneCalled)
 		require.Nil(t, currentTenure(s))
 
@@ -137,11 +134,28 @@ func checkStartCheckpoint(t *testing.T, hold time.Duration, fence bool) {
 
 	if hold == 0 {
 		require.Len(t, done, 1)
-		require.True(t, (<-done).Ok)
+		require.True(t, decodeCheckpointStartResponse(t, <-done).Ok)
 	}
 	require.Len(t, cloneCalled, 1, "acknowledged checkpoint did not launch the clone")
 	require.Same(t, tn, currentTenure(s), "HTTP wait must not end the tenure")
+	time.Sleep(time.Hour) // Advance to the next virtual periodic checkpoint.
+	synctest.Wait()
+	require.GreaterOrEqual(t, len(issued), 1, "no subsequent checkpoint")
+	for len(issued) != 0 {
+		data := <-issued
+		require.Equal(t, pcsm.StateRunning, data.Lookup("state").StringValue())
+		require.Equal(t, "chosen", data.Lookup("nsInclude", "0").StringValue())
+	}
 	s.observeOwnership(ctx, ha.Ownership{})
+}
+
+func decodeCheckpointStartResponse(t *testing.T, rec *httptest.ResponseRecorder) startResponse {
+	t.Helper()
+
+	var response startResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+
+	return response
 }
 
 func gatedStartTarget(
@@ -157,9 +171,11 @@ func gatedStartTarget(
 			return
 		}
 		data, ok := e.Command.Lookup("update", "$set", "data").DocumentOK()
+		if ok {
+			issued <- data
+		}
 		if ok && !held {
 			held = true
-			issued <- data
 			select {
 			case <-release:
 			case <-ctx.Done():
