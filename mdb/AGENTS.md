@@ -24,6 +24,7 @@ Score 11; distinct driver-policy boundary. Owns URI sanitization, topology/versi
 - Source and target compressor lists are selected independently from config.
 - The target client dials with SO_LINGER(0) (`abortOnCloseDialer`): closing a connection discards unsent data and sends RST, so a write a demoted instance buffered during a partition is never retransmitted after it heals. The source client keeps the default dialer.
 - `maxPoolSize` survives URI sanitization: omitted means the driver's 100-connection default; explicit zero means unlimited.
+- `serverSelectionTimeoutMS` survives URI sanitization and applies per side; omitted means the driver's 30s. Selection also ends at the operation's deadline: its own when it has one (startup ping `PingTimeout`, lease and membership writes `HAOperationTimeout`, HTTP handlers `ServerResponseTimeout`), otherwise the client timeout from `--mongodb-operation-timeout`, so a larger value buys nothing. Zero removes the selection deadline and leaves only the operation's. Behind mongos it covers selecting a mongos, not reaching a shard primary.
 - Ping failure triggers a bounded disconnect before returning the connection error.
 - `RunWithRetry` retries only transient errors and stops on context cancellation.
 - `RetryWithBackoff` supports bounded attempts or context-bounded unlimited retries.

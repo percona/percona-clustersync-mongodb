@@ -175,6 +175,7 @@ var allowedConnStringOptions = []string{
 	"replicaset",
 
 	"maxpoolsize",
+	"serverselectiontimeoutms",
 
 	"authsource",
 	"authmechanism",

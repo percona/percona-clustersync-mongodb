@@ -59,20 +59,24 @@ PCSM compares the source and target `featureCompatibilityVersion` only when a pr
 
 Fixed inputs from [`../config/const.go`](../config/const.go): lease renew and member heartbeat every 3s, `HAOperationTimeout` 5s for lease attempts, releases, term advances, and member heartbeats, stale member after 9s. Checkpointing defaults to every 15s plus state changes; `--recovery-checkpoint-interval` overrides the interval.
 
-HA and checkpoint writes inherit the client's majority write concern without a `wtimeout` ([`../mdb/connect.go`](../mdb/connect.go)). Checkpoint operations obey tenure cancellation and `--mongodb-operation-timeout` (5m default); server selection can fail earlier. Clone and replication data writes use the run's [target write concern](../pcsm/README.md#target-data-write-concern).
+HA and checkpoint writes inherit the client's majority write concern without a `wtimeout` ([`../mdb/connect.go`](../mdb/connect.go)). Checkpoint operations obey tenure cancellation and `--mongodb-operation-timeout` (5m default); server selection can fail earlier, at the target URI's `serverSelectionTimeoutMS` (30s default). Clone and replication data writes use the run's [target write concern](../pcsm/README.md#target-data-write-concern).
 
 T is the lease TTL. The lease deadline and the checkpoint writer run independently, and whichever fails first ends the tenure. These are conditional estimates, not guarantees, and an immediate error can end a tenure sooner.
 
 | Failure                                                                               | T = 10s                                                   | T raised                                                                                                              | Notes                                                                                                                                                         |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No target server selectable (partition, no primary)                                   | 7 to 10s, lease deadline                                  | min(T less up to 3s, checkpoint writer: 30 to 45s with default intervals for a write issued during the outage, up to the operation timeout for one already on the wire) | The driver defaults to 30s server selection; PCSM does not expose an override. A shorter operation deadline can end selection earlier. |
+| No target server selectable (partition, no primary)                                   | 7 to 10s, lease deadline                                  | min(T less up to 3s, checkpoint writer: S to S+15s with default intervals for a write issued during the outage, up to the operation timeout for one already on the wire) | S is the target URI's `serverSelectionTimeoutMS`, 30s by default. Raise it with T; the operation timeout still caps it. A shorter operation deadline can end selection earlier. |
 | Writable primary, majority acknowledgement stalls (primary keeps its majority view)   | 7 to 10s, lease deadline                                  | min(T less up to 3s, operation timeout)                                                                               | Failed lease attempts report nothing until the deadline. If the primary loses its majority and steps down, the row above applies.                            |
 | Majority up, data write concern unsatisfiable (`w:3`, one node down)                  | no transition                                             | no transition                                                                                                         | Lease and checkpoint writes still succeed. Data-write behavior is in [Target data write concern](../pcsm/README.md#target-data-write-concern).                      |
 | ACTIVE process crash                                                                  | lease takeable T after the crashed owner's last renewal   | same, longer                                                                                                          | Takeover adds up to 3s of polling, the acquisition RPC and checkpoint restore before requests are admitted. A restarted sole instance stays STANDBY up to T. |
 
-The 30 to 45s estimate combines the driver's 30s server-selection timeout with
-up to one default 15s checkpoint interval before issuing the write. It assumes
-no earlier write is still in flight. State-change saves can start sooner.
+The S to S+15s estimate combines the server selection timeout with up to one
+default 15s checkpoint interval before issuing the write. It assumes no earlier
+write is still in flight. State-change saves can start sooner. For example,
+with `--ha-lease-ttl 5m` and `serverSelectionTimeoutMS=300000` on the target
+URI, a 60s target partition ends no tenure: the checkpoint write issued during
+it completes after the heal. How the selection timeout combines with operation
+deadlines: [`../mdb/AGENTS.md`](../mdb/AGENTS.md).
 
 ## API on STANDBY
 
