@@ -80,6 +80,24 @@ Finalization is absent until requested; empty index reports are omitted.
 Recovered finalized state retains completion, but not finalization timestamps
 or unsuccessful-index reports.
 
+## Starting replication
+
+`POST /start` and `pcsm start` launch the run and return success only after
+the first checkpoint, including the requested namespace filter and run options,
+is acknowledged. If the checkpoint was not written, the previous checkpoint
+is unchanged and the new run does not launch.
+
+The HTTP request waits up to five seconds, including time spent waiting for
+the ACTIVE tenure to finish restoring. A timeout or disconnect does not cancel
+a checkpoint write already in progress. If the result could not be confirmed,
+or the start was saved but could not launch on that instance, check `/status`
+on ACTIVE before retrying. The old state can remain visible while a save is
+pending; a retry cannot overtake it.
+
+If recovery finds only the first checkpoint, it starts the clone again with
+the saved options. If a later checkpoint records an interrupted clone, the
+run restores as `failed` and requires a new `/start`.
+
 ## Pausing replication
 
 `POST /pause` and `pcsm pause` acknowledge the pause request immediately.
@@ -97,7 +115,11 @@ A start request during `pausing` is rejected immediately as already running.
 five-second HTTP request deadline. If that wait expires, the pause continues,
 but no catalog finalization is scheduled. Wait for `paused` and retry
 `/finalize`, or inspect the error if the state becomes `failed`. Once
-`/finalize` succeeds, catalog finalization proceeds asynchronously.
+`/finalize` succeeds, catalog finalization proceeds asynchronously. Wait for
+`state: "finalized"` before treating finalization as complete: PCSM reports
+it only once the checkpoint is acknowledged. If finalization is interrupted
+before that checkpoint is saved, the next ACTIVE can restore an earlier state,
+including `running`.
 
 ## Target data write concern
 

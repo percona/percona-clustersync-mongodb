@@ -50,9 +50,6 @@ fmt-py:
 pcsm-run: build
 	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state
 
-pcsm-start: build
-	./bin/pcsm --source=$(SOURCE) --target=$(TARGET) --log-level=debug --reset-state --start
-
 # Clean generated files
 clean:
 	rm -rf bin/*
@@ -67,4 +64,4 @@ metrics-up:
 metrics-down:
 	docker compose -f hack/metrics/docker-compose.yml down
 
-.PHONY: all build test-build test test-integration pytest lint lint-py fmt-py pcsm-start clean metrics-up metrics-down
+.PHONY: all build test-build test test-integration pytest lint lint-py fmt-py clean metrics-up metrics-down

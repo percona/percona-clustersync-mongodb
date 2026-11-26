@@ -157,9 +157,6 @@ func newRootCmd() *cobra.Command {
 		fmt.Sprintf("Compressors for the target MongoDB client (comma-separated: zstd,zlib,snappy; default: %s)",
 			strings.Join(config.DefaultClientCompressors(), ",")))
 
-	rootCmd.Flags().Bool("start", false, "")
-	rootCmd.Flags().MarkHidden("start") //nolint:errcheck
-
 	rootCmd.Flags().Bool("reset-state", false, "")
 	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
 
@@ -629,23 +626,7 @@ func runServer(cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	// Auto-start (--start) is deferred to promotion: replication may only
-	// begin while ACTIVE. Resolved before the server exists so the option is
-	// in place before the first promotion is consumed.
-	var (
-		autoStart *pcsm.StartOptions
-		err       error
-	)
-	if cfg.Start {
-		autoStart, err = resolveStartOptions(cfg, startRequest{
-			PauseOnInitialSync: cfg.PauseOnInitialSync,
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	srv, err := createServer(ctx, cfg, autoStart)
+	srv, err := createServer(ctx, cfg)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
@@ -719,10 +700,6 @@ type server struct {
 	// term. Ownership below it is advanced through the lease instead of acted
 	// on.
 	minTerm ha.Term
-	// autoStartOpts, when non-nil, holds the StartOptions to apply on promotion
-	// (the deferred effect of the --start flag). Set at construction, never
-	// changed.
-	autoStartOpts *pcsm.StartOptions
 }
 
 // createServer creates a new server with the given options.
@@ -731,7 +708,7 @@ type server struct {
 // known, so an unreachable source or incompatible version fails at boot rather
 // than on the failover path, and promotion stays low-latency. A STANDBY's idle
 // source connection carries only driver monitoring traffic.
-func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.StartOptions) (*server, error) {
+func createServer(ctx context.Context, cfg *config.Config) (*server, error) {
 	lg := log.Ctx(ctx)
 
 	source, err := mdb.Connect(ctx, cfg.Source, cfg)
@@ -872,7 +849,6 @@ func createServer(ctx context.Context, cfg *config.Config, autoStart *pcsm.Start
 		targetIsMongos: tgtHello.IsMongos(),
 		membership:     membership,
 		promRegistry:   promRegistry,
-		autoStartOpts:  autoStart,
 	}
 
 	// Settle ownership before the HTTP server serves any request; see
