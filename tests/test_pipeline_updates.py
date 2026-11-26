@@ -294,6 +294,9 @@ def _build_dotted_field_name_scenario(scenario_name):
 )
 def test_pipeline_update_dotted_field_names(t: Testing, scenario_name: str):
     """PCSM-139: a field name with a dot must not be replayed as a nested path"""
+    if t.source.admin.command("buildInfo")["versionArray"][:2] < [6, 1]:
+        pytest.skip("the source reports disambiguatedPaths only from MongoDB 6.1")
+
     db = "pipeline_test_db"
     coll_name = f"dotted_{scenario_name}"
     scenario = _build_dotted_field_name_scenario(scenario_name)
