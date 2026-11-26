@@ -419,6 +419,27 @@ type UpdateDescription struct {
 	UpdatedFields bson.D `bson:"updatedFields,omitempty"`
 }
 
+// hasDottedFieldName reports whether the update touches a field whose own name contains a
+// dot, such as a "main.ts" key inside a "files" document.
+//
+// updatedFields, removedFields and truncatedArrays describe such a field with a dotted path
+// ("files.main.ts") that cannot be told apart from a nested path (files -> main -> ts), so
+// the event cannot be replayed as $set/$unset on that path. MongoDB 6.1+ lists the real
+// components of every such path in disambiguatedPaths.
+func (d *UpdateDescription) hasDottedFieldName() bool {
+	for _, path := range d.DisambiguatedPaths {
+		components, _ := path.Value.(bson.A)
+		for _, component := range components {
+			name, ok := component.(string)
+			if ok && strings.Contains(name, ".") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // ReplaceEvent occurs when an update operation removes a document from a collection and replaces it
 // with a new document, such as when the replaceOne method is called.
 type ReplaceEvent struct {
