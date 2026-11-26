@@ -107,7 +107,7 @@ func failRoutedEvent(t *testing.T, w *worker) {
 	w.pendingBulkCh = make(chan *pendingBulk, 1)
 	w.writerDone = make(chan struct{})
 
-	require.NoError(t, w.addToCurrentBulk(<-w.routedEventCh))
+	require.NoError(t, w.addToCurrentBulk(t.Context(), <-w.routedEventCh))
 	require.True(t, w.enqueueBulk())
 	close(w.pendingBulkCh)
 	w.runWriter(t.Context())

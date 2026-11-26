@@ -208,3 +208,105 @@ def test_pipeline_update_regression(t: Testing, scenario_name: str):
     src_doc = t.source[db][coll_name].find_one({"_id": 1})
     dst_doc = t.target[db][coll_name].find_one({"_id": 1})
     _assert_docs_equal(src_doc, dst_doc, f"{db}.{coll_name}")
+
+
+def _build_dotted_field_name_scenario(scenario_name):
+    """Pipeline updates of fields whose own name contains a dot (PCSM-139)"""
+    # Padding keeps each update a field-level diff in the oplog; a small document
+    # would be logged as a full replacement and never reach the update path.
+    pad = "P" * 4000
+
+    if scenario_name == "key_in_document":
+        doc = {"_id": 1, "pad": pad, "files": {"main.ts": "v1", "b.ts": "b", "plain": "p"}}
+        updates = [
+            [{"$set": {"files": {"$setField": {"field": name, "input": "$files", "value": value}}}}]
+            for name, value in [("main.ts", "v2"), ("new.ts", "n")]
+        ]
+        updates.append([{"$set": {"files": {"$unsetField": {"field": "b.ts", "input": "$files"}}}}])
+
+        return {"doc": doc, "updates": updates}
+
+    if scenario_name == "top_level_field":
+        doc = {"_id": 1, "pad": pad, "a.b": 1, "c.d": 2}
+        updates = [
+            [{"$replaceWith": {"$setField": {"field": "a.b", "input": "$$ROOT", "value": 10}}}],
+            [{"$replaceWith": {"$unsetField": {"field": "c.d", "input": "$$ROOT"}}}],
+        ]
+
+        return {"doc": doc, "updates": updates}
+
+    if scenario_name == "url_key_in_array_element":
+        messages = [{"captions": {"https://x.example/a.png": "a", "pad": pad}}, {"role": "user"}]
+        doc = {"_id": 1, "messages": messages}
+        changed = [{"captions": {"https://x.example/a.png": "a2", "pad": pad}}, {"role": "user"}]
+        updates = [[{"$set": {"messages": {"$literal": changed}}}]]
+
+        return {"doc": doc, "updates": updates}
+
+    if scenario_name == "same_path_twice":
+        # files["main.ts"] and files.main.ts are both reported as "files.main.ts"
+        files = {"main.ts": "dotted", "main": {"ts": "nested", "pad": pad}}
+        doc = {"_id": 1, "pad": pad, "files": files}
+        changed = {"main.ts": "dotted2", "main": {"ts": "nested2", "pad": pad}}
+        updates = [[{"$set": {"files": {"$literal": changed}}}]]
+
+        return {"doc": doc, "updates": updates}
+
+    if scenario_name == "truncated_array":
+        doc = {"_id": 1, "pad": pad, "arrs": {"x.y": [1, 2, 3, 4], "pad": pad}}
+        updates = [[{"$set": {"arrs": {"$literal": {"x.y": [1, 9], "pad": pad}}}}]]
+
+        return {"doc": doc, "updates": updates}
+
+    if scenario_name == "values_of_dotted_keys_emptied":
+        functions = {
+            name: {"files": {"main.ts": f"code of {name}", "README": "r"}, "pad": pad}
+            for name in ["hello", "send.email", "api.v2.users"]
+        }
+        doc = {"_id": 1, "functions": functions}
+        empty_files = {
+            "$arrayToObject": {
+                "$map": {
+                    "input": {"$objectToArray": "$functions"},
+                    "as": "e",
+                    "in": {"k": "$$e.k", "v": {"$mergeObjects": ["$$e.v", {"files": {}}]}},
+                }
+            }
+        }
+        updates = [[{"$set": {"functions": empty_files}}]]
+
+        return {"doc": doc, "updates": updates}
+
+    raise ValueError(f"unknown scenario: {scenario_name}")
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "scenario_name",
+    [
+        "key_in_document",
+        "top_level_field",
+        "url_key_in_array_element",
+        "same_path_twice",
+        "truncated_array",
+        "values_of_dotted_keys_emptied",
+    ],
+)
+def test_pipeline_update_dotted_field_names(t: Testing, scenario_name: str):
+    """PCSM-139: a field name with a dot must not be replayed as a nested path"""
+    if t.source.admin.command("buildInfo")["versionArray"][:2] < [6, 1]:
+        pytest.skip("the source reports disambiguatedPaths only from MongoDB 6.1")
+
+    db = "pipeline_test_db"
+    coll_name = f"dotted_{scenario_name}"
+    scenario = _build_dotted_field_name_scenario(scenario_name)
+
+    with t.run(Runner.Phase.APPLY, wait_timeout=60):
+        t.source[db][coll_name].insert_one(scenario["doc"])
+        for update in scenario["updates"]:
+            t.source[db][coll_name].update_one({"_id": 1}, update)
+        _wait_for_target_doc(t.target, db, coll_name, 1)
+
+    src_doc = t.source[db][coll_name].find_one({"_id": 1})
+    dst_doc = t.target[db][coll_name].find_one({"_id": 1})
+    _assert_docs_equal(src_doc, dst_doc, f"{db}.{coll_name}")

@@ -13,9 +13,15 @@ import (
 
 	"github.com/percona/percona-clustersync-mongodb/errors"
 	"github.com/percona/percona-clustersync-mongodb/log"
+	"github.com/percona/percona-clustersync-mongodb/mdb"
 	"github.com/percona/percona-clustersync-mongodb/metrics"
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
+
+// errRefetchAbandoned reports that a source read for an event was cut short because the
+// run was canceled. Like a canceled bulk write it is abandonment, not a replication failure:
+// the event is at or after the resume floor and replays on resume.
+var errRefetchAbandoned = errors.New("refetch abandoned")
 
 // routedEvent bundles a change event with its pre-resolved namespace.
 // Namespace is resolved in the dispatcher using uuidMap before routing to worker.
@@ -64,6 +70,7 @@ type worker struct {
 	tickerOffset  time.Duration // stagger delay before starting the flush ticker
 	flushInterval time.Duration // maximum interval between bulk write flushes
 
+	source *mongo.Client
 	target *mongo.Client
 
 	// Async writer pipeline
@@ -106,6 +113,7 @@ func newWorker(
 		id:            strconv.Itoa(id),
 		routedEventCh: make(chan *routedEvent, opts.WorkerQueueSize),
 		flushInterval: opts.WorkerFlushInterval,
+		source:        source,
 		target:        target,
 		bulkQueueSize: opts.WorkerBulkQueueSize,
 		barrierReq:    make(chan struct{}),
@@ -265,8 +273,15 @@ func (w *worker) run(ctx context.Context) {
 			lg.Trace("Barrier requested")
 
 			// Drain all buffered events routed before the barrier was requested.
-			if !w.drainRoutedEvents() {
-				w.barrierDone <- errors.Wrap(w.writerErr, "writer failed during barrier drain")
+			if !w.drainRoutedEvents(ctx) {
+				drainErr := w.writerErr
+				if drainErr == nil {
+					// A refetch abandoned by cancellation is not reported, but the
+					// barrier over it must not report a successful drain.
+					drainErr = ctx.Err()
+				}
+
+				w.barrierDone <- errors.Wrap(drainErr, "writer failed during barrier drain")
 
 				return
 			}
@@ -321,8 +336,14 @@ func (w *worker) run(ctx context.Context) {
 				return
 			}
 
-			err := w.addToCurrentBulk(event)
+			err := w.addToCurrentBulk(ctx, event)
 			if err != nil {
+				if errors.Is(err, errRefetchAbandoned) {
+					lg.Debug("Worker stopped (context done during refetch)")
+
+					return
+				}
+
 				w.reportError(err)
 
 				return
@@ -346,13 +367,22 @@ func (w *worker) run(ctx context.Context) {
 // If adding the parsed event would push the current bulk past config.MaxWriteBatchSizeBytes,
 // the current bulk is enqueued first so the byte budget is honored without ever appending
 // past it.
-func (w *worker) addToCurrentBulk(event *routedEvent) error {
+func (w *worker) addToCurrentBulk(ctx context.Context, event *routedEvent) error {
 	parsed, err := parseDMLEvent(event.change.RawData, event.change.OperationType)
 	if err != nil {
 		return err
 	}
 
 	event.change.RawData = nil // release raw bytes for GC
+
+	// An update of a field whose name contains a dot cannot be replayed from its
+	// updateDescription (PCSM-139). Apply the whole source document instead.
+	if e, ok := parsed.(UpdateEvent); ok && e.UpdateDescription.hasDottedFieldName() {
+		parsed, err = w.refetchUpdatedDoc(ctx, event, &e)
+		if err != nil {
+			return err
+		}
+	}
 
 	// Preflight: if the current bulk would overflow the byte budget, enqueue it first
 	// and start fresh. The WouldOverflow guard returns false when the bulk is empty so
@@ -382,6 +412,62 @@ func (w *worker) addToCurrentBulk(event *routedEvent) error {
 	w.pendingEvents++
 
 	return nil
+}
+
+// refetchUpdatedDoc converts an update event that cannot be replayed from its
+// updateDescription (see UpdateDescription.hasDottedFieldName) into an event that carries
+// the whole source document: a ReplaceEvent, or a DeleteEvent when the document no longer
+// exists on the source. It is applied in the update's place in the ordered bulk.
+//
+// The read waits for the event's clusterTime (afterClusterTime) and uses the client's
+// majority read concern, so the fetched document is never older than the event. It can be
+// newer: later events for the same document are then replayed over it, the same way they
+// are replayed over a document copied by the initial sync.
+func (w *worker) refetchUpdatedDoc(ctx context.Context, event *routedEvent, update *UpdateEvent) (any, error) {
+	if w.source == nil {
+		return nil, errors.New("refetch of updated document requires source client")
+	}
+
+	documentKey, err := bson.Marshal(update.DocumentKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshal documentKey")
+	}
+
+	sess, err := w.source.StartSession()
+	if err != nil {
+		return nil, errors.Wrap(err, "start source session")
+	}
+	defer sess.EndSession(ctx)
+
+	err = sess.AdvanceOperationTime(&event.change.ClusterTime)
+	if err != nil {
+		return nil, errors.Wrap(err, "advance operation time")
+	}
+
+	coll := w.source.Database(event.ns.Database).Collection(event.ns.Collection)
+
+	doc, err := mdb.RunWithRetryVal(ctx, func(ctx context.Context) (bson.Raw, error) {
+		return coll.FindOne(mongo.NewSessionContext(ctx, sess), update.DocumentKey).Raw() //nolint:wrapcheck
+	}, mdb.DefaultRetryInterval, mdb.DefaultMaxRetries)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		// Deleted on source after this update. The delete event that follows is a no-op.
+		return DeleteEvent{DocumentKey: update.DocumentKey}, nil
+	}
+
+	if err != nil {
+		// Driver errors may not retain the context error. Once this run is
+		// canceled, a failed read is abandonment.
+		if ctx.Err() != nil {
+			return nil, errors.Join(errRefetchAbandoned, ctx.Err())
+		}
+
+		return nil, errors.Wrap(err, "refetch from source")
+	}
+
+	log.Ctx(ctx).With(log.NS(event.ns.Database, event.ns.Collection)).
+		Debugf("Update of a dotted field name: replacing target from source for %v", update.DocumentKey)
+
+	return ReplaceEvent{DocumentKey: documentKey, FullDocument: doc}, nil
 }
 
 // reportError sends an error to the error channel (non-blocking).
@@ -436,13 +522,15 @@ func (w *worker) enqueueBulk() bool {
 // when handling a barrier request to ensure all events routed before the
 // barrier are included in the bulk.
 // Returns true on success, false if a parse error or writer failure occurred.
-func (w *worker) drainRoutedEvents() bool {
+func (w *worker) drainRoutedEvents(ctx context.Context) bool {
 	for {
 		select {
 		case event := <-w.routedEventCh:
-			err := w.addToCurrentBulk(event)
+			err := w.addToCurrentBulk(ctx, event)
 			if err != nil {
-				w.reportError(err)
+				if !errors.Is(err, errRefetchAbandoned) {
+					w.reportError(err)
+				}
 
 				return false
 			}
