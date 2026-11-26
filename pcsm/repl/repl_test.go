@@ -14,7 +14,10 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
 
-var errCursorClosedByMongos = errors.New("cursor closed by mongos")
+var (
+	errCursorClosedByMongos = errors.New("cursor closed by mongos")
+	errDropIndex            = errors.New("drop index failed")
+)
 
 func TestFindNamespaceByUUIDFallsBackToEventNamespaceOnUUIDMiss(t *testing.T) {
 	t.Parallel()
@@ -83,6 +86,9 @@ type mockCatalog struct {
 	uuidMapCalls int
 
 	shardCollectionCalled bool
+
+	droppedIndexes []string
+	dropIndexErrs  map[string]error
 }
 
 type mockPool struct {
@@ -165,8 +171,10 @@ func (m *mockCatalog) DropDatabase(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *mockCatalog) DropIndex(_ context.Context, _, _, _ string) error {
-	return nil
+func (m *mockCatalog) DropIndex(_ context.Context, _, _, index string) error {
+	m.droppedIndexes = append(m.droppedIndexes, index)
+
+	return m.dropIndexErrs[index]
 }
 
 func (m *mockCatalog) Rename(_ context.Context, _, _, _, _ string) error {
@@ -539,6 +547,79 @@ func TestApplyDropDDLChange(t *testing.T) {
 				assert.Equal(t, ns.Database, cat.dropCollectionDB)
 				assert.Equal(t, ns.Collection, cat.dropCollectionColl)
 			}
+		})
+	}
+}
+
+func TestApplyDropIndexesDDLChange(t *testing.T) {
+	t.Parallel()
+
+	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
+
+	tests := []struct {
+		name    string
+		indexes []string
+		errs    map[string]error
+		wantErr error
+	}{
+		{
+			name:    "drops every index",
+			indexes: []string{"a_1", "b_1"},
+		},
+		{
+			name:    "failure before a successful drop is returned",
+			indexes: []string{"a_1", "b_1"},
+			errs:    map[string]error{"a_1": errDropIndex},
+			wantErr: errDropIndex,
+		},
+		{
+			name:    "failure of the last drop is returned",
+			indexes: []string{"a_1", "b_1"},
+			errs:    map[string]error{"b_1": errDropIndex},
+			wantErr: errDropIndex,
+		},
+		{
+			name:    "index not found is skipped",
+			indexes: []string{"a_1"},
+			errs:    map[string]error{"a_1": mongo.CommandError{Code: 27, Name: "IndexNotFound"}},
+		},
+		{
+			name:    "namespace not found is skipped",
+			indexes: []string{"a_1"},
+			errs:    map[string]error{"a_1": mongo.CommandError{Code: 26, Name: "NamespaceNotFound"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var event DropIndexesEvent
+			for _, name := range tt.indexes {
+				event.OperationDescription.Indexes = append(event.OperationDescription.Indexes,
+					struct {
+						Name string `bson:"name"`
+					}{Name: name})
+			}
+
+			cat := &mockCatalog{dropIndexErrs: tt.errs}
+			r := &Repl{catalog: cat}
+
+			change := &ChangeEvent{
+				OperationType: DropIndexes,
+				Namespace:     ns,
+				Event:         event,
+			}
+
+			err := r.applyDDLChange(t.Context(), change)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.indexes, cat.droppedIndexes)
 		})
 	}
 }
