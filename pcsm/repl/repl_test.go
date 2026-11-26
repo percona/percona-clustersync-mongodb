@@ -557,26 +557,29 @@ func TestApplyDropIndexesDDLChange(t *testing.T) {
 	ns := catalog.Namespace{Database: "testdb", Collection: "testcoll"}
 
 	tests := []struct {
-		name    string
-		indexes []string
-		errs    map[string]error
-		wantErr error
+		name        string
+		indexes     []string
+		errs        map[string]error
+		wantErr     error
+		wantDropped []string
 	}{
 		{
 			name:    "drops every index",
 			indexes: []string{"a_1", "b_1"},
 		},
 		{
-			name:    "failure before a successful drop is returned",
-			indexes: []string{"a_1", "b_1"},
-			errs:    map[string]error{"a_1": errDropIndex},
-			wantErr: errDropIndex,
+			name:        "failure before a successful drop is returned",
+			indexes:     []string{"a_1", "b_1"},
+			errs:        map[string]error{"a_1": errDropIndex},
+			wantErr:     errDropIndex,
+			wantDropped: []string{"a_1"},
 		},
 		{
-			name:    "failure of the last drop is returned",
-			indexes: []string{"a_1", "b_1"},
-			errs:    map[string]error{"b_1": errDropIndex},
-			wantErr: errDropIndex,
+			name:        "failure of the last drop is returned",
+			indexes:     []string{"a_1", "b_1"},
+			errs:        map[string]error{"b_1": errDropIndex},
+			wantErr:     errDropIndex,
+			wantDropped: []string{"a_1", "b_1"},
 		},
 		{
 			name:    "index not found is skipped",
@@ -614,6 +617,7 @@ func TestApplyDropIndexesDDLChange(t *testing.T) {
 			err := r.applyDDLChange(t.Context(), change)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
+				assert.Equal(t, tt.wantDropped, cat.droppedIndexes)
 
 				return
 			}
