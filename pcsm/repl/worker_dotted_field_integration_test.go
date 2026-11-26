@@ -117,6 +117,18 @@ func TestWorker_AddToCurrentBulk_RefetchesDocumentForDottedFieldName(t *testing.
 		require.NoError(t, bson.Unmarshal(bw.replaces[0].DocumentKey, &documentKey))
 		assert.Equal(t, bson.D{{"_id", int32(1)}}, documentKey)
 
+		// When the run is canceled while the document is being refetched
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		err = w.addToCurrentBulk(canceledCtx, newEvent())
+
+		// Then it is abandonment, not a replication failure, and nothing is added
+		require.ErrorIs(t, err, errRefetchAbandoned)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Len(t, bw.replaces, 1)
+		assert.Empty(t, bw.deletes)
+
 		// When the document has been deleted on source since the update
 		_, err = coll.DeleteOne(ctx, bson.D{{"_id", 1}})
 		require.NoError(t, err)

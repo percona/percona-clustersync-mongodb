@@ -1,11 +1,15 @@
 package repl //nolint
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/percona/percona-clustersync-mongodb/pcsm/catalog"
 )
@@ -171,4 +175,59 @@ func TestWorker_AddToCurrentBulk_UpdateWithDottedFieldNameIsNotReplayed(t *testi
 	require.ErrorContains(t, err, "requires source client")
 	assert.True(t, bw.Empty())
 	assert.Empty(t, bw.updates)
+}
+
+// Pause, demotion and shutdown cancel the run. A source read they interrupt is abandoned
+// work, like a canceled bulk write, and must not be recorded as a replication failure.
+func TestWorker_Run_CanceledRefetchIsNotReportedAsFailure(t *testing.T) {
+	t.Parallel()
+
+	// Nothing listens on this port: the refetch waits in server selection until canceled.
+	source, err := mongo.Connect(options.Client().ApplyURI("mongodb://127.0.0.1:1/?directConnection=true"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = source.Disconnect(context.Background())
+	})
+
+	errCh := make(chan error, 1)
+	w := &worker{
+		id:               "0",
+		source:           source,
+		routedEventCh:    make(chan *routedEvent, 1),
+		currentBulkWrite: &mockBulkWriter{},
+		flushInterval:    time.Hour,
+		pendingBulkCh:    make(chan *pendingBulk, 1),
+		writerDone:       make(chan struct{}),
+		newBulkWriter:    func() bulkWriter { return &mockBulkWriter{} },
+		barrierReq:       make(chan struct{}),
+		barrierDone:      make(chan error),
+		resumeCh:         make(chan struct{}),
+		done:             make(chan struct{}),
+		errCh:            errCh,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go w.run(ctx)
+
+	w.routedEventCh <- makeUpdateEvent(t,
+		`{"updatedFields": {"files.main.ts": "A2"}, "disambiguatedPaths": {"files.main.ts": ["files", "main.ts"]}}`)
+
+	// Wait until the worker has taken the event and is blocked in the refetch.
+	require.Eventually(t, func() bool { return len(w.routedEventCh) == 0 }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-w.done:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "worker did not stop after cancellation")
+	}
+
+	select {
+	case err := <-errCh:
+		require.FailNowf(t, "canceled refetch was reported as a failure", "%v", err)
+	default:
+	}
 }
