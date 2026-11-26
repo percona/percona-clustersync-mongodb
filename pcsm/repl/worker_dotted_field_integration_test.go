@@ -51,6 +51,13 @@ func TestWorker_AddToCurrentBulk_RefetchesDocumentForDottedFieldName(t *testing.
 			disconnectReplTestClient(t, source)
 		})
 
+		version, err := mdb.Version(ctx, source)
+		require.NoError(t, err)
+
+		if version.Major() == 6 && version.Minor() == 0 {
+			t.Skip("the server reports disambiguatedPaths only from MongoDB 6.1")
+		}
+
 		ns := catalog.Namespace{Database: "dotted_field_test", Collection: "documents"}
 		coll := source.Database(ns.Database).Collection(ns.Collection)
 
