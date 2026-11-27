@@ -1303,7 +1303,7 @@ func (r *Repl) applyDDLChange(ctx context.Context, change *ChangeEvent) error {
 				change.Namespace.Collection,
 				index.Name)
 			if err != nil {
-				lg.Error(err, "Drop index "+index.Name)
+				break
 			}
 		}
 
