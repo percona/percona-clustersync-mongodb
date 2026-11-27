@@ -23,7 +23,7 @@ Score 10; distinct configuration boundary. Owns defaults, env/flag binding, size
 - Every runtime flag requiring env support is bound explicitly in `bindEnvVars`.
 - Deprecated env names remain accepted only where `WarnDeprecatedEnvVars` names the replacement (`PLM_MONGODB_CLI_OPERATION_TIMEOUT`, `PCSM_NO_COLOR`).
 - Only `bindEnvVars` keys have `PCSM_*` support. Namespace filters and `resume --from-failure` are command flags read in `main.go`, not config.
-- Hidden flags (`recovery-checkpoint-interval`, `start`, `reset-state`, `pause-on-initial-sync`, `clone-read-batch-size`) are declared and hidden in `main.go`; the checkpoint interval falls back to `RecoveryCheckpointingInternal` (15s).
+- Hidden flags (`recovery-checkpoint-interval`, `reset-state`, `pause-on-initial-sync`, `clone-read-batch-size`) are declared and hidden in `main.go`; the checkpoint interval falls back to `RecoveryCheckpointingInternal` (15s).
 - Target write concern (`write_concern.go`) accepts empty/`majority` or a positive int32 `w`; empty keeps majority for legacy checkpoints.
 - Compressor values are trimmed, allowlisted, and deduplicated.
 - Clone segment/read batch sizes accept human-readable units and zero as auto.

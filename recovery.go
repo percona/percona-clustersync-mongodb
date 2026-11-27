@@ -13,6 +13,11 @@ import (
 	"github.com/percona/percona-clustersync-mongodb/log"
 )
 
+type checkpointTriggers struct {
+	stateChanged <-chan struct{}
+	transition   <-chan transitionCheckpoint
+}
+
 var (
 	errNoRecoveryData = errors.New("no recovery data")
 	// errCheckpointFenced is returned when a checkpoint claim or write is
@@ -166,8 +171,8 @@ func claimCheckpoint(ctx context.Context, coll *mongo.Collection, term int64, in
 	return cp, errors.Wrap(err, "claim checkpoint")
 }
 
-// RunCheckpointing persists the checkpoint every interval, and as soon as
-// saveNow signals, until ctx is canceled. It is the only checkpoint writer of
+// RunCheckpointing persists the checkpoint every interval, on a state-change
+// signal, and on a transition request. It is the only checkpoint writer of
 // one ACTIVE tenure, and it saves one snapshot at a time, so the snapshots of
 // the tenure reach the document in capture order. That holds only while every
 // write's outcome is known: the first write that is fenced, or whose error is
@@ -189,7 +194,7 @@ func RunCheckpointing(
 	term int64,
 	instanceID string,
 	interval time.Duration,
-	saveNow <-chan struct{},
+	triggers checkpointTriggers,
 ) error {
 	lg := log.New("checkpointing").With(log.Int64("term", term))
 
@@ -201,15 +206,24 @@ func RunCheckpointing(
 	defer ticker.Stop()
 
 	for {
+		var err error
 		select {
 		case <-ctx.Done():
 			return nil
 
 		case <-ticker.C:
-		case <-saveNow:
+			err = DoCheckpoint(ctx, m, rec, term, instanceID)
+		case <-triggers.stateChanged:
+			err = DoCheckpoint(ctx, m, rec, term, instanceID)
+		case req := <-triggers.transition:
+			err = req.save(ctx, func(ctx context.Context, data []byte) error {
+				writeErr := saveCheckpoint(ctx, m, term, instanceID, data)
+				logCheckpointResult(lg, writeErr)
+
+				return writeErr
+			})
 		}
 
-		err := DoCheckpoint(ctx, m, rec, term, instanceID)
 		switch {
 		case err == nil, errors.Is(err, errNoRecoveryData):
 
@@ -232,8 +246,12 @@ func RunCheckpointing(
 // Outcomes are logged here; callers only handle control flow.
 func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string) error {
 	err := doCheckpoint(ctx, m, rec, term, instanceID)
+	logCheckpointResult(log.New("checkpointing").With(log.Int64("term", term)), err)
 
-	lg := log.New("checkpointing").With(log.Int64("term", term))
+	return err
+}
+
+func logCheckpointResult(lg log.Logger, err error) {
 	switch {
 	case err == nil:
 		lg.Debug("Checkpoint saved")
@@ -248,8 +266,6 @@ func DoCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 	default:
 		lg.Error(err, "Failed to save a checkpoint")
 	}
-
-	return err
 }
 
 func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term int64, instanceID string) error {
@@ -261,6 +277,10 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 		return errNoRecoveryData
 	}
 
+	return saveCheckpoint(ctx, m, term, instanceID, data)
+}
+
+func saveCheckpoint(ctx context.Context, m *mongo.Client, term int64, instanceID string, data []byte) error {
 	// The document exists: the tenure claimed it in Restore. One that matches
 	// nothing is owned by a newer term now (or is gone, which only a reset
 	// under a running instance produces); either way this tenure no longer
@@ -273,7 +293,7 @@ func doCheckpoint(ctx context.Context, m *mongo.Client, rec Recoverable, term in
 		{"data", bson.Raw(data)},
 	}}}
 
-	err = recoveryCollection(m).FindOneAndUpdate(ctx, ownedAt(term), update,
+	err := recoveryCollection(m).FindOneAndUpdate(ctx, ownedAt(term), update,
 		options.FindOneAndUpdate().SetProjection(bson.D{{"_id", 1}})).Err()
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return errCheckpointFenced

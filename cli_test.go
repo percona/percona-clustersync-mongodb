@@ -150,6 +150,14 @@ func runPCSM(t *testing.T, args []string, env map[string]string) (string, string
 	return stdout.String(), stderr.String(), err
 }
 
+func TestServerRejectsRemovedStartFlag(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, err := runPCSM(t, []string{"--start", "--help"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, stderr, "unknown flag: --start")
+}
+
 func TestMongoDBOperationTimeoutFlagRejectedByHTTPClientCommands(t *testing.T) {
 	t.Parallel()
 

@@ -8,7 +8,7 @@ Score 8; distinct orchestration domain. Owns the state machine and composes cata
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Change lifecycle behavior | `pcsm.go` | `PCSM.Start`, `Pause`, `Resume`, `Finalize`, and state transitions |
+| Change lifecycle behavior | `pcsm.go`, `start.go`, `finalize_checkpoint.go` | State transitions and checkpoint acknowledgment |
 | Change persisted pipeline state | `pcsm.go` | `Checkpoint` and `Recover` compose catalog, clone, and repl checkpoints |
 | Add a pipeline test double | `mocks_test.go` | Local `Cloner` and `Replicator` substitutes |
 | Test state transitions | `state_test.go` | State sequencing and invalid-operation coverage |

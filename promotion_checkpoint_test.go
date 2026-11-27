@@ -449,7 +449,8 @@ func TestRunCheckpointingSavesOnSignal(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_ = RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour, saveNow)
+			_ = RunCheckpointing(ctx, target, pipeline, 1, "active", time.Hour,
+				checkpointTriggers{stateChanged: saveNow})
 		}()
 		t.Cleanup(func() {
 			cancel()

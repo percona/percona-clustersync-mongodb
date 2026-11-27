@@ -47,7 +47,6 @@ type Config struct {
 	Clone CloneConfig `mapstructure:",squash"`
 
 	// hidden startup flags
-	Start                      bool          `mapstructure:"start"`
 	ResetState                 bool          `mapstructure:"reset-state"`
 	PauseOnInitialSync         bool          `mapstructure:"pause-on-initial-sync"`
 	RecoveryCheckpointInterval time.Duration `mapstructure:"recovery-checkpoint-interval"`

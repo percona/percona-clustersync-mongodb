@@ -153,8 +153,8 @@ func (s *server) openTenure(ctx context.Context, term ha.Term, lg log.Logger) {
 }
 
 // runTenure does the work of opening tenure t: it restores the pipeline from
-// the checkpoint, starts the tenure's checkpoint writer, applies the deferred
-// --start and then admits requests. It never takes mu, since endTenure joins
+// the checkpoint, starts the tenure's checkpoint writer, then admits
+// requests. It never takes mu, since endTenure joins
 // it under mu; an outcome it must act on is handed to a goroutine of its own.
 func (s *server) runTenure(ctx context.Context, t *tenure) {
 	defer close(t.done)
@@ -199,40 +199,20 @@ func (s *server) runTenure(ctx context.Context, t *tenure) {
 
 	// The tenure's checkpoint writer. It ends on the first write it cannot
 	// account for, and the tenure ends with it.
+	transitions := newTransitionCheckpoints()
+	t.pipeline.SetTransitionSaver(transitions.submit)
 	go func() {
 		//nolint:contextcheck // Checkpoint writes must end with this tenure, even while the server stays live.
 		err := RunCheckpointing(t.ctx, s.targetCluster, t.pipeline, int64(t.term),
-			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval, saveNow)
+			s.membership.InstanceID(), s.cfg.RecoveryCheckpointInterval,
+			checkpointTriggers{stateChanged: saveNow, transition: transitions.requests})
+		close(transitions.stopped)
 		if err != nil {
 			s.onCheckpointLost(ctx, t, err)
 		}
 	}()
 
-	// Apply the deferred --start now that this instance is ACTIVE, before any
-	// request is admitted, so a /start cannot pre-empt the configured options.
-	// Only valid from idle: a restored non-idle pipeline must not be restarted.
-	if s.autoStartOpts != nil {
-		s.autoStart(ectx, t, lg) //nolint:contextcheck // Replication is owned by the tenure, not the server.
-	}
-
 	close(t.ready)
-}
-
-// autoStart applies the deferred --start to tenure t's pipeline, when it is
-// idle.
-func (s *server) autoStart(ectx context.Context, t *tenure, lg log.Logger) {
-	state := t.pipeline.Status(ectx).State
-	if state != pcsm.StateIdle {
-		lg.With(log.String("state", string(state))).
-			Info("Skipping --start on promotion: replication already in progress")
-
-		return
-	}
-
-	err := t.pipeline.Start(ectx, s.autoStartOpts)
-	if err != nil {
-		lg.Error(err, "auto-start on promotion")
-	}
 }
 
 // endTenure ends the current tenure, if any: it cancels the epoch, advertises

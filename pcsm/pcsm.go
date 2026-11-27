@@ -167,6 +167,8 @@ type PCSM struct {
 	nsFilter  sel.NSFilter // Namespace filter
 
 	onStateChanged OnStateChangedFunc // onStateChanged is invoked on each state change
+	saveTransition TransitionSaver
+	startPending   bool
 
 	pauseOnInitialSync bool
 	targetWriteConcern string
@@ -246,7 +248,13 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	if p.state == StateIdle {
+	return p.checkpointLocked(p.state)
+}
+
+// checkpointLocked captures the components for state, which can be a
+// candidate transition not yet published to readers.
+func (p *PCSM) checkpointLocked(state State) ([]byte, error) {
+	if state == StateIdle {
 		return nil, nil
 	}
 
@@ -263,7 +271,7 @@ func (p *PCSM) Checkpoint(_ context.Context) ([]byte, error) {
 		Clone:   p.clone.Checkpoint(),
 		Repl:    p.repl.Checkpoint(),
 
-		State: p.state,
+		State: state,
 	}
 
 	if p.targetWriteConcern != "majority" {
@@ -299,7 +307,8 @@ func (p *PCSM) Recover(ctx context.Context, data []byte) error {
 
 	// A finalizing pipeline whose finalizer was interrupted holds no live work
 	// and can be replaced like any other settled state.
-	if p.state == StateRunning || p.state == StatePausing || (p.state == StateFinalizing && p.finalizeActive) ||
+	if p.startPending || p.state == StateRunning || p.state == StatePausing ||
+		(p.state == StateFinalizing && p.finalizeActive) ||
 		(p.state == StatePaused && p.repl != nil && p.repl.Status().Pausing) {
 		return errors.Errorf("cannot recover: invalid PCSM state %s", p.state)
 	}
@@ -546,93 +555,6 @@ type StartOptions struct {
 	Clone clone.Options
 	// Repl contains replication behavior options.
 	Repl repl.Options
-}
-
-// Start starts the replication process with the given options.
-func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
-	err := p.lockAfterRun(ctx, false)
-	if err != nil {
-		return err
-	}
-	defer p.lock.Unlock()
-
-	switch p.state {
-	case StateRunning, StatePausing, StateFinalizing:
-		err := errors.New("already running")
-		log.New("pcsm:start").Error(err, "")
-
-		return err
-
-	case StateFailed:
-		// Allow a fresh /start (re-clone from scratch) only if the clone never
-		// finished. A failure after the clone completed is a repl-phase failure,
-		// recovered with resume --from-failure, so it is still rejected here.
-		if p.clone != nil {
-			cloneStatus := p.clone.Status()
-			if cloneStatus.IsFinished() {
-				err := errors.New("already running")
-				log.New("pcsm:start").Error(err, "")
-
-				return err
-			}
-		}
-
-	case StatePaused:
-		err := errors.New("paused")
-		log.New("pcsm:start").Error(err, "")
-
-		return err
-	}
-
-	if options == nil {
-		options = &StartOptions{}
-	}
-
-	parent, err := p.executionParent(ctx)
-	if err != nil {
-		return err
-	}
-
-	wc, err := config.ParseTargetWriteConcern(options.TargetWriteConcern)
-	if err != nil {
-		return errors.Wrap(err, "start target write concern")
-	}
-	cloneOptions := options.Clone
-	cloneOptions.WriteConcern = wc
-	replOptions := options.Repl
-	replOptions.WriteConcern = wc
-
-	execCtx, execution, err := p.admitExecution(parent, &p.runExec)
-	if err != nil {
-		return err
-	}
-
-	p.err = nil
-	p.targetWriteConcern = fmt.Sprint(wc.W)
-
-	p.nsInclude = options.IncludeNamespaces
-	p.nsExclude = options.ExcludeNamespaces
-	p.nsFilter = sel.MakeFilter(p.nsInclude, p.nsExclude)
-	p.pauseOnInitialSync = options.PauseOnInitialSync
-	// Requested, before NewRepl resolves auto values in its copy.
-	p.cloneOptions = options.Clone
-	p.replOptions = options.Repl
-	p.catalog = catalog.NewCatalog(p.source, p.target, p.sourceVer)
-	p.clone = clone.NewClone(p.source, p.target, p.catalog, p.nsFilter, &cloneOptions, p.targetIsSharded)
-	p.repl = repl.NewRepl(
-		p.source, p.target, p.catalog, p.nsFilter, &replOptions,
-		p.sourceVer, p.sourceIsSharded, p.targetIsSharded,
-	)
-	p.finalizeStatus = nil
-	p.state = StateRunning
-
-	p.startRun(execCtx, execution)
-
-	// Persist idle->running immediately: a crash before the first periodic
-	// checkpoint would otherwise leave no recovery data to resume from.
-	go p.onStateChanged(StateRunning)
-
-	return nil
 }
 
 // lockAfterRun returns with p.lock held on success. A stopped run may still be
@@ -1023,6 +945,10 @@ func (p *PCSM) Pause(ctx context.Context) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	if p.startPending {
+		return errStartPending
+	}
+
 	err := p.doPause(ctx)
 	if err != nil {
 		log.New("pcsm").Error(err, "Pause Cluster Replication")
@@ -1074,6 +1000,10 @@ func (p *PCSM) Resume(ctx context.Context, options ResumeOptions) error {
 		return err
 	}
 	defer p.lock.Unlock()
+
+	if p.startPending {
+		return errStartPending
+	}
 
 	if p.state != StatePaused && (p.state != StateFailed || !options.ResumeFromFailure) {
 		return errors.New("cannot resume: not paused or not resuming from failure")
@@ -1130,6 +1060,10 @@ func (p *PCSM) Finalize(ctx context.Context) error {
 
 	p.lock.Lock()
 	defer p.lock.Unlock()
+
+	if p.startPending {
+		return errStartPending
+	}
 
 	if p.finalizeActive {
 		return errors.New("finalization is already in progress")
@@ -1273,30 +1207,7 @@ func (p *PCSM) startFinalize(parent context.Context, lg log.Logger) error {
 			close(done)
 		}()
 
-		unsuccessful := finalizer.Finalize(execCtx)
-
-		p.lock.Lock()
-		if execCtx.Err() != nil {
-			p.finalizeActive = false
-			p.lock.Unlock()
-
-			lg.Warn("Finalization interrupted; reissue /finalize once ACTIVE")
-
-			return
-		}
-
-		p.finalizeStatus.UnsuccessfulIndexes = unsuccessful
-		p.finalizeStatus.CompletedAt = time.Now()
-		p.finalizeStatus.Completed = true
-		p.finalizeActive = false
-		p.state = StateFinalized
-		startedAt := p.finalizeStatus.StartedAt
-		p.lock.Unlock()
-
-		lg.With(log.Elapsed(time.Since(startedAt))).
-			Info("Finalization is completed")
-
-		go p.onStateChanged(StateFinalized)
+		p.completeFinalization(execCtx, finalizer.Finalize(execCtx), lg)
 	}()
 
 	lg.Info("Finalizing")

@@ -14,6 +14,7 @@ Percona ClusterSync for MongoDB (PCSM): Go service for initial clone plus contin
 ./
 |-- main.go               # CLI, HTTP server/client, startup, reset subcommands
 |-- recovery.go           # Checkpoint claim/restore and single checkpoint writer
+|-- transition_checkpoint.go # Start and finalize checkpoint handoff
 |-- tenure.go             # ACTIVE tenure lifecycle controller
 |-- config/ ha/ mdb/      # Flags/env, lease+membership, driver boundary
 |-- pcsm/                 # Pipeline state machine; catalog/ clone/ repl/
