@@ -217,10 +217,10 @@ func RunCheckpointing(
 			err = DoCheckpoint(ctx, m, rec, term, instanceID)
 		case req := <-triggers.transition:
 			err = req.save(ctx, func(ctx context.Context, data []byte) error {
-				err := saveCheckpoint(ctx, m, term, instanceID, data)
-				logCheckpointResult(lg, err)
+				writeErr := saveCheckpoint(ctx, m, term, instanceID, data)
+				logCheckpointResult(lg, writeErr)
 
-				return err
+				return writeErr
 			})
 		}
 

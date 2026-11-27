@@ -94,8 +94,8 @@ func (p *PCSM) Start(ctx context.Context, options *StartOptions) error {
 		if !saved {
 			return nil
 		}
-		err := p.launchStartLocked(parent, opts, wc)
-		if err != nil {
+		launchErr := p.launchStartLocked(parent, opts, wc)
+		if launchErr != nil {
 			// The next ACTIVE can restore this run even though we cannot
 			// launch it on the tenure that saved it.
 			return errStartSaved
