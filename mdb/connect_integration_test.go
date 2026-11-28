@@ -119,6 +119,36 @@ func TestConnect_MaxPoolSize(t *testing.T) {
 	require.NoError(t, client.Ping(ctx, nil), "ping should succeed with maxPoolSize set")
 }
 
+// TestConnect_ServerSelectionTimeout verifies PCSM-407: a serverSelectionTimeoutMS
+// set in the connection string survives sanitization and bounds server
+// selection. The replica set name matches no member, so no server is selectable
+// and the startup ping fails once selection times out, well before its own
+// config.PingTimeout.
+func TestConnect_ServerSelectionTimeout(t *testing.T) {
+	t.Parallel()
+
+	const selectionTimeout = time.Second
+
+	uri := fmt.Sprintf("%s/?replicaSet=pcsm-no-such-set&serverSelectionTimeoutMS=%d",
+		integrationURI, selectionTimeout.Milliseconds())
+
+	cfg := &config.Config{Source: uri}
+	cfg.MongoDB.OperationTimeout = time.Minute
+
+	start := time.Now()
+	client, err := Connect(t.Context(), uri, cfg)
+	elapsed := time.Since(start)
+
+	if client != nil {
+		_ = client.Disconnect(context.Background())
+	}
+
+	require.ErrorContains(t, err, "server selection error")
+	require.GreaterOrEqual(t, elapsed, selectionTimeout)
+	require.Less(t, elapsed, config.PingTimeout/2,
+		"server selection should end at serverSelectionTimeoutMS, not at the ping timeout")
+}
+
 // TestGetFCV verifies getParameter works through the Stable API client and that
 // a freshly started deployment reports an FCV matching its binary major version.
 func TestGetFCV(t *testing.T) {

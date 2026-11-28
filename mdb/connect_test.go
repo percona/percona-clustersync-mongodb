@@ -34,7 +34,6 @@ func TestSanitizeConnString(t *testing.T) {
 		"maxStalenessSeconds",
 		"readPreferenceTags",
 		"localThresholdMS",
-		"serverSelectionTimeoutMS",
 		"serverSelectionTryOnce",
 		"heartbeatFrequencyMS",
 		"socketCheckIntervalMS",
@@ -81,6 +80,20 @@ func TestSanitizeConnString(t *testing.T) {
 		t.Parallel()
 
 		for _, opt := range []string{"maxPoolSize=500", "MaxPoolSize=500", "MAXPOOLSIZE=500"} {
+			uri := baseURI + "/?" + opt
+			res, _ := sanitizeMongoURI(uri)
+			assert.Equal(t, uri, res)
+		}
+	})
+
+	t.Run("serverSelectionTimeoutMS preserved", func(t *testing.T) {
+		t.Parallel()
+
+		for _, opt := range []string{
+			"serverSelectionTimeoutMS=300000",
+			"serverselectiontimeoutms=300000",
+			"SERVERSELECTIONTIMEOUTMS=300000",
+		} {
 			uri := baseURI + "/?" + opt
 			res, _ := sanitizeMongoURI(uri)
 			assert.Equal(t, uri, res)
